@@ -322,7 +322,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_update_replication_mode(&mut self) {
         self.fsm
             .peer
-            .switch_commit_group(&self.ctx.global_replication_state);
+            .switch_replication_mode(&self.ctx.global_replication_state);
         if self.fsm.peer.is_leader() {
             self.reset_raft_tick(GroupState::Ordered);
             self.register_pd_heartbeat_tick();
@@ -1731,7 +1731,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             };
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            new_peer.peer.init_commit_group(&mut *replication_state);
+            new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
             let meta_peer = new_peer.peer.peer.clone();
 
@@ -2858,10 +2858,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
         self.fsm.peer.heartbeat_pd(self.ctx);
-        if self.ctx.cfg.hibernate_regions
-            && self.fsm.peer.replication_mode_version > 0
-            && self.fsm.peer.dr_auto_sync_state == DrAutoSyncState::SyncRecover
-        {
+        if self.ctx.cfg.hibernate_regions && self.fsm.peer.replication_mode_need_catch_up() {
             self.register_pd_heartbeat_tick();
         }
     }

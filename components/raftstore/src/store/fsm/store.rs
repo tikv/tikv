@@ -829,7 +829,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 region,
             ));
-            peer.peer.init_commit_group(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut *replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -867,7 +867,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 &region,
             )?;
-            peer.peer.init_commit_group(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut *replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -1522,7 +1522,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             target.clone(),
         )?;
         let mut guard = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_commit_group(&mut *guard);
+        peer.peer.init_replication_mode(&mut *guard);
         drop(guard);
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.

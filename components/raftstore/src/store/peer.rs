@@ -344,7 +344,7 @@ impl Peer {
     }
 
     /// Sets commit group to the peer.
-    pub fn init_commit_group(&mut self, state: &mut GlobalReplicationState) {
+    pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
         if !self.get_store().region().get_peers().is_empty() {
             state.calculate_commit_group(self.get_store().region().get_peers());
@@ -366,10 +366,10 @@ impl Peer {
     }
 
     /// Updates replication mode.
-    pub fn switch_commit_group(&mut self, state: &Mutex<GlobalReplicationState>) {
+    pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let mut guard = state.lock().unwrap();
-        let enable_group_commit = if guard.status.mode == ReplicationMode::Majority {
+        let enable_group_commit = if guard.status.get_mode() == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             self.dr_auto_sync_state = DrAutoSyncState::Async;
             false
@@ -609,10 +609,7 @@ impl Peer {
         if self.get_store().applied_index() < last_index {
             return res;
         }
-        if self.replication_mode_version > 0
-            && self.dr_auto_sync_state != DrAutoSyncState::Async
-            && !self.replication_sync
-        {
+        if self.replication_mode_need_catch_up() {
             return res;
         }
         res.up_to_date = true;
@@ -1145,6 +1142,16 @@ impl Peer {
     /// that are older than apply index as apply index <= last index <= index of snapshot.
     pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
+    }
+
+    /// Checks if leader needs to keep sending logs for follower.
+    ///
+    /// In DrAutoSync mode, if leader goes to sleep before the region is sync,
+    /// PD may wait longer time to reach sync state.
+    pub fn replication_mode_need_catch_up(&self) -> bool {
+        self.replication_mode_version > 0
+            && self.dr_auto_sync_state != DrAutoSyncState::Async
+            && !self.replication_sync
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
@@ -2578,22 +2585,32 @@ impl Peer {
         let mut status = RegionReplicationStatus::default();
         status.state_id = self.replication_mode_version;
         let state = if !self.replication_sync {
-            let res = self.raft_group.raft.check_group_commit_consistent();
-            if Some(true) != res {
-                let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
-                if self.get_store().applied_index_term() >= self.term() {
-                    for (id, p) in self.raft_group.raft.prs().voters() {
-                        buffer.push((*id, p.commit_group_id, p.matched));
-                    }
-                };
-                info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
+            if self.dr_auto_sync_state != DrAutoSyncState::Async {
+                let res = self.raft_group.raft.check_group_commit_consistent();
+                if Some(true) != res {
+                    let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+                    if self.get_store().applied_index_term() >= self.term() {
+                        for (id, p) in self.raft_group.raft.prs().voters() {
+                            buffer.push((*id, p.commit_group_id, p.matched));
+                        }
+                    };
+                    info!(
+                        "still not reach integrity over label";
+                        "status" => ?res,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.id,
+                        "progress" => ?buffer
+                    );
+                } else {
+                    self.replication_sync = true;
+                }
+                match res {
+                    Some(true) => RegionReplicationState::IntegrityOverLabel,
+                    Some(false) => RegionReplicationState::SimpleMajority,
+                    None => RegionReplicationState::Unknown,
+                }
             } else {
-                self.replication_sync = true;
-            }
-            match res {
-                Some(true) => RegionReplicationState::IntegrityOverLabel,
-                Some(false) => RegionReplicationState::SimpleMajority,
-                None => RegionReplicationState::Unknown,
+                RegionReplicationState::SimpleMajority
             }
         } else {
             RegionReplicationState::IntegrityOverLabel

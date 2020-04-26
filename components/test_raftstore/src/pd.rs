@@ -14,7 +14,9 @@ use tokio_timer::timer::Handle;
 
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationMode, ReplicationStatus};
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+};
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
@@ -1000,6 +1002,14 @@ impl TestPdClient {
         status.mut_dr_auto_sync().label_key = label_key.to_owned();
         status.mut_dr_auto_sync().state_id = 1;
         self.cluster.wl().replication_status = Some(status);
+    }
+
+    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
+        let mut cluster = self.cluster.wl();
+        let status = cluster.replication_status.as_mut().unwrap();
+        let mut dr = status.mut_dr_auto_sync();
+        dr.state_id += 1;
+        dr.set_state(state);
     }
 
     pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
