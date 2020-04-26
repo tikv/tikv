@@ -214,9 +214,8 @@ pub fn get_decrypter_reader(
     let enc_info = box_try!(encryption_key_manager.get_file(file));
     let mthd = encryption_method_from_db_encryption_method(enc_info.method);
     debug!(
-        "get_decrypter_reader gets enc_infor for {:?}, method: {:?}", file, mthd;
-        "key" => hex::encode_upper(&enc_info.key),
-        "iv" => hex::encode_upper(&enc_info.iv),
+        "get_decrypter_reader gets enc_infor for {:?}, method: {:?}",
+        file, mthd
     );
     if mthd == EncryptionMethod::Plaintext {
         let f = box_try!(File::open(file));
