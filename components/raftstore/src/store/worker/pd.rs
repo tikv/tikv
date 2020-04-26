@@ -431,6 +431,7 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
+    // Deprecate
     fn handle_ask_split(
         &self,
         handle: &Handle,
@@ -482,7 +483,12 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+<<<<<<< HEAD
         callback: Callback<RocksEngine>,
+=======
+        callback: Callback<E>,
+        task: String,
+>>>>>>> 6df2714... raftstore: use batch split for auto-split (#7654)
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -497,6 +503,7 @@ impl<T: PdClient> Runner<T> {
                             "region_id" => region.get_id(),
                             "new_region_ids" => ?resp.get_ids(),
                             "region" => ?region,
+                            "task" => task,
                         );
 
                         let req = new_batch_split_region_request(
@@ -887,6 +894,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         }
 
         match task {
+            // AskSplit has deprecated, use AskBatchSplit
             Task::AskSplit {
                 region,
                 split_key,
@@ -900,7 +908,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 peer,
                 right_derive,
                 callback,
-                String::from("AskSplit"),
+                String::from("ask_split"),
             ),
             Task::AskBatchSplit {
                 region,
@@ -915,20 +923,21 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 peer,
                 right_derive,
                 callback,
+                String::from("batch_split"),
             ),
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
                         self.pd_client.get_region_by_id(split_info.region_id).wait()
                     {
-                        self.handle_ask_split(
+                        self.handle_ask_batch_split(
                             handle,
                             region,
-                            split_info.split_key,
+                            vec![split_info.split_key],
                             split_info.peer,
                             true,
                             Callback::None,
-                            String::from("AutoSplit"),
+                            String::from("auto_split"),
                         );
                     }
                 }
