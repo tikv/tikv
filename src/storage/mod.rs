@@ -950,6 +950,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if let Some(end) = end_key {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
+        if key_only {
+            option.set_key_only(key_only);
+        }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -987,6 +990,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
