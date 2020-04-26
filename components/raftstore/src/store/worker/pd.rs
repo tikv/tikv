@@ -483,12 +483,8 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-<<<<<<< HEAD
         callback: Callback<RocksEngine>,
-=======
-        callback: Callback<E>,
         task: String,
->>>>>>> 6df2714... raftstore: use batch split for auto-split (#7654)
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
