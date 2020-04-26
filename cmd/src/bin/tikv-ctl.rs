@@ -37,7 +37,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
@@ -85,7 +85,7 @@ fn new_debug_executor(
 
             Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
-                None,
+                ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
