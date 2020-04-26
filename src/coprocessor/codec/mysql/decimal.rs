@@ -1789,14 +1789,8 @@ impl Display for Decimal {
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-<<<<<<< HEAD:src/coprocessor/codec/mysql/decimal.rs
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
-        // Note: as_f64() may be never fail?
-        Ok(self.as_f64()?.round() != 0f64)
-=======
-    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
         Ok(!self.is_zero())
->>>>>>> 6b60d57... tidb_query: fix the logical behavior of floats (#7342):components/tidb_query_datatype/src/codec/mysql/decimal.rs
     }
 }
 
