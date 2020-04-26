@@ -5,6 +5,8 @@ pub mod config;
 pub mod fsm;
 pub mod msg;
 pub mod transport;
+
+#[macro_use]
 pub mod util;
 
 mod bootstrap;
@@ -14,6 +16,7 @@ mod peer;
 mod peer_storage;
 mod read_queue;
 mod region_snapshot;
+mod replication_mode;
 mod snap;
 mod worker;
 
@@ -36,6 +39,7 @@ pub use self::peer_storage::{
     RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 pub use self::region_snapshot::{new_temp_engine, RegionIterator, RegionSnapshot};
+pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},

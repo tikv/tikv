@@ -18,10 +18,7 @@ pub enum ConfigValue {
     Usize(usize),
     Bool(bool),
     String(String),
-    // `String` represent config field that has type `String`,
-    // `Other` represent config field with type that can be
-    // coverted to `String` as temporary representation i.e enum type.
-    Other(String),
+    BlobRunMode(String),
     Module(ConfigChange),
     Skip,
 }
@@ -38,7 +35,7 @@ impl Display for ConfigValue {
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
-            ConfigValue::Other(v) => write!(f, "{}", v),
+            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
         }
