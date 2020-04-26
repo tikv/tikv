@@ -279,11 +279,11 @@ impl Datum {
         let b = match self {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
-            Datum::F64(f) => Some(f.round() != 0f64),
+            Datum::F64(f) => Some(f != 0f64),
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
+            Datum::Dec(d) => Some(!d.is_zero()),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
@@ -1698,10 +1698,10 @@ mod tests {
             (Datum::U64(0), Some(false)),
             (Datum::U64(1), Some(true)),
             (Datum::F64(0f64), Some(false)),
-            (Datum::F64(0.4), Some(false)),
+            (Datum::F64(0.4), Some(true)),
             (Datum::F64(0.5), Some(true)),
             (Datum::F64(-0.5), Some(true)),
-            (Datum::F64(-0.4), Some(false)),
+            (Datum::F64(-0.4), Some(true)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
             (b"0.5".as_ref().into(), Some(false)),
@@ -1720,7 +1720,7 @@ mod tests {
             ),
             (
                 Datum::Dec(Decimal::from_f64(0.1415926).unwrap()),
-                Some(false),
+                Some(true),
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
