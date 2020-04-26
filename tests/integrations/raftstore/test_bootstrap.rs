@@ -63,6 +63,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
+        Arc::default(),
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
