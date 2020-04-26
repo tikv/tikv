@@ -415,16 +415,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
         }
         const TAG: &str = "modify_tikv_config";
 
-        let module = req.get_module();
         let config_name = req.take_config_name();
         let config_value = req.take_config_value();
 
-        let f = self
-            .pool
-            .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
-                debugger.modify_tikv_config(module, &config_name, &config_value)
-            }))
-            .map(|_| ModifyTikvConfigResponse::default());
+        let f =
+            self.pool
+                .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
+                    debugger.modify_tikv_config(&config_name, &config_value)
+                }))
+                .map(|_| ModifyTikvConfigResponse::default());
 
         self.handle_response(ctx, sink, f, TAG);
     }

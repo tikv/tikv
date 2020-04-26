@@ -2375,6 +2375,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
 }
 
 fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
+    let v = v.trim_matches('\"');
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),

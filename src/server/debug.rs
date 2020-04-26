@@ -716,12 +716,7 @@ impl Debugger {
             })
     }
 
-    pub fn modify_tikv_config(
-        &self,
-        _module: Module,
-        config_name: &str,
-        config_value: &str,
-    ) -> Result<()> {
+    pub fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
         if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
             return Err(Error::Other(
                 format!("failed to update config, err: {:?}", e).into(),

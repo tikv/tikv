@@ -75,7 +75,7 @@ mod profiler_guard {
     }
 }
 
-const COMPONENT_REQUEST_RETRY: usize = 10;
+const COMPONENT_REQUEST_RETRY: usize = 5;
 static COMPONENT: &str = "tikv";
 
 #[cfg(feature = "failpoints")]
