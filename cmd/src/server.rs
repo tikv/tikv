@@ -73,9 +73,6 @@ pub fn run_tikv(config: TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
-    // TODO: currently the logger config can not be managed
-    // by PD and has to be provided when starting (or default
-    // config will be use). Consider remove this constraint.
     initial_logger(&config);
 
     // Print version information.
@@ -204,8 +201,6 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
-        // TODO: register addr to pd
-
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
 
