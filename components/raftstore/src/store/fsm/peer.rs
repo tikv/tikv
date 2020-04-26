@@ -2880,12 +2880,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
                 );
+
                 self.ctx
                     .raft_metrics
                     .leader_missing
                     .lock()
                     .unwrap()
                     .insert(self.region_id());
+
+                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
             }
             StaleState::ToValidate => {
                 // for peer B in case 1 above
