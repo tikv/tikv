@@ -109,8 +109,11 @@ impl<E: Engine> Endpoint<E> {
                         is_desc_scan = scan.get_idx_scan().get_desc();
                     }
                 }
+
+                let tag = if table_scan { "select" } else { "index" };
+
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -143,8 +146,15 @@ impl<E: Engine> Endpoint<E> {
                 let mut analyze = AnalyzeReq::new();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
+
+                let tag = if table_scan {
+                    "analyze_table"
+                } else {
+                    "analyze_index"
+                };
+
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -162,8 +172,15 @@ impl<E: Engine> Endpoint<E> {
                 let mut checksum = ChecksumRequest::new();
                 box_try!(checksum.merge_from(&mut is));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+
+                let tag = if table_scan {
+                    "checksum_table"
+                } else {
+                    "checksum_index"
+                };
+
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -213,11 +230,12 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     // TODO: Convert to use async / await.
     fn handle_unary_request_impl(
-        tracker: Box<Tracker>,
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
+        tracker.on_scheduled();
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
             .and_then(move |_| {
                 with_tls_engine(|engine| {
@@ -225,8 +243,9 @@ impl<E: Engine> Endpoint<E> {
                         .map(|snapshot| (tracker, snapshot))
                 })
             })
-            .and_then(move |(tracker, snapshot)| {
+            .and_then(move |(mut tracker, snapshot)| {
                 // When snapshot is retrieved, deadline may exceed.
+                tracker.on_snapshot_finished();
                 future::result(tracker.req_ctx.deadline.check_if_exceeded())
                     .map(|_| (tracker, snapshot))
             })
@@ -309,12 +328,13 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
-        tracker: Box<Tracker>,
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
 
+        tracker.on_scheduled();
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check_if_exceeded())
                 .and_then(move |_| {
@@ -323,8 +343,9 @@ impl<E: Engine> Endpoint<E> {
                             .map(|snapshot| (tracker, snapshot))
                     })
                 })
-                .and_then(move |(tracker, snapshot)| {
+                .and_then(move |(mut tracker, snapshot)| {
                     // When snapshot is retrieved, deadline may exceed.
+                    tracker.on_snapshot_finished();
                     future::result(tracker.req_ctx.deadline.check_if_exceeded())
                         .map(|_| (tracker, snapshot))
                 })
@@ -439,14 +460,6 @@ impl<E: Engine> Endpoint<E> {
         stream::once(result_of_stream) // Stream<Stream<Resp, Error>, Error>
             .flatten() // Stream<Resp, Error>
             .or_else(|e| Ok(make_error_response(e))) // Stream<Resp, ()>
-    }
-}
-
-fn make_tag(is_table_scan: bool) -> &'static str {
-    if is_table_scan {
-        "select"
-    } else {
-        "index"
     }
 }
 
