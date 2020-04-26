@@ -20,7 +20,7 @@ use engine_traits::{
     TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType, Module};
+use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
@@ -1556,7 +1556,7 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines, Some(Default::default()))
+        Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger {
@@ -1991,29 +1991,6 @@ mod tests {
     }
 
     #[test]
-    fn test_modify_tikv_config() {
-        let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "max_background_jobs", "8")
-            .unwrap();
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 8);
-
-        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "default.disable_auto_compactions", "true")
-            .unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
-    }
-
-    #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
         let engine = RocksEngine::from_ref(&debugger.engines.kv);
@@ -2291,19 +2268,5 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
-    }
-
-    #[test]
-    fn test_modify_gc_io_limit() {
-        let debugger = new_debugger();
-        debugger
-            .modify_tikv_config(Module::Server, "gc", "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap();
     }
 }

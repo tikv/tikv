@@ -158,7 +158,7 @@ impl TiKVServer {
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
-        let config = cfg_controller.get_current().clone();
+        let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
