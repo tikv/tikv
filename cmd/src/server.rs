@@ -98,7 +98,7 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
-    tikv.register_services(gc_worker);
+    tikv.register_services();
     tikv.init_metrics_flusher();
 
     tikv.run_server(server_config);
@@ -619,10 +619,7 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(
-        &mut self,
-        gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
-    ) {
+    fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
@@ -653,8 +650,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker.get_config_manager(),
-            self.config.enable_dynamic_config,
+            self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
         );
         if servers

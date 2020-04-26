@@ -5,12 +5,13 @@ use futures::stream::Stream;
 use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
-use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode};
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
 use pprof;
 use pprof::protos::Message;
 use regex::Regex;
+use reqwest::{self, blocking::Client};
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -21,7 +22,7 @@ use tokio_threadpool::{Builder, ThreadPool};
 use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use super::Result;
 use crate::config::ConfigController;
@@ -90,7 +91,7 @@ pub struct StatusServer {
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     pd_client: Option<Arc<RpcClient>>,
-    cfg_controller: Option<ConfigController>,
+    cfg_controller: ConfigController,
 }
 
 impl StatusServer {
@@ -116,7 +117,7 @@ impl StatusServer {
             rx: Some(rx),
             addr: None,
             pd_client,
-            cfg_controller: Some(cfg_controller),
+            cfg_controller,
         }
     }
 
@@ -224,7 +225,7 @@ impl StatusServer {
     fn get_config(
         cfg_controller: &ConfigController,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let res = match serde_json::to_string(cfg_controller.get_current()) {
+        let res = match serde_json::to_string(&cfg_controller.get_current()) {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
@@ -238,12 +239,12 @@ impl StatusServer {
     }
 
     fn update_config(
-        cfg_controller: Arc<RwLock<ConfigController>>,
+        cfg_controller: ConfigController,
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
             let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
-                Ok(change) => match cfg_controller.write().unwrap().update(change) {
+                Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("fail to update, error: {:?}", e),
@@ -415,8 +416,7 @@ impl StatusServer {
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite + Send + 'static,
     {
-        // TODO: use future lock
-        let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
+        let cfg_controller = self.cfg_controller.clone();
         // Start to serve.
         let server = builder.serve(move || {
             let cfg_controller = cfg_controller.clone();
@@ -439,9 +439,7 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => {
-                                Self::get_config(&cfg_controller.read().unwrap())
-                            }
+                            (Method::GET, "/config") => Self::get_config(&cfg_controller),
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req)
                             }
@@ -569,13 +567,14 @@ impl StatusServer {
                 let pd_addr = pd_addr
                     .trim_start_matches("http://")
                     .trim_start_matches("https://");
-                let url = format!("http://{}/component", pd_addr);
-                let req = Request::post(&url)
-                    .header(hyper::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(json.clone()))
-                    .unwrap();
-                match client.request(req).wait() {
-                    Ok(resp) if resp.status() == StatusCode::OK => return,
+                let url = format!("http://{}/pd/api/v1/component", pd_addr);
+                let res = client
+                    .post(&url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(json.clone())
+                    .send();
+                match res {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
                     Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
                     Err(e) => error!("failed to register addr to pd"; "error" => ?e),
                 }
@@ -603,10 +602,12 @@ impl StatusServer {
                 let pd_addr = pd_addr
                     .trim_start_matches("http://")
                     .trim_start_matches("https://");
-                let url = format!("http://{}/component/{}/{}", pd_addr, COMPONENT, status_addr);
-                let req = Request::delete(&url).body(Body::empty()).unwrap();
-                match client.request(req).wait() {
-                    Ok(resp) if resp.status() == StatusCode::OK => return,
+                let url = format!(
+                    "http://{}/pd/api/v1/component/{}/{}",
+                    pd_addr, COMPONENT, status_addr
+                );
+                match client.delete(&url).send() {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
                     Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
                     Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
                 }
