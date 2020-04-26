@@ -4451,11 +4451,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/tipb.git?branch=release-3.1#cc8b75c5338321c30389273dd32874e525f8c7ee"
-=======
-source = "git+https://github.com/pingcap/tipb.git#7316d94df1eed974822e2f3e70dc3e0aea1a6b0a"
->>>>>>> b2a27d2... tidb_query: add is true/false keep null ScalarFuncSig (#7532)
+source = "git+https://github.com/pingcap/tipb.git?branch=release-3.1#ce17d2d0325132a7c9839e96645d01e6584c142a"
 dependencies = [
  "protobuf",
 ]
