@@ -5,7 +5,7 @@ use futures::stream::Stream;
 use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
 use pprof;
@@ -25,6 +25,7 @@ use std::sync::{Arc, RwLock};
 
 use super::Result;
 use crate::config::ConfigController;
+use pd_client::RpcClient;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -73,6 +74,9 @@ mod profiler_guard {
     }
 }
 
+const COMPONENT_REQUEST_RETRY: usize = 10;
+static COMPONENT: &str = "tikv";
+
 #[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
 #[cfg(feature = "failpoints")]
@@ -85,11 +89,16 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
+    pd_client: Option<Arc<RpcClient>>,
     cfg_controller: Option<ConfigController>,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, cfg_controller: ConfigController) -> Self {
+    pub fn new(
+        status_thread_pool_size: usize,
+        pd_client: Option<Arc<RpcClient>>,
+        cfg_controller: ConfigController,
+    ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -106,6 +115,7 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
+            pd_client,
             cfg_controller: Some(cfg_controller),
         }
     }
@@ -520,10 +530,14 @@ impl StatusServer {
             let server = Server::builder(tcp_stream);
             self.start_serve(server);
         }
+        // register the status address to pd
+        self.register_addr(status_addr);
         Ok(())
     }
 
     pub fn stop(self) {
+        // unregister the status address to pd
+        self.unregister_addr();
         let _ = self.tx.send(());
         self.thread_pool
             .shutdown_now()
@@ -536,6 +550,76 @@ impl StatusServer {
     // in test to avoid port conflict.
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
+    }
+
+    fn register_addr(&self, status_addr: String) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        let json = {
+            let mut body = std::collections::HashMap::new();
+            body.insert("component".to_owned(), COMPONENT.to_owned());
+            body.insert("addr".to_owned(), status_addr);
+            serde_json::to_string(&body).unwrap()
+        };
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let pd_addr = pd_addr
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
+                let url = format!("http://{}/component", pd_addr);
+                let req = Request::post(&url)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json.clone()))
+                    .unwrap();
+                match client.request(req).wait() {
+                    Ok(resp) if resp.status() == StatusCode::OK => return,
+                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to unregister addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
+    }
+
+    fn unregister_addr(&self) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let status_addr = format!("{}", self.listening_addr());
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let pd_addr = pd_addr
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
+                let url = format!("http://{}/component/{}/{}", pd_addr, COMPONENT, status_addr);
+                let req = Request::delete(&url).body(Body::empty()).unwrap();
+                match client.request(req).wait() {
+                    Ok(resp) if resp.status() == StatusCode::OK => return,
+                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to unregister addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
     }
 }
 
@@ -636,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -681,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -717,7 +801,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -849,7 +933,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -890,7 +974,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -951,7 +1035,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start(
             "127.0.0.1:0".to_string(),
             &new_security_cfg(Some(allowed_cn)),

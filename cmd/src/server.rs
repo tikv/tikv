@@ -774,6 +774,7 @@ impl TiKVServer {
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
                 self.config.server.status_thread_pool_size,
+                Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
             ));
             // Start the status server.
