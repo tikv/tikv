@@ -21,7 +21,9 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
+use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
@@ -47,7 +49,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
+pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
@@ -72,7 +74,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
@@ -142,7 +144,9 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
+{
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -1129,14 +1133,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
-    tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-        .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::default();
-            res.set_test_id(req.get_test_id());
-            res
-        })
-        .map_err(|_| unreachable!())
+    let mut res = BatchCommandsEmptyResponse::default();
+    res.set_test_id(req.get_test_id());
+    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // can be called immediately, so the future is polled recursively and lead to deadlock.
+    if req.get_delay_time() < 10 {
+        Either::A(future::result(Ok(res)))
+    } else {
+        Either::B(
+            tikv_util::timer::GLOBAL_TIMER_HANDLE
+                .delay(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(req.get_delay_time()),
+                )
+                .map(move |_| res)
+                .map_err(|_| unreachable!()),
+        )
+    }
 }
 
 fn future_get<E: Engine, L: LockManager>(
@@ -1726,7 +1739,10 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     min_commit_ts,
                 } => {
                     resp.set_lock_ttl(lock_ttl);
-                    if min_commit_ts > caller_start_ts {
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // Even though the min_commit_ts is not pushed, the point get can ingore the lock
+                    // next time because it's not committed. So we pretend it has been pushed.
+                    if min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                 }
