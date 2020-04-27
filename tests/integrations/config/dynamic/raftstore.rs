@@ -10,7 +10,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::fsm::*;
-use raftstore::store::{SnapManager, StoreMsg, Transport};
+use raftstore::store::{AutoSplitController, SnapManager, StoreMsg, Transport};
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
@@ -101,6 +101,7 @@ fn start_raftstore(
             host,
             importer,
             Worker::new("split"),
+            AutoSplitController::default(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
