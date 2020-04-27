@@ -189,6 +189,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -256,6 +257,7 @@ impl Simulator for NodeCluster {
             coprocessor_host,
             importer,
             split_check_worker,
+            AutoSplitController::default(),
         )?;
         assert!(engines
             .kv
