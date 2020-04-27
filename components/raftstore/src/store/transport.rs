@@ -23,7 +23,10 @@ pub trait CasualRouter<E: KvEngine> {
 }
 
 /// Routes proposal to target region.
-pub trait ProposalRouter<S> where S: Snapshot {
+pub trait ProposalRouter<S>
+where
+    S: Snapshot,
+{
     fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>>;
 }
 
@@ -47,7 +50,10 @@ impl<E: KvEngine> CasualRouter<E> for RaftRouter<E> {
 
 impl<E: KvEngine> ProposalRouter<E::Snapshot> for RaftRouter<E> {
     #[inline]
-    fn send(&self, cmd: RaftCommand<E::Snapshot>) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
+    fn send(
+        &self,
+        cmd: RaftCommand<E::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
         self.send_raft_command(cmd)
     }
 }

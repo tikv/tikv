@@ -7,21 +7,16 @@ use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
 use engine_rocks::RocksEngine;
+use engine_traits::Snapshot;
 use engine_traits::CF_RAFT;
-use engine_traits::{Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 use crate::store::metrics::*;
 
 /// Consistency checking task.
-pub enum Task<S>
-{
-    ComputeHash {
-        index: u64,
-        region: Region,
-        snap: S,
-    },
+pub enum Task<S> {
+    ComputeHash { index: u64, region: Region, snap: S },
 }
 
 impl<S> Task<S>
@@ -154,7 +149,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_rocks::{RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};

@@ -46,8 +46,7 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<S>
-{
+pub enum Task<S> {
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
@@ -69,8 +68,7 @@ pub enum Task<S>
     },
 }
 
-impl<S> Task<S>
-{
+impl<S> Task<S> {
     pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
         Task::Destroy {
             region_id,
@@ -80,8 +78,7 @@ impl<S> Task<S>
     }
 }
 
-impl<S> Display for Task<S>
-{
+impl<S> Display for Task<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),

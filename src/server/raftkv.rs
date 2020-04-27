@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksEngine, RocksTablePropertiesCollection, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;

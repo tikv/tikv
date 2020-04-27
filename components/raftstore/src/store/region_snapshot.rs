@@ -42,10 +42,7 @@ where
         RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
     }
 
-    pub fn from_snapshot(
-        snap: S::SyncSnapshot,
-        region: Region,
-    ) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: S::SyncSnapshot, region: Region) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
             region: Arc::new(region),

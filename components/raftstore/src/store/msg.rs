@@ -38,7 +38,10 @@ pub struct WriteResponse {
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
 // generics. If it can be deleted in the future in favor of derive, it should
 // be.
-impl<S> Clone for ReadResponse<S> where S: Snapshot {
+impl<S> Clone for ReadResponse<S>
+where
+    S: Snapshot,
+{
     fn clone(&self) -> ReadResponse<S> {
         ReadResponse {
             response: self.response.clone(),

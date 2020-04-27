@@ -1583,7 +1583,7 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch, RocksSnapshot};
+    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;

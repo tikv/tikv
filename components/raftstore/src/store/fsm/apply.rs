@@ -15,8 +15,8 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -194,8 +194,7 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<S>
-{
+pub enum ExecResult<S> {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -235,8 +234,7 @@ pub enum ExecResult<S>
 }
 
 /// The possible returned value when applying logs.
-pub enum ApplyResult<S>
-{
+pub enum ApplyResult<S> {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
@@ -986,7 +984,12 @@ where
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E::Snapshot>> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<E::Snapshot>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -3345,7 +3348,9 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{util::new_engine, RocksEngine, RocksWriteBatch, WRITE_BATCH_MAX_KEYS, RocksSnapshot};
+    use engine_rocks::{
+        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
+    };
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
