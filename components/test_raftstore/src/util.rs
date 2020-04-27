@@ -17,9 +17,9 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::DB;
 use engine::*;
+use engine_rocks::config::BlobRunMode;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Iterable, Peekable};

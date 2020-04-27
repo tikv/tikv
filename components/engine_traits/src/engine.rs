@@ -28,7 +28,7 @@ pub trait KvEngine:
     + Debug
     + 'static
 {
-    type Snapshot: Snapshot<Self>;
+    type Snapshot: Snapshot;
 
     fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;

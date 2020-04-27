@@ -24,7 +24,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -34,7 +34,7 @@ where
     E: KvEngine,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new(ps: &PeerStorage) -> RegionSnapshot<RocksEngine> {
+    pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksEngine> {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
@@ -43,7 +43,7 @@ where
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -136,16 +136,6 @@ where
             it_valid = f(it.key(), it.value())? && it.next()?;
         }
         Ok(())
-    }
-
-    pub fn get_properties_cf(&self, cf: &str) -> Result<E::TablePropertiesCollection> {
-        let start = keys::enc_start_key(&self.region);
-        let end = keys::enc_end_key(&self.region);
-        let prop = self
-            .snap
-            .get_db()
-            .get_range_properties_cf(cf, &start, &end)?;
-        Ok(prop)
     }
 
     #[inline]
@@ -282,7 +272,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
     ) -> RegionIterator<E> {
@@ -295,7 +285,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,
@@ -417,14 +407,17 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_peer_storage(engines: KvEngines<RocksEngine, RocksEngine>, r: &Region) -> PeerStorage {
+    fn new_peer_storage(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+        r: &Region,
+    ) -> PeerStorage<RocksEngine, RocksEngine> {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(
         engines: KvEngines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage, DataSet) {
+    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -448,7 +441,7 @@ mod tests {
 
     fn load_multiple_levels_dataset(
         engines: KvEngines<RocksEngine, RocksEngine>,
-    ) -> (PeerStorage, DataSet) {
+    ) -> (PeerStorage<RocksEngine, RocksEngine>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);

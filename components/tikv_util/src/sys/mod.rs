@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod cpu_time;
+
 #[cfg(target_os = "linux")]
 mod cgroup;
 
@@ -20,7 +22,7 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
-            let cpu_num = sysinfo::get_logical_cores();
+            let cpu_num = num_cpus::get();
             let cgroup_quota = self.cgroup.cpu_cores_quota();
             if cgroup_quota < 0 {
                 cpu_num
@@ -64,7 +66,7 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
-            sysinfo::get_logical_cores()
+            num_cpus::get()
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {

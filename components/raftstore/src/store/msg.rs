@@ -178,6 +178,13 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    /// Capture the changes of the region.
+    CaptureChange {
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        callback: Callback<RocksEngine>,
+    },
+    LeaderCallback(Callback<RocksEngine>),
 }
 
 /// Message that will be sent to a peer.
@@ -226,11 +233,6 @@ pub enum CasualMessage<E: KvEngine> {
     RegionOverlapped,
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
-    /// Capture the changes of the region.
-    CaptureChange {
-        cmd: ChangeCmd,
-        callback: Callback<RocksEngine>,
-    },
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -272,7 +274,6 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::CaptureChange { .. } => write!(fmt, "CaptureChange"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
@@ -312,7 +313,7 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes },
+    ApplyRes { res: ApplyTaskRes<E> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),

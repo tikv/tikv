@@ -41,8 +41,10 @@ configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 engine_rocks = { path = "../engine_rocks" }
+encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"
+openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
 futures-executor = "0.3.1"
@@ -55,11 +57,12 @@ lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client" }
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }
+rand = "0.6.5"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -78,7 +81,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
