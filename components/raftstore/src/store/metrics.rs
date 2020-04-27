@@ -424,7 +424,7 @@ lazy_static! {
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_read_index_pending",
-            "pending read index count"
+            "Pending read index count"
         ).unwrap();
 
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =

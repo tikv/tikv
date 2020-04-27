@@ -158,9 +158,20 @@ impl EntryCache {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
+                    let mut cleared_cache_entries_size = 0;
+                    self.cache
+                        .iter()
+                        .for_each(|e| cleared_cache_entries_size += e.compute_size());
+                    RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    let mut truncated_cache_entries_size = 0;
+                    self.cache
+                        .iter()
+                        .skip(left)
+                        .for_each(|e| truncated_cache_entries_size += e.compute_size());
+                    RAFT_ENTRIES_CAHCHES_GAUGE.sub(truncated_cache_entries_size as i64);
                     self.cache.truncate(left);
                 }
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
@@ -178,9 +189,18 @@ impl EntryCache {
         let mut start_idx = 0;
         if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
             if len < self.cache.len() {
-                self.cache.drain(..len);
+                let mut drained_cache_entries_size = 0;
+                self.cache
+                    .drain(..len)
+                    .for_each(|e| drained_cache_entries_size += e.compute_size());
+                RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
             } else {
                 start_idx = len - self.cache.len();
+                let mut cleared_cache_entries_size = 0;
+                self.cache
+                    .iter()
+                    .for_each(|e| cleared_cache_entries_size += e.compute_size());
+                RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                 self.cache.clear();
             }
         }
@@ -198,10 +218,14 @@ impl EntryCache {
             return;
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
+
+        let mut drained_cache_entries_size = 0;
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+            .for_each(|e| drained_cache_entries_size += e.compute_size());
+        RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
