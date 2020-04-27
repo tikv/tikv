@@ -54,8 +54,9 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
                 #block
             }.inspect(move |_| {
                 let _spans = __span_rx.iter();
+                let _spans: Vec<_> = _spans.collect();
                 // tracer::util::draw_stdout(_spans.collect());
-                let _ = tracer_pb::serialize(_spans);
+                // let _ = tracer_pb::serialize(_spans);
             })
         }
     )
