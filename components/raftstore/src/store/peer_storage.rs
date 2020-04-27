@@ -184,9 +184,12 @@ impl EntryCache {
                 self.cache.clear();
             }
         }
+        let mut cache_entries_size = 0;
         for e in &entries[start_idx..] {
+            cache_entries_size += e.compute_size();
             self.cache.push_back(e.to_owned());
         }
+        RAFT_ENTRIES_CAHCHES_GAUGE.add(cache_entries_size as i64);
     }
 
     pub fn compact_to(&mut self, idx: u64) {
