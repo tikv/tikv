@@ -19,7 +19,8 @@ use kvproto::raft_cmdpb::{
     TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
-    ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+    RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -41,7 +42,7 @@ use crate::store::{Callback, Config, PdTask, QuorumAlgorithm, ReadResponse, Regi
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -236,6 +237,12 @@ pub struct Peer {
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
     pub pending_merge_state: Option<MergeState>,
+    /// The rollback merge proposal can be proposed only when the number
+    /// of peers is greater than the majority of all peers.
+    /// There are more details in the annotation above
+    /// `test_node_merge_write_data_to_source_region_after_merging`
+    /// The peers who want to rollback merge
+    pub want_rollback_merge_peers: HashSet<u64>,
     /// source region is catching up logs for merge
     pub catch_up_logs: Option<CatchUpLogs>,
 
@@ -306,6 +313,7 @@ impl Peer {
             pending_remove: false,
             should_wake_up: false,
             pending_merge_state: None,
+            want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
@@ -2500,6 +2508,22 @@ impl Peer {
         self.mut_store().cancel_applying_snap();
         self.pending_reads.clear_all(None);
     }
+
+    pub fn maybe_add_want_rollback_merge_peer(&mut self, peer_id: u64, extra_msg: &ExtraMessage) {
+        if !self.is_leader() {
+            return;
+        }
+        if let Some(ref state) = self.pending_merge_state {
+            if state.get_commit() == extra_msg.get_premerge_commit() {
+                self.add_want_rollback_merge_peer(peer_id);
+            }
+        }
+    }
+
+    pub fn add_want_rollback_merge_peer(&mut self, peer_id: u64) {
+        assert!(self.pending_merge_state.is_some());
+        self.want_rollback_merge_peers.insert(peer_id);
+    }
 }
 
 impl Peer {
@@ -2648,6 +2672,39 @@ impl Peer {
                     "err" => ?e,
                 );
             }
+        }
+    }
+
+    pub fn send_want_rollback_merge<T: Transport>(&self, premerge_commit: u64, trans: &mut T) {
+        let mut send_msg = RaftMessage::default();
+        send_msg.set_region_id(self.region_id);
+        send_msg.set_from_peer(self.peer.clone());
+        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        let to_peer = match self.get_peer_from_cache(self.leader_id()) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "failed to look up recipient peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "to_peer" => self.leader_id(),
+                );
+                return;
+            }
+        };
+        send_msg.set_to_peer(to_peer.clone());
+        let extra_msg = send_msg.mut_extra_msg();
+        extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
+        extra_msg.set_premerge_commit(premerge_commit);
+        if let Err(e) = trans.send(send_msg) {
+            error!(
+                "failed to send want rollback merge message";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target_peer_id" => to_peer.get_id(),
+                "target_store_id" => to_peer.get_store_id(),
+                "err" => ?e
+            );
         }
     }
 }
