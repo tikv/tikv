@@ -10,10 +10,9 @@ use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
-use tikv::storage;
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::*;
+use tikv::storage::{self, lock_manager::DummyLockManager, *};
 use tikv_util::{collections::HashMap, HandyRwLock};
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
@@ -27,7 +26,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::from_engine(engine0).build().unwrap();
+    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine0)
+        .build()
+        .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
