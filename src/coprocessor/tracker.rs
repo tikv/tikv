@@ -198,7 +198,7 @@ impl Tracker {
                 "handler_build_time" => ?self.handler_build_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
-                "tag" => self.req_ctx.tag,
+                "tag" => self.req_ctx.tag.get_str(),
                 "scan_is_desc" => self.req_ctx.is_desc_scan,
                 "scan_iter_ops" => self.total_storage_stats.total_op_count(),
                 "scan_iter_processed" => self.total_storage_stats.total_processed(),
@@ -211,91 +211,87 @@ impl Tracker {
         let total_storage_stats =
             std::mem::replace(&mut self.total_storage_stats, Statistics::default());
 
-        TLS_COP_METRICS.with(|m| {
-            let mut cop_metrics = m.borrow_mut();
+        // req time
+        COPR_REQ_HISTOGRAM_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.req_time));
+        // wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .all
+            .observe(time::duration_to_sec(self.wait_time));
+        // schedule wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .schedule
+            .observe(time::duration_to_sec(self.schedule_wait_time));
+        // snapshot wait time
+        COPR_REQ_WAIT_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .snapshot
+            .observe(time::duration_to_sec(self.snapshot_wait_time));
+        // handle time
+        COPR_REQ_HANDLE_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.total_process_time));
+        // handler build time
+        COPR_REQ_HANDLER_BUILD_TIME_STATIC
+            .get(self.req_ctx.tag)
+            .observe(time::duration_to_sec(self.handler_build_time));
+        // scan keys
+        COPR_SCAN_KEYS_STATIC
+            .get(self.req_ctx.tag)
+            .observe(total_storage_stats.total_processed() as f64);
+        // RocksDB perf stats
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_key_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
 
-            // req time
-            cop_metrics
-                .local_copr_req_histogram_vec
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.req_time));
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .internal_delete_skipped_count
+            .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
 
-            // wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "all"])
-                .observe(time::duration_to_sec(self.wait_time));
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_cache_hit_count
+            .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
 
-            // schedule wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "schedule"])
-                .observe(time::duration_to_sec(self.schedule_wait_time));
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_read_count
+            .inc_by(self.total_perf_stats.0.block_read_count as i64);
 
-            // snapshot wait time
-            cop_metrics
-                .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag, "snapshot"])
-                .observe(time::duration_to_sec(self.snapshot_wait_time));
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .block_read_byte
+            .inc_by(self.total_perf_stats.0.block_read_byte as i64);
 
-            // handler build time
-            cop_metrics
-                .local_copr_req_handler_build_time
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.handler_build_time));
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .encrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
 
-            // handle time
-            cop_metrics
-                .local_copr_req_handle_time
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.total_process_time));
-
-            // scan keys
-            cop_metrics
-                .local_copr_scan_keys
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(total_storage_stats.total_processed() as f64);
-
-            // RocksDB perf stats
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
-                .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
-                .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
-                .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_count"])
-                .inc_by(self.total_perf_stats.0.block_read_count as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
-                .inc_by(self.total_perf_stats.0.block_read_byte as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "encrypt_data_nanos"])
-                .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
-
-            cop_metrics
-                .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "decrypt_data_nanos"])
-                .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
-        });
+        COPR_ROCKSDB_PERF_COUNTER_STATIC
+            .get(self.req_ctx.tag)
+            .decrypt_data_nanos
+            .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
+        let peer = self.req_ctx.context.get_peer();
+        let region_id = self.req_ctx.context.get_region_id();
+        let start_key = &self.req_ctx.lower_bound;
+        let end_key = &self.req_ctx.upper_bound;
+        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
+            reverse_scan
+        } else {
+            false
+        };
+
+        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
         self.current_stage = TrackerState::Tracked;
     }
 }

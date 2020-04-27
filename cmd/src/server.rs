@@ -27,7 +27,8 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
 use std::{
@@ -118,6 +119,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
+    state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
@@ -160,11 +162,12 @@ impl TiKVServer {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
-
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+
+        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
+            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
@@ -177,6 +180,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
+            state,
             store_path,
             encryption_key_manager: None,
             engines: None,
@@ -548,11 +552,21 @@ impl TiKVServer {
             Box::new(RaftstoreConfigManager(raft_store.clone())),
         );
 
+        let split_config_manager =
+            SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
+        cfg_controller.register(
+            tikv::config::Module::Split,
+            Box::new(split_config_manager.clone()),
+        );
+
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
             raft_store,
             self.pd_client.clone(),
+            self.state.clone(),
         );
 
         node.start(
@@ -564,6 +578,7 @@ impl TiKVServer {
             coprocessor_host,
             importer.clone(),
             split_check_worker,
+            auto_split_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
