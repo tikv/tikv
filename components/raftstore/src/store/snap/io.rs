@@ -48,6 +48,8 @@ where
         .create_new(true)
         .open(path)));
     let mut encrypted_file: Option<EncrypterWriter<File>> = None;
+    let mut should_encrypt = false;
+
     if let Some(key_mgr) = key_mgr {
         let enc_info = box_try!(key_mgr.new_file(path));
         let mthd = encryption_method_from_db_encryption_method(enc_info.method);
@@ -59,13 +61,14 @@ where
                 box_try!(Iv::from_slice(&enc_info.iv)),
             ));
             encrypted_file = Some(writer);
+            should_encrypt = true;
         }
     }
-    let mut writer = if let Some(file) = file.as_mut() {
-        file as &mut dyn Write
+
+    let mut writer = if !should_encrypt {
+        file.as_mut().unwrap() as &mut dyn Write
     } else {
-        let enc_file = encrypted_file.as_mut().unwrap();
-        enc_file as &mut dyn Write
+        encrypted_file.as_mut().unwrap() as &mut dyn Write
     };
 
     let mut stats = BuildStatistics::default();
@@ -77,9 +80,10 @@ where
         Ok(true)
     }));
 
-    let mut file = match file {
-        Some(f) => f,
-        None => encrypted_file.unwrap().finalize(),
+    let mut file = if !should_encrypt {
+        file.unwrap()
+    } else {
+        encrypted_file.unwrap().finalize()
     };
 
     if stats.key_count > 0 {
@@ -214,7 +218,7 @@ pub fn get_decrypter_reader(
     let enc_info = box_try!(encryption_key_manager.get_file(file));
     let mthd = encryption_method_from_db_encryption_method(enc_info.method);
     debug!(
-        "get_decrypter_reader gets enc_infor for {:?}, method: {:?}",
+        "get_decrypter_reader gets enc_info for {:?}, method: {:?}",
         file, mthd
     );
     if mthd == EncryptionMethod::Plaintext {

@@ -186,20 +186,23 @@ impl<W: Write> EncrypterWriter<W> {
         })
     }
 
+    /// Finalize the internal writer and encrypter and return the writer.
     pub fn finalize(&mut self) -> W {
-        self.do_finalize();
-        self.writer.take().unwrap()
+        self.do_finalize().unwrap()
     }
 
-    fn do_finalize(&mut self) {
-        let _ = self.flush();
-        let mut encrypt_buffer = vec![0; self.block_size];
-        let bytes = self.crypter.finalize(&mut encrypt_buffer).unwrap();
-        if bytes != 0 {
-            // The EncrypterWriter current only support crypters that always return the same amount
-            // of data. This is true for CTR mode.
-            panic!("unsupported encryption");
+    fn do_finalize(&mut self) -> Option<W> {
+        if self.writer.is_some() {
+            drop(self.flush());
+            let mut encrypt_buffer = vec![0; self.block_size];
+            let bytes = self.crypter.finalize(&mut encrypt_buffer).unwrap();
+            if bytes != 0 {
+                // The EncrypterWriter current only support crypters that always return the same
+                // amount of data. This is true for CTR mode.
+                panic!("unsupported encryption");
+            }
         }
+        self.writer.take()
     }
 }
 
