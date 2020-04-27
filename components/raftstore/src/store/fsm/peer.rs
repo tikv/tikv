@@ -889,6 +889,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_merge_target() {
+            fail_point!("on_has_merge_target", |_| Ok(()));
             if self.need_gc_merge(&msg)? {
                 self.on_stale_merge();
             }
@@ -950,7 +951,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.reset_raft_tick(GroupState::Ordered);
             }
             ExtraMessageType::MsgWantRollbackMerge => {
-                unimplemented!("remove this after #6584 merged")
+                self.fsm
+                    .peer
+                    .maybe_add_want_rollback_merge_peer(msg.get_from_peer().get_id(), &extra_msg);
             }
         }
     }
@@ -1905,18 +1908,64 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_check_merge(&mut self) {
-        if self.fsm.stopped || self.fsm.peer.pending_merge_state.is_none() {
+        if self.fsm.stopped
+            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_merge_state.is_none()
+        {
             return;
         }
         self.register_merge_check_tick();
+        fail_point!(
+            "on_check_merge_not_1001",
+            self.fsm.peer_id() != 1001,
+            |_| {}
+        );
         if let Err(e) = self.schedule_merge() {
-            info!(
-                "failed to schedule merge, rollback";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-            self.rollback_merge();
+            if self.fsm.peer.is_leader() {
+                self.fsm
+                    .peer
+                    .add_want_rollback_merge_peer(self.fsm.peer_id());
+                if self.fsm.peer.want_rollback_merge_peers.len()
+                    >= raft::majority(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .status()
+                            .progress
+                            .unwrap()
+                            .voter_ids()
+                            .len(),
+                    )
+                {
+                    info!(
+                        "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    );
+                    self.rollback_merge();
+                }
+            } else if !self.fsm.peer.peer.get_is_learner() {
+                info!(
+                    "want to rollback merge";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "leader_id" => self.fsm.peer.leader_id(),
+                    "err" => %e,
+                );
+                if self.fsm.peer.leader_id() != raft::INVALID_ID {
+                    self.ctx.need_flush_trans = true;
+                    self.fsm.peer.send_want_rollback_merge(
+                        self.fsm
+                            .peer
+                            .pending_merge_state
+                            .as_ref()
+                            .unwrap()
+                            .get_commit(),
+                        &mut self.ctx.trans,
+                    );
+                }
+            }
         }
     }
 
@@ -2084,7 +2133,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.tag, pending_commit, commit
             );
         }
+        // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
+        self.fsm.peer.want_rollback_merge_peers.clear();
+
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);

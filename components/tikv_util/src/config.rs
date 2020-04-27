@@ -611,6 +611,9 @@ mod check_data_dir {
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            if afile.is_null() {
+                return Err(ConfigError::FileSystem("error opening fstab".to_string()));
+            }
             let mut fs = FsInfo::default();
             loop {
                 let ent = libc::getmntent(afile);
