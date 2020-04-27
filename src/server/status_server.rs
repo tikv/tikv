@@ -564,12 +564,10 @@ impl StatusServer {
         };
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
-                let pd_addr = pd_addr
-                    .trim_start_matches("http://")
-                    .trim_start_matches("https://");
-                let url = format!("http://{}/pd/api/v1/component", pd_addr);
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path("pd/api/v1/component");
                 let res = client
-                    .post(&url)
+                    .post(url.as_str())
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
                     .body(json.clone())
                     .send();
@@ -585,7 +583,7 @@ impl StatusServer {
             }
         }
         error!(
-            "failed to unregister addr to pd after {} tries",
+            "failed to register addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
     }
@@ -599,14 +597,9 @@ impl StatusServer {
         let client = Client::new();
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
-                let pd_addr = pd_addr
-                    .trim_start_matches("http://")
-                    .trim_start_matches("https://");
-                let url = format!(
-                    "http://{}/pd/api/v1/component/{}/{}",
-                    pd_addr, COMPONENT, status_addr
-                );
-                match client.delete(&url).send() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
+                match client.delete(url.as_str()).send() {
                     Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
                     Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
                     Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
