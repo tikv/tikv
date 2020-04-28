@@ -2444,7 +2444,7 @@ impl Debug for GenSnapTask {
 static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ObserveID(usize);
 
 impl ObserveID {
@@ -2908,7 +2908,7 @@ where
             } => (observe_id, region_id, None),
         };
         if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            if observe_cmd.id != observe_id {
+            if observe_cmd.id > observe_id {
                 notify_stale_req(self.delegate.term, cb);
                 return;
             }

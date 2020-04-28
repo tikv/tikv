@@ -138,18 +138,18 @@ fn test_delayed_change_cmd() {
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(150);
     let mut suite = TestSuite::with_cluster(3, cluster);
     let region = suite.cluster.get_region(&[]);
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let leader = suite.cluster.leader_of_region(region.get_id()).unwrap();
     // Wait util lease expired
     sleep_ms(200);
 
-    let (read_index_sx, read_index_rx) = mspc::sync_channel::<RaftMessage>(10);
+    let (read_index_sx, read_index_rx) = mpsc::sync_channel::<RaftMessage>(10);
     let send_read_index_filter = RegionPacketFilter::new(region.get_id(), leader.get_store_id())
         .direction(Direction::Send)
         .msg_type(MessageType::MsgReadIndex)
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
             read_index_sx.send(msg.clone()).unwrap();
         }));
-    cluster.add_send_filter(CloneFilterFactory(send_read_index_filter));
+    suite.cluster.add_send_filter(CloneFilterFactory(send_read_index_filter));
 
     let mut req = ChangeDataRequest::default();
     req.region_id = region.get_id();
