@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite};
-use crossbeam::channel;
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;
@@ -12,8 +11,10 @@ use kvproto::cdcpb::{
     ChangeDataRequest,
 };
 use kvproto::kvrpcpb::*;
+use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use std::sync::mpsc;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
@@ -134,13 +135,13 @@ fn test_observe_duplicate_cmd() {
 fn test_delayed_change_cmd() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(150);
-    let mut suite = TestSuite::with_cluster(cluster);
+    let mut suite = TestSuite::with_cluster(3, cluster);
     let region = suite.cluster.get_region(&[]);
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     // Wait util lease expired
     sleep_ms(200);
 
-    let (read_index_sx, read_index_rx) = channel::unbounded::<RaftMessage>();
+    let (read_index_sx, read_index_rx) = mspc::sync_channel::<RaftMessage>(10);
     let send_read_index_filter = RegionPacketFilter::new(region.get_id(), leader.get_store_id())
         .direction(Direction::Send)
         .msg_type(MessageType::MsgReadIndex)
@@ -164,9 +165,9 @@ fn test_delayed_change_cmd() {
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
-    mutation.key = b"k";
-    mutation.value = b"v";
-    suite.must_kv_prewrite(region.get_id(), vec![mutation], b"k", start_ts);
+    mutation.key = b"k".to_vec();
+    mutation.value = b"v".to_vec();
+    suite.must_kv_prewrite(region.get_id(), vec![mutation], b"k".to_vec(), start_ts);
 
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
@@ -177,7 +178,7 @@ fn test_delayed_change_cmd() {
 
     // Commit
     let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![b"k"], start_ts, commit_ts);
+    suite.must_kv_commit(1, vec![b"k".to_vec()], start_ts, commit_ts);
 
     let mut events = receive_event(false);
     while events.len() < 2 {
