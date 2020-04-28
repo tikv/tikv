@@ -280,11 +280,32 @@ impl Tracker {
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
                 .inc_by(self.total_perf_stats.0.block_read_byte as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "encrypt_data_nanos"])
+                .inc_by(self.total_perf_stats.0.encrypt_data_nanos as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "decrypt_data_nanos"])
+                .inc_by(self.total_perf_stats.0.decrypt_data_nanos as i64);
         });
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
         tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
+        let peer = self.req_ctx.context.get_peer();
+        let region_id = self.req_ctx.context.get_region_id();
+        let start_key = &self.req_ctx.lower_bound;
+        let end_key = &self.req_ctx.upper_bound;
+        let reverse_scan = if let Some(reverse_scan) = self.req_ctx.is_desc_scan {
+            reverse_scan
+        } else {
+            false
+        };
+
+        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
         self.current_stage = TrackerState::Tracked;
     }
 }

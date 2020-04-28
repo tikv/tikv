@@ -85,25 +85,23 @@ fn test_stale_resolver() {
         events.extend(receive_event(false).into_iter());
     }
     assert_eq!(events.len(), 2);
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            let e = &es.entries[1];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+    for event in events {
+        match event.event.unwrap() {
+            Event_oneof_event::Entries(es) => match es.entries.len() {
+                1 => {
+                    assert_eq!(es.entries[0].get_type(), EventLogType::Commit, "{:?}", es);
+                }
+                2 => {
+                    let e = &es.entries[0];
+                    assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+                    let e = &es.entries[1];
+                    assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+                }
+                _ => panic!("{:?}", es),
+            },
+            Event_oneof_event::Error(e) => panic!("{:?}", e),
+            _ => panic!("unknown event"),
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
-    }
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(Some(resp_rx1));

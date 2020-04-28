@@ -17,6 +17,7 @@ configuration = { path = "../configuration" }
 chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
+derive_more = "0.99.3"
 fail = "0.3"
 fs2 = "0.4"
 futures = "0.1"
