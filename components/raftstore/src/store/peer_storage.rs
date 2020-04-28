@@ -231,7 +231,8 @@ fn update_raft_entries_caches_gauge(old_size: i64, new_size: i64) {
     let size_change = old_size - new_size;
     if size_change > 0 {
         RAFT_ENTRIES_CACHES_GAUGE.sub(size_change);
-    } else if size_change < 0 {
+    }
+    if size_change < 0 {
         RAFT_ENTRIES_CACHES_GAUGE.add(-size_change);
     }
 }
