@@ -2600,11 +2600,12 @@ impl Peer {
     }
 
     pub fn bcast_wake_up_message<T: Transport, C>(&self, ctx: &mut PollContext<T, C>) {
-        ctx.need_flush_trans = true;
         for peer in self.region().get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
+            ctx.need_flush_trans = true;
+
             let mut send_msg = RaftMessage::default();
             send_msg.set_region_id(self.region_id);
             send_msg.set_from_peer(self.peer.clone());
@@ -2626,7 +2627,6 @@ impl Peer {
     }
 
     pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        ctx.need_flush_trans = true;
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
@@ -2635,6 +2635,8 @@ impl Peer {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
+            ctx.need_flush_trans = true;
+
             let mut send_msg = RaftMessage::default();
             send_msg.set_region_id(self.region_id);
             send_msg.set_from_peer(self.peer.clone());
@@ -2659,7 +2661,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         check_conf_ver: u64,
-        check_peers: &[metapb::Peer],
+        check_peers: Vec<metapb::Peer>,
     ) {
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
@@ -2667,7 +2669,7 @@ impl Peer {
         }
         if self.check_stale_conf_ver < check_conf_ver {
             self.check_stale_conf_ver = check_conf_ver;
-            self.check_stale_peers = check_peers.to_vec();
+            self.check_stale_peers = check_peers;
             self.bcast_check_stale_peer_message(ctx);
         }
     }
