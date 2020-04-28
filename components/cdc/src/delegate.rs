@@ -414,6 +414,10 @@ impl Delegate {
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
+            info!("mismatched observe id, drop batch";
+                "current" => ?self.id,
+                "received" => ?batch.observe_id,
+                "region_id" => self.region_id);
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
