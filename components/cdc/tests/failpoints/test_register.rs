@@ -43,26 +43,21 @@ fn test_failed_pending_batch() {
     sleep_ms(200);
     fail::remove(fp);
 
-    let mut events = receive_event(false);
-    if events.len() == 1 {
-        events.extend(receive_event(false).into_iter());
-    }
-    assert_eq!(events.len(), 2, "{:?}", events);
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+    loop {
+        let mut events = receive_event(false);
+        match events.pop().unwrap().event.unwrap() {
+            Event_oneof_event::Error(err) => {
+                assert!(err.has_epoch_not_match(), "{:?}", err);
+                break;
+            }
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            _ => panic!("unknown event"),
         }
-        _ => panic!("unknown event"),
     }
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Error(err) => {
-            assert!(err.has_epoch_not_match(), "{:?}", err);
-        }
-        _ => panic!("unknown event"),
-    }
-
     // Try to subscribe region again.
     let region = suite.cluster.get_region(b"k0");
     // Ensure it is the previous region.
