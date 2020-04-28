@@ -2670,7 +2670,6 @@ impl Peer {
         if self.check_stale_conf_ver < check_conf_ver {
             self.check_stale_conf_ver = check_conf_ver;
             self.check_stale_peers = check_peers;
-            self.bcast_check_stale_peer_message(ctx);
         }
     }
 }

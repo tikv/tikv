@@ -364,7 +364,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_base_tick();
 
                 if self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+                    // FIXME: should use `bcast_check_stale_peer_message` instead.
+                    // Sending a new enum type msg to a old tikv may cause panic during rolling update
+                    // we should change the protobuf behavior and check if properly handled in all place 
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -2879,15 +2882,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
                 );
-
                 self.ctx
                     .raft_metrics
                     .leader_missing
                     .lock()
                     .unwrap()
                     .insert(self.region_id());
-
-                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
             }
             StaleState::ToValidate => {
                 // for peer B in case 1 above
