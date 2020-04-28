@@ -794,7 +794,7 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
         }
     }
     for i in 0..stall_num {
-        STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC
+        STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
             .with_label_values(&[name, ROCKSDB_IOSTALL_TYPE[i]])
             .set(counter[i]);
     }
@@ -989,7 +989,7 @@ lazy_static! {
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_write_stall_reason",
         "QPS of each reason which cause tikv write stall",
         &["db", "type"]
