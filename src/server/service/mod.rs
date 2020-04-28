@@ -5,4 +5,3 @@ mod kv;
 
 pub use self::debug::Service as DebugService;
 pub use self::kv::Service as KvService;
-pub use self::kv::{batch_commands_request, batch_commands_response};

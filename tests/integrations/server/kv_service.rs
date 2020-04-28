@@ -8,7 +8,6 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::new_server_cluster;
-use tikv::server::service::batch_commands_request;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -70,8 +69,8 @@ fn test_empty_commands() {
     for _ in 0..1000 {
         let mut batch_req = BatchCommandsRequest::default();
         for i in 0..10 {
-            let mut req = batch_commands_request::Request::default();
-            req.cmd = Some(batch_commands_request::request::Cmd::Empty(
+            let mut req = BatchCommandsRequest_Request::default();
+            req.cmd = Some(BatchCommandsRequest_Request_oneof_cmd::Empty(
                 Default::default(),
             ));
             batch_req.mut_requests().push(req);
