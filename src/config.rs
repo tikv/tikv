@@ -13,6 +13,7 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{
@@ -33,10 +34,10 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use encryption::EncryptionConfig;
-use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
@@ -48,7 +49,8 @@ use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, MB};
+use raftstore::store::SplitConfig;
+use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -1850,8 +1852,8 @@ mod readpool_tests {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[config(skip)]
-    pub enable_dynamic_config: bool,
+    #[config(hidden)]
+    pub cfg_path: String,
 
     #[config(skip)]
     #[serde(with = "log_level_serde")]
@@ -1874,8 +1876,6 @@ pub struct TiKvConfig {
 
     #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
-
-    pub refresh_config_interval: ReadableDuration,
 
     #[config(skip)]
     pub readpool: ReadPoolConfig,
@@ -1919,12 +1919,15 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub gc: GcConfig,
+
+    #[config(submodule)]
+    pub split: SplitConfig,
 }
 
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
-            enable_dynamic_config: true,
+            cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
@@ -1932,7 +1935,6 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
-            refresh_config_interval: ReadableDuration::secs(30),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -1947,6 +1949,7 @@ impl Default for TiKvConfig {
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
+            split: SplitConfig::default(),
         }
     }
 }
@@ -1982,6 +1985,14 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
+
+        if self.cfg_path.is_empty() {
+            self.cfg_path = Path::new(&self.storage.data_dir)
+                .join(LAST_CONFIG_FILE)
+                .to_str()
+                .unwrap()
+                .to_owned();
+        }
 
         let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
         if self.raft_store.raftdb_path.is_empty() {
@@ -2200,7 +2211,9 @@ impl TiKvConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
         (|| -> Result<Self, Box<dyn Error>> {
             let s = fs::read_to_string(&path)?;
-            Ok(::toml::from_str(&s)?)
+            let mut cfg: TiKvConfig = toml::from_str(&s)?;
+            cfg.cfg_path = path.as_ref().display().to_string();
+            Ok(cfg)
         })()
         .unwrap_or_else(|e| {
             panic!(
@@ -2229,6 +2242,7 @@ impl TiKvConfig {
         let tmp = tempfile::tempdir()?;
         let mut cfg = TiKvConfig::default();
         cfg.storage.data_dir = tmp.path().display().to_string();
+        cfg.cfg_path = tmp.path().join(LAST_CONFIG_FILE).display().to_string();
         Ok((cfg, tmp))
     }
 }
@@ -2295,6 +2309,17 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
+pub fn write_config<P: AsRef<Path>>(tem_dir: P, path: P, content: &[u8]) -> CfgResult<()> {
+    let tmp_cfg_path = tem_dir.as_ref().join(TMP_CONFIG_FILE);
+    {
+        let mut f = fs::File::create(&tmp_cfg_path)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp_cfg_path, &path)?;
+    Ok(())
+}
+
 lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
@@ -2314,9 +2339,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
             }
             return match typed.get(&f) {
                 None => Err(format!("unexpect fields: {}", f).into()),
-                Some(ConfigValue::Skip) => {
-                    Err(format!("fields {:?} can not be change", fields).into())
-                }
+                Some(ConfigValue::Skip) => Err(format!("config {:?} can not be change", f).into()),
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
                         .entry(f)
@@ -2352,6 +2375,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
 }
 
 fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
+    let v = v.trim_matches('\"');
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
@@ -2361,11 +2385,54 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
+        ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
-        ConfigValue::Other(_) => ConfigValue::Other(v.to_owned()),
         _ => unreachable!(),
     };
     Ok(res)
+}
+
+fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
+    fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
+        if let Some(mut f) = fields.pop() {
+            if f == "raftstore" {
+                f = "raft_store".to_owned();
+            } else {
+                f = f.replace("-", "_");
+            }
+            match typed.get(&f) {
+                None | Some(ConfigValue::Skip) => {
+                    Err(format!("failed to get fields: {}", f).into())
+                }
+                Some(ConfigValue::Module(m)) => helper(fields, m),
+                Some(c) => {
+                    if !fields.is_empty() {
+                        return Err(format!("unexpect fields: {:?}", fields).into());
+                    }
+                    match c {
+                        ConfigValue::Duration(_)
+                        | ConfigValue::Size(_)
+                        | ConfigValue::String(_)
+                        | ConfigValue::BlobRunMode(_) => Ok(true),
+                        _ => Ok(false),
+                    }
+                }
+            }
+        } else {
+            Err("failed to get field".to_owned().into())
+        }
+    };
+    let mut dst = HashMap::new();
+    for (name, value) in change {
+        let fields: Vec<_> = name.as_str().split('.').collect();
+        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        if helper(fields, &TIKVCONFIG_TYPED)? {
+            dst.insert(name, format!("\"{}\"", value));
+        } else {
+            dst.insert(name, value);
+        }
+    }
+    Ok(dst)
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -2384,6 +2451,7 @@ pub enum Module {
     Import,
     PessimisticTxn,
     Gc,
+    Split,
     Unknown(String),
 }
 
@@ -2396,6 +2464,7 @@ impl From<&str> for Module {
             "raft_store" => Module::Raftstore,
             "coprocessor" => Module::Coprocessor,
             "pd" => Module::Pd,
+            "split" => Module::Split,
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
@@ -2412,8 +2481,13 @@ impl From<&str> for Module {
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
 /// return the change if the incoming change is invalid.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ConfigController {
+    inner: Arc<RwLock<ConfigInner>>,
+}
+
+#[derive(Default)]
+struct ConfigInner {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
 }
@@ -2421,27 +2495,30 @@ pub struct ConfigController {
 impl ConfigController {
     pub fn new(current: TiKvConfig) -> Self {
         ConfigController {
-            current,
-            config_mgrs: HashMap::new(),
+            inner: Arc::new(RwLock::new(ConfigInner {
+                current,
+                config_mgrs: HashMap::new(),
+            })),
         }
     }
 
-    pub fn update(&mut self, change: HashMap<String, String>) -> CfgResult<()> {
-        let diff = to_config_change(change)?;
+    pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
+        let diff = to_config_change(change.clone())?;
         {
-            let mut incoming = self.current.clone();
+            let mut incoming = self.get_current();
             incoming.update(diff.clone());
             incoming.validate()?;
         }
+        let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
             match change {
                 ConfigValue::Module(change) => {
                     // update a submodule's config only if changes had been sucessfully
                     // dispatched to corresponding config manager, to avoid double dispatch change
-                    if let Some(mgr) = self.config_mgrs.get_mut(&Module::from(name.as_str())) {
+                    if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            self.current.update(to_update);
+                            inner.current.update(to_update);
                             return Err(e);
                         }
                     }
@@ -2453,32 +2530,42 @@ impl ConfigController {
             }
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
-        self.current.update(to_update);
-        // TODO: persist config to the orignal config file
-        if let Err(e) = persist_config(&self.current) {
-            return Err(e.into());
-        }
+        inner.current.update(to_update);
+        // Write change to the config file
+        let content = {
+            let change = to_toml_encode(change)?;
+            let src = if Path::new(&inner.current.cfg_path).exists() {
+                fs::read_to_string(&inner.current.cfg_path)?
+            } else {
+                String::new()
+            };
+            let mut t = TomlWriter::new();
+            t.write_change(src, change);
+            t.finish()
+        };
+        write_config(
+            &inner.current.storage.data_dir,
+            &inner.current.cfg_path,
+            &content,
+        )?;
         Ok(())
     }
 
-    pub fn update_config(&mut self, name: &str, value: &str) -> CfgResult<()> {
+    pub fn update_config(&self, name: &str, value: &str) -> CfgResult<()> {
         let mut m = HashMap::new();
         m.insert(name.to_owned(), value.to_owned());
         self.update(m)
     }
 
-    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
-        if self.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
+    pub fn register(&self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        let mut inner = self.inner.write().unwrap();
+        if inner.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
             warn!("config manager for module {:?} already registered", module)
         }
     }
 
-    pub fn get_current(&self) -> &TiKvConfig {
-        &self.current
-    }
-
-    pub fn get_current_mut(&mut self) -> &mut TiKvConfig {
-        &mut self.current
+    pub fn get_current(&self) -> TiKvConfig {
+        self.inner.read().unwrap().current.clone()
     }
 }
 
@@ -2647,14 +2734,12 @@ mod tests {
 
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
-        incoming.refresh_config_interval = ReadableDuration::hours(10);
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
-        change.insert("refresh-config-interval".to_owned(), "10h".to_owned());
         change.insert(
             "coprocessor.region-split-keys".to_owned(),
             "10000".to_owned(),
@@ -2698,6 +2783,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_to_toml_encode() {
+        let mut change = HashMap::new();
+        change.insert(
+            "raftstore.pd-heartbeat-tick-interval".to_owned(),
+            "1h".to_owned(),
+        );
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "read-only".to_owned(),
+        );
+        let res = to_toml_encode(change).unwrap();
+        assert_eq!(
+            res.get("raftstore.pd-heartbeat-tick-interval"),
+            Some(&"\"1h\"".to_owned())
+        );
+        assert_eq!(
+            res.get("coprocessor.region-split-keys"),
+            Some(&"10000".to_owned())
+        );
+        assert_eq!(
+            res.get("gc.max-write-bytes-per-sec"),
+            Some(&"\"100MB\"".to_owned())
+        );
+        assert_eq!(res.get("raftstore.sync-log"), Some(&"false".to_owned()));
+        assert_eq!(
+            res.get("rocksdb.defaultcf.titan.blob-run-mode"),
+            Some(&"\"read-only\"".to_owned())
+        );
+    }
+
     fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
@@ -2713,7 +2835,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
@@ -2729,7 +2851,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
-        let (db, mut cfg_controller) = new_engines(cfg);
+        let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();

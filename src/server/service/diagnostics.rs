@@ -159,6 +159,7 @@ mod sys {
     use tikv_util::config::KB;
     use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
     use tikv_util::sys::sys_quota::SysQuota;
+    use walkdir::WalkDir;
 
     type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
 
@@ -297,8 +298,6 @@ mod sys {
                 ("tx-packets/s", rate(cur.tx_packets, prev.tx_packets)),
                 ("rx-errors/s", rate(cur.rx_errors, prev.rx_errors)),
                 ("tx-errors/s", rate(cur.tx_errors, prev.tx_errors)),
-                ("rx-comp/s", rate(cur.rx_compressed, prev.rx_compressed)),
-                ("tx-comp/s", rate(cur.tx_compressed, prev.tx_compressed)),
             ];
             let mut pairs = vec![];
             for info in infos.into_iter() {
@@ -398,17 +397,13 @@ mod sys {
                 "cpu-logical-cores",
                 SysQuota::new().cpu_cores_quota().to_string(),
             ),
-            (
-                "cpu-physical-cores",
-                sysinfo::get_physical_cores().to_string(),
-            ),
+            ("cpu-physical-cores", num_cpus::get_physical().to_string()),
             (
                 "cpu-frequency",
                 format!("{}MHz", sysinfo::get_cpu_frequency()),
             ),
         ];
         // cache
-        use sysinfo::cache_size;
         let caches = vec![
             ("l1-cache-size", cache_size::l1_cache_size()),
             ("l1-cache-line-size", cache_size::l1_cache_line_size()),
@@ -501,7 +496,7 @@ mod sys {
     }
 
     fn nic_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-        let nics = sysinfo::datalink::interfaces();
+        let nics = pnet_datalink::interfaces();
         for nic in nics.into_iter() {
             let mut infos = vec![
                 ("mac", nic.mac_address().to_string()),
@@ -542,7 +537,7 @@ mod sys {
     /// system_info collects system related information, e.g: kernel
     pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
         // sysctl
-        let sysctl = sysinfo::get_sysctl_list();
+        let sysctl = get_sysctl_list();
         let mut pairs = vec![];
         for (key, val) in sysctl.into_iter() {
             let mut pair = ServerInfoPair::default();
@@ -557,6 +552,26 @@ mod sys {
         item.set_name("sysctl".to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
+    }
+
+    /// Returns system wide configuration
+    ///
+    /// # Note
+    ///
+    /// Current only can be used in operating system mounted `procfs`
+    fn get_sysctl_list() -> HashMap<String, String> {
+        const DIR: &str = "/proc/sys/";
+        WalkDir::new(DIR)
+            .into_iter()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let content = std::fs::read_to_string(entry.path()).ok()?;
+                let path = entry.path().to_str()?;
+
+                let name = path.trim_start_matches(DIR).replace("/", ".");
+                Some((name, content.trim().to_string()))
+            })
+            .collect()
     }
 
     /// process_info collects all process list
