@@ -177,7 +177,7 @@ fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
 
 fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_network_lists();
+    system.refresh_networks_list();
     system.refresh_networks();
     let current = system.get_networks();
 
@@ -282,6 +282,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         ),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
+        ("cpu-vendor-id", processor.get_vendor_id().to_string()),
     ];
     // cache
     let caches = vec![
@@ -498,8 +499,11 @@ mod tests {
         let prev_cpu = cpu_time_snapshot();
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let networks = system.get_networks();
-        let prev_nic = networks;
+        let prev_nic = system
+            .get_networks()
+            .into_iter()
+            .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
+            .collect();
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
@@ -635,24 +639,33 @@ mod tests {
         }
         // cpu
         let cpu_info = collector.iter().find(|x| x.get_tp() == "cpu").unwrap();
-        assert_eq!(
-            cpu_info
-                .get_pairs()
-                .iter()
-                .map(|x| x.get_key())
-                .collect::<Vec<&str>>(),
-            vec![
-                "cpu-logical-cores",
-                "cpu-physical-cores",
-                "cpu-frequency",
-                "l1-cache-size",
-                "l1-cache-line-size",
-                "l2-cache-size",
-                "l2-cache-line-size",
-                "l3-cache-size",
-                "l3-cache-line-size",
-            ]
-        );
+        let vendor_id = cpu_info
+            .get_pairs()
+            .iter()
+            .find(|x| x.get_key() == "cpu-vendor-id")
+            .unwrap()
+            .get_value();
+        if vendor_id != "AuthenticAMD" {
+            assert_eq!(
+                cpu_info
+                    .get_pairs()
+                    .iter()
+                    .map(|x| x.get_key())
+                    .collect::<Vec<&str>>(),
+                vec![
+                    "cpu-logical-cores",
+                    "cpu-physical-cores",
+                    "cpu-frequency",
+                    "cpu-vendor-id",
+                    "l1-cache-size",
+                    "l1-cache-line-size",
+                    "l2-cache-size",
+                    "l2-cache-line-size",
+                    "l3-cache-size",
+                    "l3-cache-line-size",
+                ]
+            );
+        }
         let mem_info = collector.iter().find(|x| x.get_tp() == "memory").unwrap();
         assert_eq!(
             mem_info
