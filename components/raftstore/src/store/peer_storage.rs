@@ -154,24 +154,14 @@ impl EntryCache {
         if entries.is_empty() {
             return;
         }
+        let current_mem_size = self.get_mem_size();
         if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
-                    let mut cleared_cache_entries_size = 0;
-                    self.cache
-                        .iter()
-                        .for_each(|e| cleared_cache_entries_size += get_entry_mem_size(&e));
-                    RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
-                    let mut truncated_cache_entries_size = 0;
-                    self.cache
-                        .iter()
-                        .skip(left)
-                        .for_each(|e| truncated_cache_entries_size += get_entry_mem_size(&e));
-                    RAFT_ENTRIES_CAHCHES_GAUGE.sub(truncated_cache_entries_size as i64);
                     self.cache.truncate(left);
                 }
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
@@ -189,27 +179,22 @@ impl EntryCache {
         let mut start_idx = 0;
         if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
             if len < self.cache.len() {
-                let mut drained_cache_entries_size = 0;
-                self.cache
-                    .drain(..len)
-                    .for_each(|e| drained_cache_entries_size += get_entry_mem_size(&e));
-                RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
+                self.cache.drain(..len);
             } else {
                 start_idx = len - self.cache.len();
-                let mut cleared_cache_entries_size = 0;
-                self.cache
-                    .iter()
-                    .for_each(|e| cleared_cache_entries_size += get_entry_mem_size(&e));
-                RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                 self.cache.clear();
             }
         }
-        let mut cache_entries_size = 0;
         for e in &entries[start_idx..] {
-            cache_entries_size += get_entry_mem_size(&e);
             self.cache.push_back(e.to_owned());
         }
-        RAFT_ENTRIES_CAHCHES_GAUGE.add(cache_entries_size as i64);
+        let size_change = current_mem_size - self.get_mem_size();
+        if size_change > 0 {
+            RAFT_ENTRIES_CAHCHES_GAUGE.add(size_change);
+        }
+        if size_change < 0 {
+            RAFT_ENTRIES_CAHCHES_GAUGE.sub(-size_change);
+        }
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -219,30 +204,39 @@ impl EntryCache {
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
 
-        let mut drained_cache_entries_size = 0;
+        let current_mem_size = self.get_mem_size();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
-            .for_each(|e| drained_cache_entries_size += get_entry_mem_size(&e));
-        RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
         }
+        let size_change = current_mem_size - self.get_mem_size();
+        if size_change > 0 {
+            RAFT_ENTRIES_CAHCHES_GAUGE.add(size_change);
+        }
+        if size_change < 0 {
+            RAFT_ENTRIES_CAHCHES_GAUGE.sub(-size_change);
+        }
+    }
+
+    fn get_mem_size(&self) -> i64 {
+        let data_size: usize = self
+            .cache
+            .iter()
+            .map(|e| e.get_data().len() + e.get_context().len())
+            .sum();
+        (self.cache.capacity() + data_size) as i64
     }
 
     #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
-}
-
-// Get the memory usage of the entry.
-fn get_entry_mem_size(entry: &Entry) -> usize {
-    std::mem::size_of_val(entry) + entry.get_data().len() + entry.get_context().len()
 }
 
 #[derive(Default)]
