@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
+use crate::server::service::diagnostics::ioload;
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
 use sysinfo::{DiskExt, ProcessExt, SystemExt};
 use tikv_util::config::KB;
@@ -164,10 +165,10 @@ fn nic_load_info(
 }
 
 fn io_load_info(
-    prev_io: HashMap<String, sysinfo::IOLoad>,
+    prev_io: HashMap<String, ioload::IoLoad>,
     collector: &mut Vec<ServerInfoItem>,
 ) {
-    let current = sysinfo::IOLoad::snapshot();
+    let current = ioload::IoLoad::snapshot();
     let rate = |cur, prev| (cur - prev) as f64;
     for (name, cur) in current.into_iter() {
         let prev = match prev_io.get(&name) {
@@ -228,7 +229,7 @@ pub fn load_info(
     (prev_cpu, prev_nic, prev_io): (
         CpuTimeSnapshot,
         HashMap<String, sysinfo::NICLoad>,
-        HashMap<String, sysinfo::IOLoad>,
+        HashMap<String, ioload::IoLoad>,
     ),
     collector: &mut Vec<ServerInfoItem>,
 ) {
@@ -465,7 +466,7 @@ mod tests {
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
         let prev_nic = sysinfo::NICLoad::snapshot();
-        let prev_io = sysinfo::IOLoad::snapshot();
+        let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
         #[cfg(linux)]

@@ -113,7 +113,7 @@ impl Diagnostics for Service {
                         let load = (
                             sys::cpu_time_snapshot(),
                             sysinfo::NICLoad::snapshot(),
-                            sysinfo::IOLoad::snapshot(),
+                            ioload::IoLoad::snapshot(),
                         );
                         let when = Instant::now() + Duration::from_millis(1000);
                         (Some(load), when)

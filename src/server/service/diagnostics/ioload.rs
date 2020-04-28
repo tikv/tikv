@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 
-/// IOLoad represents current system block devices IO statistics
+/// IoLoad represents current system block devices IO statistics
 #[derive(Debug)]
-pub struct IOLoad {
+pub struct IoLoad {
     /// number of read I/Os processed
     /// units: requests
     pub read_io: f64,
@@ -42,7 +42,7 @@ pub struct IOLoad {
     pub time_in_queue: f64,
 }
 
-impl IOLoad {
+impl IoLoad {
     /// Returns the current IO statistics
     ///
     /// # Notes
@@ -55,7 +55,7 @@ impl IOLoad {
 
     /// Returns the current IO statistics
     #[cfg(unix)]
-    pub fn snapshot() -> HashMap<String, IOLoad> {
+    pub fn snapshot() -> HashMap<String, IoLoad> {
         let mut result = HashMap::new();
         // https://www.kernel.org/doc/Documentation/block/stat.txt
         if let Ok(dir) = std::fs::read_dir("/sys/block/") {
@@ -63,9 +63,9 @@ impl IOLoad {
                 if let Ok(entry) = entry {
                     let stat = entry.path().join("stat");
                     let mut s = String::new();
-                    if let Err(_) = File::open(stat).and_then(|mut f| f.read_to_string(&mut s)) {
+                    if File::open(stat).and_then(|mut f| f.read_to_string(&mut s)).is_err() {
                         continue;
-                    };
+                    }
                     let parts = s
                         .split_whitespace()
                         .map(|w| w.parse().unwrap_or_default())
@@ -73,7 +73,7 @@ impl IOLoad {
                     if parts.len() != 11 {
                         continue;
                     }
-                    let load = IOLoad {
+                    let load = IoLoad {
                         read_io: parts[0],
                         read_merges: parts[1],
                         read_sectors: parts[2],
