@@ -13,11 +13,7 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
-<<<<<<< HEAD
-use std::sync::Arc;
-=======
 use std::sync::{Arc, RwLock};
->>>>>>> 5dfed75... config: update config through tikv-ctl (#7658)
 use std::usize;
 
 use configuration::{

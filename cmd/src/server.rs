@@ -610,11 +610,7 @@ impl TiKVServer {
         server_config
     }
 
-<<<<<<< HEAD
-    fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter>>) {
-=======
     fn register_services(&mut self) {
->>>>>>> 5dfed75... config: update config through tikv-ctl (#7658)
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
