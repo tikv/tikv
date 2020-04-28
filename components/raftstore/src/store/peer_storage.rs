@@ -161,7 +161,7 @@ impl EntryCache {
                     let mut cleared_cache_entries_size = 0;
                     self.cache
                         .iter()
-                        .for_each(|e| cleared_cache_entries_size += e.compute_size());
+                        .for_each(|e| cleared_cache_entries_size += get_entry_mem_size(&e));
                     RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                     self.cache.clear();
                 } else {
@@ -170,7 +170,7 @@ impl EntryCache {
                     self.cache
                         .iter()
                         .skip(left)
-                        .for_each(|e| truncated_cache_entries_size += e.compute_size());
+                        .for_each(|e| truncated_cache_entries_size += get_entry_mem_size(&e));
                     RAFT_ENTRIES_CAHCHES_GAUGE.sub(truncated_cache_entries_size as i64);
                     self.cache.truncate(left);
                 }
@@ -192,21 +192,21 @@ impl EntryCache {
                 let mut drained_cache_entries_size = 0;
                 self.cache
                     .drain(..len)
-                    .for_each(|e| drained_cache_entries_size += e.compute_size());
+                    .for_each(|e| drained_cache_entries_size += get_entry_mem_size(&e));
                 RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
             } else {
                 start_idx = len - self.cache.len();
                 let mut cleared_cache_entries_size = 0;
                 self.cache
                     .iter()
-                    .for_each(|e| cleared_cache_entries_size += e.compute_size());
+                    .for_each(|e| cleared_cache_entries_size += get_entry_mem_size(&e));
                 RAFT_ENTRIES_CAHCHES_GAUGE.sub(cleared_cache_entries_size as i64);
                 self.cache.clear();
             }
         }
         let mut cache_entries_size = 0;
         for e in &entries[start_idx..] {
-            cache_entries_size += e.compute_size();
+            cache_entries_size += get_entry_mem_size(&e);
             self.cache.push_back(e.to_owned());
         }
         RAFT_ENTRIES_CAHCHES_GAUGE.add(cache_entries_size as i64);
@@ -224,7 +224,7 @@ impl EntryCache {
         // if necessary.
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
-            .for_each(|e| drained_cache_entries_size += e.compute_size());
+            .for_each(|e| drained_cache_entries_size += get_entry_mem_size(&e));
         RAFT_ENTRIES_CAHCHES_GAUGE.sub(drained_cache_entries_size as i64);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
@@ -238,6 +238,11 @@ impl EntryCache {
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
+}
+
+// Get the memory usage of the entry.
+fn get_entry_mem_size(entry: &Entry) -> usize {
+    std::mem::size_of_val(entry) + entry.get_data().len() + entry.get_context().len()
 }
 
 #[derive(Default)]
