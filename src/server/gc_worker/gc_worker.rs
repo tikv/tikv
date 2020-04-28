@@ -9,9 +9,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::DB;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine, RocksSyncSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -23,7 +21,9 @@ use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
 };
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcStrategy, MvccReader, MvccTxn};
+use crate::storage::mvcc::{
+    check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
@@ -40,8 +40,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::AutoGcConfig;
 use super::gc_manager::{GcManager, GcManagerHandle};
-use super::init_compaction_filter;
-use super::{Callback, Error, ErrorInner, Result};
+use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -139,8 +138,8 @@ impl Display for GcTask {
 /// Used to perform GC operations on the engine.
 struct GcRunner<E: Engine> {
     engine: E,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    local_storage: Option<RocksEngine>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
@@ -155,8 +154,8 @@ struct GcRunner<E: Engine> {
 impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        local_storage: Option<RocksEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
@@ -250,10 +249,7 @@ impl<E: Engine> GcRunner<E> {
         let start_key = keys::data_key(region_info.region.get_start_key());
         let end_key = keys::data_end_key(region_info.region.get_end_key());
 
-        let collection = match db
-            .c()
-            .get_range_properties_cf(CF_WRITE, &start_key, &end_key)
-        {
+        let collection = match db.get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
             Ok(c) => c,
             Err(e) => {
                 error!(
@@ -266,8 +262,12 @@ impl<E: Engine> GcRunner<E> {
                 return true;
             }
         };
-        let strategy = GcStrategy::new(self.cfg.ratio_threshold, self.cfg.enable_compaction_filter);
-        check_need_gc(safe_point, strategy, collection)
+        check_need_gc(
+            safe_point,
+            self.cfg.ratio_threshold,
+            self.cfg.enable_compaction_filter,
+            &collection,
+        )
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -279,7 +279,7 @@ impl<E: Engine> GcRunner<E> {
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.get_snapshot(ctx)?;
         let mut reader = MvccReader::new(
-            snapshot,
+            snapshot.clone(),
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
             ctx.get_isolation_level(),
@@ -289,8 +289,8 @@ impl<E: Engine> GcRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let strategy = GcStrategy::new(self.cfg.ratio_threshold, self.cfg.enable_compaction_filter);
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, strategy);
+        let skip_gc = is_range_start
+            && !check_region_need_gc(&self.engine, snapshot, safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
             GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -320,7 +320,8 @@ impl<E: Engine> GcRunner<E> {
         keys: Vec<Key>,
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
-        let snapshot = self.get_snapshot(ctx)?;
+        let engine = self.local_storage.as_ref().unwrap().get_sync_db();
+        let snapshot = RocksSyncSnapshot::new(engine);
         let mut txn = MvccTxn::for_scan(
             snapshot,
             Some(ScanMode::Forward),
@@ -434,9 +435,8 @@ impl<E: Engine> GcRunner<E> {
         // First, call delete_files_in_range to free as much disk space as possible
         let delete_files_start_time = Instant::now();
         for cf in cfs {
-            let cf_handle = get_cf_handle(local_storage, cf).unwrap();
             local_storage
-                .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
+                .delete_files_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
@@ -456,7 +456,6 @@ impl<E: Engine> GcRunner<E> {
         for cf in cfs {
             // TODO: set use_delete_range with config here.
             local_storage
-                .c()
                 .delete_all_in_range_cf(cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
@@ -665,9 +664,9 @@ pub fn sync_gc(
 pub struct GcWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
-    local_storage: Option<Arc<DB>>,
+    local_storage: Option<RocksEngine>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
     /// This is useful to do the `need_gc` check without waking hibernatin regions up.
     /// This is not set for tests.
@@ -729,19 +728,18 @@ impl<E: Engine> Drop for GcWorker<E> {
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        local_storage: Option<RocksEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        let config_manager = GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)));
         GcWorker {
             engine,
             local_storage,
             raft_store_router,
-            config_manager,
+            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             region_info_accessor,
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -757,12 +755,9 @@ impl<E: Engine> GcWorker<E> {
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
-        info!(
-            "start_auto_gc, has_local_storage: {}",
-            self.local_storage.is_some()
-        );
         if let Some(db) = self.local_storage.clone() {
-            init_compaction_filter(db, Arc::clone(&safe_point), self.config_manager.clone());
+            let safe_point = Arc::clone(&safe_point);
+            init_compaction_filter(db, safe_point, self.config_manager.clone());
         }
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -790,7 +785,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost,
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
@@ -938,6 +933,7 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Storage, TestStorageBuilder};
+    use engine_rocks::Compat;
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1042,7 +1038,13 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GcWorker::new(engine, Some(db), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1200,8 +1202,13 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
-        let mut gc_worker =
-            GcWorker::new(prefixed_engine, Some(db), None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(
+            prefixed_engine,
+            Some(db.c().clone()),
+            None,
+            None,
+            GcConfig::default(),
+        );
         gc_worker.start().unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {

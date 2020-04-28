@@ -3,9 +3,7 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
-use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -37,7 +35,7 @@ use sst_importer::{error_inc, Config, Error, SSTImporter};
 pub struct ImportSSTService<Router> {
     cfg: Config,
     router: Router,
-    engine: Arc<DB>,
+    engine: RocksEngine,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
@@ -45,11 +43,11 @@ pub struct ImportSSTService<Router> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
-        engine: Arc<DB>,
+        engine: RocksEngine,
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
@@ -70,7 +68,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
     }
 }
 
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -90,12 +88,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => {
-                    switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
-                SwitchMode::Import => {
-                    switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
+                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine, mf),
+                SwitchMode::Import => switcher.enter_import_mode(&self.engine, mf),
             }
         };
         match res {
@@ -178,9 +172,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let engine = Arc::clone(&self.engine);
         let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(RocksEngine::from_ref(&engine))
+            .set_db(&self.engine)
             .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
             .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
             .unwrap();
@@ -233,7 +226,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
 
         if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
-            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+            && self
+                .engine
+                .ingest_maybe_slowdown_writes(CF_DEFAULT)
+                .expect("cf")
         {
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -300,7 +296,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         }
         let label = "compact";
         let timer = Instant::now_coarse();
-        let engine = Arc::clone(&self.engine);
+        let engine = self.engine.clone();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let (start, end) = if !req.has_range() {
@@ -317,7 +313,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
-            let res = compact_files_in_range(&engine, start, end, output_level);
+            let res = engine.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";

@@ -11,8 +11,6 @@ use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
 use kvproto::{errorpb, metapb};
-use pd_client;
-use raft;
 use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
@@ -76,12 +74,7 @@ quick_error! {
             description(err.description())
             display("Io {}", err)
         }
-        Engine(err: engine::Error) {
-            from()
-            description("Engine error")
-            display("Engine {:?}", err)
-        }
-        EngineTraits(err: engine_traits::Error) {
+        Engine(err: engine_traits::Error) {
             from()
             description("Engine error")
             display("Engine {:?}", err)
@@ -155,6 +148,16 @@ quick_error! {
             description(err.description())
             display("Snapshot {}", err)
         }
+        SstImporter(err: sst_importer::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("SstImporter {}", err)
+        }
+        Encryption(err: encryption::Error) {
+            from()
+            display("Encryption {}", err)
+        }
     }
 }
 
@@ -214,7 +217,7 @@ impl From<Error> for errorpb::Error {
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
-            Error::Engine(engine::Error::NotInRange(key, region_id, start_key, end_key)) => {
+            Error::Engine(engine_traits::Error::NotInRange(key, region_id, start_key, end_key)) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb.mut_key_not_in_region().set_region_id(region_id);
                 errorpb

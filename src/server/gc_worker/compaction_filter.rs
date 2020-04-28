@@ -12,6 +12,7 @@ use engine::rocks::{
     CompactionFilterFactory, DBCompactionFilter, DBIterator, SeekKey, Writable, WriteOptions, DB,
 };
 use engine_rocks::{util as rocks_util, RocksWriteBatch};
+use engine_rocks::RocksEngine;
 use engine_traits::{WriteBatch, CF_DEFAULT, CF_GC};
 use txn_types::{Key, WriteRef, WriteType};
 
@@ -28,14 +29,14 @@ lazy_static! {
 }
 
 pub fn init_compaction_filter(
-    db: Arc<DB>,
+    db: RocksEngine,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
 ) {
     info!("initialize GC context for compaction filter");
     let mut gc_context = GC_CONTEXT.lock().unwrap();
     *gc_context = Some(GcContext {
-        db,
+        db: db.as_inner().clone(),
         safe_point,
         cfg_tracker,
     });
@@ -372,25 +373,21 @@ fn need_filter_gc_table() -> Option<(Arc<DB>, Arc<AtomicU64>)> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::kv::{RocksEngine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::{
-        must_commit, must_get_none, must_prewrite_delete, must_prewrite_put,
-    };
-    use engine::rocks::util::{compact_range, get_cf_handle};
-    use engine::rocks::Writable;
-    use engine_traits::{CF_DEFAULT, CF_GC};
+    use crate::storage::kv::RocksEngine as StorageRocksEngine;
+    use engine_rocks::RocksEngine;
+    use engine_traits::{CompactExt, SyncMutable};
 
-    pub fn gc_by_compact(engine: &RocksEngine, _: &[u8], safe_point: u64) {
-        let kv = engine.get_rocksdb();
+    pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
+        let engine = RocksEngine::from_db(engine.get_rocksdb());
+
         // Put a new key-value pair to ensure compaction can be triggered correctly.
-        let handle = get_cf_handle(&kv, "write").unwrap();
-        kv.put_cf(handle, b"k1", b"v1").unwrap();
+        engine.put_cf("write", b"k1", b"v1").unwrap();
 
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
-        init_compaction_filter(Arc::clone(&kv), safe_point, cfg);
-        compact_range(&kv, handle, None, None, false, 1);
+        init_compaction_filter(engine.clone(), safe_point, cfg);
+        engine.compact_range("write", None, None, false, 1).unwrap();
     }
 
     #[test]

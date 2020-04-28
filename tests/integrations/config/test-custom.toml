@@ -59,7 +59,7 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = false
+request-batch-enable-cross-command = true
 request-batch-wait-duration = "10ms"
 
 [server.labels]
@@ -148,7 +148,7 @@ store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
-quorum-algorithm = "integration-on-half-fail"
+perf-level = 5
 
 [coprocessor]
 split-region-on-table = false
@@ -399,7 +399,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
-allow-concurrent-memtable-write = true
+allow-concurrent-memtable-write = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 
@@ -471,10 +471,20 @@ gc-merge-rewrite = true
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
-cipher-file = "invalid path"
 cert-allowed-cn = [
     "example.tikv.com",
 ]
+
+[encryption]
+data-encryption-method = "aes128-ctr"
+data-key-rotation-period = "14d"
+
+[encryption.master-key]
+type = "file"
+path = "/master/key/path"
+
+[encryption.previous-master-key]
+type = "plaintext"
 
 [import]
 num-threads = 123

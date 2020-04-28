@@ -8,8 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{IterOption, DATA_KEY_PREFIX_LEN, DB};
-use engine_traits::{name_to_cf, CfName};
+use engine::{DATA_KEY_PREFIX_LEN, DB};
+use engine_traits::{name_to_cf, CfName, IterOptions};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -163,6 +163,7 @@ impl BackupRange {
             IsolationLevel::Si,
             false, /* fill_cache */
             Default::default(),
+            false,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
@@ -217,7 +218,7 @@ impl BackupRange {
         let start = Instant::now();
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
-        let mut option = IterOption::default();
+        let mut option = IterOptions::default();
         if let Some(end) = self.end_key.clone() {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }

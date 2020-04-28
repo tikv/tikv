@@ -3,7 +3,6 @@
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
-use raft::StateRole;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
@@ -570,11 +569,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 let mut scanned_regions = 0;
                 for info in iter {
                     scanned_regions += 1;
-                    if info.role == StateRole::Leader {
-                        if find_peer(&info.region, store_id).is_some() {
-                            let _ = tx.send((Some(info.region.clone()), scanned_regions));
-                            return;
-                        }
+                    if find_peer(&info.region, store_id).is_some() {
+                        let _ = tx.send((Some(info.region.clone()), scanned_regions));
+                        return;
                     }
                 }
                 let _ = tx.send((None, scanned_regions));
@@ -620,6 +617,7 @@ mod tests {
     use super::*;
     use crate::storage::Callback;
     use kvproto::metapb;
+    use raft::StateRole;
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use raftstore::store::util::new_peer;

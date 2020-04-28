@@ -2,7 +2,6 @@
 
 use futures::sync::oneshot;
 use futures::{future, Future};
-use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
@@ -88,7 +87,7 @@ impl ReadPoolHandle {
                     CommandPri::Low => read_pool_low,
                 };
 
-                pool.spawn(move || Box::pin(f.never_error()).compat())?;
+                pool.spawn(f)?;
             }
             ReadPoolHandle::Yatp {
                 remote,
@@ -317,15 +316,14 @@ mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
-    use raftstore::store::FlowStatistics;
+    use raftstore::store::ReadStats;
     use std::thread;
-    use tikv_util::collections::HashMap;
 
     #[derive(Clone)]
     struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
-        fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+        fn report_read_stats(&self, _read_stats: ReadStats) {}
     }
 
     #[test]

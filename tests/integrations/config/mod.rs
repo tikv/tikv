@@ -6,13 +6,15 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
+use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
+use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -87,7 +89,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
-        request_batch_enable_cross_command: false,
+        request_batch_enable_cross_command: true,
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
@@ -182,7 +184,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
+        perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -478,7 +480,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_unordered_write: false,
-        allow_concurrent_memtable_write: true,
+        allow_concurrent_memtable_write: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
@@ -559,8 +561,17 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
-        cipher_file: "invalid path".to_owned(),
         cert_allowed_cn,
+    };
+    value.encryption = EncryptionConfig {
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
+        data_key_rotation_period: ReadableDuration::days(14),
+        master_key: MasterKeyConfig::File {
+            config: FileCofnig {
+                path: "/master/key/path".to_owned(),
+            },
+        },
+        previous_master_key: MasterKeyConfig::Plaintext,
     };
     value.import = ImportConfig {
         num_threads: 123,
