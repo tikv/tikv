@@ -895,11 +895,17 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Ok((TxnStatus::TtlExpire, released));
                 }
 
-                // If lock.minCommitTS is 0, it's not a large transaction and we can't push forward
-                // its minCommitTS otherwise the transaction can't be committed by old version TiDB
+                // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
+                // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
                 // during rolling update.
-                // If this is a large transaction and the lock is active, push forward the minCommitTS.
-                if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
+                if !lock.min_commit_ts.is_zero()
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
+                    // next time because it's not committed.
+                    && !caller_start_ts.is_max()
+                    // Push forward the min_commit_ts so that reading won't be blocked by locks.
+                    && caller_start_ts >= lock.min_commit_ts
+                {
                     lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
@@ -2609,6 +2615,29 @@ mod tests {
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
+        must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);
+        // Don't push forward the min_commit_ts if caller_start_ts is max.
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(310, 0),
+            TimeStamp::max(),
+            ts(320, 0),
+            r,
+            uncommitted(100, ts(310, 1)),
+        );
+        must_commit(&engine, k, ts(310, 0), ts(315, 0));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(310, 0),
+            TimeStamp::max(),
+            ts(320, 0),
+            r,
+            committed(ts(315, 0)),
+        );
     }
 
     #[test]

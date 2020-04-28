@@ -1514,7 +1514,6 @@ where
         state.get_region(),
         &mut snap_data,
         &mut stat,
-        Box::new(mgr.clone()),
     )?;
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
