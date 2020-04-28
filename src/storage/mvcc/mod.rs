@@ -8,7 +8,7 @@ mod write;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
 use std::error;
@@ -621,7 +621,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.cleanup(Key::from_raw(key), current_ts).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts, true).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -634,7 +634,8 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.cleanup(Key::from_raw(key), current_ts).unwrap_err()
+        txn.cleanup(Key::from_raw(key), current_ts, true)
+            .unwrap_err()
     }
 
     pub fn must_txn_heart_beat<E: Engine>(
