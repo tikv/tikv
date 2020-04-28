@@ -533,7 +533,7 @@ impl Peer {
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
-            // Only recent active peer is considerred, so that an isolated follower
+            // Only recent active peer is considered, so that an isolated follower
             // won't cause a waste of leader's resource.
             if *id == self.peer.get_id() || !pr.recent_active {
                 continue;
@@ -949,7 +949,7 @@ impl Peer {
                     );
                     // If the predecessor reads index during transferring leader and receives
                     // quorum's heartbeat response after that, it may wait for applying to
-                    // current term to apply the read. So broadcast eargerly to avoid unexpected
+                    // current term to apply the read. So broadcast eagerly to avoid unexpected
                     // latency.
                     //
                     // TODO: Maybe the predecessor should just drop all the read requests directly?
@@ -993,7 +993,7 @@ impl Peer {
         self.get_store().applied_index_term() == self.term()
             // There may be stale read if the old leader splits really slow,
             // the new region may already elected a new leader while
-            // the old leader still think it owns the splitted range.
+            // the old leader still think it owns the split range.
             && !self.is_splitting()
             // There may be stale read if a target leader is in another store and
             // applied commit merge, written new values, but the sibling peer in
@@ -1026,7 +1026,7 @@ impl Peer {
             || self.pending_merge_state.is_some()
     }
 
-    // Checks merge strictly, it checks whether there is any onging merge by
+    // Checks merge strictly, it checks whether there is any ongoing merge by
     // tracking last proposed prepare merge.
     // TODO: There is a false positives, proposed prepare merge may never be
     //       committed.
