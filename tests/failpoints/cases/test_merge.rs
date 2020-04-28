@@ -750,6 +750,7 @@ fn test_node_merge_transfer_leader() {
 
 #[test]
 fn test_node_merge_cascade_merge_with_apply_yield() {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -789,6 +790,7 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
 // Test if the rollback merge proposal is proposed before the majority of peers want to rollback
 #[test]
 fn test_node_mutiple_rollback_merge() {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
