@@ -38,7 +38,6 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
-    RegionProposal,
 };
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
@@ -619,7 +618,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksEngine>>) {
+    pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -627,9 +626,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
-        if let Some(p) = self.fsm.peer.take_apply_proposals() {
-            proposals.push(p);
-        }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);

@@ -32,9 +32,7 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
-};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
@@ -68,35 +66,54 @@ pub enum StaleState {
 }
 
 /// Meta information about proposals.
-pub struct ProposalMeta {
-    pub index: u64,
-    pub term: u64,
+pub struct ProposalMeta<E>
+where
+    E: KvEngine,
+{
+    pub proposal: Proposal<E>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
 }
 
-#[derive(Default)]
-struct ProposalQueue {
-    queue: VecDeque<ProposalMeta>,
+struct ProposalQueue<E>
+where
+    E: KvEngine,
+{
+    queue: VecDeque<ProposalMeta<E>>,
 }
 
-impl ProposalQueue {
-    fn pop(&mut self, term: u64) -> Option<ProposalMeta> {
-        self.queue.pop_front().and_then(|meta| {
-            if meta.term > term {
-                self.queue.push_front(meta);
-                return None;
+impl<E: KvEngine> ProposalQueue<E> {
+    fn new() -> ProposalQueue<E> {
+        ProposalQueue {
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn find_propose_time(&self, index: u64, term: u64) -> Option<Timespec> {
+        for p in self.queue.iter() {
+            if p.proposal.index == index && p.proposal.term == term {
+                return Some(p.renew_lease_time.unwrap());
             }
-            Some(meta)
-        })
+        }
+        None
     }
 
-    fn push(&mut self, meta: ProposalMeta) {
+    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<E>> {
+        let mut q = Vec::new();
+        while let Some(m) = self.queue.pop_front() {
+            if (m.proposal.term, m.proposal.index) > (term, index) {
+                self.queue.push_front(m);
+                break;
+            }
+            if !m.proposal.cb.is_none() {
+                q.push(m.proposal);
+            }
+        }
+        q
+    }
+
+    fn push(&mut self, meta: ProposalMeta<E>) {
         self.queue.push_back(meta);
-    }
-
-    fn clear(&mut self) {
-        self.queue.clear();
     }
 
     fn gc(&mut self) {
@@ -176,9 +193,7 @@ pub struct Peer {
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    proposals: ProposalQueue,
-    apply_proposals: Vec<Proposal<RocksEngine>>,
-
+    proposals: ProposalQueue<RocksEngine>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
@@ -285,8 +300,7 @@ impl Peer {
             peer,
             region_id: region.get_id(),
             raft_group,
-            proposals: Default::default(),
-            apply_proposals: vec![],
+            proposals: ProposalQueue::new(),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
@@ -486,7 +500,7 @@ impl Peer {
 
         self.pending_reads.clear_all(Some(region.get_id()));
 
-        for proposal in self.apply_proposals.drain(..) {
+        for ProposalMeta { proposal, .. } in self.proposals.queue.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
         }
 
@@ -1074,16 +1088,6 @@ impl Peer {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
-    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
-        if self.apply_proposals.is_empty() {
-            return None;
-        }
-
-        let proposals = mem::replace(&mut self.apply_proposals, vec![]);
-        let region_proposal = RegionProposal::new(self.peer_id(), self.region_id, proposals);
-        Some(region_proposal)
-    }
-
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
@@ -1315,17 +1319,13 @@ impl Peer {
             let mut lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
             let mut merge_to_be_update = self.is_leader();
-            if !lease_to_be_updated {
-                // It's not leader anymore, we are safe to clear proposals. If it becomes leader
-                // again, the lease should be updated when election is finished, old proposals
-                // have no effect.
-                self.proposals.clear();
-            }
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if lease_to_be_updated {
-                    let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
+                    let propose_time = self
+                        .proposals
+                        .find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
                             (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -1388,13 +1388,16 @@ impl Peer {
                 }
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
+                let cbs = self.proposals.take(committed_index, term);
                 let apply = Apply::new(
+                    self.peer_id(),
                     self.region_id,
                     self.term(),
                     committed_entries,
                     self.get_store().committed_index(),
                     term,
                     committed_index,
+                    cbs,
                 );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -1658,15 +1661,6 @@ impl Peer {
         true
     }
 
-    fn find_propose_time(&mut self, index: u64, term: u64) -> Option<Timespec> {
-        while let Some(meta) = self.proposals.pop(term) {
-            if meta.index == index && meta.term == term {
-                return Some(meta.renew_lease_time.unwrap());
-            }
-        }
-        None
-    }
-
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
@@ -1719,11 +1713,10 @@ impl Peer {
                 }
                 self.should_wake_up = true;
                 let meta = ProposalMeta {
-                    index: idx,
-                    term: self.term(),
+                    proposal: Proposal::new(is_conf_change, idx, self.term(), cb),
                     renew_lease_time: None,
                 };
-                self.post_propose(ctx, meta, is_conf_change, cb);
+                self.post_propose(ctx, meta);
                 true
             }
         }
@@ -1732,20 +1725,13 @@ impl Peer {
     fn post_propose<T, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
-        mut meta: ProposalMeta,
-        is_conf_change: bool,
-        cb: Callback<RocksEngine>,
+        mut meta: ProposalMeta<RocksEngine>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
             poll_ctx.current_time = Some(monotonic_raw_now());
         }
         meta.renew_lease_time = poll_ctx.current_time;
-
-        if !cb.is_none() {
-            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
-            self.apply_proposals.push(p);
-        }
 
         self.proposals.push(meta);
     }
@@ -2101,11 +2087,10 @@ impl Peer {
             let req = RaftCmdRequest::default();
             if let Ok(index) = self.propose_normal(poll_ctx, req) {
                 let meta = ProposalMeta {
-                    index,
-                    term: self.term(),
+                    proposal: Proposal::new(false, index, self.term(), Callback::None),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(poll_ctx, meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta);
             }
         }
 
