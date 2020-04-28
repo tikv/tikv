@@ -14,8 +14,7 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use encryption::{
-    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager,
-    DecrypterReader, Error as EncryptionError, Iv,
+    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -281,6 +280,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     Ok(snapshot_meta)
 }
 
+<<<<<<< HEAD
 fn enc_err_to_raftstore(e: EncryptionError) -> RaftStoreError {
     RaftStoreError::Snapshot(box_err!(e))
 }
@@ -306,6 +306,8 @@ fn get_decrypter_reader(
     Ok(Box::new(r) as Box<dyn Read + Send>)
 }
 
+=======
+>>>>>>> f2401ff... raftstore: encrypt lock cf in snapshots (#7616)
 fn calc_checksum_and_size(
     path: &PathBuf,
     encryption_key_manager: Option<&DataKeyManager>,
@@ -313,7 +315,7 @@ fn calc_checksum_and_size(
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
         // Crc32 and file size need to be calculated based on decrypted contents.
         let file_name = path.to_str().unwrap();
-        let mut r = get_decrypter_reader(file_name, &mgr)?;
+        let mut r = snap_io::get_decrypter_reader(file_name, &mgr)?;
         calc_crc32_and_size(&mut r)?
     } else {
         (calc_crc32(path)?, get_file_size(path)?)
@@ -797,7 +799,10 @@ impl Snap {
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
-                snap_io::build_plain_cf_file::<E>(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
+                let key_mgr = self.mgr.encryption_key_manager.as_ref();
+                snap_io::build_plain_cf_file::<E>(
+                    path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
+                )?
             } else {
                 snap_io::build_sst_cf_file::<E>(
                     path,
@@ -893,6 +898,7 @@ where
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
         let region = options.region;
+        let key_mgr = self.mgr.encryption_key_manager.as_ref();
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
@@ -907,6 +913,7 @@ where
                 };
                 snap_io::apply_plain_cf_file(
                     path,
+                    key_mgr,
                     &abort_checker,
                     &options.db,
                     cf,
@@ -1356,11 +1363,11 @@ impl SnapManager {
             None => return Ok(Box::new(s)),
         };
         for cf_file in &mut s.cf_files {
-            if plain_file_used(cf_file.cf) || cf_file.size == 0 {
+            if cf_file.size == 0 {
                 continue;
             }
             let p = cf_file.path.to_str().unwrap();
-            let reader = get_decrypter_reader(p, key_manager)?;
+            let reader = snap_io::get_decrypter_reader(p, key_manager)?;
             cf_file.file_for_sending = Some(reader);
         }
         Ok(Box::new(s))
@@ -1542,8 +1549,25 @@ impl SnapshotDeleter for SnapManager {
         true
     }
 
+<<<<<<< HEAD
     fn encryption_key_manager(&self) -> Option<&DataKeyManager> {
         self.encryption_key_manager.as_ref().map(|x| x.as_ref())
+=======
+    fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
+        fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+        let mgr = self.encryption_key_manager.as_ref();
+        if let Some(mgr) = &mgr {
+            let src = cf_file.tmp_path.to_str().unwrap();
+            let dst = cf_file.path.to_str().unwrap();
+            // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
+            // because without metadata file, saved cf files are nothing.
+            mgr.rename_file(src, dst)?;
+        }
+        let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
+        cf_file.checksum = checksum;
+        cf_file.size = size;
+        Ok(())
+>>>>>>> f2401ff... raftstore: encrypt lock cf in snapshots (#7616)
     }
 }
 
