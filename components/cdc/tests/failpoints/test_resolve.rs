@@ -120,7 +120,7 @@ fn test_stale_resolver() {
                     let e = &es.entries[1];
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
-                .. => {
+                _ => {
                     panic!("unexepected event length {:?}", es);
                 }
             },
