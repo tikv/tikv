@@ -394,13 +394,13 @@ impl Delegate {
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return None;
         }
-        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return None,
         };
-        debug!("resolved ts updated";
+        info!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;

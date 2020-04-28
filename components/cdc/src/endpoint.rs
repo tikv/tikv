@@ -379,6 +379,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
+            "checkpoint_ts" => request.checkpoint_ts,
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
@@ -532,13 +533,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     self.on_deregister(deregister);
                 }
             } else {
-                debug!("stale region ready";
+                info!("stale region ready";
                     "region_id" => region.get_id(),
                     "observe_id" => ?observe_id,
                     "current_id" => ?delegate.id);
             }
         } else {
-            debug!("region not found on region ready (finish building resolver)";
+            info!("region not found on region ready (finish building resolver)";
                 "region_id" => region.get_id());
         }
     }
@@ -717,7 +718,7 @@ impl Initializer {
             if let Some(None) = entries.last() {
                 done = true;
             }
-            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+            info!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             let scanned = Task::IncrementalScan {
                 region_id,
@@ -839,7 +840,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 downstream_state,
                 cb,
             } => {
-                debug!("downstream was initialized"; "downstream_id" => ?downstream_id);
+                info!("downstream was initialized"; "downstream_id" => ?downstream_id);
                 downstream_state.uninitialized_to_normal();
                 cb();
             }
