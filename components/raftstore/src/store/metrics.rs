@@ -455,7 +455,7 @@ lazy_static! {
             "collect topN of read qps",
         &["order"]
         ).unwrap();
-    pub static ref RAFT_ENTRIES_CAHCHES_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches"
         ).unwrap();
