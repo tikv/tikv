@@ -963,7 +963,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ExtraMessageType::MsgCheckStalePeerResponse => {
                 self.fsm.peer.on_check_stale_peer_response(
                     msg.get_region_epoch().get_conf_ver(),
-                    msg.mut_extra_msg().take_check_peers().into_vec(),
+                    msg.mut_extra_msg().take_check_peers().into(),
                 );
             }
         }
@@ -1036,7 +1036,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if msg.has_extra_msg() {
                 // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(

@@ -1333,6 +1333,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 // it is removed due to conf change or merge.
                 need_gc_msg |=
                     msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
