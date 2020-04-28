@@ -4424,6 +4424,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",
