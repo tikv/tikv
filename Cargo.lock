@@ -1966,7 +1966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#038e31959c2a66085aad455db6e34fa4e98a58f9"
+source = "git+https://github.com/pingcap/kvproto.git#f7ca9b5146bfecf97b9bc222884629bdbf668571"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4645,6 +4645,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",
