@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::server::{Error, Result};
 use futures::{Future, Sink, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
@@ -16,10 +17,9 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
+use sysinfo::SystemExt;
 use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-
-use crate::server::{Error, Result};
 
 mod ioload;
 mod log;
@@ -110,9 +110,18 @@ impl Diagnostics for Service {
             .spawn_fn(move || {
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
+                        let mut system = sysinfo::System::new();
+                        system.refresh_networks_list();
+                        system.refresh_all();
                         let load = (
                             sys::cpu_time_snapshot(),
-                            sysinfo::NICLoad::snapshot(),
+                            system
+                                .get_networks()
+                                .into_iter()
+                                .map(|(n, d)| {
+                                    (n.to_owned(), sys::NicSnapshot::from_network_data(d))
+                                })
+                                .collect(),
                             ioload::IoLoad::snapshot(),
                         );
                         let when = Instant::now() + Duration::from_millis(1000);

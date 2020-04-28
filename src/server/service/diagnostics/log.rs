@@ -62,9 +62,7 @@ impl LogIterator {
         let log_name = match log_path.file_name() {
             Some(file_name) => match file_name.to_str() {
                 Some(file_name) => file_name,
-                None => {
-                    return Err(Error::SearchError(format!("Invalid utf8: {:?}", file_name)))
-                }
+                None => return Err(Error::SearchError(format!("Invalid utf8: {:?}", file_name))),
             },
             None => {
                 return Err(Error::SearchError(format!(
@@ -169,9 +167,7 @@ impl Iterator for LogIterator {
                         if time < self.begin_time {
                             continue;
                         }
-                        if self.level_flag != 0
-                            && self.level_flag & (1 << (level as usize)) == 0
-                        {
+                        if self.level_flag != 0 && self.level_flag & (1 << (level as usize)) == 0 {
                             continue;
                         }
                         if !self.patterns.is_empty() {
@@ -259,8 +255,8 @@ fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
     let buffer = BufReader::new(file);
     let file_start_time = match buffer.lines().next() {
         Some(Ok(line)) => {
-            let (_, (time, _)) = parse(&line)
-                .map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
+            let (_, (time, _)) =
+                parse(&line).map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
             time
         }
         Some(Err(err)) => {
@@ -273,8 +269,8 @@ fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
     let mut rev_lines = rev_lines::RevLines::with_capacity(512, buffer)?;
     let file_end_time = match rev_lines.next() {
         Some(line) => {
-            let (_, (time, _)) = parse(&line)
-                .map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
+            let (_, (time, _)) =
+                parse(&line).map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
             time
         }
         None => INVALID_TIMESTAMP,
@@ -310,9 +306,8 @@ pub fn search<P: AsRef<Path>>(
     let levels = req.take_levels();
     let mut patterns = vec![];
     for pattern in req.take_patterns().iter() {
-        let pattern = regex::Regex::new(pattern).map_err(|e| {
-            Error::InvalidRequest(format!("illegal regular expression: {:?}", e))
-        })?;
+        let pattern = regex::Regex::new(pattern)
+            .map_err(|e| Error::InvalidRequest(format!("illegal regular expression: {:?}", e)))?;
         patterns.push(pattern);
     }
     let level_flag = levels

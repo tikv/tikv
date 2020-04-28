@@ -63,7 +63,10 @@ impl IoLoad {
                 if let Ok(entry) = entry {
                     let stat = entry.path().join("stat");
                     let mut s = String::new();
-                    if File::open(stat).and_then(|mut f| f.read_to_string(&mut s)).is_err() {
+                    if File::open(stat)
+                        .and_then(|mut f| f.read_to_string(&mut s))
+                        .is_err()
+                    {
                         continue;
                     }
                     let parts = s

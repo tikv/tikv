@@ -5,7 +5,7 @@ use std::string::ToString;
 
 use crate::server::service::diagnostics::ioload;
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use sysinfo::{DiskExt, ProcessExt, SystemExt};
+use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 use tikv_util::config::KB;
 use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
 use tikv_util::sys::sys_quota::SysQuota;
@@ -13,10 +13,55 @@ use walkdir::WalkDir;
 
 type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
 
+#[derive(Clone, Debug)]
+pub struct NicSnapshot {
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_packets: u64,
+    tx_packets: u64,
+    rx_errors: u64,
+    tx_errors: u64,
+}
+
+impl NicSnapshot {
+    pub fn from_network_data(data: &impl NetworkExt) -> NicSnapshot {
+        NicSnapshot {
+            rx_bytes: data.get_total_received(),
+            tx_bytes: data.get_total_transmitted(),
+            rx_packets: data.get_total_packets_received(),
+            tx_packets: data.get_total_packets_transmitted(),
+            rx_errors: data.get_total_errors_on_received(),
+            tx_errors: data.get_total_errors_on_transmitted(),
+        }
+    }
+
+    fn into_pairs(self, prev: &NicSnapshot) -> Vec<ServerInfoPair> {
+        macro_rules! pair {
+            ($label: literal, $value: expr, $old_value: expr) => {{
+                let mut pair = ServerInfoPair::default();
+                pair.set_key($label.to_owned());
+                pair.set_value(format!("{:.2}", ($value - $old_value) as f64));
+                pair
+            }};
+        }
+
+        vec![
+            pair!("rx-bytes/s", self.rx_bytes, prev.rx_bytes),
+            pair!("tx-bytes/s", self.tx_bytes, prev.tx_bytes),
+            pair!("rx-packets/s", self.rx_packets, prev.rx_packets),
+            pair!("tx-packets/s", self.tx_packets, prev.tx_packets),
+            pair!("rx-errors/s", self.rx_errors, prev.rx_errors),
+            pair!("tx-errors/s", self.tx_errors, prev.tx_errors),
+        ]
+    }
+}
+
 fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>) {
     // CPU load
     {
-        let load = sysinfo::get_avg_load();
+        let mut system = sysinfo::System::new();
+        system.refresh_system();
+        let load = system.get_load_average();
         let infos = vec![
             ("load1", load.one),
             ("load5", load.five),
@@ -81,7 +126,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_all();
+    system.refresh_memory();
     let total_memory = SysQuota::new().memory_limit_in_bytes();
     let used_memory = system.get_used_memory() * KB;
     let free_memory = system.get_free_memory() * KB;
@@ -130,44 +175,28 @@ fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     }
 }
 
-fn nic_load_info(
-    prev_nic: HashMap<String, sysinfo::NICLoad>,
-    collector: &mut Vec<ServerInfoItem>,
-) {
-    let current = sysinfo::NICLoad::snapshot();
-    let rate = |cur, prev| (cur - prev) as f64;
-    for (name, cur) in current.into_iter() {
-        let prev = match prev_nic.get(&name) {
+fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<ServerInfoItem>) {
+    let mut system = sysinfo::System::new();
+    system.refresh_network_lists();
+    system.refresh_networks();
+    let current = system.get_networks();
+
+    for (name, cur) in current {
+        let prev = match prev_nic.get(name) {
             Some(p) => p,
             None => continue,
         };
-        let infos = vec![
-            ("rx-bytes/s", rate(cur.rx_bytes, prev.rx_bytes)),
-            ("tx-bytes/s", rate(cur.tx_bytes, prev.tx_bytes)),
-            ("rx-packets/s", rate(cur.rx_packets, prev.rx_packets)),
-            ("tx-packets/s", rate(cur.tx_packets, prev.tx_packets)),
-            ("rx-errors/s", rate(cur.rx_errors, prev.rx_errors)),
-            ("tx-errors/s", rate(cur.tx_errors, prev.tx_errors)),
-        ];
-        let mut pairs = vec![];
-        for info in infos.into_iter() {
-            let mut pair = ServerInfoPair::default();
-            pair.set_key(info.0.to_string());
-            pair.set_value(format!("{:.2}", info.1));
-            pairs.push(pair);
-        }
+        let cur = NicSnapshot::from_network_data(cur);
+        let pairs = cur.into_pairs(prev);
         let mut item = ServerInfoItem::default();
         item.set_tp("net".to_string());
-        item.set_name(name);
+        item.set_name(name.clone());
         item.set_pairs(pairs.into());
         collector.push(item);
     }
 }
 
-fn io_load_info(
-    prev_io: HashMap<String, ioload::IoLoad>,
-    collector: &mut Vec<ServerInfoItem>,
-) {
+fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<ServerInfoItem>) {
     let current = ioload::IoLoad::snapshot();
     let rate = |cur, prev| (cur - prev) as f64;
     for (name, cur) in current.into_iter() {
@@ -228,7 +257,7 @@ pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
 pub fn load_info(
     (prev_cpu, prev_nic, prev_io): (
         CpuTimeSnapshot,
-        HashMap<String, sysinfo::NICLoad>,
+        HashMap<String, NicSnapshot>,
         HashMap<String, ioload::IoLoad>,
     ),
     collector: &mut Vec<ServerInfoItem>,
@@ -241,17 +270,18 @@ pub fn load_info(
 
 fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_all();
+    system.refresh_cpu();
+    let processor = match system.get_processors().iter().next() {
+        Some(p) => p,
+        None => return,
+    };
     let mut infos = vec![
         (
             "cpu-logical-cores",
             SysQuota::new().cpu_cores_quota().to_string(),
         ),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
-        (
-            "cpu-frequency",
-            format!("{}MHz", sysinfo::get_cpu_frequency()),
-        ),
+        ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
     ];
     // cache
     let caches = vec![
@@ -283,7 +313,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 
 fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_all();
+    system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
     pair.set_value((system.get_total_memory() * KB).to_string());
@@ -296,7 +326,8 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 
 fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_all();
+    system.refresh_disks_list();
+    system.refresh_disks();
     let disks = system.get_disks();
     for disk in disks {
         let total = disk.get_total_space();
@@ -429,8 +460,8 @@ fn get_sysctl_list() -> HashMap<String, String> {
 #[allow(dead_code)]
 pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = sysinfo::System::new();
-    system.refresh_all();
-    let processes = system.get_process_list();
+    system.refresh_processes();
+    let processes = system.get_processes();
     for (pid, p) in processes.iter() {
         if p.cmd().is_empty() {
             continue;
@@ -465,7 +496,10 @@ mod tests {
     #[test]
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
-        let prev_nic = sysinfo::NICLoad::snapshot();
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        let networks = system.get_networks();
+        let prev_nic = networks;
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
