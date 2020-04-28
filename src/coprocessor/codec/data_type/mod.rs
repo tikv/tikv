@@ -175,7 +175,6 @@ mod tests {
         assert!(val.is_err());
     }
 
-
     #[test]
     fn test_real_as_bool() {
         let tests: Vec<(f64, Option<bool>)> = vec![
