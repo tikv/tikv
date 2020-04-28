@@ -89,9 +89,11 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
-        init();
-        let mut cluster = new_server_cluster(1, count);
+        Self::with_cluster(new_server_cluster(1, count))
+    }
 
+    pub fn with_cluster(mut cluster: Cluster<ServerCluster>) -> TestSuite {
+        init();
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();
