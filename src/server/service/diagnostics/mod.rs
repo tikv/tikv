@@ -21,6 +21,7 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
 
+mod ioload;
 mod log;
 mod sys;
 
