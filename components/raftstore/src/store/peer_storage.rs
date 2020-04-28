@@ -190,10 +190,10 @@ impl EntryCache {
         }
         let size_change = current_mem_size - self.get_mem_size();
         if size_change > 0 {
-            RAFT_ENTRIES_CAHCHES_GAUGE.add(size_change);
+            RAFT_ENTRIES_CAHCHES_GAUGE.sub(size_change);
         }
         if size_change < 0 {
-            RAFT_ENTRIES_CAHCHES_GAUGE.sub(-size_change);
+            RAFT_ENTRIES_CAHCHES_GAUGE.add(-size_change);
         }
     }
 
@@ -217,10 +217,10 @@ impl EntryCache {
         }
         let size_change = current_mem_size - self.get_mem_size();
         if size_change > 0 {
-            RAFT_ENTRIES_CAHCHES_GAUGE.add(size_change);
+            RAFT_ENTRIES_CAHCHES_GAUGE.sub(size_change);
         }
         if size_change < 0 {
-            RAFT_ENTRIES_CAHCHES_GAUGE.sub(-size_change);
+            RAFT_ENTRIES_CAHCHES_GAUGE.add(-size_change);
         }
     }
 
