@@ -9,5 +9,5 @@ protobuf-codec = ["fuzz-targets/protobuf-codec"]
 prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
-afl = "0.6"
+afl = "0.8"
 fuzz-targets = { path = "../targets", default-features = false }
