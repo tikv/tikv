@@ -13,7 +13,7 @@ use engine::Peekable;
 use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, Callback};
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
