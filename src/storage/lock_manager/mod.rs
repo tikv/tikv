@@ -33,13 +33,7 @@ pub trait LockMgr: Clone + Send + 'static {
     );
 
     /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
-    fn wake_up(
-        &self,
-        lock_ts: u64,
-        hashes: Option<Vec<u64>>,
-        commit_ts: u64,
-        is_pessimistic_txn: bool,
-    );
+    fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64, is_pessimistic_txn: bool);
 
     /// Returns true if there are waiters in the `LockMgr`.
     ///
@@ -68,7 +62,7 @@ impl LockMgr for DummyLockMgr {
     fn wake_up(
         &self,
         _lock_ts: u64,
-        _hashes: Option<Vec<u64>>,
+        _hashes: Vec<u64>,
         _commit_ts: u64,
         _is_pessimistic_txn: bool,
     ) {
