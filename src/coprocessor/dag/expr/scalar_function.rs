@@ -206,13 +206,19 @@ impl ScalarFunc {
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
             | ScalarFuncSig::IntIsTrue
+            | ScalarFuncSig::IntIsTrueWithNull
             | ScalarFuncSig::IntIsFalse
+            | ScalarFuncSig::IntIsFalseWithNull
             | ScalarFuncSig::IntIsNull
             | ScalarFuncSig::RealIsTrue
+            | ScalarFuncSig::RealIsTrueWithNull
             | ScalarFuncSig::RealIsFalse
+            | ScalarFuncSig::RealIsFalseWithNull
             | ScalarFuncSig::RealIsNull
             | ScalarFuncSig::DecimalIsTrue
+            | ScalarFuncSig::DecimalIsTrueWithNull
             | ScalarFuncSig::DecimalIsFalse
+            | ScalarFuncSig::DecimalIsFalseWithNull
             | ScalarFuncSig::DecimalIsNull
             | ScalarFuncSig::StringIsNull
             | ScalarFuncSig::TimeIsNull
@@ -771,14 +777,20 @@ dispatch_call! {
         UnaryNotDecimal => unary_not_decimal,
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
-        IntIsFalse => int_is_false,
-        IntIsTrue => int_is_true,
-        RealIsTrue => real_is_true,
-        RealIsFalse => real_is_false,
+        IntIsFalse => int_is_false false,
+        IntIsFalseWithNull => int_is_false true,
+        IntIsTrue => int_is_true false,
+        IntIsTrueWithNull => int_is_true true,
+        RealIsTrue => real_is_true false,
+        RealIsTrueWithNull => real_is_true true,
+        RealIsFalse => real_is_false false,
+        RealIsFalseWithNull => real_is_false true,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
-        DecimalIsTrue => decimal_is_true,
-        DecimalIsFalse => decimal_is_false,
+        DecimalIsTrue => decimal_is_true false,
+        DecimalIsTrueWithNull => decimal_is_true true,
+        DecimalIsFalse => decimal_is_false false,
+        DecimalIsFalseWithNull => decimal_is_false true,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
