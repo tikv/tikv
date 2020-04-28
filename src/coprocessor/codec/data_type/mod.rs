@@ -46,7 +46,7 @@ impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty()
-            && crate::coprocessor::codec::convert::bytes_to_int(context, self)? != 0)
+            && crate::coprocessor::codec::convert::bytes_to_f64(context, self)? != 0f64)
     }
 }
 
@@ -119,6 +119,61 @@ impl_evaluable_type! { Json }
 mod tests {
     use super::*;
     use std::f64;
+
+    #[test]
+    fn test_bytes_as_bool() {
+        let tests: Vec<(&'static [u8], Option<bool>)> = vec![
+            (b"", Some(false)),
+            (b" 23", Some(true)),
+            (b"-1", Some(true)),
+            (b"1.11", Some(true)),
+            (b"1.11.00", None),
+            (b"xx", None),
+            (b"0x00", None),
+            (b"11.xx", None),
+            (b"xx.11", None),
+            (
+                b".0000000000000000000000000000000000000000000000000000001",
+                Some(true),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (i, (v, expect)) in tests.into_iter().enumerate() {
+            let rb: Result<bool> = v.to_vec().as_mysql_bool(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(rb.unwrap(), val);
+                }
+                None => {
+                    assert!(
+                        rb.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        rb
+                    );
+                }
+            }
+        }
+
+        // test overflow
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::NEG_INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+    }
 
     #[test]
     fn test_real_as_bool() {
