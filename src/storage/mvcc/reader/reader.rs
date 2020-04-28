@@ -377,6 +377,7 @@ impl<S: Snapshot> MvccReader<S> {
 pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
+    only_care_delete: bool,
     write_properties: &RocksTablePropertiesCollection,
 ) -> bool {
     // Always GC.
@@ -396,6 +397,10 @@ pub fn check_need_gc(
 
     // Note: Since the properties are file-based, it can be false positive.
     // For example, multiple files can have a different version of the same row.
+    if only_care_delete {
+        // If compaction filter is enabled, traditional GC only clears DELETE marks.
+        return props.num_deletes as f64 > props.num_versions as f64 * (ratio_threshold - 1.0);
+    }
 
     // A lot of MVCC versions to GC.
     if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
@@ -448,7 +453,7 @@ pub fn check_region_need_gc<E: Engine, S: Snapshot>(
         Ok(v) => v,
         Err(_) => return true,
     };
-    check_need_gc(safe_point, ratio_threshold, &prop)
+    check_need_gc(safe_point, ratio_threshold, false, &prop)
 }
 
 #[cfg(test)]
@@ -697,7 +702,7 @@ mod tests {
             .c()
             .get_range_properties_cf(CF_WRITE, &start, &end)
             .unwrap();
-        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
+        assert_eq!(check_need_gc(safe_point, 1.0, false, &collection), need_gc);
 
         get_mvcc_properties(safe_point, &collection)
     }

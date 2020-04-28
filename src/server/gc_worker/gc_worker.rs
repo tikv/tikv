@@ -9,7 +9,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSyncSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -262,7 +262,12 @@ impl<E: Engine> GcRunner<E> {
                 return true;
             }
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
+        check_need_gc(
+            safe_point,
+            self.cfg.ratio_threshold,
+            self.cfg.enable_compaction_filter,
+            &collection,
+        )
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -315,7 +320,8 @@ impl<E: Engine> GcRunner<E> {
         keys: Vec<Key>,
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
-        let snapshot = self.get_snapshot(ctx)?;
+        let engine = self.local_storage.as_ref().unwrap().get_sync_db();
+        let snapshot = RocksSyncSnapshot::new(engine);
         let mut txn = MvccTxn::for_scan(
             snapshot,
             Some(ScanMode::Forward),
