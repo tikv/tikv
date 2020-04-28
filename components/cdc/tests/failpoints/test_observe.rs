@@ -15,6 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
