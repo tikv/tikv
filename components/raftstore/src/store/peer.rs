@@ -2604,8 +2604,6 @@ impl Peer {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            ctx.need_flush_trans = true;
-
             let mut send_msg = RaftMessage::default();
             send_msg.set_region_id(self.region_id);
             send_msg.set_from_peer(self.peer.clone());
@@ -2622,6 +2620,8 @@ impl Peer {
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
                 );
+            } else {
+                ctx.need_flush_trans = true;
             }
         }
     }
@@ -2635,8 +2635,6 @@ impl Peer {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            ctx.need_flush_trans = true;
-
             let mut send_msg = RaftMessage::default();
             send_msg.set_region_id(self.region_id);
             send_msg.set_from_peer(self.peer.clone());
@@ -2653,6 +2651,8 @@ impl Peer {
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
                 );
+            } else {
+                ctx.need_flush_trans = true;
             }
         }
     }

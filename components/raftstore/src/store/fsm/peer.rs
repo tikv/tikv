@@ -945,9 +945,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
-        let region_epoch = msg.get_region_epoch().clone();
-        let extra_msg = msg.mut_extra_msg();
-        match extra_msg.get_type() {
+        match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.group_state == GroupState::Idle {
                     self.reset_raft_tick(GroupState::Ordered);
@@ -959,8 +957,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ExtraMessageType::MsgCheckStalePeerResponse => {
                 self.fsm.peer.on_check_stale_peer_response(
                     &mut self.ctx,
-                    region_epoch.get_conf_ver(),
-                    extra_msg.take_check_peers().into_vec(),
+                    msg.get_region_epoch().get_conf_ver(),
+                    msg.mut_extra_msg().take_check_peers().into_vec(),
                 );
             }
         }
