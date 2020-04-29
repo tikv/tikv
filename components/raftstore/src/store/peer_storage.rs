@@ -153,7 +153,6 @@ impl EntryCache {
         if entries.is_empty() {
             return;
         }
-        let current_mem_size = self.get_mem_size();
         if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
@@ -166,7 +165,9 @@ impl EntryCache {
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
                     && self.cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
+                    let current_mem_size = self.get_mem_size();
                     self.cache.shrink_to_fit();
+                    update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -184,6 +185,7 @@ impl EntryCache {
                 self.cache.clear();
             }
         }
+        let current_mem_size = self.get_mem_size();
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
         }
@@ -197,18 +199,18 @@ impl EntryCache {
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
 
-        let current_mem_size = self.get_mem_size();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
+            let current_mem_size = self.get_mem_size();
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
+            update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
         }
-        update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
     }
 
     fn get_mem_size(&self) -> i64 {
