@@ -270,6 +270,13 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    // The normal write process is respond to clients and release latches
+                    // after async write finished. If pipelined pessimistic lock is enabled,
+                    // the process becomes parallel and there are two msgs for one command:
+                    //   1. Msg::PipelinedWrite: respond to clients
+                    //   2. Msg::WriteFinished: deque context and release latches
+                    // The order between these two msgs is uncertain due to thread scheduling
+                    // so we clone the result for each msg.
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
                         (pr.maybe_clone().unwrap(), pr)
                     } else {
@@ -280,6 +287,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         sched_pool
                             .pool
                             .spawn(async move {
+                                fail_point!("scheduler_async_write_finish");
+
                                 notify_scheduler(
                                     sched,
                                     Msg::WriteFinished {
@@ -305,6 +314,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else if pipelined {
+                        fail_point!("scheduler_pipelined_write_finish");
+
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
                         Msg::PipelinedWrite {
