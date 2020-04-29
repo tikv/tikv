@@ -792,7 +792,7 @@ pub struct DbConfig {
     pub titan: TitanDBConfig,
     #[config(skip)]
     #[serde(with = "log_level_serde")]
-    pub log_level: slog::Level,
+    pub rocksdb_log_level: slog::Level,
 }
 
 impl Default for DbConfig {
@@ -834,7 +834,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
-            log_level: slog::Level::Info,
+            rocksdb_log_level: slog::Level::Info,
         }
     }
 }
@@ -859,6 +859,7 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
+        /*
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -868,7 +869,7 @@ impl DbConfig {
                     );
                 })
         }
-
+        */
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
@@ -892,7 +893,7 @@ impl DbConfig {
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
-        opts.set_info_log_level(match self.log_level {
+        opts.set_info_log_level(match self.rocksdb_log_level {
             slog::Level::Error => DBInfoLogLevel::Error,
             slog::Level::Critical => DBInfoLogLevel::Fatal,
             slog::Level::Info => DBInfoLogLevel::Info,

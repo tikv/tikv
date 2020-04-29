@@ -25,7 +25,8 @@ tikv_util = { path = "../tikv_util" }
 time = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/hawkingrei/rust-rocksdb.git"
+branch = "refactor_log"
 package = "rocksdb"
 features = ["static_libcpp"]
 
