@@ -14,7 +14,6 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 
-#![feature(c_variadic)]
 #![cfg_attr(test, feature(test))]
 
 #[allow(unused_extern_crates)]
