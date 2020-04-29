@@ -328,6 +328,11 @@ pub struct Peer {
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
+
+    /// The known newest conf version and its corresponding peer list
+    /// Send to these peers to check whether itself is stale.
+    pub check_stale_conf_ver: u64,
+    pub check_stale_peers: Vec<metapb::Peer>,
 }
 
 impl Peer {
@@ -405,6 +410,8 @@ impl Peer {
             pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
+            check_stale_conf_ver: 0,
+            check_stale_peers: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2517,9 +2524,8 @@ impl Peer {
         }
     }
 
-    pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
-        let region = self.raft_group.get_store().region();
-        for peer in region.get_peers() {
+    pub fn bcast_wake_up_message<T: Transport, C>(&self, ctx: &mut PollContext<T, C>) {
+        for peer in self.region().get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
@@ -2530,7 +2536,7 @@ impl Peer {
             send_msg.set_to_peer(peer.clone());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_field_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = trans.send(send_msg) {
+            if let Err(e) = ctx.trans.send(send_msg) {
                 error!(
                     "failed to send wake up message";
                     "region_id" => self.region_id,
@@ -2539,7 +2545,51 @@ impl Peer {
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
                 );
+            } else {
+                ctx.need_flush_trans = true;
             }
+        }
+    }
+
+    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+            self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
+            self.check_stale_peers = self.region().get_peers().to_vec();
+        }
+        for peer in &self.check_stale_peers {
+            if peer.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut send_msg = RaftMessage::default();
+            send_msg.set_region_id(self.region_id);
+            send_msg.set_from_peer(self.peer.clone());
+            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+            send_msg.set_to_peer(peer.clone());
+            let extra_msg = send_msg.mut_extra_msg();
+            extra_msg.set_field_type(ExtraMessageType::MsgCheckStalePeer);
+            if let Err(e) = ctx.trans.send(send_msg) {
+                error!(
+                    "failed to send check stale peer message";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => peer.get_id(),
+                    "target_store_id" => peer.get_store_id(),
+                    "err" => ?e,
+                );
+            } else {
+                ctx.need_flush_trans = true;
+            }
+        }
+    }
+
+    pub fn on_check_stale_peer_response(
+        &mut self,
+        check_conf_ver: u64,
+        check_peers: Vec<metapb::Peer>,
+    ) {
+        if self.check_stale_conf_ver < check_conf_ver {
+            self.check_stale_conf_ver = check_conf_ver;
+            self.check_stale_peers = check_peers;
         }
     }
 

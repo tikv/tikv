@@ -964,7 +964,7 @@ fn test_merge_isloated_not_in_merge_learner() {
     pd_client.must_remove_peer(right.get_id(), right_on_store1);
 
     pd_client.must_merge(left.get_id(), right.get_id());
-    // Add a new learner on store 2 to trigger peer 2 send wake-up msg to other peers
+    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to other peers
     pd_client.must_add_peer(right.get_id(), new_learner_peer(2, 5));
 }
 
@@ -1006,7 +1006,7 @@ fn test_merge_isloated_stale_learner() {
 
     let new_left = pd_client.get_region(b"k1").unwrap();
     assert_ne!(left.get_id(), new_left.get_id());
-    // Add a new learner on store 2 to trigger peer 2 send wake-up msg to other peers
+    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to other peers
     pd_client.must_add_peer(new_left.get_id(), new_learner_peer(2, 5));
     cluster.must_put(b"k123", b"v123");
 
@@ -1119,4 +1119,51 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     }
 
     fail::remove(on_handle_apply_2_fp);
+}
+
+/// Test if a learner can be destroyed properly in such conditions as follows
+/// 1. A peer is isolated
+/// 2. Be the last removed peer in its peer list
+/// 3. Then its region merges to another region.
+/// 4. Isolation disappears
+#[test]
+fn test_merge_isloated_not_in_merge_learner_2() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
+
+    pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 2));
+    // Ensure this learner exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    cluster.stop_node(2);
+
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
+    pd_client.must_remove_peer(left.get_id(), left_on_store1);
+
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
+    pd_client.must_remove_peer(right.get_id(), right_on_store1);
+    // The peer list of peer 2 is (1001, 1), (2, 2)
+    pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    cluster.run_node(2).unwrap();
+    // When the abnormal leader missing duration has passed, the check-stale-peer msg will be sent to peer 1001.
+    // After that, a new peer list will be returned (2, 2) (3, 3).
+    // Then peer 2 sends the check-stale-peer msg to peer 3 and it will get a tombstone response.
+    // Finally peer 2 will be destroyed.
+    must_get_none(&cluster.get_engine(2), b"k1");
 }
