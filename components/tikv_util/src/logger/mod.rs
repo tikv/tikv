@@ -698,7 +698,9 @@ mod tests {
 
     thread_local! {
         static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
         static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+
     }
 
     struct NormalWriter;
@@ -711,18 +713,18 @@ mod tests {
         }
     }
 
-    struct SlowLogWriter;
-    impl Write for SlowLogWriter {
+    struct RocksdbLogWriter;
+    impl Write for RocksdbLogWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }
         fn flush(&mut self) -> io::Result<()> {
-            SLOW_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
         }
     }
 
-    struct RocksdbLogWriter;
-    impl Write for RocksdbLogWriter {
+    struct SlowLogWriter;
+    impl Write for SlowLogWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             SLOW_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }

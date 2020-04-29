@@ -21,8 +21,8 @@ use configuration::{
 };
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBInfoLogLevel, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    LRUCacheOptions, TitanDBOptions,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    TitanDBOptions,
 };
 use slog;
 
@@ -36,7 +36,7 @@ use encryption::EncryptionConfig;
 use engine::rocks::util::{
     db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
@@ -731,6 +731,8 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[config(skip)]
+    pub rocksdb_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -790,9 +792,6 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
-    #[config(skip)]
-    #[serde(with = "log_level_serde")]
-    pub rocksdb_log_level: slog::Level,
 }
 
 impl Default for DbConfig {
@@ -834,7 +833,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
-            rocksdb_log_level: slog::Level::Info,
+            rocksdb_log_level: LogLevel::Info,
         }
     }
 }
@@ -893,13 +892,7 @@ impl DbConfig {
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
-        opts.set_info_log_level(match self.rocksdb_log_level {
-            slog::Level::Error => DBInfoLogLevel::Error,
-            slog::Level::Critical => DBInfoLogLevel::Fatal,
-            slog::Level::Info => DBInfoLogLevel::Info,
-            slog::Level::Warning => DBInfoLogLevel::Warn,
-            slog::Level::Debug | slog::Level::Trace => DBInfoLogLevel::Debug,
-        });
+        opts.set_info_log_level(self.rocksdb_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }

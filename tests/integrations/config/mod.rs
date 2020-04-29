@@ -10,7 +10,7 @@ use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -34,7 +34,7 @@ fn test_toml_serde() {
     let value = TiKvConfig::default();
     let dump = toml::to_string_pretty(&value).unwrap();
     let load = toml::from_str(&dump).unwrap();
-    assert_eq!(value, load,"{}", format!("expected {:?} but {:?}",value,load));
+    assert_eq!(value, load);
 }
 
 // Read a file in project directory. It is similar to `include_str!`,
@@ -211,7 +211,7 @@ fn test_serde_custom_tikv_config() {
         purge_obsolete_files_period: ReadableDuration::secs(1),
     };
     value.rocksdb = DbConfig {
-        rocksdb_log_level: slog::Level::Info,
+        rocksdb_log_level: LogLevel::Info,
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
