@@ -553,7 +553,10 @@ impl ImportDir {
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
-        if length != 0 || crc32 != 0 {
+        // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
+        // currently we can not handle sst file size after rewrite,
+        // we need re-compute length & crc32 and fill back to sstMeta.
+        if length != 0 && crc32 != 0 {
             // we only validate if the length and CRC32 are explicitly provided.
             engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
             IMPORTER_INGEST_BYTES.observe(length as _)
