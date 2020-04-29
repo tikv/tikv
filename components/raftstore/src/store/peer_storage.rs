@@ -241,6 +241,8 @@ impl Drop for EntryCache {
 }
 
 fn update_raft_entries_caches_gauge(old_size: i64, new_size: i64) {
+    // If size_change is greater than 0, it means that the memory usage decreases,
+    // otherwise it means that the memory usage increases.
     let size_change = old_size - new_size;
     RAFT_ENTRIES_CACHES_GAUGE.add(-size_change);
 }
