@@ -22,7 +22,8 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -388,6 +389,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        // Apply committed entries more quickly.
+        if self.fsm.peer.raft_group.get_store().committed_index()
+            > self.fsm.peer.raft_group.get_store().applied_index()
+        {
+            self.fsm.has_ready = true;
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -799,18 +806,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_merge_target() {
+            fail_point!("on_has_merge_target", |_| Ok(()));
             if self.need_gc_merge(&msg)? {
                 self.on_stale_merge();
             }
             return Ok(());
         }
 
-        if msg.has_extra_msg() {
-            // now noop
+        if self.check_msg(&msg) {
             return Ok(());
         }
 
-        if self.check_msg(&msg) {
+        if msg.has_extra_msg() {
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -846,6 +854,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.has_ready = true;
         Ok(())
+    }
+
+    fn on_extra_message(&mut self, msg: &RaftMessage) {
+        let extra_msg = msg.get_extra_msg();
+        match extra_msg.get_field_type() {
+            ExtraMessageType::MsgRegionWakeUp => {
+                self.reset_raft_tick(GroupState::Ordered);
+            }
+            ExtraMessageType::MsgWantRollbackMerge => {
+                self.fsm
+                    .peer
+                    .maybe_add_want_rollback_merge_peer(msg.get_from_peer().get_id(), &extra_msg);
+            }
+        }
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
@@ -888,7 +910,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Returns true means that the message can be dropped silently.
     fn check_msg(&mut self, msg: &RaftMessage) -> bool {
         let from_epoch = msg.get_region_epoch();
-        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -912,11 +933,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
+            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+            if msg.has_extra_msg() {
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // it is removed due to conf change or merge.
+                need_gc_msg |=
+                    msg.get_extra_msg().get_field_type() == ExtraMessageType::MsgRegionWakeUp
+            }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
                 msg,
                 self.fsm.peer.region().get_region_epoch().clone(),
-                is_vote_msg,
+                need_gc_msg,
                 None,
             );
             return true;
@@ -1758,18 +1786,64 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_check_merge(&mut self) {
-        if self.fsm.stopped || self.fsm.peer.pending_merge_state.is_none() {
+        if self.fsm.stopped
+            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_merge_state.is_none()
+        {
             return;
         }
         self.register_merge_check_tick();
+        fail_point!(
+            "on_check_merge_not_1001",
+            self.fsm.peer_id() != 1001,
+            |_| {}
+        );
         if let Err(e) = self.schedule_merge() {
-            info!(
-                "failed to schedule merge, rollback";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-            self.rollback_merge();
+            if self.fsm.peer.is_leader() {
+                self.fsm
+                    .peer
+                    .add_want_rollback_merge_peer(self.fsm.peer_id());
+                if self.fsm.peer.want_rollback_merge_peers.len()
+                    >= raft::quorum(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .status_ref()
+                            .progress
+                            .unwrap()
+                            .voters()
+                            .len(),
+                    )
+                {
+                    info!(
+                        "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    );
+                    self.rollback_merge();
+                }
+            } else if !self.fsm.peer.peer.get_is_learner() {
+                info!(
+                    "want to rollback merge";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "leader_id" => self.fsm.peer.leader_id(),
+                    "err" => %e,
+                );
+                if self.fsm.peer.leader_id() != raft::INVALID_ID {
+                    self.ctx.need_flush_trans = true;
+                    self.fsm.peer.send_want_rollback_merge(
+                        self.fsm
+                            .peer
+                            .pending_merge_state
+                            .as_ref()
+                            .unwrap()
+                            .get_commit(),
+                        &mut self.ctx.trans,
+                    );
+                }
+            }
         }
     }
 
@@ -1937,7 +2011,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.tag, pending_commit, commit
             );
         }
+        // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
+        self.fsm.peer.want_rollback_merge_peers.clear();
+
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
