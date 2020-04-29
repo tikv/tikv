@@ -151,7 +151,7 @@ git = "https://github.com/pingcap/murmur3.git"
 [dependencies.prometheus]
 version = "0.4.2"
 default-features = false
-features = ["nightly", "push", "process"]
+features = ["nightly", "push"]
 
 [dependencies.prometheus-static-metric]
 version = "0.1.4"
