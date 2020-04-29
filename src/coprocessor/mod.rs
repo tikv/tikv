@@ -38,6 +38,7 @@ use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use rand::prelude::*;
+use metrics::ReqTag;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -81,7 +82,7 @@ type RequestHandlerBuilder<Snap> =
 #[derive(Debug, Clone)]
 pub struct ReqContext {
     /// The tag of the request
-    pub tag: &'static str,
+    pub tag: ReqTag,
 
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
@@ -112,11 +113,17 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The lower bound key in ranges of the request
+    pub lower_bound: Vec<u8>,
+
+    /// The upper bound key in ranges of the request
+    pub upper_bound: Vec<u8>,
 }
 
 impl ReqContext {
     pub fn new(
-        tag: &'static str,
+        tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
@@ -127,6 +134,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let lower_bound = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let upper_bound = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         Self {
             tag,
             context,
@@ -138,13 +153,15 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            lower_bound,
+            upper_bound,
         }
     }
 
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),

@@ -15,7 +15,9 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+
 use engine_rocks::RocksEngine;
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -32,12 +34,17 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::KeysInfoFormatter;
 use crate::store::util::{check_region_epoch, compare_region_epoch};
+use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+
+use crate::observe_perf_context_type;
+use crate::report_perf_context;
+
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
@@ -348,6 +355,8 @@ where
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    perf_context_statistics: PerfContextStatistics,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -385,6 +394,7 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
         }
     }
 
@@ -458,6 +468,10 @@ where
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            report_perf_context!(
+                self.perf_context_statistics,
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            );
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -1980,12 +1994,11 @@ where
                 self.tag, source_region, e
             ),
         };
-        match state.get_state() {
-            PeerState::Normal | PeerState::Merging => {}
-            _ => panic!(
+        if state.get_state() != PeerState::Merging {
+            panic!(
                 "{} unexpected state of merging region {:?}",
                 self.tag, state
-            ),
+            );
         }
         let exist_region = state.get_region().to_owned();
         if *source_region != exist_region {
@@ -2431,12 +2444,12 @@ impl Debug for GenSnapTask {
 static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ObserveID(usize);
 
 impl ObserveID {
     pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -2636,6 +2649,7 @@ where
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
+        fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
@@ -2887,25 +2901,18 @@ where
                 observe_id,
                 region_id,
                 enabled,
-            } => {
-                assert!(
-                    !self
-                        .delegate
-                        .observe_cmd
-                        .as_ref()
-                        .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                    "{} observer already exists {:?} {:?}",
-                    self.delegate.tag,
-                    self.delegate.observe_cmd,
-                    observe_id
-                );
-                (observe_id, region_id, Some(enabled))
-            }
+            } => (observe_id, region_id, Some(enabled)),
             ChangeCmd::Snapshot {
                 observe_id,
                 region_id,
             } => (observe_id, region_id, None),
         };
+        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
+            if observe_cmd.id > observe_id {
+                notify_stale_req(self.delegate.term, cb);
+                return;
+            }
+        }
 
         assert_eq!(self.delegate.region_id(), region_id);
         let resp = match compare_region_epoch(
@@ -2928,19 +2935,32 @@ where
                     )),
                 }
             }
-            Err(e) => ReadResponse {
-                response: cmd_resp::new_error(e),
-                snapshot: None,
-            },
+            Err(e) => {
+                // Return error if epoch not match
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                });
+                return;
+            }
         };
         if let Some(enabled) = enabled {
+            assert!(
+                !self
+                    .delegate
+                    .observe_cmd
+                    .as_ref()
+                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
+                "{} observer already exists {:?} {:?}",
+                self.delegate.tag,
+                self.delegate.observe_cmd,
+                observe_id
+            );
             // TODO(cdc): take observe_cmd when enabled is false.
             self.delegate.observe_cmd = Some(ObserveCmd {
                 id: observe_id,
                 enabled,
             });
-        } else if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            observe_cmd.id = observe_id;
         }
 
         cb.invoke_read(resp);
@@ -3069,6 +3089,7 @@ where
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
+        self.apply_ctx.perf_context_statistics.start();
     }
 
     /// There is no control fsm in apply poller.
@@ -3366,7 +3387,7 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
+        let importer = Arc::new(SSTImporter::new(dir.path(), None).unwrap());
         (dir, importer)
     }
 

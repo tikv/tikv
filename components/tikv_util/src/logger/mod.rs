@@ -19,7 +19,9 @@ use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
-/// The suffix appended to the end of rotated log files by datetime log rotator
+// The suffix appended to the end of rotated log files by datetime log rotator
+// Warning: Diagnostics service parses log files by file name format.
+//          Remember to update the corresponding code when suffix layout is changed.
 pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.

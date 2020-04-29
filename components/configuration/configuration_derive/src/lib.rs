@@ -42,6 +42,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     let update_fn = update(&fields, &creat_name)?;
     let diff_fn = diff(&fields, &creat_name)?;
     let get_encoder_fn = get_encoder(&encoder_name, &encoder_lt);
+    let typed_fn = typed(&fields, &creat_name)?;
     let encoder_struct = encoder(
         &name,
         &creat_name,
@@ -57,6 +58,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
             #update_fn
             #diff_fn
             #get_encoder_fn
+            #typed_fn
         }
         #encoder_struct
     })
@@ -226,6 +228,43 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenSt
             let mut #diff_ident = std::collections::HashMap::default();
             #(#diff_fields)*
             #diff_ident
+        }
+    })
+}
+
+fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+    let typed_ident = Ident::new("typed_ident", Span::call_site());
+    let mut typed_fields = Vec::with_capacity(fields.len());
+    for field in fields {
+        let (skip, hidden, submodule) = get_config_attrs(&field.attrs)?;
+        if field.ident.is_none() {
+            continue;
+        }
+        let name = field.ident.as_ref().unwrap();
+        let name_lit = LitStr::new(&format!("{}", name), name.span());
+        let f = if submodule {
+            quote! {
+                {
+                    let typed = #creat_name::Configuration::typed(&self.#name);
+                    #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(typed));
+                }
+            }
+        } else if skip || hidden {
+            quote! {
+                #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::Skip);
+            }
+        } else {
+            quote! {
+                #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(self.#name.clone()));
+            }
+        };
+        typed_fields.push(f);
+    }
+    Ok(quote! {
+        fn typed(&self) -> #creat_name::ConfigChange {
+            let mut #typed_ident = std::collections::HashMap::default();
+            #(#typed_fields)*
+            #typed_ident
         }
     })
 }
