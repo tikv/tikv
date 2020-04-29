@@ -215,9 +215,9 @@ impl EntryCache {
         let data_size: usize = self
             .cache
             .iter()
-            .map(|e| e.get_data().len() + e.get_context().len())
+            .map(|e| e.data.capacity() + e.context.capacity())
             .sum();
-        (self.cache.capacity() + data_size) as i64
+        (std::mem::size_of::<Entry>() * self.cache.capacity() + data_size) as i64
     }
 
     #[inline]
@@ -229,7 +229,7 @@ impl EntryCache {
 impl Default for EntryCache {
     fn default() -> Self {
         let cache = VecDeque::default();
-        RAFT_ENTRIES_CACHES_GAUGE.add(cache.capacity() as i64);
+        RAFT_ENTRIES_CACHES_GAUGE.add((std::mem::size_of::<Entry>() * cache.capacity()) as i64);
         EntryCache { cache }
     }
 }
