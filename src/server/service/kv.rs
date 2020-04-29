@@ -16,6 +16,7 @@ use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, Wri
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
 use futures::executor::{self, Notify, Spawn};
+use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
@@ -1319,14 +1320,23 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
-    tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-        .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::new();
-            res.set_test_id(req.get_test_id());
-            res
-        })
-        .map_err(|_| unreachable!())
+    let mut res = BatchCommandsEmptyResponse::default();
+    res.set_test_id(req.get_test_id());
+    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // can be called immediately, so the future is polled recursively and lead to deadlock.
+    if req.get_delay_time() < 10 {
+        Either::A(future::result(Ok(res)))
+    } else {
+        Either::B(
+            tikv_util::timer::GLOBAL_TIMER_HANDLE
+                .delay(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(req.get_delay_time()),
+                )
+                .map(move |_| res)
+                .map_err(|_| unreachable!()),
+        )
+    }
 }
 
 fn future_get<E: Engine, L: LockMgr>(
