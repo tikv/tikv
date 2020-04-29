@@ -556,8 +556,16 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into(), false)
-                .unwrap();
+            txn.acquire_pessimistic_lock(
+                k,
+                pk,
+                false,
+                0,
+                for_update_ts.into(),
+                false,
+                TimeStamp::zero(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -1035,11 +1043,11 @@ mod tests {
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
-        assert_eq!(write, Write::new(WriteType::Rollback, 3.into(), None));
+        assert_eq!(write, Write::new_rollback(3.into(), false));
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
-        assert_eq!(write, Write::new(WriteType::Rollback, 7.into(), None));
+        assert_eq!(write, Write::new_rollback(7.into(), false));
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());

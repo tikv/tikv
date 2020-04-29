@@ -17,7 +17,7 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType,
+    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType,
     StatusResponse,
 };
 use kvproto::raft_serverpb::{
@@ -367,7 +367,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::CaptureChange { cmd, callback } => self.on_capture_change(cmd, callback),
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -496,17 +495,34 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
     }
 
-    fn on_capture_change(&mut self, cmd: ChangeCmd, cb: Callback<RocksEngine>) {
-        if !self.fsm.peer.is_leader() {
-            cb.invoke_with_response(new_error(Error::NotLeader(
-                self.region_id(),
-                self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
-            )));
-            return;
-        }
-        self.ctx
-            .apply_router
-            .schedule_task(self.region_id(), ApplyTask::Change { cmd, cb })
+    fn on_capture_change(
+        &mut self,
+        cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
+        cb: Callback<RocksEngine>,
+    ) {
+        let region_id = self.region_id();
+        let msg =
+            new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
+        let apply_router = self.ctx.apply_router.clone();
+        self.propose_raft_command(
+            msg,
+            Callback::Read(Box::new(move |resp| {
+                // Return the error
+                if resp.response.get_header().has_error() {
+                    cb.invoke_read(resp);
+                    return;
+                }
+                apply_router.schedule_task(
+                    region_id,
+                    ApplyTask::Change {
+                        cmd,
+                        region_epoch,
+                        cb,
+                    },
+                )
+            })),
+        );
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -542,6 +558,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
+            SignificantMsg::CaptureChange {
+                cmd,
+                region_epoch,
+                callback,
+            } => self.on_capture_change(cmd, region_epoch, callback),
+            SignificantMsg::LeaderCallback(cb) => {
+                self.on_leader_callback(cb);
+            }
         }
     }
 
@@ -568,6 +592,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "status" => ?status,
         );
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
+    }
+
+    fn on_leader_callback(&mut self, cb: Callback<RocksEngine>) {
+        let msg = new_read_index_request(
+            self.region_id(),
+            self.region().get_region_epoch().clone(),
+            self.fsm.peer.peer.clone(),
+        );
+        self.propose_raft_command(msg, cb);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -858,12 +891,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
-        if msg.has_extra_msg() {
-            self.on_extra_message(&msg);
+        if self.check_msg(&msg) {
             return Ok(());
         }
 
-        if self.check_msg(&msg) {
+        if msg.has_extra_msg() {
+            self.on_extra_message(&msg);
             return Ok(());
         }
 
@@ -958,7 +991,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     /// Returns true means that the message can be dropped silently.
     fn check_msg(&mut self, msg: &RaftMessage) -> bool {
         let from_epoch = msg.get_region_epoch();
-        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -982,11 +1014,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
+            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+            if msg.has_extra_msg() {
+                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // it is removed due to conf change or merge.
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+            }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
                 msg,
                 self.fsm.peer.region().get_region_epoch().clone(),
-                is_vote_msg,
+                need_gc_msg,
                 None,
             );
             return true;
@@ -3002,6 +3040,20 @@ pub fn maybe_destroy_source(
         }
     }
     false
+}
+
+pub fn new_read_index_request(
+    region_id: u64,
+    region_epoch: RegionEpoch,
+    peer: metapb::Peer,
+) -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::default();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_region_epoch(region_epoch);
+    request.mut_header().set_peer(peer);
+    let mut cmd = Request::default();
+    cmd.set_cmd_type(CmdType::ReadIndex);
+    request
 }
 
 pub fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {

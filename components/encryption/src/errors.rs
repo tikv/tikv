@@ -18,6 +18,18 @@ pub enum Error {
     Crypter(CrypterError),
     #[fail(display = "Protobuf error {}", _0)]
     Proto(ProtobufError),
+    #[fail(display = "Unknown encryption error")]
+    UnknownEncryption,
+    #[fail(display = "Wrong master key error {}", _0)]
+    WrongMasterKey(Box<dyn error::Error + Sync + Send>),
+    #[fail(
+        display = "Both master key failed, current key {}, previous key {}.",
+        _0, _1
+    )]
+    BothMasterKeyFail(
+        Box<dyn error::Error + Sync + Send>,
+        Box<dyn error::Error + Sync + Send>,
+    ),
 }
 
 macro_rules! impl_from {

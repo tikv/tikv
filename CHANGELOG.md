@@ -2,6 +2,39 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.0-rc.1] - 2020-04-28
++ Compability Changes
+  + Disable the Hibernate Region feature by default [#7618](https://github.com/tikv/tikv/pull/7618)
++ Important Bug Fixes
+  + Fix the deadlock issue caused by the probe request from TiDB [#7540](https://github.com/tikv/tikv/pull/7540)
+  + Fix the issue that the minimum commit timestamp of a transaction might overflow which affects data correctness [#7638](https://github.com/tikv/tikv/pull/7638)
++ New Features
+  + Support using the user-owned KMS key for the server-side encryption when backing up data to S3 [#7630](https://github.com/tikv/tikv/pull/7630) 
+  + Enable the load-based `split region` operation [#7623](https://github.com/tikv/tikv/pull/7623)
+  + Support validating common names [#7468](https://github.com/tikv/tikv/pull/7468)
+  + Add the file lock check to avoid starting multiple TiKV instances that are bound to the same address [#7447](https://github.com/tikv/tikv/pull/7447)
+  + Support AWS KMS in encryption at rest [#7465](https://github.com/tikv/tikv/pull/7465)
++ Bug Fixes
+  + Address the OpenSSL security issue: CVE-2020-1967 [#7622](https://github.com/tikv/tikv/pull/7622)
+  + Avoid protecting rollback records written by `BatchRollback` to improve performance when many write conflicts exist in optimistic transactions [#7604](https://github.com/tikv/tikv/pull/7604)
+  + Fix the issue that the needless wake-up of transactions results in useless retry and performance reduction in heavy lock-race workloads [#7551](https://github.com/tikv/tikv/pull/7551)
+  + Fix the issue that the Region might be stuck in the multi-time merging [#7518](https://github.com/tikv/tikv/pull/7518) 
+  + Fix the issue that the learner is not deleted when deleting the learner [#7518](https://github.com/tikv/tikv/pull/7518) 
+  + Fix the issue that follower read might cause panic in raft-rs [#7408](https://github.com/tikv/tikv/pull/7408)
+  + Fix the bug that a SQL operation might fail because of the `group by constant` error [#7383](https://github.com/tikv/tikv/pull/7383)
+  + Fix the issue that an optimistic lock might block reads if the corresponding primary lock is a pessimistic lock [#7328](https://github.com/tikv/tikv/pull/7328)
+
+## [4.0.0-rc] - 2020-04-08
++ Compatibility Changes
+  + Support the `pipelined` feature in pessimistic transactions, which improves the TPC-C performance by 20%. The risk is that the transaction commit might fail because of lock failure during the execution [#6984](https://github.com/tikv/tikv/pull/6984)
+  + Enable the `unify-read-pool` configuration item in new clusters by default and use the previous setting of this item in old clusters [#7059](https://github.com/tikv/tikv/pull/7059)
++ New Features
+  + Support the `pipelined` feature in pessimistic transactions, which improves the TPC-C performance by 20%. The risk is that the transaction commit might fail because of lock failure during the execution  [#6984](https://github.com/tikv/tikv/pull/6984)
+  + Support TLS in the HTTP port [#5393](https://github.com/tikv/tikv/pull/5393)
+  + Enable the `unify-read-pool` configuration item in new clusters by default and use the previous setting of this item in old clusters  [#7059](https://github.com/tikv/tikv/pull/7059)
++ Bug Fixes
+  + Fix the possible panic caused by transferring the leader when the Follower Read feature is enabled [#7101](https://github.com/tikv/tikv/pull/7101)
+
 ## [4.0.0-beta.2] - 2020-03-18
 + New Features
   + Support the configuration of persistent dynamic update [#6684](https://github.com/tikv/tikv/pull/6684)
