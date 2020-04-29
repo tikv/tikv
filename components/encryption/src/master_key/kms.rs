@@ -83,6 +83,8 @@ impl AwsKms {
                 if let RusotoError::Service(DecryptError::IncorrectKey(e)) = e {
                     Error::WrongMasterKey(e.into())
                 } else {
+                    // To keep it simple, retry all errors, even though only
+                    // some of them are retriable.
                     Error::Other(e.into())
                 }
             })
@@ -141,10 +143,7 @@ where
             }
         }
     }
-    panic!(
-        "kms request failed in {} times, err: {:?}",
-        retry_limit, last_err
-    )
+    Err(Error::Other(box_err!("{:?}", last_err)))
 }
 
 struct Inner {
