@@ -2449,7 +2449,7 @@ pub struct ObserveID(usize);
 
 impl ObserveID {
     pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
