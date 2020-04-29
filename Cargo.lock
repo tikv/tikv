@@ -2004,7 +2004,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+>>>>>>> baa170f... raftstore: fix bug which cause writebatch too small (#7640)
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2023,7 +2027,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+>>>>>>> baa170f... raftstore: fix bug which cause writebatch too small (#7640)
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3371,7 +3379,11 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+>>>>>>> baa170f... raftstore: fix bug which cause writebatch too small (#7640)
 dependencies = [
  "libc",
  "librocksdb_sys",
