@@ -16,14 +16,17 @@ pub struct Span {
     pub tag: &'static str,
     pub id: ID,
     pub parent: Option<ID>,
-    pub elapsed_start: std::time::Duration,
-    pub elapsed_end: std::time::Duration,
+    // pub elapsed_start: std::time::Duration,
+    // pub elapsed_end: std::time::Duration,
+    pub start_time: std::time::SystemTime,
+    pub end_time: std::time::SystemTime,
 }
 
 pub struct SpanInner {
     sender: crossbeam::channel::Sender<Span>,
-    root_start_time: std::time::Instant,
-    elapsed_start: std::time::Duration,
+    // root_start_time: std::time::Instant,
+    // elapsed_start: std::time::Duration,
+    start_time: std::time::SystemTime,
 }
 
 pub struct ArcSpanInner {
@@ -41,8 +44,10 @@ impl Drop for ArcSpanInner {
                 tag: self.tag,
                 id: self.id.unwrap(),
                 parent: self.parent,
-                elapsed_start: span.elapsed_start,
-                elapsed_end: span.root_start_time.elapsed(),
+                // elapsed_start: span.elapsed_start,
+                // elapsed_end: span.root_start_time.elapsed(),
+                start_time: span.start_time,
+                end_time: std::time::SystemTime::now(),
             });
         }
 
@@ -83,8 +88,9 @@ pub fn new_span_root(tag: &'static str, sender: crossbeam::channel::Sender<Span>
     for _ in 0..FACTOR {
         span_inners.push(SpanInner {
             sender: sender.clone(),
-            root_start_time: std::time::Instant::now(),
-            elapsed_start: std::time::Duration::new(0, 0),
+            // root_start_time: std::time::Instant::now(),
+            // elapsed_start: std::time::Duration::new(0, 0),
+            start_time: std::time::SystemTime::now(),
         });
     }
 
@@ -121,9 +127,9 @@ pub fn new_span(tag: &'static str) -> OSpanGuard {
         for parent_span in parent_arc_span.span_inner.iter() {
             span_inners.push(SpanInner {
                 sender: parent_span.sender.clone(),
-
-                root_start_time: parent_span.root_start_time,
-                elapsed_start: parent_span.root_start_time.elapsed(),
+                // root_start_time: parent_span.root_start_time,
+                // elapsed_start: parent_span.root_start_time.elapsed(),
+                start_time: std::time::SystemTime::now(),
             })
         }
 

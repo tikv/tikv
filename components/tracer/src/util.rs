@@ -1,12 +1,22 @@
 const BAR_LEN: usize = 70;
 
+fn time_nanos(t: std::time::SystemTime) -> u128 {
+    #[allow(clippy::match_wild_err_arm)]
+    match t.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+        Ok(n) => n.as_nanos(),
+        Err(_) => panic!(),
+    }
+}
+
 pub fn draw_stdout(spans: Vec<crate::Span>) {
     let mut children = std::collections::HashMap::new();
     let mut spans_map = std::collections::HashMap::new();
     let mut root = None;
     for span in spans {
-        let start = span.elapsed_start.as_nanos();
-        let end = span.elapsed_end.as_nanos();
+        // let start = span.elapsed_start.as_nanos();
+        // let end = span.elapsed_end.as_nanos();
+        let start = time_nanos(span.start_time);
+        let end = time_nanos(span.end_time);
         assert_eq!(
             spans_map.insert(span.id, (span.tag, start, end - start)),
             None,
