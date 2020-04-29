@@ -20,7 +20,6 @@ use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleObserver};
 use test_raftstore::sleep_ms;
 
-// TODO: Remove this test after the pending cmd batch is removed.
 #[test]
 fn test_failed_pending_batch() {
     // For test that a pending cmd batch contains a error like epoch not match.
@@ -229,8 +228,8 @@ fn test_merge() {
         .unwrap();
     sleep_ms(200);
     // Pause before completing commit merge
-    let fp = "before_handle_catch_up_logs_for_merge";
-    fail::cfg(fp, "pause").unwrap();
+    let commit_merge_fp = "before_handle_catch_up_logs_for_merge";
+    fail::cfg(commit_merge_fp, "pause").unwrap();
     // The call is finished when prepare_merge is applied.
     suite.cluster.try_merge(source.get_id(), target.get_id());
     // Epoch not match after prepare_merge
@@ -263,32 +262,37 @@ fn test_merge() {
         }
         _ => panic!("unknown event"),
     }
-    sleep_ms(200);
-    // Retry to subscribe source region
-    let source = suite.cluster.get_region(b"k0");
-    req.region_id = source.get_id();
-    req.set_region_epoch(source.get_region_epoch().clone());
-    let _source_tx = source_tx.send((req, WriteFlags::default())).wait().unwrap();
     // Continue to commit merge
-    fail::remove(fp);
-    let mut events = source_event(false);
-    if events.len() == 1 {
-        events.extend(source_event(false).into_iter());
-    }
-    assert_eq!(events.len(), 2, "{:?}", events);
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+    let destroy_peer_fp = "destroy_peer";
+    fail::cfg(destroy_peer_fp, "pause").unwrap();
+    fail::remove(commit_merge_fp);
+    // Wait until raftstore receives MergeResult
+    sleep_ms(100);
+    // Retry to subscribe source region
+    let mut source_epoch = source.get_region_epoch().clone();
+    source_epoch.set_version(source_epoch.get_version() + 1);
+    source_epoch.set_conf_ver(source_epoch.get_conf_ver() + 1);
+    req.region_id = source.get_id();
+    req.set_region_epoch(source_epoch);
+    let _source_tx = source_tx.send((req, WriteFlags::default())).wait().unwrap();
+    // Wait until raftstore receives ChangeCmd
+    sleep_ms(100);
+    fail::remove(destroy_peer_fp);
+    loop {
+        let mut events = source_event(false);
+        assert_eq!(events.len(), 1, "{:?}", events);
+        match events.pop().unwrap().event.unwrap() {
+            Event_oneof_event::Error(err) => {
+                assert!(err.has_region_not_found(), "{:?}", err);
+                break;
+            }
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            _ => panic!("unknown event"),
         }
-        _ => panic!("unknown event"),
-    }
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Error(err) => {
-            assert!(err.has_region_not_found(), "{:?}", err);
-        }
-        _ => panic!("unknown event"),
     }
     let mut events = target_event(false);
     assert_eq!(events.len(), 1, "{:?}", events);

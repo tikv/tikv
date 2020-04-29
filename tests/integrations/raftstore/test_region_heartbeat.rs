@@ -81,6 +81,7 @@ fn test_server_down_peers_with_hibernate_regions() {
     // by design. So here use a short check interval to trigger region heartbeat
     // more frequently.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
+    cluster.cfg.raft_store.hibernate_regions = true;
     test_down_peers(&mut cluster);
 }
 
