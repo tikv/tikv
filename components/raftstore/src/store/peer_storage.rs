@@ -96,6 +96,8 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
 
+const ENTRY_MEM_SIZE:usize = std::mem::size_of::<Entry>();
+
 struct EntryCache {
     cache: VecDeque<Entry>,
 }
@@ -219,7 +221,7 @@ impl EntryCache {
             .iter()
             .map(|e| e.data.capacity() + e.context.capacity())
             .sum();
-        (std::mem::size_of::<Entry>() * self.cache.capacity() + data_size) as i64
+        (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
     }
 
     #[inline]
@@ -231,7 +233,7 @@ impl EntryCache {
 impl Default for EntryCache {
     fn default() -> Self {
         let cache = VecDeque::default();
-        RAFT_ENTRIES_CACHES_GAUGE.add((std::mem::size_of::<Entry>() * cache.capacity()) as i64);
+        RAFT_ENTRIES_CACHES_GAUGE.add((ENTRY_MEM_SIZE * cache.capacity()) as i64);
         EntryCache { cache }
     }
 }
