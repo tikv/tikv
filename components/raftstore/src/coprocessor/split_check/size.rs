@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -266,26 +266,21 @@ fn get_approximate_split_keys(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0).unwrap_or(0);
+    let cfs = [
+        (CF_DEFAULT, get_cf_size(CF_DEFAULT)),
+        (CF_WRITE, get_cf_size(CF_WRITE)),
+        (CF_LOCK, get_cf_size(CF_LOCK)),
+    ];
 
-    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
-    if default_cf_size + write_cf_size == 0 {
-        return Err(box_err!("default cf and write cf is empty"));
+    let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
+    if total_size == 0 {
+        return Err(box_err!("all CFs are empty"));
     }
 
+    let (cf, cf_size) = cfs.iter().max_by_key(|(_, s)| s).unwrap();
     // assume the size of keys is uniform distribution in both cfs.
-    let (cf, cf_split_size) = if default_cf_size >= write_cf_size {
-        (
-            CF_DEFAULT,
-            split_size * default_cf_size / (default_cf_size + write_cf_size),
-        )
-    } else {
-        (
-            CF_WRITE,
-            split_size * write_cf_size / (default_cf_size + write_cf_size),
-        )
-    };
+    let cf_split_size = split_size * cf_size / total_size;
 
     get_approximate_split_keys_cf(db, cf, &region, cf_split_size, max_size, batch_split_limit)
 }
