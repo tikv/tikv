@@ -3369,12 +3369,18 @@ mod tests {
         (dir, importer)
     }
 
-    pub fn new_entry(term: u64, index: u64, req: Option<RaftCmdRequest>) -> Entry {
+    pub fn new_entry(term: u64, index: u64, set_data: bool) -> Entry {
         let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
-        if let Some(r) = req {
-            e.set_data(r.write_to_bytes().unwrap())
+        if set_data {
+            let mut cmd = Request::default();
+            cmd.set_cmd_type(CmdType::Put);
+            cmd.mut_put().set_key(b"key".to_vec());
+            cmd.mut_put().set_value(b"value".to_vec());
+            let mut req = RaftCmdRequest::default();
+            req.mut_requests().push(cmd);
+            e.set_data(req.write_to_bytes().unwrap())
         }
         e
     }
@@ -3500,15 +3506,14 @@ mod tests {
         reg.term = 4;
         reg.applied_index_term = 5;
         router.schedule_task(2, Msg::Registration(reg.clone()));
-        let reg_ = reg.clone();
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
             assert_eq!(delegate.tag, "[region 2] 1");
-            assert_eq!(delegate.region, reg_.region);
+            assert_eq!(delegate.region, reg.region);
             assert!(!delegate.pending_remove);
-            assert_eq!(delegate.apply_state, reg_.apply_state);
-            assert_eq!(delegate.term, reg_.term);
-            assert_eq!(delegate.applied_index_term, reg_.applied_index_term);
+            assert_eq!(delegate.apply_state, reg.apply_state);
+            assert_eq!(delegate.term, reg.term);
+            assert_eq!(delegate.applied_index_term, reg.applied_index_term);
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -3526,7 +3531,7 @@ mod tests {
                 1,
                 1,
                 0,
-                vec![new_entry(0, 1, None)],
+                vec![new_entry(0, 1, true)],
                 1,
                 0,
                 1,
@@ -3543,12 +3548,12 @@ mod tests {
             Proposal::new(
                 false,
                 4,
-                5,
+                4,
                 Callback::Write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
-            Proposal::new(false, 4, 6, Callback::None),
+            Proposal::new(false, 4, 5, Callback::None),
         ];
         router.schedule_task(
             2,
@@ -3556,36 +3561,23 @@ mod tests {
                 1,
                 2,
                 11,
-                vec![new_entry(6, 4, None)],
+                vec![new_entry(5, 4, true)],
                 3,
-                6,
+                5,
                 4,
                 pops,
             )),
         );
         // proposal with not commit entry should be ignore
         validate(&router, 2, move |delegate| {
-            assert_eq!(delegate.term, 6);
+            assert_eq!(delegate.term, 11);
         });
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
 
-        let apply_state_key = keys::apply_state_key(2);
-        assert!(engine
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-            .unwrap()
-            .is_none());
         // Make sure Apply and Snapshot are in the same batch.
         let (snap_tx, _) = mpsc::sync_channel(0);
-        let (cc_tx, cc_rx) = mpsc::channel();
-        let p = Proposal::new(
-            true,
-            5,
-            6,
-            Callback::Write(Box::new(move |write: WriteResponse| {
-                cc_tx.send(write.response).unwrap();
-            })),
-        );
         batch_messages(
             &router,
             2,
@@ -3594,17 +3586,15 @@ mod tests {
                     1,
                     2,
                     11,
-                    vec![new_entry(6, 5, None)],
-                    4,
-                    6,
+                    vec![new_entry(5, 5, false)],
                     5,
-                    vec![p],
+                    5,
+                    5,
+                    vec![],
                 )),
                 Msg::Snapshot(GenSnapTask::new(2, 0, snap_tx)),
             ],
         );
-        let cc_resp = cc_rx.try_recv().unwrap();
-        assert!(!cc_resp.get_header().has_error());
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -3612,6 +3602,7 @@ mod tests {
             },
             e => panic!("unexpected apply result: {:?}", e),
         };
+        let apply_state_key = keys::apply_state_key(2);
         let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
                 .get_msg_cf(CF_RAFT, &apply_state_key)
@@ -3621,7 +3612,7 @@ mod tests {
         };
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state, apply_state);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 4);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 5);
         assert!(apply_res.exec_res.is_empty());
         // empty entry will make applied_index step forward and should write apply state to engine.
         assert_eq!(apply_res.metrics.written_keys, 1);
@@ -3629,7 +3620,7 @@ mod tests {
         validate(&router, 2, |delegate| {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
-            assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
                 delegate.last_sync_apply_index
@@ -3663,7 +3654,7 @@ mod tests {
                 1,
                 1,
                 0,
-                vec![new_entry(0, 1, None)],
+                vec![new_entry(0, 1, true)],
                 1,
                 0,
                 1,
@@ -4304,7 +4295,7 @@ mod tests {
                 2,
                 2,
                 3,
-                vec![cb(3, 2, capture_tx.clone())],
+                vec![cb(3, 2, capture_tx)],
             )),
         );
         fetch_apply_res(&rx);

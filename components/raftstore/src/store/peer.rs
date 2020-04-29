@@ -99,17 +99,17 @@ impl<E: KvEngine> ProposalQueue<E> {
     }
 
     fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<E>> {
-        let mut q = Vec::new();
+        let mut propos = Vec::new();
         while let Some(m) = self.queue.pop_front() {
             if (m.proposal.term, m.proposal.index) > (term, index) {
                 self.queue.push_front(m);
                 break;
             }
             if !m.proposal.cb.is_none() {
-                q.push(m.proposal);
+                propos.push(m.proposal);
             }
         }
-        q
+        propos
     }
 
     fn push(&mut self, meta: ProposalMeta<E>) {
