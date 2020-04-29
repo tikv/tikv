@@ -7,10 +7,15 @@ extern crate tikv_util;
 #[cfg(feature = "test-runner")]
 #[macro_use]
 extern crate derive_more;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate prometheus;
 
 mod batch;
 mod fsm;
 mod mailbox;
+mod metrics;
 mod router;
 
 #[cfg(feature = "test-runner")]

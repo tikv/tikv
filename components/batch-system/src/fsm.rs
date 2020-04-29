@@ -44,6 +44,10 @@ pub trait Fsm {
     {
         None
     }
+
+    fn after_scheduled(&mut self) {}
+
+    fn before_reschedule(&mut self) {}
 }
 
 pub struct FsmState<N> {

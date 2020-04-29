@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, Histogram, IntCounter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -8,6 +8,29 @@ lazy_static! {
     pub static ref APPLY_PROPOSAL: Histogram = register_histogram!(
         "tikv_raftstore_apply_proposal",
         "The count of proposals sent by a region at once",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref APPLY_BATCH_BYTES: Histogram = register_histogram!(
+        "tikv_raftstore_apply_batch_bytes",
+        "Histogram of bytes each apply commit",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref APPLY_BATCH_KEYS: Histogram = register_histogram!(
+        "tikv_raftstore_apply_batch_keys",
+        "Histogram of keys each apply commit",
+        exponential_buckets(1.0, 2.0, 30).unwrap()
+    )
+    .unwrap();
+    pub static ref APPLY_YIELD_COUNT: IntCounter = register_int_counter!(
+        "tikv_raftstore_apply_yield_count",
+        "The count of yield fsms"
+    )
+    .unwrap();
+    pub static ref APPLY_RESCHEDULE_WAIT_DURATION: Histogram = register_histogram!(
+        "tikv_raftstore_apply_reschedule_wait_duration_secs",
+        "The interval of a fsm was rescheduled",
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();

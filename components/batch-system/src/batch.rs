@@ -7,6 +7,7 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
+use crate::metrics::*;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError};
 use std::borrow::Cow;
@@ -87,12 +88,14 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => {
+            FsmTypes::Normal(mut n) => {
+                n.after_scheduled();
                 self.normals.push(n);
                 self.counters.push(0);
             }
-            FsmTypes::Control(c) => {
+            FsmTypes::Control(mut c) => {
                 assert!(self.control.is_none());
+                c.after_scheduled();
                 self.control = Some(c);
             }
             FsmTypes::Empty => return false,
@@ -155,8 +158,9 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     /// Schedule the normal FSM located at `index`.
     pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
-        let fsm = self.normals.swap_remove(index);
+        let mut fsm = self.normals.swap_remove(index);
         self.counters.swap_remove(index);
+        fsm.before_reschedule();
         router.normal_scheduler.schedule(fsm);
     }
 
@@ -229,6 +233,7 @@ pub trait PollHandler<N, C> {
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
 struct Poller<N: Fsm, C: Fsm, Handler> {
+    tag: String,
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
@@ -337,7 +342,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 match mark {
                     ReschedulePolicy::Release(l) => batch.release(r, l),
                     ReschedulePolicy::Remove => batch.remove(r),
-                    ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
+                    ReschedulePolicy::Schedule => {
+                        RESCHEDULE_FSM_COUNT
+                            .with_label_values(&[self.tag.as_str()])
+                            .inc();
+                        batch.reschedule(&self.router, r);
+                    }
                 }
             }
         }
@@ -384,6 +394,7 @@ where
         for i in 0..self.pool_size {
             let handler = builder.build();
             let mut poller = Poller {
+                tag: name_prefix.clone(),
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
                 handler,

@@ -461,6 +461,9 @@ where
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            APPLY_BATCH_BYTES.observe(self.kv_wb().data_size() as f64);
+            APPLY_BATCH_KEYS.observe(self.kv_wb().count() as f64);
+
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
@@ -875,6 +878,7 @@ where
                         pending_entries,
                         pending_msgs: Vec::default(),
                     });
+                    APPLY_YIELD_COUNT.inc();
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
                     }
@@ -2600,6 +2604,7 @@ where
     delegate: ApplyDelegate<E>,
     receiver: Receiver<Msg<E>>,
     mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
+    reschedule_time: Option<Instant>,
 }
 
 impl<E> ApplyFsm<E>
@@ -2620,6 +2625,7 @@ where
                 delegate,
                 receiver: rx,
                 mailbox: None,
+                reschedule_time: None,
             }),
         )
     }
@@ -3027,6 +3033,18 @@ where
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    #[inline]
+    fn after_scheduled(&mut self) {
+        if let Some(t) = self.reschedule_time.take() {
+            APPLY_RESCHEDULE_WAIT_DURATION.observe(t.elapsed().as_millis() as f64 / 1000f64);
+        }
+    }
+
+    #[inline]
+    fn before_reschedule(&mut self) {
+        self.reschedule_time = Some(Instant::now_coarse());
     }
 }
 
