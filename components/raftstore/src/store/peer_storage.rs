@@ -96,7 +96,7 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
 
-const ENTRY_MEM_SIZE:usize = std::mem::size_of::<Entry>();
+const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
 
 struct EntryCache {
     cache: VecDeque<Entry>,
