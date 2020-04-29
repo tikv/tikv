@@ -6,10 +6,12 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
 use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
@@ -20,6 +22,7 @@ use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -90,7 +93,6 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
@@ -98,6 +100,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker: 2200,
         },
         storage: StorageReadPoolConfig {
+            use_unified_pool: Some(true),
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
@@ -107,6 +110,7 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprReadPoolConfig {
+            use_unified_pool: Some(false),
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -193,6 +197,10 @@ fn test_serde_custom_tikv_config() {
         sample_ratio: 0.982,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
+        level_merge: true,
+        range_merge: true,
+        max_sorted_runs: 100,
+        gc_merge_rewrite: true,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
@@ -321,6 +329,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -375,6 +387,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -429,6 +445,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -532,12 +552,24 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
     };
+    let mut cert_allowed_cn = HashSet::default();
+    cert_allowed_cn.insert("example.tikv.com".to_owned());
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
-        cipher_file: "invalid path".to_owned(),
+        cert_allowed_cn,
+    };
+    value.encryption = EncryptionConfig {
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
+        data_key_rotation_period: ReadableDuration::days(14),
+        master_key: MasterKeyConfig::File {
+            config: FileCofnig {
+                path: "/master/key/path".to_owned(),
+            },
+        },
+        previous_master_key: MasterKeyConfig::Plaintext,
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -551,8 +583,8 @@ fn test_serde_custom_tikv_config() {
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         enabled: false,
-        wait_for_lock_timeout: 10,
-        wake_up_delay_duration: 100,
+        wait_for_lock_timeout: ReadableDuration::millis(10),
+        wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
     };
 
@@ -621,13 +653,16 @@ fn test_readpool_default_config() {
 }
 
 #[test]
-fn test_do_not_unify_readpool_with_legacy_config() {
+fn test_do_not_use_unified_readpool_with_legacy_config() {
     let content = r#"
         [readpool.storage]
         normal-concurrency = 1
+
+        [readpool.coprocessor]
+        normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    assert!(!cfg.readpool.is_unified());
+    assert!(!cfg.readpool.is_unified_pool_enabled());
 }
 
 #[test]

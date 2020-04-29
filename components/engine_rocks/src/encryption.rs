@@ -1,15 +1,36 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Result;
+use std::sync::Arc;
 
+use encryption::{self, DataKeyManager};
+use engine::Env;
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
     FileEncryptionInfo as DBFileEncryptionInfo,
 };
 
+// Use engine::Env directly since Env is not abstracted.
+pub fn get_env(
+    key_manager: Option<Arc<DataKeyManager>>,
+    base_env: Option<Arc<Env>>,
+) -> encryption::Result<Arc<Env>> {
+    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+    if let Some(manager) = key_manager {
+        // TODO(yiwu): To avoid nested Arc here, need to refactor rust-rocksdb API to accept a
+        // Box<DBEncryptionKeyManager> instead.
+        Ok(Arc::new(Env::new_key_managed_encrypted_env(
+            base_env,
+            Arc::new(WrappedEncryptionKeyManager { manager }),
+        )?))
+    } else {
+        Ok(base_env)
+    }
+}
+
 pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
-    manager: T,
+    manager: Arc<T>,
 }
 
 impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {

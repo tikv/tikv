@@ -3,7 +3,10 @@
 use std::cell::RefCell;
 use std::mem;
 
-use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::{FlowStatsReporter, Statistics};
+use kvproto::metapb;
+use raftstore::store::util::build_key_range;
+use raftstore::store::ReadStats;
 use tikv_util::collections::HashMap;
 
 use prometheus::local::*;
@@ -28,6 +31,13 @@ lazy_static! {
     pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
+        &["req", "type"],
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
+        "tikv_coprocessor_request_handler_build_seconds",
+        "Bucketed histogram of coprocessor request handler build duration",
         &["req"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
@@ -98,10 +108,11 @@ pub struct CopLocalMetrics {
     pub local_copr_req_histogram_vec: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
+    pub local_copr_req_handler_build_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
-    local_cop_flow_stats: HashMap<u64, FlowStatistics>,
+    local_read_stats: ReadStats,
 }
 
 thread_local! {
@@ -113,14 +124,16 @@ thread_local! {
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:
                 COPR_REQ_WAIT_TIME.local(),
+            local_copr_req_handler_build_time:
+                COPR_REQ_HANDLER_BUILD_TIME.local(),
             local_copr_scan_keys:
                 COPR_SCAN_KEYS.local(),
             local_copr_rocksdb_perf_counter:
                 COPR_ROCKSDB_PERF_COUNTER.local(),
             local_scan_details:
                 HashMap::default(),
-            local_cop_flow_stats:
-                HashMap::default(),
+            local_read_stats:
+                ReadStats::default(),
         }
     );
 }
@@ -132,6 +145,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         m.local_copr_req_histogram_vec.flush();
         m.local_copr_req_handle_time.flush();
         m.local_copr_req_wait_time.flush();
+        m.local_copr_req_handler_build_time.flush();
         m.local_copr_scan_keys.flush();
         m.local_copr_rocksdb_perf_counter.flush();
 
@@ -146,15 +160,11 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         }
 
         // Report PD metrics
-        if m.local_cop_flow_stats.is_empty() {
-            // Stats to report to PD is empty, ignore.
-            return;
+        if !m.local_read_stats.is_empty() {
+            let mut read_stats = ReadStats::default();
+            mem::swap(&mut read_stats, &mut m.local_read_stats);
+            reporter.report_read_stats(read_stats);
         }
-
-        let mut read_stats = HashMap::default();
-        mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
-
-        reporter.report_read_stats(read_stats);
     });
 }
 
@@ -170,11 +180,25 @@ pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
 
 pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     TLS_COP_METRICS.with(|m| {
-        let map = &mut m.borrow_mut().local_cop_flow_stats;
-        let flow_stats = map
-            .entry(region_id)
-            .or_insert_with(crate::storage::FlowStatistics::default);
-        flow_stats.add(&statistics.write.flow_stats);
-        flow_stats.add(&statistics.data.flow_stats);
+        let mut m = m.borrow_mut();
+        m.local_read_stats.add_flow(
+            region_id,
+            &statistics.write.flow_stats,
+            &statistics.data.flow_stats,
+        );
+    });
+}
+
+pub fn tls_collect_qps(
+    region_id: u64,
+    peer: &metapb::Peer,
+    start_key: &[u8],
+    end_key: &[u8],
+    reverse_scan: bool,
+) {
+    TLS_COP_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+        let key_range = build_key_range(start_key, end_key, reverse_scan);
+        m.local_read_stats.add_qps(region_id, peer, key_range);
     });
 }
