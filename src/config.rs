@@ -16,10 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use configuration::{
-    rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult,
-    RollbackCollector,
-};
+use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1957,30 +1954,6 @@ impl Default for TiKvConfig {
 impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    /// Validate the config, if encounter invalid config try to fallback to
-    /// the valid config. Caller should not rely on this method for validating
-    /// because some configs not implement rollback collector yet.
-    pub fn validate_with_rollback(&mut self, cfg: &TiKvConfig) -> ConfigChange {
-        let mut c = HashMap::new();
-        let rb_collector = RollbackCollector::new(cfg, &mut c);
-        if let Err(e) = self.validate_or_rollback(Some(rb_collector)) {
-            warn!("Invalid config"; "err" => ?e)
-        }
-        c
-    }
-
-    // If `rb_collector` is `Some`, when encounter some invalid config, instead of
-    // return an Error, a fallback from these invalid configs to the valid config
-    // will be collected and insert into `rb_collector`. For configs that not implement
-    // rollback collector yet, an `Err` will return if encounter invalid config
-    // TODO: implement rollback collector for more config
-    fn validate_or_rollback(
-        &mut self,
-        mut rb_collector: Option<RollbackCollector<TiKvConfig>>,
-    ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -2045,36 +2018,16 @@ impl TiKvConfig {
             .into());
         }
 
-        rollback_or!(
-            rb_collector,
-            raft_store,
-            |r| { self.raft_store.validate_or_rollback(r) },
-            self.raft_store.validate()?
-        );
-        rollback_or!(
-            rb_collector,
-            coprocessor,
-            |r| { self.coprocessor.validate_or_rollback(r) },
-            self.coprocessor.validate()?
-        );
-        rollback_or!(
-            rb_collector,
-            pessimistic_txn,
-            |r| { self.pessimistic_txn.validate_or_rollback(r) },
-            self.pessimistic_txn.validate()?
-        );
-        rollback_or!(
-            rb_collector,
-            gc,
-            |r| { self.gc.validate_or_rollback(r) },
-            self.gc.validate()?
-        );
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.server.validate()?;
+        self.raft_store.validate()?;
         self.pd.validate()?;
+        self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.pessimistic_txn.validate()?;
+        self.gc.validate()?;
         Ok(())
     }
 
