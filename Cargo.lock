@@ -1203,7 +1203,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.0#0d534a3a8d50999f89eff72fd4afe2bd99c440f8"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.0#7137e8d2924e110f6b0e88b989e85c762156aba8"
 dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1912,7 +1912,7 @@ name = "protoc"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1992,7 +1992,7 @@ version = "0.4.3"
 source = "git+https://github.com/tikv/raft-rs?rev=9782199fa6318f94bf0974129664d974b03f8f11#9782199fa6318f94bf0974129664d974b03f8f11"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
