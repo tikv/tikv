@@ -160,7 +160,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
         let mut fsm = self.normals.swap_remove(index);
         self.counters.swap_remove(index);
-        fsm.before_reschedule();
         router.normal_scheduler.schedule(fsm);
     }
 
@@ -303,6 +302,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                         // it's possible all the hot regions are fetched in a batch the
                         // next time.
                         if hot_fsm_count % 2 == 0 {
+                            p.before_reschedule();
                             reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                             continue;
                         }
