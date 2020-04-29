@@ -793,11 +793,15 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.apply_state(region_id, store_id).take_truncated_state()
+    }
+
+    pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
+        let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
+            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &key)
             .unwrap()
             .unwrap()
-            .take_truncated_state()
     }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
