@@ -3494,7 +3494,7 @@ mod tests {
             region_scheduler,
             sender,
             _phantom: PhantomData,
-            engine: engine.clone(),
+            engine,
             router: router.clone(),
         };
         system.spawn("test-basic".to_owned(), builder);
