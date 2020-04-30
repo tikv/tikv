@@ -158,7 +158,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     /// Schedule the normal FSM located at `index`.
     pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
-        let mut fsm = self.normals.swap_remove(index);
+        let fsm = self.normals.swap_remove(index);
         self.counters.swap_remove(index);
         router.normal_scheduler.schedule(fsm);
     }

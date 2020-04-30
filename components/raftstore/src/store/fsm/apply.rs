@@ -777,6 +777,8 @@ where
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+
+    schedule_time: Option<Instant>,
 }
 
 impl<E> ApplyDelegate<E>
@@ -804,6 +806,7 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
+            schedule_time: None,
         }
     }
 
@@ -879,6 +882,9 @@ where
                         pending_msgs: Vec::default(),
                     });
                     APPLY_YIELD_COUNT.inc();
+                    if let Some(t) = self.schedule_time.take() {
+                        APPLY_EXECUTE_DURATION.observe(t.elapsed().as_millis() as f64 / 1000f64);
+                    }
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
                     }
@@ -3037,6 +3043,7 @@ where
 
     #[inline]
     fn after_scheduled(&mut self) {
+        self.delegate.schedule_time = Some(Instant::now_coarse());
         if let Some(t) = self.reschedule_time.take() {
             APPLY_RESCHEDULE_WAIT_DURATION.observe(t.elapsed().as_millis() as f64 / 1000f64);
         }

@@ -269,6 +269,8 @@ impl<E: KvEngine> Fsm for PeerFsm<E> {
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
     fsm: &'a mut PeerFsm<RocksEngine>,
     ctx: &'a mut PollContext<T, C>,
+    last_check_time: Instant,
+    last_check_index: u64,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
@@ -276,7 +278,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         fsm: &'a mut PeerFsm<RocksEngine>,
         ctx: &'a mut PollContext<T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
-        PeerFsmDelegate { fsm, ctx }
+        let applied_index = fsm.peer.get_store().applied_index();
+        PeerFsmDelegate {
+            fsm,
+            ctx,
+            last_check_time: Instant::now(),
+            last_check_index: applied_index,
+        }
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine>>) {
@@ -847,6 +855,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
+                }
+                if self.last_check_time.elapsed().as_millis() > 10_000 {
+                    if res.apply_state.get_applied_index() - self.last_check_index > 10240 {
+                        info!("applied logs";
+                            "region_id" => self.region_id(),
+                            "count" => res.apply_state.get_applied_index() - self.last_check_index,
+                            "cost" => self.last_check_time.elapsed().as_millis(),
+                        );
+
+                        self.last_check_index = res.apply_state.get_applied_index();
+                        self.last_check_time = Instant::now();
+                    }
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,

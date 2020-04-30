@@ -34,6 +34,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref APPLY_EXECUTE_DURATION: Histogram = register_histogram!(
+        "tikv_raftstore_apply_execute_wait_duration_secs",
+        "The interval of a fsm was handled",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
 
 #[derive(Default)]
