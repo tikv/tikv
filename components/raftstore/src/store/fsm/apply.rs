@@ -30,6 +30,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -2278,30 +2279,6 @@ where
     pub cbs: Vec<Proposal<E>>,
 }
 
-impl<E: KvEngine> Apply<E> {
-    pub fn new(
-        peer_id: u64,
-        region_id: u64,
-        term: u64,
-        entries: Vec<Entry>,
-        last_commit_index: u64,
-        commit_term: u64,
-        commit_index: u64,
-        cbs: Vec<Proposal<E>>,
-    ) -> Apply<E> {
-        Apply {
-            peer_id,
-            region_id,
-            term,
-            entries,
-            last_commit_index,
-            commit_index,
-            commit_term,
-            cbs,
-        }
-    }
-}
-
 #[derive(Default, Clone)]
 pub struct Registration {
     pub id: u64,
@@ -2335,20 +2312,8 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Callback<E>,
-}
-
-impl<E> Proposal<E>
-where
-    E: KvEngine,
-{
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E>) -> Proposal<E> {
-        Proposal {
-            is_conf_change,
-            index,
-            term,
-            cb,
-        }
-    }
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
 }
 
 pub struct Destroy {
@@ -3477,6 +3442,43 @@ mod tests {
         }
     }
 
+    fn proposl<E: KvEngine>(
+        is_conf_change: bool,
+        index: u64,
+        term: u64,
+        cb: Callback<E>,
+    ) -> Proposal<E> {
+        Proposal {
+            is_conf_change,
+            index,
+            term,
+            cb,
+            renew_lease_time: None,
+        }
+    }
+
+    fn apply<E: KvEngine>(
+        peer_id: u64,
+        region_id: u64,
+        term: u64,
+        entries: Vec<Entry>,
+        last_commit_index: u64,
+        commit_term: u64,
+        commit_index: u64,
+        cbs: Vec<Proposal<E>>,
+    ) -> Apply<E> {
+        Apply {
+            peer_id,
+            region_id,
+            term,
+            entries,
+            last_commit_index,
+            commit_index,
+            commit_term,
+            cbs,
+        }
+    }
+
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
@@ -3517,7 +3519,7 @@ mod tests {
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = Proposal::new(
+        let p = proposl(
             false,
             1,
             0,
@@ -3527,7 +3529,7 @@ mod tests {
         );
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 1,
                 1,
                 0,
@@ -3545,7 +3547,7 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(
+            proposl(
                 false,
                 4,
                 4,
@@ -3553,20 +3555,11 @@ mod tests {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
-            Proposal::new(false, 4, 5, Callback::None),
+            proposl(false, 4, 5, Callback::None),
         ];
         router.schedule_task(
             2,
-            Msg::apply(Apply::new(
-                1,
-                2,
-                11,
-                vec![new_entry(5, 4, true)],
-                3,
-                5,
-                4,
-                pops,
-            )),
+            Msg::apply(apply(1, 2, 11, vec![new_entry(5, 4, true)], 3, 5, 4, pops)),
         );
         // proposal with not commit entry should be ignore
         validate(&router, 2, move |delegate| {
@@ -3582,7 +3575,7 @@ mod tests {
             &router,
             2,
             vec![
-                Msg::apply(Apply::new(
+                Msg::apply(apply(
                     1,
                     2,
                     11,
@@ -3640,7 +3633,7 @@ mod tests {
 
         // Stopped peer should be removed.
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = Proposal::new(
+        let p = proposl(
             false,
             1,
             0,
@@ -3650,7 +3643,7 @@ mod tests {
         );
         router.schedule_task(
             2,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 1,
                 1,
                 0,
@@ -3674,7 +3667,7 @@ mod tests {
     }
 
     fn cb<E: KvEngine>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<E> {
-        Proposal::new(
+        proposl(
             false,
             idx,
             term,
@@ -3887,7 +3880,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 1,
@@ -3919,7 +3912,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
@@ -3941,7 +3934,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 2,
@@ -3965,7 +3958,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 2,
@@ -3992,7 +3985,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4017,7 +4010,7 @@ mod tests {
         let delete_entry = EntryBuilder::new(6, 3).delete(b"k5").epoch(1, 3).build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4038,7 +4031,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4062,7 +4055,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4117,7 +4110,7 @@ mod tests {
         let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4159,7 +4152,7 @@ mod tests {
         }
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 3,
@@ -4231,7 +4224,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(peer_id, 1, 1, vec![put_entry], 0, 1, 1, vec![])),
+            Msg::apply(apply(peer_id, 1, 1, vec![put_entry], 0, 1, 1, vec![])),
         );
         fetch_apply_res(&rx);
         // It must receive nothing because no region registered.
@@ -4255,7 +4248,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
         );
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
@@ -4287,7 +4280,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 2,
@@ -4315,7 +4308,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
                 peer_id,
                 1,
                 2,
@@ -4337,7 +4330,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(peer_id, 1, 2, vec![put_entry], 5, 2, 6, vec![])),
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 5, 2, 6, vec![])),
         );
         // Must not receive new cmd.
         cmdbatch_rx
@@ -4539,7 +4532,7 @@ mod tests {
                 .build();
             router.schedule_task(
                 1,
-                Msg::apply(Apply::new(
+                Msg::apply(apply(
                     peer_id,
                     1,
                     1,
