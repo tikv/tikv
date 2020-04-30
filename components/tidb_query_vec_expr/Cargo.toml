@@ -6,6 +6,7 @@ publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
 [dependencies]
+base64 = "0.10"
 byteorder = "1.2"
 codec = { path = "../codec" }
 derive_more = "0.15.0"
