@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
+use std::path::PathBuf;
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -22,9 +23,10 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
+use encryption::DataKeyManager;
 use engine::rocks;
-use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
+use engine_rocks::encryption::get_env;
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use keys;
 use kvproto::debugpb::{Db as DBType, *};
@@ -62,29 +64,26 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+                .unwrap()
+                .map(|key_manager| Arc::new(key_manager));
+            let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                kv_db_opts.set_env(encrypted_env);
-            }
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
+                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
+                    .canonicalize()
+                    .unwrap();
+                String::from(db_path.to_str().unwrap())
+            });
             let mut raft_db_opts = cfg.raftdb.build_opt();
+            raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                raft_db_opts.set_env(encrypted_env);
-            }
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
@@ -1045,10 +1044,6 @@ fn main() {
                 .long("key-path")
                 .takes_value(true)
                 .help("Set the private key path"),
-        )
-        .arg(
-            Arg::with_name("cipher_file")
-            .required(false).long("cipher-file").takes_value(true).help("set cipher file path")
         )
         .arg(
             Arg::with_name("hex-to-escaped")
@@ -2119,10 +2114,9 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
-    let cipher_file = matches.value_of("cipher_file");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && cipher_file.is_none() {
+    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
         return Arc::new(SecurityManager::new(&cfg).unwrap());
     }
 
@@ -2133,10 +2127,6 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
         cfg.ca_path = ca_path.unwrap().to_owned();
         cfg.cert_path = cert_path.unwrap().to_owned();
         cfg.key_path = key_path.unwrap().to_owned();
-    }
-
-    if let Some(cipher_file) = cipher_file {
-        cfg.cipher_file = cipher_file.to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
@@ -2277,12 +2267,13 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
+    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
+    let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
-    if !cfg.security.cipher_file.is_empty() {
-        let encrypted_env =
-            encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
-        opts.set_env(encrypted_env);
-    }
+    opts.set_env(env);
+
     engine::rocks::run_ldb_tool(&args, &opts);
 }
 
