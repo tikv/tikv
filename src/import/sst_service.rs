@@ -5,13 +5,19 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
+
+#[cfg(feature = "prost-codec")]
+use kvproto::import_sstpb::write_request::*;
+#[cfg(feature = "protobuf-codec")]
+use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
+
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -362,6 +368,82 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         ctx.spawn(
             future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn write(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<WriteRequest>,
+        sink: ClientStreamingSink<WriteResponse>,
+    ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let label = "write";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+        let engine = Arc::clone(&self.engine);
+        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
+        ctx.spawn(
+            self.threads.spawn(
+                bounded_stream
+                    .into_future()
+                    .map_err(|(e, _)| Error::from(e))
+                    .and_then(move |(req, stream)| {
+                        let meta = match req {
+                            Some(r) => match r.chunk {
+                                Some(Chunk::Meta(m)) => m,
+                                _ => return Err(Error::InvalidChunk),
+                            },
+                            _ => return Err(Error::InvalidChunk),
+                        };
+                        let name = import.get_path(&meta);
+
+                        let default = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                            .set_in_memory(true)
+                            .set_db(RocksEngine::from_ref(&engine))
+                            .set_cf(CF_DEFAULT)
+                            .build(&name.to_str().unwrap())?;
+                        let write = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                            .set_in_memory(true)
+                            .set_db(RocksEngine::from_ref(&engine))
+                            .set_cf(CF_WRITE)
+                            .build(&name.to_str().unwrap())?;
+                        let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
+                            Ok(w) => w,
+                            Err(e) => {
+                                error!("build writer failed {:?}", e);
+                                return Err(Error::InvalidChunk);
+                            }
+                        };
+                        Ok((writer, stream))
+                    })
+                    .and_then(move |(writer, stream)| {
+                        stream
+                            .map_err(Error::from)
+                            .fold(writer, |mut writer, req| {
+                                let start = Instant::now_coarse();
+                                let batch = match req.chunk {
+                                    Some(Chunk::Batch(b)) => b,
+                                    _ => return Err(Error::InvalidChunk),
+                                };
+                                writer.write(batch)?;
+                                IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                                Ok(writer)
+                            })
+                            .and_then(|writer| writer.finish())
+                    })
+                    .then(move |res| match res {
+                        Ok(metas) => {
+                            let mut resp = WriteResponse::default();
+                            resp.set_metas(metas.into());
+                            Ok(resp)
+                        }
+                        Err(e) => Err(e),
+                    })
+                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
+            ),
         )
     }
 }
