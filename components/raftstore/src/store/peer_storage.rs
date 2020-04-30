@@ -1489,13 +1489,7 @@ where
     let mut snap_data = RaftSnapshotData::default();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
-    s.build(
-        &kv_snap,
-        state.get_region(),
-        &mut snap_data,
-        &mut stat,
-        Box::new(mgr.clone()),
-    )?;
+    s.build(&kv_snap, state.get_region(), &mut snap_data, &mut stat)?;
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
