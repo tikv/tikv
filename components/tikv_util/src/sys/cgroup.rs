@@ -28,18 +28,17 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
-            display("{:?}", err)
+            display("{}", err)
         }
         Io(err: std::io::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         PathErr(err: std::path::StripPrefixError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
     }
 }
