@@ -205,7 +205,10 @@ pub fn get_region_approximate_size(
 ) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)?
+        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)
+            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+            // backward compatibility.
+            .or_else(|e| if cfname == &CF_LOCK { Ok(0) } else { Err(e) })?;
     }
     Ok(size)
 }
@@ -258,7 +261,7 @@ pub fn get_region_approximate_size_cf(
     Ok(total_size)
 }
 
-/// Get region approximate split keys based on default and write cf.
+/// Get region approximate split keys based on default, write and lock cf.
 fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
@@ -266,11 +269,13 @@ fn get_approximate_split_keys(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0).unwrap_or(0);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
     let cfs = [
-        (CF_DEFAULT, get_cf_size(CF_DEFAULT)),
-        (CF_WRITE, get_cf_size(CF_WRITE)),
-        (CF_LOCK, get_cf_size(CF_LOCK)),
+        (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
+        (CF_WRITE, box_try!(get_cf_size(CF_WRITE))),
+        // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+        // backward compatibility.
+        (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),
     ];
 
     let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
