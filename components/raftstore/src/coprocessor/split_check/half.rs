@@ -112,7 +112,7 @@ pub fn get_region_approximate_middle(
     db: &impl KvEngine,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
