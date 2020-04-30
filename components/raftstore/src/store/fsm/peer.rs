@@ -2441,6 +2441,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     new_regions.push(sibling_region);
                 }
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                let debug_new_regions: Vec<_> = new_regions
+                    .iter()
+                    .map(|r| (hex::encode(r.get_start_key()), hex::encode(r.get_end_key())))
+                    .collect();
+                error!(
+                    "epoch_not_match in pre_propose_raft_command with new_regions: {:?}",
+                    debug_new_regions
+                );
                 Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
@@ -2791,12 +2799,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "prev_epoch" => ?region.get_region_epoch(),
                 "epoch" => ?epoch,
             );
+            let new_regions = vec![region.to_owned()];
+            let debug_new_regions: Vec<_> = new_regions
+                .iter()
+                .map(|r| (hex::encode(r.get_start_key()), hex::encode(r.get_end_key())))
+                .collect();
+            error!(
+                "epoch_not_match in validate_split_region with new_regions: {:?}",
+                debug_new_regions
+            );
             return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch
                 ),
-                vec![region.to_owned()],
+                new_regions,
             ));
         }
         Ok(())

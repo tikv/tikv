@@ -1099,12 +1099,22 @@ where
                 // clear dirty values.
                 ctx.kv_wb_mut().rollback_to_save_point().unwrap();
                 match e {
-                    Error::EpochNotMatch(..) => debug!(
-                        "epoch not match";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "err" => ?e
-                    ),
+                    Error::EpochNotMatch(_, ref new_regions) => {
+                        let debug_new_regions: Vec<_> = new_regions
+                            .iter()
+                            .map(|r| (hex::encode(r.get_start_key()), hex::encode(r.get_end_key())))
+                            .collect();
+                        error!(
+                            "epoch_not_match in apply_raft_cmd with new_regions: {:?}",
+                            debug_new_regions
+                        );
+                        debug!(
+                            "epoch not match";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        );
+                    }
                     _ => error!(
                         "execute raft command";
                         "region_id" => self.region_id(),

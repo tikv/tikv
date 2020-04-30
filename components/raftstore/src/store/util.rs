@@ -222,6 +222,14 @@ pub fn compare_region_epoch(
         } else {
             vec![]
         };
+        let debug_new_regions: Vec<_> = regions
+            .iter()
+            .map(|r| (hex::encode(r.get_start_key()), hex::encode(r.get_end_key())))
+            .collect();
+        error!(
+            "epoch_not_match in compare_region_epoch with new_regions: {:?}",
+            debug_new_regions
+        );
         return Err(Error::EpochNotMatch(
             format!(
                 "current epoch of region {} is {:?}, but you \
