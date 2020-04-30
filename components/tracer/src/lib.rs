@@ -5,28 +5,30 @@ extern crate lazy_static;
 extern crate tikv_alloc;
 
 pub mod future;
+pub mod time_measure;
 pub mod util;
-pub type ID = usize;
+
 pub use tracer_attribute;
 
+use time_measure::*;
+
+pub type ID = usize;
 const FACTOR: usize = 100;
+pub const TIME_MEASURE_TYPE: TimeMeasureType = TimeMeasureType::Instant;
 
 #[derive(Debug)]
 pub struct Span {
     pub tag: &'static str,
     pub id: ID,
     pub parent: Option<ID>,
-    // pub elapsed_start: std::time::Duration,
-    // pub elapsed_end: std::time::Duration,
-    pub start_time: std::time::SystemTime,
-    pub end_time: std::time::SystemTime,
+    pub elapsed_start: std::time::Duration,
+    pub elapsed_end: std::time::Duration,
 }
 
 pub struct SpanInner {
     sender: crossbeam::channel::Sender<Span>,
-    // root_start_time: std::time::Instant,
-    // elapsed_start: std::time::Duration,
-    start_time: std::time::SystemTime,
+    root: TimeMeasureRoot,
+    time_handle: TimeMeasureHandle,
 }
 
 pub struct ArcSpanInner {
@@ -40,14 +42,13 @@ pub struct ArcSpanInner {
 impl Drop for ArcSpanInner {
     fn drop(&mut self) {
         for span in self.span_inner.drain(..) {
+            let (start, end) = span.time_handle.end();
             let _ = span.sender.try_send(Span {
                 tag: self.tag,
                 id: self.id.unwrap(),
                 parent: self.parent,
-                // elapsed_start: span.elapsed_start,
-                // elapsed_end: span.root_start_time.elapsed(),
-                start_time: span.start_time,
-                end_time: std::time::SystemTime::now(),
+                elapsed_start: start,
+                elapsed_end: end,
             });
         }
 
@@ -82,15 +83,19 @@ lazy_static! {
     };
 }
 
-pub fn new_span_root(tag: &'static str, sender: crossbeam::channel::Sender<Span>) -> SpanGuard {
+pub fn new_span_root(
+    tag: &'static str,
+    sender: crossbeam::channel::Sender<Span>,
+    time_measure_type: TimeMeasureType,
+) -> SpanGuard {
     let mut span_inners = Vec::with_capacity(FACTOR);
 
     for _ in 0..FACTOR {
+        let root = TimeMeasure::root(time_measure_type);
         span_inners.push(SpanInner {
             sender: sender.clone(),
-            // root_start_time: std::time::Instant::now(),
-            // elapsed_start: std::time::Duration::new(0, 0),
-            start_time: std::time::SystemTime::now(),
+            root,
+            time_handle: root.start(),
         });
     }
 
@@ -125,11 +130,11 @@ pub fn new_span(tag: &'static str) -> OSpanGuard {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         for parent_span in parent_arc_span.span_inner.iter() {
+            let root = parent_span.root;
             span_inners.push(SpanInner {
                 sender: parent_span.sender.clone(),
-                // root_start_time: parent_span.root_start_time,
-                // elapsed_start: parent_span.root_start_time.elapsed(),
-                start_time: std::time::SystemTime::now(),
+                root,
+                time_handle: root.start(),
             })
         }
 

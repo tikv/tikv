@@ -47,7 +47,7 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
         #where_clause
         {
             let (__span_tx, __span_rx) = crossbeam::channel::unbounded();
-            let __span = tracer::new_span_root(#tag, __span_tx);
+            let __span = tracer::new_span_root(#tag, __span_tx, tracer::TIME_MEASURE_TYPE);
             let __g = __span.enter();
 
             {

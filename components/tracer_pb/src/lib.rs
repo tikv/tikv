@@ -7,14 +7,6 @@ mod protos {
     include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 }
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn timestamp(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_nanos() as u64
-}
-
 pub use crate::protos::tracer_pb::*;
 
 #[cfg(feature = "protobuf-codec")]
@@ -28,10 +20,8 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
             if let Some(p) = span.parent {
                 s.set_parent_value(p as u32);
             }
-            // s.set_start(span.elapsed_start.as_nanos() as u64);
-            // s.set_end(span.elapsed_end.as_nanos() as u64);
-            s.set_start(timestamp(span.start_time));
-            s.set_end(timestamp(span.end_time));
+            s.set_start(span.elapsed_start.as_nanos() as u64);
+            s.set_end(span.elapsed_end.as_nanos() as u64);
             s
         })
         .collect();
@@ -55,10 +45,8 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
             } else {
                 Some(self::span::Parent::ParentNone(true))
             };
-            // s.start = span.elapsed_start.as_nanos() as u64;
-            // s.end = span.elapsed_end.as_nanos() as u64;
-            s.set_start(timestamp(span.start_time));
-            s.set_end(timestamp(span.end_time));
+            s.start = span.elapsed_start.as_nanos() as u64;
+            s.end = span.elapsed_end.as_nanos() as u64;
             s
         })
         .collect();
