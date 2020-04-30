@@ -298,8 +298,6 @@ mod sys {
                 ("tx-packets/s", rate(cur.tx_packets, prev.tx_packets)),
                 ("rx-errors/s", rate(cur.rx_errors, prev.rx_errors)),
                 ("tx-errors/s", rate(cur.tx_errors, prev.tx_errors)),
-                ("rx-comp/s", rate(cur.rx_compressed, prev.rx_compressed)),
-                ("tx-comp/s", rate(cur.tx_compressed, prev.tx_compressed)),
             ];
             let mut pairs = vec![];
             for info in infos.into_iter() {

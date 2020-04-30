@@ -1966,7 +1966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#038e31959c2a66085aad455db6e34fa4e98a58f9"
+source = "git+https://github.com/pingcap/kvproto.git#c3b73d03dde2f54154d396f44dc9a25c3e8bdb79"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2023,7 +2023,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2042,7 +2042,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3400,7 +3400,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4491,7 +4491,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "regex",
- "safemem",
  "slog",
  "slog-global",
  "tidb_query_common",
@@ -4508,6 +4507,7 @@ name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
  "rand 0.6.5",
+ "safemem",
  "tidb_query_datatype",
  "time 0.1.42",
 ]
@@ -4555,6 +4555,7 @@ dependencies = [
 name = "tidb_query_vec_expr"
 version = "0.0.1"
 dependencies = [
+ "base64 0.10.1",
  "bstr",
  "byteorder",
  "chrono",
@@ -4645,6 +4646,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",
@@ -5536,7 +5538,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#9d3ccd00673965bb9a8d5ff672707b52863ba69c"
+source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
