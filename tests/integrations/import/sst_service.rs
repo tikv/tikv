@@ -79,6 +79,33 @@ fn test_upload_sst() {
 }
 
 #[test]
+fn test_write_sst() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    let mut meta = new_sst_meta(0, 0);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    let mut keys = vec![];
+    let mut values = vec![];
+    let sst_range = (0, 10);
+    for i in sst_range.0..sst_range.1 {
+        keys.push(vec![i]);
+        values.push(vec![i]);
+    }
+    let resp = send_write_sst(&import, &meta, keys, values, 1).unwrap();
+
+    for m in resp.metas.into_iter() {
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(m.clone());
+        let resp = import.ingest(&ingest).unwrap();
+        assert!(!resp.has_error());
+    }
+    check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
+}
+
+#[test]
 fn test_ingest_sst() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
@@ -272,6 +299,40 @@ fn send_upload_sst(
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
+fn send_write_sst(
+    client: &ImportSstClient,
+    meta: &SstMeta,
+    keys: Vec<Vec<u8>>,
+    values: Vec<Vec<u8>>,
+    commit_ts: u64,
+) -> Result<WriteResponse> {
+    let mut r1 = WriteRequest::default();
+    r1.set_meta(meta.clone());
+    let mut r2 = WriteRequest::default();
+
+    let mut batch = WriteBatch::default();
+    let mut pairs = vec![];
+
+    for (i, key) in keys.iter().enumerate() {
+        let mut pair = Pair::default();
+        pair.set_key(key.to_vec());
+        pair.set_value(values[i].to_vec());
+        pairs.push(pair);
+    }
+    batch.set_commit_ts(commit_ts);
+    batch.set_pairs(pairs.into());
+    r2.set_batch(batch);
+
+    let reqs: Vec<_> = vec![r1, r2]
+        .into_iter()
+        .map(|r| (r, WriteFlags::default()))
+        .collect();
+
+    let (tx, rx) = client.write().unwrap();
+    let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
+}
+
 fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
     for i in sst_range.0..sst_range.1 {
         let mut m = RawGetRequest::default();
@@ -279,6 +340,18 @@ fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
         m.set_key(vec![i]);
         let resp = tikv.raw_get(&m).unwrap();
         assert!(resp.get_error().is_empty());
+        assert!(!resp.has_region_error());
+        assert_eq!(resp.get_value(), &[i]);
+    }
+}
+
+fn check_ingested_txn_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8), start_ts: u64) {
+    for i in sst_range.0..sst_range.1 {
+        let mut m = GetRequest::default();
+        m.set_context(ctx.clone());
+        m.set_key(vec![i]);
+        m.set_version(start_ts);
+        let resp = tikv.kv_get(&m).unwrap();
         assert!(!resp.has_region_error());
         assert_eq!(resp.get_value(), &[i]);
     }
