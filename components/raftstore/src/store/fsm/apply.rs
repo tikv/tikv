@@ -2662,7 +2662,7 @@ impl ApplyFsm {
     fn resume_pending<W: WriteBatch + WriteBatchVecExt<RocksEngine>>(
         &mut self,
         ctx: &mut ApplyContext<W>,
-    ) -> bool {
+    ) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {

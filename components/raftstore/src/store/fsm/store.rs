@@ -1070,16 +1070,26 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = RocksEngine::from_db(builder.engines.kv.clone());
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder, dyn_cfg)?;
+            self.start_system::<T, C, RocksWriteBatchVec>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder, dyn_cfg)?;
+            self.start_system::<T, C, RocksWriteBatch>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
         }
         Ok(())
     }
 
     fn start_system<
         T: Transport + 'static,
-        C: PdClient + ConfigClient + 'static,
+        C: PdClient + 'static,
         W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
     >(
         &mut self,
