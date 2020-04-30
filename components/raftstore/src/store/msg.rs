@@ -180,8 +180,10 @@ pub enum SignificantMsg {
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeCmd,
+        region_epoch: RegionEpoch,
         callback: Callback<RocksEngine>,
     },
+    LeaderCallback(Callback<RocksEngine>),
 }
 
 /// Message that will be sent to a peer.

@@ -17,6 +17,7 @@ configuration = { path = "../configuration" }
 chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
+derive_more = "0.99.3"
 fail = "0.3"
 fs2 = "0.4"
 futures = "0.1"
@@ -38,12 +39,14 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-term = "2.4"
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
 tokio-core = "0.1"
 tokio-executor = "0.1"
 tokio-sync = "0.1.7"
 tokio-timer = "0.2"
+tempfile = "3.0"
 url = "2"
 zeroize = { version = "1.1", features = ["alloc"] }
 
