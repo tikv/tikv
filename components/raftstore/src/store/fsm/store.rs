@@ -54,8 +54,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
+    StoreTick,
 };
 use crate::Result;
 use engine::Engines;
