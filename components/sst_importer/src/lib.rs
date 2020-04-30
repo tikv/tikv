@@ -24,5 +24,5 @@ pub mod sst_importer;
 
 pub use self::config::Config;
 pub use self::errors::{error_inc, Error, Result};
-pub use self::sst_importer::SSTImporter;
+pub use self::sst_importer::{SSTImporter, SSTWriter};
 pub use self::util::prepare_sst_for_ingestion;
