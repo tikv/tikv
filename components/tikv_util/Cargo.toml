@@ -45,7 +45,6 @@ time = "0.1"
 tokio-core = "0.1"
 tokio-executor = "0.1"
 tokio-sync = "0.1.7"
-tokio-threadpool = "0.1.13"
 tokio-timer = "0.2"
 tempfile = "3.0"
 url = "2"
@@ -53,6 +52,9 @@ zeroize = { version = "1.1", features = ["alloc"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
 futures-cpupool = "0.1"
