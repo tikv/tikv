@@ -2577,7 +2577,6 @@ mod tests {
     use engine_traits::DBOptions as DBOptionsTrait;
     use slog::Level;
     use std::sync::Arc;
-    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -2623,8 +2622,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
         // write critical config when exist.
         tikv_cfg.rocksdb.wal_dir = s2.clone();

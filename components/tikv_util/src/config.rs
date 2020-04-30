@@ -1118,7 +1118,6 @@ mod tests {
 
     use super::*;
     use tempfile::Builder;
-    use toml;
 
     #[test]
     fn test_readable_size() {

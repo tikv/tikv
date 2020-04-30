@@ -284,7 +284,7 @@ mod tests {
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(magic_contents.as_ref().into()),
             });
-        let mut aws_kms = AwsKms::with_request_dispatcher(&config.clone(), dispatcher).unwrap();
+        let mut aws_kms = AwsKms::with_request_dispatcher(&config, dispatcher).unwrap();
         let (ciphertext, plaintext) = aws_kms.generate_data_key().unwrap();
         assert_eq!(ciphertext, magic_contents);
         assert_eq!(plaintext, magic_contents);

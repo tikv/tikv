@@ -780,7 +780,6 @@ pub mod tests {
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
-    use rand;
     use std::thread;
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;

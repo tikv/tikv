@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
         assert_eq!(column.as_real_slice(), &[]);
-        assert_eq!(column.clone().capacity(), 0);
+        assert_eq!(column.capacity(), 0);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(1.0).ok());
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
-        assert_eq!(column.clone().capacity(), 1);
+        assert_eq!(column.capacity(), 1);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().capacity(), 2);
+        assert_eq!(column.capacity(), 2);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(4.5).ok());
@@ -564,7 +564,7 @@ mod tests {
             column.as_real_slice(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
         );
-        assert_eq!(column.clone().capacity(), 3);
+        assert_eq!(column.capacity(), 3);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
