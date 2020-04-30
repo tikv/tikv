@@ -2023,7 +2023,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2042,7 +2042,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3400,7 +3400,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4491,7 +4491,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "regex",
- "safemem",
  "slog",
  "slog-global",
  "tidb_query_common",
@@ -4508,6 +4507,7 @@ name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
  "rand 0.6.5",
+ "safemem",
  "tidb_query_datatype",
  "time 0.1.42",
 ]
@@ -4555,6 +4555,7 @@ dependencies = [
 name = "tidb_query_vec_expr"
 version = "0.0.1"
 dependencies = [
+ "base64 0.10.1",
  "bstr",
  "byteorder",
  "chrono",

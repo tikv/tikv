@@ -1184,7 +1184,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             engines.kv,
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
