@@ -21,7 +21,7 @@ pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster,
 };
-pub use self::config::{Config, QuorumAlgorithm};
+pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
     Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
@@ -43,6 +43,9 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::worker::{DynamicConfig, FlowStatistics, FlowStatsReporter, PdTask};
+pub use self::worker::{
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadStats, SplitConfig,
+    SplitConfigManager,
+};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
