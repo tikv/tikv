@@ -71,7 +71,8 @@ impl RowSlice<'_> {
                 if let Ok(idx) = non_null_ids.binary_search(&(id as u32)) {
                     let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
                     let start = if idx > 0 {
-                        offsets.get_unchecked(idx - 1) as usize
+                        // Previous `offsets.get(idx)` indicates it's ok to index `idx - 1`
+                        unsafe { offsets.get_unchecked(idx - 1) as usize }
                     } else {
                         0usize
                     };
@@ -86,7 +87,8 @@ impl RowSlice<'_> {
                 if let Ok(idx) = non_null_ids.binary_search(&(id as u8)) {
                     let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
                     let start = if idx > 0 {
-                        offsets.get_unchecked(idx - 1) as usize
+                        // Previous `offsets.get(idx)` indicates it's ok to index `idx - 1`
+                        unsafe { offsets.get_unchecked(idx - 1) as usize }
                     } else {
                         0usize
                     };
@@ -173,17 +175,15 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
         if std::mem::size_of::<T>() * index >= self.slice.len() {
             None
         } else {
-            Some(self.get_unchecked(index))
+            unsafe { Some(self.get_unchecked(index)) }
         }
     }
 
     #[inline]
-    fn get_unchecked(&self, index: usize) -> T {
+    unsafe fn get_unchecked(&self, index: usize) -> T {
         let ptr = self.slice.as_ptr() as *const T;
-        unsafe {
-            let ptr = ptr.add(index);
-            std::ptr::read_unaligned(ptr)
-        }
+        let ptr = ptr.add(index);
+        std::ptr::read_unaligned(ptr)
     }
 
     #[inline]
@@ -202,13 +202,13 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
         while steps > 0 && size > 1 {
             let half = size / 2;
             let mid = base + half;
-            let cmp = self.get_unchecked(mid).cmp(value);
+            let cmp = unsafe { self.get_unchecked(mid) }.cmp(value);
             base = if cmp == Greater { base } else { mid };
             size -= half;
             steps -= 1;
         }
 
-        let cmp = self.get_unchecked(base).cmp(value);
+        let cmp = unsafe { self.get_unchecked(base) }.cmp(value);
         if cmp == Equal {
             Ok(base)
         } else {
@@ -234,10 +234,10 @@ mod tests {
             buf.write_u16_le(*n).unwrap();
         }
 
-        for i in 3..=data.len() {
+        for i in 1..=data.len() {
             let le_bytes = read_le_bytes::<u16>(&mut buf.as_slice(), i).unwrap();
             for j in 0..i {
-                assert_eq!(le_bytes.get_unchecked(j), data[j]);
+                assert_eq!(unsafe { le_bytes.get_unchecked(j) }, data[j]);
             }
         }
     }
