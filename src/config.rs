@@ -25,7 +25,6 @@ use engine::rocks::{
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
     TitanDBOptions,
 };
-use slog;
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;

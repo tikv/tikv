@@ -350,7 +350,7 @@ impl<'a> Iterator for Iter<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.nth(0)
+        Self::nth(self, 0)
     }
 
     #[inline]

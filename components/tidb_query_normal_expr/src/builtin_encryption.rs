@@ -6,7 +6,6 @@ use std::io::Read;
 use crate::ScalarFunc;
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use hex;
 use openssl::hash::{self, MessageDigest};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{Error, EvalContext, Result};

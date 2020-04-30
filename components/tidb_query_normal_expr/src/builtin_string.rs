@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -9,7 +8,6 @@ use std::iter;
 
 use hex::{self, FromHex};
 
-use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
 use tidb_query_shared_expr::string::{

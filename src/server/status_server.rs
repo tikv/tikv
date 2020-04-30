@@ -8,7 +8,6 @@ use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
-use pprof;
 use pprof::protos::Message;
 use regex::Regex;
 use reqwest::{self, blocking::Client};
@@ -34,8 +33,8 @@ use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod profiler_guard {
+    use tikv_alloc::activate_prof;
     use tikv_alloc::error::ProfResult;
-    use tikv_alloc::{activate_prof, deactivate_prof};
 
     use futures::{Future, Poll};
     use futures_locks::{Mutex, MutexFut, MutexGuard};
@@ -60,9 +59,10 @@ mod profiler_guard {
 
     impl Drop for ProfGuard {
         fn drop(&mut self) {
-            match deactivate_prof() {
-                _ => {} // TODO: handle error here
-            }
+            /* TODO: handle error here
+            match tikv_alloc::deactivate_prof() {
+                _ => {},
+            } */
         }
     }
 

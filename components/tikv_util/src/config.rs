@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use url;
 
 use super::time::Instant;
 use crate::slow_log;
@@ -579,7 +578,6 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use libc;
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::path::Path;

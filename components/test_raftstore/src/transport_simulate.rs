@@ -7,8 +7,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
-use rand;
-
 use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
@@ -357,7 +355,7 @@ impl Filter for RegionPacketFilter {
             }
             true
         };
-        let origin_msgs = mem::replace(msgs, Vec::default());
+        let origin_msgs = mem::take(msgs);
         let (retained, dropped) = origin_msgs.into_iter().partition(retain);
         *msgs = retained;
         if let Some(dropped_messages) = self.dropped_messages.as_ref() {

@@ -731,7 +731,7 @@ impl Peer {
     ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
-            { self.peer.get_store_id() == 3 && self.region_id == 1 },
+            self.peer.get_store_id() == 3 && self.region_id == 1,
             |_| Ok(())
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
