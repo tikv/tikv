@@ -185,21 +185,17 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
-            description("request to underhook engine failed")
             display("{:?}", err)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
         EmptyRequest {
-            description("an empty request")
             display("an empty request")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("unknown error {:?}", err)
         }
     }
@@ -243,10 +239,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }
