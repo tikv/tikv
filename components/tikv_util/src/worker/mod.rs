@@ -51,18 +51,15 @@ impl<T> ScheduleError<T> {
     }
 }
 
-impl<T> Error for ScheduleError<T> {
-    fn description(&self) -> &str {
-        match *self {
-            ScheduleError::Stopped(_) => "channel has been closed",
-            ScheduleError::Full(_) => "channel is full",
-        }
-    }
-}
+impl<T> Error for ScheduleError<T> {}
 
 impl<T> Display for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.description())
+        let msg = match *self {
+            ScheduleError::Stopped(_) => "channel has been closed",
+            ScheduleError::Full(_) => "channel is full",
+        };
+        write!(f, "{}", msg)
     }
 }
 

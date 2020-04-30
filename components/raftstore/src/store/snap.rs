@@ -76,16 +76,14 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Abort {
-            description("abort")
             display("abort")
         }
         TooManySnapshots {
-            description("too many snapshots")
+            display("too many snapshots")
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("snap failed {:?}", err)
         }
     }
