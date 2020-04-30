@@ -14,8 +14,7 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use encryption::{
-    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager,
-    DecrypterReader, Error as EncryptionError, Iv,
+    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -185,7 +184,6 @@ pub trait Snapshot<E: KvEngine>: GenericSnapshot {
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()>;
     fn apply(&mut self, options: ApplyOptions<E>) -> Result<()>;
 }
@@ -213,46 +211,11 @@ pub fn copy_snapshot(
     Ok(())
 }
 
-/// `SnapshotDeleter` is a trait for deleting snapshot.
-/// It's used to ensure that the snapshot deletion happens under the protection of locking
-/// to avoid race case for concurrent read/write.
-pub trait SnapshotDeleter {
-    // Return true if it successfully delete the specified snapshot.
-    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn GenericSnapshot, check_entry: bool)
-        -> bool;
-
-    fn encryption_key_manager(&self) -> Option<&DataKeyManager> {
-        None
-    }
-
-    fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
-        fs::rename(&cf_file.tmp_path, &cf_file.path)?;
-        if !plain_file_used(cf_file.cf) {
-            if let Some(mgr) = self.encryption_key_manager() {
-                let src = cf_file.tmp_path.to_str().unwrap();
-                let dst = cf_file.path.to_str().unwrap();
-                // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
-                // because without metadata file, saved cf files are nothing.
-                mgr.rename_file(src, dst)?;
-            }
-        }
-        let mgr = self.encryption_key_manager();
-        let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
-        cf_file.checksum = checksum;
-        cf_file.size = size;
-        Ok(())
-    }
-}
-
-// Try to delete the specified snapshot using deleter, return true if the deletion is done.
-pub fn retry_delete_snapshot(
-    deleter: &dyn SnapshotDeleter,
-    key: &SnapKey,
-    snap: &dyn GenericSnapshot,
-) -> bool {
+// Try to delete the specified snapshot, return true if the deletion is done.
+fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &dyn GenericSnapshot) -> bool {
     let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
     for _ in 0..DELETE_RETRY_MAX_TIMES {
-        if deleter.delete_snapshot(key, snap, true) {
+        if mgr.delete_snapshot(key, snap, true) {
             return true;
         }
         thread::sleep(d);
@@ -281,39 +244,14 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     Ok(snapshot_meta)
 }
 
-fn enc_err_to_raftstore(e: EncryptionError) -> RaftStoreError {
-    RaftStoreError::Snapshot(box_err!(e))
-}
-
-fn get_decrypter_reader(
-    file: &str,
-    encryption_key_manager: &DataKeyManager,
-) -> RaftStoreResult<Box<dyn Read + Send>> {
-    let enc_info = encryption_key_manager.get_file(file)?;
-    let mthd = encryption_method_from_db_encryption_method(enc_info.method);
-    debug!(
-        "get_decrypter_reader gets enc_infor for {:?}, method: {:?}", file, mthd;
-        "key" => hex::encode_upper(&enc_info.key),
-        "iv" => hex::encode_upper(&enc_info.iv),
-    );
-    if mthd == EncryptionMethod::Plaintext {
-        let f = File::open(file)?;
-        return Ok(Box::new(f) as Box<dyn Read + Send>);
-    }
-    let iv = Iv::from_slice(&enc_info.iv).map_err(enc_err_to_raftstore)?;
-    let f = File::open(file)?;
-    let r = DecrypterReader::new(f, mthd, &enc_info.key, iv).map_err(enc_err_to_raftstore)?;
-    Ok(Box::new(r) as Box<dyn Read + Send>)
-}
-
 fn calc_checksum_and_size(
     path: &PathBuf,
-    encryption_key_manager: Option<&DataKeyManager>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<(u32, u64)> {
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
         // Crc32 and file size need to be calculated based on decrypted contents.
         let file_name = path.to_str().unwrap();
-        let mut r = get_decrypter_reader(file_name, &mgr)?;
+        let mut r = snap_io::get_decrypter_reader(file_name, &mgr)?;
         calc_crc32_and_size(&mut r)?
     } else {
         (calc_crc32(path)?, get_file_size(path)?)
@@ -353,7 +291,7 @@ fn check_file_size_and_checksum(
     path: &PathBuf,
     expected_size: u64,
     expected_checksum: u32,
-    encryption_key_manager: Option<&DataKeyManager>,
+    encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<()> {
     let (checksum, size) = calc_checksum_and_size(path, encryption_key_manager)?;
     check_file_size(size, expected_size, path)?;
@@ -398,22 +336,18 @@ pub struct Snap {
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
-    size_track: Arc<AtomicU64>,
-    limiter: Limiter,
     hold_tmp_files: bool,
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
+
+    mgr: SnapManagerCore,
 }
 
 impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<AtomicU64>,
         is_sending: bool,
         to_build: bool,
-        deleter: Box<dyn SnapshotDeleter>,
-        limiter: Limiter,
-        encryption_key_manager: Option<Arc<DataKeyManager>>,
+        mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
         if !dir_path.exists() {
@@ -459,10 +393,8 @@ impl Snap {
             cf_files,
             cf_index: 0,
             meta_file,
-            size_track,
-            limiter,
             hold_tmp_files: false,
-            encryption_key_manager,
+            mgr: mgr.clone(),
         };
 
         // load snapshot meta if meta_file exists
@@ -476,7 +408,7 @@ impl Snap {
                     "snapshot" => %s.path(),
                     "err" => ?e,
                 );
-                if !retry_delete_snapshot(&*deleter as &dyn SnapshotDeleter, key, &s) {
+                if !retry_delete_snapshot(mgr, key, &s) {
                     warn!(
                         "failed to delete snapshot because it's already registered elsewhere";
                         "snapshot" => %s.path(),
@@ -488,36 +420,23 @@ impl Snap {
         Ok(s)
     }
 
-    pub fn new_for_building<T: Into<PathBuf>>(
+    fn new_for_building<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter>,
-        limiter: Limiter,
-        mgr: Option<Arc<DataKeyManager>>,
+        mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, size_track, true, true, deleter, limiter, mgr)?;
+        let mut s = Self::new(dir, key, true, true, mgr)?;
         s.init_for_building()?;
         Ok(s)
     }
 
-    pub fn new_for_sending<T: Into<PathBuf>>(
+    fn new_for_sending<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter>,
-        mgr: Option<Arc<DataKeyManager>>,
+        mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(
-            dir,
-            key,
-            size_track,
-            true,
-            false,
-            deleter,
-            Limiter::new(INFINITY),
-            mgr,
-        )?;
+        let mut s = Self::new(dir, key, true, false, mgr)?;
+        s.mgr.limiter = Limiter::new(INFINITY);
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -533,16 +452,13 @@ impl Snap {
         Ok(s)
     }
 
-    pub fn new_for_receiving<T: Into<PathBuf>>(
+    fn new_for_receiving<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
+        mgr: &SnapManagerCore,
         snapshot_meta: SnapshotMeta,
-        size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter>,
-        limiter: Limiter,
-        mgr: Option<Arc<DataKeyManager>>,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, size_track, false, false, deleter, limiter, mgr)?;
+        let mut s = Self::new(dir, key, false, false, mgr)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -570,7 +486,7 @@ impl Snap {
                 write_digest: crc32fast::Hasher::new(),
             });
 
-            if let Some(mgr) = s.encryption_key_manager.as_ref() {
+            if let Some(mgr) = &s.mgr.encryption_key_manager {
                 let path = cf_file.path.to_str().unwrap();
                 let enc_info = mgr.new_file(path)?;
                 let mthd = encryption_method_from_db_encryption_method(enc_info.method);
@@ -591,23 +507,13 @@ impl Snap {
         Ok(s)
     }
 
-    pub fn new_for_applying<T: Into<PathBuf>>(
+    fn new_for_applying<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
-        size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter>,
-        mgr: Option<Arc<DataKeyManager>>,
+        mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let s = Self::new(
-            dir,
-            key,
-            size_track,
-            false,
-            false,
-            deleter,
-            Limiter::new(INFINITY),
-            mgr,
-        )?;
+        let mut s = Self::new(dir, key, false, false, mgr)?;
+        s.mgr.limiter = Limiter::new(INFINITY);
         Ok(s)
     }
 
@@ -654,7 +560,7 @@ impl Snap {
             cf_file.size = meta.get_size();
             cf_file.checksum = meta.get_checksum();
             if file_exists(&cf_file.path) {
-                let mgr = self.encryption_key_manager.as_ref().map(|t| t.as_ref());
+                let mgr = self.mgr.encryption_key_manager.as_ref();
                 let (_, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
                 check_file_size(size, cf_file.size, &cf_file.path)?;
             }
@@ -706,14 +612,18 @@ impl Snap {
                     cf_file.checksum,
                 )?;
             }
-            let mgr = self.encryption_key_manager.as_ref().map(|x| x.as_ref());
-            check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum, mgr)?;
+            check_file_size_and_checksum(
+                &cf_file.path,
+                cf_file.size,
+                cf_file.checksum,
+                self.mgr.encryption_key_manager.as_ref(),
+            )?;
 
             if !for_send && !plain_file_used(cf_file.cf) {
                 sst_importer::prepare_sst_for_ingestion(
                     &cf_file.path,
                     &cf_file.clone_path,
-                    self.encryption_key_manager.as_ref(),
+                    self.mgr.encryption_key_manager.as_ref(),
                 )?;
             }
         }
@@ -761,7 +671,6 @@ impl Snap {
         kv_snap: &E::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()>
     where
         E: KvEngine,
@@ -777,7 +686,7 @@ impl Snap {
                         "snapshot" => %self.path(),
                         "err" => ?e,
                     );
-                    if !retry_delete_snapshot(&*deleter as &dyn SnapshotDeleter, &self.key, self) {
+                    if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
                             "failed to delete corrupted snapshot because it's \
                              already registered elsewhere";
@@ -797,7 +706,10 @@ impl Snap {
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
-                snap_io::build_plain_cf_file::<E>(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
+                let key_mgr = self.mgr.encryption_key_manager.as_ref();
+                snap_io::build_plain_cf_file::<E>(
+                    path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
+                )?
             } else {
                 snap_io::build_sst_cf_file::<E>(
                     path,
@@ -805,15 +717,15 @@ impl Snap {
                     cf_file.cf,
                     &begin_key,
                     &end_key,
-                    &self.limiter,
+                    &self.mgr.limiter,
                 )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
                 // Use `kv_count` instead of file size to check empty files because encrypted sst files
                 // contain some metadata so their sizes will never be 0.
-                deleter.rename_tmp_cf_file_for_send(cf_file)?;
-                self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
+                self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
+                self.mgr.snap_size.fetch_add(cf_file.size, Ordering::SeqCst);
             } else {
                 delete_file_if_exist(&cf_file.tmp_path).unwrap();
             }
@@ -862,10 +774,9 @@ where
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<E>(kv_snap, region, stat, deleter)?;
+        self.do_build::<E>(kv_snap, region, stat)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -893,6 +804,7 @@ where
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
         let region = options.region;
+        let key_mgr = self.mgr.encryption_key_manager.as_ref();
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
@@ -907,6 +819,7 @@ where
                 };
                 snap_io::apply_plain_cf_file(
                     path,
+                    key_mgr,
                     &abort_checker,
                     &options.db,
                     cf,
@@ -954,7 +867,7 @@ impl GenericSnapshot for Snap {
 
             // Delete cf files.
             if delete_file_if_exist(&cf_file.path).unwrap() {
-                self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
+                self.mgr.snap_size.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
@@ -1018,7 +931,7 @@ impl GenericSnapshot for Snap {
             }
 
             fs::rename(&cf_file.tmp_path, &cf_file.path)?;
-            self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
+            self.mgr.snap_size.fetch_add(cf_file.size, Ordering::SeqCst);
         }
         sync_dir(&self.dir_path)?;
 
@@ -1100,7 +1013,7 @@ impl Write for Snap {
             written_bytes += write_len;
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
-            let mut file = self.limiter.clone().limit(file);
+            let mut file = self.mgr.limiter.clone().limit(file);
             if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
@@ -1168,10 +1081,15 @@ pub struct SnapStats {
     pub receiving_count: usize,
 }
 
+#[derive(Clone)]
 struct SnapManagerCore {
+    // directory to store snapfile.
     base: String,
-    registry: HashMap<SnapKey, Vec<SnapEntry>>,
+
+    registry: Arc<RwLock<HashMap<SnapKey, Vec<SnapEntry>>>>,
+    limiter: Limiter,
     snap_size: Arc<AtomicU64>,
+    encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
 fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
@@ -1188,12 +1106,9 @@ fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
-    // directory to store snapfile.
-    core: Arc<RwLock<SnapManagerCore>>,
+    core: SnapManagerCore,
     router: Option<RaftRouter<RocksEngine>>,
-    limiter: Limiter,
     max_total_size: u64,
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl SnapManager {
@@ -1203,8 +1118,8 @@ impl SnapManager {
 
     pub fn init(&self) -> io::Result<()> {
         // Use write lock so only one thread initialize the directory at a time.
-        let core = self.core.wl();
-        let path = Path::new(&core.base);
+        let _lock = self.core.registry.wl();
+        let path = Path::new(&self.core.base);
         if !path.exists() {
             fs::create_dir_all(path)?;
             return Ok(());
@@ -1223,7 +1138,7 @@ impl SnapManager {
                         fs::remove_file(p.path())?;
                     } else if s.ends_with(SST_FILE_SUFFIX) {
                         let len = p.metadata()?.len();
-                        core.snap_size.fetch_add(len, Ordering::SeqCst);
+                        self.core.snap_size.fetch_add(len, Ordering::SeqCst);
                     }
                 }
             }
@@ -1233,9 +1148,9 @@ impl SnapManager {
 
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
-        let core = self.core.rl();
-        let path = Path::new(&core.base);
-        let read_dir = fs::read_dir(path)?;
+        // Use a lock to protect the directory when scanning.
+        let registry = self.core.registry.rl();
+        let read_dir = fs::read_dir(Path::new(&self.core.base))?;
         // Remove the duplicate snap keys.
         let mut v: Vec<_> = read_dir
             .filter_map(|p| {
@@ -1243,7 +1158,7 @@ impl SnapManager {
                     Err(e) => {
                         error!(
                             "failed to list content of directory";
-                            "directory" => %core.base,
+                            "directory" => %&self.core.base,
                             "err" => ?e,
                         );
                         return None;
@@ -1277,7 +1192,7 @@ impl SnapManager {
                     return None;
                 }
                 let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
-                if core.registry.contains_key(&snap_key) {
+                if registry.contains_key(&snap_key) {
                     // Skip those registered snapshot.
                     return None;
                 }
@@ -1291,7 +1206,7 @@ impl SnapManager {
 
     #[inline]
     pub fn has_registered(&self, key: &SnapKey) -> bool {
-        self.core.rl().registry.contains_key(key)
+        self.core.registry.rl().contains_key(key)
     }
 
     pub fn get_snapshot_for_building<E: KvEngine>(
@@ -1324,18 +1239,8 @@ impl SnapManager {
             };
         }
 
-        let (dir, snap_size) = {
-            let core = self.core.rl();
-            (core.base.clone(), Arc::clone(&core.snap_size))
-        };
-        let f = Snap::new_for_building(
-            dir,
-            key,
-            snap_size,
-            Box::new(self.clone()),
-            self.limiter.clone(),
-            self.encryption_key_manager.clone(),
-        )?;
+        let base = &self.core.base;
+        let f = Snap::new_for_building(base, key, &self.core)?;
         Ok(Box::new(f))
     }
 
@@ -1343,24 +1248,19 @@ impl SnapManager {
         &self,
         key: &SnapKey,
     ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
-        let core = self.core.rl();
-        let mut s = Snap::new_for_sending(
-            &core.base,
-            key,
-            Arc::clone(&core.snap_size),
-            Box::new(self.clone()),
-            self.encryption_key_manager.clone(),
-        )?;
-        let key_manager = match self.encryption_key_manager.as_ref() {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let mut s = Snap::new_for_sending(base, key, &self.core)?;
+        let key_manager = match self.core.encryption_key_manager.as_ref() {
             Some(m) => m,
             None => return Ok(Box::new(s)),
         };
         for cf_file in &mut s.cf_files {
-            if plain_file_used(cf_file.cf) || cf_file.size == 0 {
+            if cf_file.size == 0 {
                 continue;
             }
             let p = cf_file.path.to_str().unwrap();
-            let reader = get_decrypter_reader(p, key_manager)?;
+            let reader = snap_io::get_decrypter_reader(p, key_manager)?;
             cf_file.file_for_sending = Some(reader);
         }
         Ok(Box::new(s))
@@ -1371,30 +1271,18 @@ impl SnapManager {
         key: &SnapKey,
         data: &[u8],
     ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
-        let core = self.core.rl();
+        let _lock = self.core.registry.rl();
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let f = Snap::new_for_receiving(
-            &core.base,
-            key,
-            snapshot_data.take_meta(),
-            Arc::clone(&core.snap_size),
-            Box::new(self.clone()),
-            self.limiter.clone(),
-            self.encryption_key_manager.clone(),
-        )?;
+        let base = &self.core.base;
+        let f = Snap::new_for_receiving(base, key, &self.core, snapshot_data.take_meta())?;
         Ok(Box::new(f))
     }
 
     fn get_concrete_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snap>> {
-        let core = self.core.rl();
-        let s = Snap::new_for_applying(
-            &core.base,
-            key,
-            Arc::clone(&core.snap_size),
-            Box::new(self.clone()),
-            self.encryption_key_manager.clone(),
-        )?;
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let s = Snap::new_for_applying(base, key, &self.core)?;
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from(format!(
                 "snapshot of {:?} not exists.",
@@ -1422,8 +1310,7 @@ impl SnapManager {
     ///
     /// Return value is not guaranteed to be accurate.
     pub fn get_total_snap_size(&self) -> u64 {
-        let core = self.core.rl();
-        core.snap_size.load(Ordering::SeqCst)
+        self.core.snap_size.load(Ordering::SeqCst)
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
@@ -1436,8 +1323,7 @@ impl SnapManager {
             "key" => %key,
             "entry" => ?entry,
         );
-        let mut core = self.core.wl();
-        match core.registry.entry(key) {
+        match self.core.registry.wl().entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) {
                     warn!(
@@ -1464,15 +1350,15 @@ impl SnapManager {
         );
         let mut need_clean = false;
         let mut handled = false;
-        let mut core = self.core.wl();
-        if let Some(e) = core.registry.get_mut(key) {
+        let registry = &mut self.core.registry.wl();
+        if let Some(e) = registry.get_mut(key) {
             let last_len = e.len();
             e.retain(|e| e != entry);
             need_clean = e.is_empty();
             handled = last_len > e.len();
         }
         if need_clean {
-            core.registry.remove(key);
+            registry.remove(key);
         }
         if handled {
             notify_stats(self.router.as_ref());
@@ -1486,10 +1372,9 @@ impl SnapManager {
     }
 
     pub fn stats(&self) -> SnapStats {
-        let core = self.core.rl();
         // send_count, generating_count, receiving_count, applying_count
         let (mut sending_cnt, mut receiving_cnt) = (0, 0);
-        for v in core.registry.values() {
+        for v in self.core.registry.rl().values() {
             let (mut is_sending, mut is_receiving) = (false, false);
             for s in v {
                 match *s {
@@ -1510,18 +1395,28 @@ impl SnapManager {
             receiving_count: receiving_cnt,
         }
     }
+
+    pub fn delete_snapshot(
+        &self,
+        key: &SnapKey,
+        snap: &dyn GenericSnapshot,
+        check_entry: bool,
+    ) -> bool {
+        self.core.delete_snapshot(key, snap, check_entry)
+    }
 }
 
-impl SnapshotDeleter for SnapManager {
+impl SnapManagerCore {
+    // Return true if it successfully delete the specified snapshot.
     fn delete_snapshot(
         &self,
         key: &SnapKey,
         snap: &dyn GenericSnapshot,
         check_entry: bool,
     ) -> bool {
-        let core = self.core.rl();
+        let registry = self.registry.rl();
         if check_entry {
-            if let Some(e) = core.registry.get(key) {
+            if let Some(e) = registry.get(key) {
                 if e.len() > 1 {
                     info!(
                         "skip to delete snapshot since it's registered more than once";
@@ -1531,7 +1426,7 @@ impl SnapshotDeleter for SnapManager {
                     return false;
                 }
             }
-        } else if core.registry.contains_key(key) {
+        } else if registry.contains_key(key) {
             info!(
                 "skip to delete snapshot since it's registered";
                 "snapshot" => %snap.path(),
@@ -1542,8 +1437,20 @@ impl SnapshotDeleter for SnapManager {
         true
     }
 
-    fn encryption_key_manager(&self) -> Option<&DataKeyManager> {
-        self.encryption_key_manager.as_ref().map(|x| x.as_ref())
+    fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
+        fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+        let mgr = self.encryption_key_manager.as_ref();
+        if let Some(mgr) = &mgr {
+            let src = cf_file.tmp_path.to_str().unwrap();
+            let dst = cf_file.path.to_str().unwrap();
+            // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
+            // because without metadata file, saved cf files are nothing.
+            mgr.rename_file(src, dst)?;
+        }
+        let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
+        cf_file.checksum = checksum;
+        cf_file.size = size;
+        Ok(())
     }
 }
 
@@ -1583,15 +1490,15 @@ impl SnapManagerBuilder {
             u64::MAX
         };
         SnapManager {
-            core: Arc::new(RwLock::new(SnapManagerCore {
+            core: SnapManagerCore {
                 base: path.into(),
-                registry: map![],
+                registry: Arc::new(RwLock::new(map![])),
+                limiter,
                 snap_size: Arc::new(AtomicU64::new(0)),
-            })),
+                encryption_key_manager: self.key_manager,
+            },
             router,
-            limiter,
             max_total_size,
-            encryption_key_manager: self.key_manager,
         }
     }
 }
@@ -1602,13 +1509,12 @@ pub mod tests {
     use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, RwLock};
 
-    use engine::rocks;
     use engine::rocks::util::CFOptions;
-    use engine::rocks::{DBOptions, Env, DB};
+    use engine::rocks::{self, DBOptions, Env, DB};
     use engine::Engines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Peekable, SyncMutable};
@@ -1620,13 +1526,12 @@ pub mod tests {
     use raft::eraftpb::Entry;
 
     use protobuf::Message;
-    use std::path::PathBuf;
     use tempfile::{Builder, TempDir};
     use tikv_util::time::Limiter;
 
     use super::{
         ApplyOptions, GenericSnapshot, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
-        Snapshot, SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
+        SnapManagerCore, Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
         SNAP_GEN_PREFIX,
     };
 
@@ -1640,16 +1545,6 @@ pub mod tests {
     const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
     const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
     const BYTE_SIZE: usize = 1;
-
-    #[derive(Clone)]
-    struct DummyDeleter;
-
-    impl SnapshotDeleter for DummyDeleter {
-        fn delete_snapshot(&self, _: &SnapKey, snap: &dyn GenericSnapshot, _: bool) -> bool {
-            snap.delete();
-            true
-        }
-    }
 
     type DBBuilder = fn(
         p: &Path,
@@ -1781,6 +1676,16 @@ pub mod tests {
         }
     }
 
+    fn create_manager_core(path: &str) -> SnapManagerCore {
+        SnapManagerCore {
+            base: path.to_owned(),
+            registry: Arc::new(RwLock::new(map![])),
+            limiter: Limiter::new(INFINITY),
+            snap_size: Arc::new(AtomicU64::new(0)),
+            encryption_key_manager: None,
+        }
+    }
+
     pub fn gen_db_options_with_encryption() -> DBOptions {
         let env = Arc::new(Env::new_default_ctr_encrypted_env(b"abcd").unwrap());
         let mut db_opt = DBOptions::new();
@@ -1867,53 +1772,34 @@ pub mod tests {
             .prefix("test-snap-file-db-src")
             .tempdir()
             .unwrap();
+
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::new_for_building(
-            src_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+
+        let mgr_core = create_manager_core(src_dir.path().to_str().unwrap());
+
+        let mut s1 = Snap::new_for_building(src_dir.path(), &key, &mgr_core).unwrap();
+
         // Ensure that this snapshot file doesn't exist before being built.
         assert!(!s1.exists());
-        assert_eq!(size_track.load(Ordering::SeqCst), 0);
+        assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), 0);
 
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        Snapshot::<RocksEngine>::build(
-            &mut s1,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s1, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
         let total_size = s1.total_size().unwrap();
         // Ensure the `size_track` is modified correctly.
-        let size = size_track.load(Ordering::SeqCst);
+        let size = mgr_core.snap_size.load(Ordering::SeqCst);
         assert_eq!(size, total_size);
         assert_eq!(stat.size as u64, size);
         assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
         // Ensure this snapshot could be read for sending.
-        let mut s2 = Snap::new_for_sending(
-            src_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .unwrap();
+        let mut s2 = Snap::new_for_sending(src_dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
         // TODO check meta data correct.
@@ -1924,16 +1810,9 @@ pub mod tests {
             .tempdir()
             .unwrap();
 
-        let mut s3 = Snap::new_for_receiving(
-            dst_dir.path(),
-            &key,
-            snap_data.take_meta(),
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut s3 =
+            Snap::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta())
+                .unwrap();
         assert!(!s3.exists());
 
         // Ensure snapshot data could be read out of `s2`, and write into `s3`.
@@ -1944,18 +1823,16 @@ pub mod tests {
         assert!(s3.exists());
 
         // Ensure the tracked size is handled correctly after receiving a snapshot.
-        assert_eq!(size_track.load(Ordering::SeqCst), size * 2);
+        assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), size * 2);
 
         // Ensure `delete()` works to delete the source snapshot.
         s2.delete();
         assert!(!s2.exists());
         assert!(!s1.exists());
-        assert_eq!(size_track.load(Ordering::SeqCst), size);
+        assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 =
-            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter, None)
-                .unwrap();
+        let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = Builder::new()
@@ -1981,7 +1858,7 @@ pub mod tests {
         s4.delete();
         assert!(!s4.exists());
         assert!(!s3.exists());
-        assert_eq!(size_track.load(Ordering::SeqCst), 0);
+        assert_eq!(mgr_core.snap_size.load(Ordering::SeqCst), 0);
 
         // Verify the data is correct after applying snapshot.
         assert_eq_db(&db, &dst_db);
@@ -2012,53 +1889,23 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+
+        let mut s1 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        Snapshot::<RocksEngine>::build(
-            &mut s1,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s1, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s1.exists());
 
-        let mut s2 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut s2 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
-        Snapshot::<RocksEngine>::build(
-            &mut s2,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter,
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s2, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s2.exists());
     }
 
@@ -2165,30 +2012,13 @@ pub mod tests {
         from_dir: &TempDir,
         to_dir: &TempDir,
         key: &SnapKey,
-        size_track: Arc<AtomicU64>,
+        mgr: &SnapManagerCore,
         snapshot_meta: SnapshotMeta,
-        deleter: Box<DummyDeleter>,
     ) {
-        let mut from = Snap::new_for_sending(
-            from_dir.path(),
-            key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .unwrap();
+        let mut from = Snap::new_for_sending(from_dir.path(), key, mgr).unwrap();
         assert!(from.exists());
 
-        let mut to = Snap::new_for_receiving(
-            to_dir.path(),
-            key,
-            snapshot_meta,
-            Arc::clone(&size_track),
-            deleter,
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut to = Snap::new_for_receiving(to_dir.path(), key, mgr, snapshot_meta).unwrap();
 
         assert!(!to.exists());
         let _ = io::copy(&mut from, &mut to).unwrap();
@@ -2212,63 +2042,25 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+        let mut s1 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        Snapshot::<RocksEngine>::build(
-            &mut s1,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s1, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None
-        )
-        .is_err());
+        assert!(Snap::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
 
-        let mut s2 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut s2 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        Snapshot::<RocksEngine>::build(
-            &mut s2,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s2, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2279,23 +2071,15 @@ pub mod tests {
             &dir,
             &dst_dir,
             &key,
-            Arc::clone(&size_track),
+            &mgr_core,
             snap_data.get_meta().clone(),
-            deleter.clone(),
         );
 
         let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
         assert_eq!(1, metas.len());
         let snap_meta = metas.pop().unwrap();
 
-        let mut s5 = Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .unwrap();
+        let mut s5 = Snap::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
         assert!(s5.exists());
 
         let dst_db_dir = Builder::new()
@@ -2313,24 +2097,8 @@ pub mod tests {
         assert!(s5.apply(options).is_err());
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snap::new_for_receiving(
-            dst_dir.path(),
-            &key,
-            snap_meta,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .is_err());
-        assert!(Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter,
-            None
-        )
-        .is_err());
+        assert!(Snap::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).is_err());
+        assert!(Snap::new_for_applying(dst_dir.path(), &key, &mgr_core).is_err());
     }
 
     #[test]
@@ -2349,63 +2117,25 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+        let mut s1 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        Snapshot::<RocksEngine>::build(
-            &mut s1,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s1, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None
-        )
-        .is_err());
+        assert!(Snap::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
 
-        let mut s2 = Snap::new_for_building(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut s2 = Snap::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        Snapshot::<RocksEngine>::build(
-            &mut s2,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s2, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2416,31 +2146,17 @@ pub mod tests {
             &dir,
             &dst_dir,
             &key,
-            Arc::clone(&size_track),
+            &mgr_core,
             snap_data.get_meta().clone(),
-            deleter.clone(),
         );
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .is_err());
-        assert!(Snap::new_for_receiving(
-            dst_dir.path(),
-            &key,
-            snap_data.take_meta(),
-            Arc::clone(&size_track),
-            deleter,
-            Limiter::new(INFINITY),
-            None,
-        )
-        .is_err());
+        assert!(Snap::new_for_applying(dst_dir.path(), &key, &mgr_core,).is_err());
+        assert!(
+            Snap::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2479,44 +2195,18 @@ pub mod tests {
             .unwrap();
         let snapshot = RocksSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
-        let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(mgr);
-        let mut s1 = Snap::new_for_building(
-            &path,
-            &key1,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mgr_core = create_manager_core(&path);
+        let mut s1 = Snap::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        Snapshot::<RocksEngine>::build(
-            &mut s1,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            deleter.clone(),
-        )
-        .unwrap();
-        let mut s =
-            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
-                .unwrap();
+        Snapshot::<RocksEngine>::build(&mut s1, &snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
+        let mut s = Snap::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size().unwrap();
-        let mut s2 = Snap::new_for_receiving(
-            &path,
-            &key1,
-            snap_data.get_meta().clone(),
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let mut s2 =
+            Snap::new_for_receiving(&path, &key1, &mgr_core, snap_data.get_meta().clone()).unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
         s2.save().unwrap();
@@ -2524,25 +2214,8 @@ pub mod tests {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = Snap::new_for_building(
-            &path,
-            &key2,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
-        let s4 = Snap::new_for_receiving(
-            &path,
-            &key2,
-            snap_data.take_meta(),
-            Arc::clone(&size_track),
-            deleter,
-            Limiter::new(INFINITY),
-            None,
-        )
-        .unwrap();
+        let s3 = Snap::new_for_building(&path, &key2, &mgr_core).unwrap();
+        let s4 = Snap::new_for_receiving(&path, &key2, &mgr_core, snap_data.take_meta()).unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
@@ -2604,14 +2277,8 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            Box::new(src_mgr.clone()),
-        )
-        .unwrap();
+        s1.build(&snapshot, &region, &mut snap_data, &mut stat)
+            .unwrap();
         let v = snap_data.write_to_bytes().unwrap();
 
         check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
@@ -2684,7 +2351,6 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
                 &mut stat,
-                Box::new(snap_mgr.clone()),
             )
             .unwrap();
             snap_data.write_to_bytes().unwrap()
@@ -2710,14 +2376,8 @@ pub mod tests {
                 .unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
-            s.build(
-                &snapshot,
-                &region,
-                &mut snap_data,
-                &mut stat,
-                Box::new(snap_mgr.clone()),
-            )
-            .unwrap();
+            s.build(&snapshot, &region, &mut snap_data, &mut stat)
+                .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1658;
