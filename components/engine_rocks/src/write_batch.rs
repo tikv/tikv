@@ -327,6 +327,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let engine = new_default_engine(path.path().join("db").to_str().unwrap()).unwrap();
+        assert!(engine.support_write_batch_vec());
         let mut wb = engine.write_batch();
         for _i in 0..WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
@@ -341,5 +342,7 @@ mod tests {
         assert!(!wb.should_write_to_engine());
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
+        wb.clear();
+        assert!(!wb.should_write_to_engine());
     }
 }
