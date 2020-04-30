@@ -91,10 +91,9 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
-    pub fn append_ts(self, ts: TimeStamp) -> Key {
-        let mut encoded = self.0;
-        encoded.encode_u64_desc(ts.into_inner()).unwrap();
-        Key(encoded)
+    pub fn append_ts(mut self, ts: TimeStamp) -> Key {
+        self.0.encode_u64_desc(ts.into_inner()).unwrap();
+        self
     }
 
     /// Gets the timestamp contained in this key.

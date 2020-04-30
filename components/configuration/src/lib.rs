@@ -18,11 +18,9 @@ pub enum ConfigValue {
     Usize(usize),
     Bool(bool),
     String(String),
-    // `String` represent config field that has type `String`,
-    // `Other` represent config field with type that can be
-    // coverted to `String` as temporary representation i.e enum type.
-    Other(String),
+    BlobRunMode(String),
     Module(ConfigChange),
+    Skip,
 }
 
 impl Display for ConfigValue {
@@ -37,8 +35,9 @@ impl Display for ConfigValue {
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
-            ConfigValue::Other(v) => write!(f, "{}", v),
+            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
+            ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
         }
     }
 }
@@ -93,6 +92,7 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
+// TODO: remove
 pub struct RollbackCollector<'a, 'b, T> {
     pub cfg: &'a T,
     change: &'b mut ConfigChange,
@@ -155,11 +155,13 @@ pub trait Configuration<'a> {
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
+    /// Get all fields and their type of the config
+    fn typed(&self) -> ConfigChange;
 }
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub trait ConfigManager: Send {
+pub trait ConfigManager: Send + Sync {
     fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 

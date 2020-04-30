@@ -49,7 +49,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
             black_box(ranges.to_vec()),
             // TODO: Change to use `FixtureStorage` directly instead of
             // `TiKVStorage<FixtureStore<..>>`
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(unique),
             black_box(false),
         )
@@ -77,7 +80,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         unique: bool,
     ) -> Self::E {
         let mut executor = BatchIndexScanExecutor::new(
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),
             black_box(ranges.to_vec()),
