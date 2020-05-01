@@ -201,7 +201,6 @@ impl EntryCache {
             return;
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
-
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
