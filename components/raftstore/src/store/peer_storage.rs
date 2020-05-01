@@ -235,8 +235,9 @@ impl EntryCache {
         self.mem_size_change += size_change;
     }
 
-    fn flush_mem_size_change(&self) {
+    fn flush_mem_size_change(&mut self) {
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
+        self.mem_size_change = 0;
     }
 
     #[inline]
