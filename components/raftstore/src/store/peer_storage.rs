@@ -100,6 +100,7 @@ const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
 
 struct EntryCache {
     cache: VecDeque<Entry>,
+    mem_size_change: i64,
 }
 
 impl EntryCache {
@@ -169,7 +170,7 @@ impl EntryCache {
                 {
                     let current_mem_size = self.get_mem_size();
                     self.cache.shrink_to_fit();
-                    update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
+                    self.update_mem_size_change(current_mem_size, self.get_mem_size());
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -191,7 +192,7 @@ impl EntryCache {
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
         }
-        update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
+        self.update_mem_size_change(current_mem_size, self.get_mem_size());
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -211,7 +212,7 @@ impl EntryCache {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
-            update_raft_entries_caches_gauge(current_mem_size, self.get_mem_size());
+            self.update_mem_size_change(current_mem_size, self.get_mem_size());
         }
     }
 
@@ -224,6 +225,20 @@ impl EntryCache {
         (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
     }
 
+    fn update_mem_size_change(&mut self, old_size: i64, new_size: i64) {
+        let size_change = new_size - old_size;
+        if size_change == 0 {
+            return;
+        }
+        // If size_change is greater than 0, it means that the memory usage increases,
+        // otherwise it means that the memory usage decreases.
+        self.mem_size_change += size_change;
+    }
+
+    fn flush_mem_size_change(&self) {
+        RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
+    }
+
     #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
@@ -234,7 +249,10 @@ impl Default for EntryCache {
     fn default() -> Self {
         let cache = VecDeque::default();
         RAFT_ENTRIES_CACHES_GAUGE.add((ENTRY_MEM_SIZE * cache.capacity()) as i64);
-        EntryCache { cache }
+        EntryCache {
+            cache,
+            mem_size_change: 0,
+        }
     }
 }
 
@@ -242,16 +260,6 @@ impl Drop for EntryCache {
     fn drop(&mut self) {
         RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_mem_size());
     }
-}
-
-fn update_raft_entries_caches_gauge(old_size: i64, new_size: i64) {
-    let size_change = new_size - old_size;
-    if size_change == 0 {
-        return;
-    }
-    // If size_change is greater than 0, it means that the memory usage increases,
-    // otherwise it means that the memory usage decreases.
-    RAFT_ENTRIES_CACHES_GAUGE.add(size_change);
 }
 
 #[derive(Default)]
@@ -1020,6 +1028,7 @@ where
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
         self.stats.flush();
+        self.cache.flush_mem_size_change();
     }
 
     // Apply the peer with given snapshot.
