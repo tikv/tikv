@@ -49,7 +49,6 @@ regex = "1.1"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"
-servo_arc = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 smallvec = "1.1"
