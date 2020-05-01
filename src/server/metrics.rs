@@ -124,7 +124,7 @@ make_auto_flush_static_metric! {
         "type" => GrpcTypeKind,
     }
 
-    pub struct RequestBatchSizeHistogramVec: Histogram {
+    pub struct RequestBatchSizeHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
     }
 }
