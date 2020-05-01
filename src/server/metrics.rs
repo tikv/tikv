@@ -123,6 +123,10 @@ make_auto_flush_static_metric! {
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
     }
+
+    pub struct RequestBatchSizeHistogramVec: Histogram {
+        "type" => CommandKind,
+    }
 }
 
 make_static_metric! {
@@ -299,13 +303,16 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
-    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_size",
-        "Size of request batch input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
-    )
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
+        register_histogram_vec!(
+            RequestBatchSizeHistogramVec
+            "tikv_server_request_batch_size",
+            "Size of request batch input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
     .unwrap();
+
     pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_server_request_batch_ratio",
         "Ratio of request batch output to input",
