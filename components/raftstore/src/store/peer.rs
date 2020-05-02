@@ -47,7 +47,7 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics, RaftProposeMetrics};
+use super::local_metrics::{RaftMessageMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -217,7 +217,10 @@ impl BatchRaftCmdRequestBuilder {
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
+    fn build(
+        &mut self,
+        metric: &mut RaftProposeMetrics,
+    ) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
