@@ -1,0 +1,107 @@
+[readpool]
+unify-read-pool = true
+
+[readpool.unified]
+min-thread-count = 1
+max-thread-count = 1
+
+[readpool.storage]
+high-concurrency = 1
+normal-concurrency = 1
+low-concurrency = 1
+
+[readpool.coprocessor]
+high-concurrency = 1
+normal-concurrency = 1
+low-concurrency = 1
+
+[server]
+addr = "127.0.0.1:0"
+grpc-concurrency = 1
+# Considering connection selection algo is involved, maybe
+# use 2 or larger value here?
+grpc-raft-conn-num = 1
+# Disable stats concurrency. procinfo performs too bad without optimization,
+# disable it to save CPU for real tests.
+stats-concurrency = 0
+
+[server.labels]
+
+[storage]
+scheduler-concurrency = 10
+scheduler-worker-pool-size = 1
+
+[storage.block-cache]
+shared = true
+capacity = "64MB"
+
+[pd]
+
+[metric]
+
+[raftstore]
+sync-log = false
+raft-base-tick-interval = "10ms"
+raft-heartbeat-ticks = 2
+raft-election-timeout-ticks = 25
+raft-log-gc-tick-interval = "100ms"
+raft-log-gc-threshold = 1
+region-split-check-diff = 10000
+region-compact-check-interval = "12s"
+clean-stale-peer-delay = "0s"
+# Use a value of 3 seconds as max_leader_missing_duration just for test.
+# In production environment, the value of max_leader_missing_duration
+# should be configured far beyond the election timeout.
+max-leader-missing-duration = "2s"
+# To make a valid config, use a value of 2 seconds as
+# abnormal_leader_missing_duration and set
+# peer_stale_state_check_interval to 1 second.
+abnormal-leader-missing-duration = "1500ms"
+peer-stale-state-check-interval = "1s"
+report-region-flow-interval = "100ms"
+raft-store-max-leader-lease = "250ms"
+allow-remove-leader = true
+merge-check-tick-interval = "100ms"
+pd-heartbeat-tick-interval = "20ms"
+raft-reject-transfer-leader-duration = "0s"
+
+[coprocessor]
+
+[rocksdb]
+max-background-jobs = 1
+max-sub-compactions = 1
+
+[rocksdb.titan]
+max-background-gc = 1
+
+[rocksdb.defaultcf]
+
+[rocksdb.defaultcf.titan]
+
+[rocksdb.writecf]
+
+[rocksdb.lockcf]
+
+[rocksdb.raftcf]
+
+[raftdb]
+max-background-jobs = 1
+max-sub-compactions = 1
+
+[raftdb.titan]
+max-background-gc = 1
+
+[raftdb.defaultcf]
+
+[raftdb.defaultcf.titan]
+
+[security]
+
+[import]
+num-threads = 1
+
+[gc]
+
+[pessimistic-txn]
+wait-for-lock-timeout = "3s"
+wake-up-delay-duration = "100ms"

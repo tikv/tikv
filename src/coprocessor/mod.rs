@@ -24,7 +24,7 @@ mod checksum;
 pub mod dag;
 mod endpoint;
 mod error;
-pub mod local_metrics;
+mod interceptors;
 pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
@@ -37,10 +37,9 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-use std::sync::Arc;
+use metrics::ReqTag;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
-use tokio::sync::Semaphore;
 use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -82,7 +81,7 @@ type RequestHandlerBuilder<Snap> =
 #[derive(Debug, Clone)]
 pub struct ReqContext {
     /// The tag of the request
-    pub tag: &'static str,
+    pub tag: ReqTag,
 
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
@@ -114,16 +113,16 @@ pub struct ReqContext {
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
 
-    /// The time allowed to be used on this handler without getting a semaphore permit.
-    pub execution_time_limit: Option<Duration>,
+    /// The lower bound key in ranges of the request
+    pub lower_bound: Vec<u8>,
 
-    /// The coprocessor semaphore which limits concurrent running jobs.
-    pub semaphore: Option<Arc<Semaphore>>,
+    /// The upper bound key in ranges of the request
+    pub upper_bound: Vec<u8>,
 }
 
 impl ReqContext {
     pub fn new(
-        tag: &'static str,
+        tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
@@ -134,6 +133,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let lower_bound = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let upper_bound = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         Self {
             tag,
             context,
@@ -145,15 +152,15 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
-            execution_time_limit: None,
-            semaphore: None,
+            lower_bound,
+            upper_bound,
         }
     }
 
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),

@@ -13,8 +13,12 @@
 
 mod cf_handle;
 pub use crate::cf_handle::*;
+mod cf_names;
+pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod compact;
+pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
 mod db_vector;
@@ -23,6 +27,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
+mod misc;
+pub use crate::misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;

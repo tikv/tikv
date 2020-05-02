@@ -6,7 +6,6 @@ publish = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -17,7 +16,6 @@ protobuf-codec = [
   "tikv/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -30,11 +28,12 @@ prost-codec = [
 
 [dependencies]
 engine = { path = "../engine" }
+engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"
 futures-cpupool = "0.1"
-grpcio = { version = "0.5.0-alpha.5", default-features = false, features = ["openssl-vendored"] }
-hex = "0.3"
+grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
+hex = "0.4"
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../pd_client" }
@@ -45,7 +44,9 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tempfile = "3.0"
+test_util = { path = "../test_util" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
+txn_types = { path = "../txn_types" }

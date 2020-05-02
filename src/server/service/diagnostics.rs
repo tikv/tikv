@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{Future, Sink, Stream};
@@ -9,6 +10,13 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+
+#[cfg(feature = "prost-codec")]
+use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::diagnosticspb::SearchLogRequestTarget;
+
+use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
@@ -18,11 +26,23 @@ use crate::server::{Error, Result};
 pub struct Service {
     pool: CpuPool,
     log_file: String,
+    slow_log_file: String,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String) -> Self {
-        Service { pool, log_file }
+    pub fn new(
+        pool: CpuPool,
+        log_file: String,
+        slow_log_file: String,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
+        Service {
+            pool,
+            log_file,
+            slow_log_file,
+            security_mgr,
+        }
     }
 }
 
@@ -33,7 +53,14 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        let log_file = self.log_file.to_owned();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
+            self.log_file.to_owned()
+        } else {
+            self.slow_log_file.to_owned()
+        };
         let stream = self
             .pool
             .spawn_fn(move || log::search(log_file, req))
@@ -70,14 +97,21 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let tp = req.get_tp();
         let collect = self
             .pool
             .spawn_fn(move || {
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
-                        let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
-                        let when = Instant::now() + Duration::from_millis(100);
+                        let load = (
+                            sys::cpu_time_snapshot(),
+                            sysinfo::NICLoad::snapshot(),
+                            sysinfo::IOLoad::snapshot(),
+                        );
+                        let when = Instant::now() + Duration::from_millis(1000);
                         (Some(load), when)
                     }
                     _ => (None, Instant::now()),
@@ -118,14 +152,18 @@ impl Diagnostics for Service {
 
 mod sys {
     use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
     use std::string::ToString;
 
     use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
     use sysinfo::{DiskExt, ProcessExt, SystemExt};
+    use tikv_util::config::KB;
+    use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
+    use tikv_util::sys::sys_quota::SysQuota;
+    use walkdir::WalkDir;
 
-    fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
+    type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+
+    fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>) {
         // CPU load
         {
             let load = sysinfo::get_avg_load();
@@ -147,57 +185,59 @@ mod sys {
             item.set_pairs(pairs.into());
             collector.push(item);
         }
-        // https://www.kernel.org/doc/Documentation/filesystems/proc.txt
-        // We ignore the error because some operating systems don't contain procfs.
-        if let Ok(file) = File::open("/proc/stat") {
-            let names = vec![
-                "user",
-                "nice",
-                "system",
-                "idle",
-                "iowait",
-                "irq",
-                "softirq",
-                "steal",
-                "guest",
-                "guest_nice",
-            ];
-            for line in BufReader::new(file).lines() {
-                if let Ok(line) = line {
-                    if !line.starts_with("cpu") {
-                        continue;
-                    }
-                    let mut parts = line.split_whitespace();
-                    let name = match parts.nth(0) {
-                        Some(name) if name != "cpu" => name,
-                        _ => continue,
-                    };
-                    let mut pairs = vec![];
-                    for (val, name) in parts.zip(&names) {
-                        let mut pair = ServerInfoPair::default();
-                        pair.set_key((*name).to_string());
-                        pair.set_value(val.to_string());
-                        pairs.push(pair);
-                    }
-                    let mut item = ServerInfoItem::default();
-                    item.set_tp("cpu".to_string());
-                    item.set_name(name.to_string());
-                    item.set_pairs(pairs.into());
-                    collector.push(item);
-                }
-            }
+
+        if prev_cpu.is_none() {
+            return;
         }
+
+        let t2 = LiunxStyleCpuTime::current();
+        if t2.is_err() {
+            return;
+        }
+        let t2 = t2.unwrap();
+        if t2.total() == 0 {
+            return;
+        }
+
+        let delta = t2 - prev_cpu.unwrap();
+        let delta_total = delta.total() as f64;
+        let data: Vec<(&'static str, f64)> = vec![
+            ("user", delta.user as f64 / delta_total),
+            ("system", delta.system as f64 / delta_total),
+            ("idle", delta.idle as f64 / delta_total),
+            ("nice", delta.nice as f64 / delta_total),
+            ("iowait", delta.iowait as f64 / delta_total),
+            ("irq", delta.irq as f64 / delta_total),
+            ("softirq", delta.softirq as f64 / delta_total),
+            ("steal", delta.steal as f64 / delta_total),
+            ("guest", delta.guest as f64 / delta_total),
+            ("guest_nice", delta.guest_nice as f64 / delta_total),
+        ];
+
+        let mut pairs = vec![];
+        for (key, value) in data {
+            let mut pair = ServerInfoPair::default();
+            pair.set_key(key.to_string());
+            pair.set_value(format!("{:.2}", value));
+            pairs.push(pair);
+        }
+
+        let mut item = ServerInfoItem::default();
+        item.set_tp("cpu".to_string());
+        item.set_name("usage".to_string());
+        item.set_pairs(pairs.into());
+        collector.push(item);
     }
 
     fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
         let mut system = sysinfo::System::new();
         system.refresh_all();
-        let total_memory = system.get_total_memory();
-        let used_memory = system.get_used_memory();
-        let free_memory = system.get_free_memory();
-        let total_swap = system.get_total_swap();
-        let used_swap = system.get_used_swap();
-        let free_swap = system.get_free_swap();
+        let total_memory = SysQuota::new().memory_limit_in_bytes();
+        let used_memory = system.get_used_memory() * KB;
+        let free_memory = system.get_free_memory() * KB;
+        let total_swap = system.get_total_swap() * KB;
+        let used_swap = system.get_used_swap() * KB;
+        let free_swap = system.get_free_swap() * KB;
         let used_memory_pct = (used_memory as f64) / (total_memory as f64);
         let free_memory_pct = (free_memory as f64) / (total_memory as f64);
         let used_swap_pct = (used_swap as f64) / (total_swap as f64);
@@ -245,7 +285,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::NICLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_nic.get(&name) {
                 Some(p) => p,
@@ -258,8 +298,6 @@ mod sys {
                 ("tx-packets/s", rate(cur.tx_packets, prev.tx_packets)),
                 ("rx-errors/s", rate(cur.rx_errors, prev.rx_errors)),
                 ("tx-errors/s", rate(cur.tx_errors, prev.tx_errors)),
-                ("rx-comp/s", rate(cur.rx_compressed, prev.rx_compressed)),
-                ("tx-comp/s", rate(cur.tx_compressed, prev.tx_compressed)),
             ];
             let mut pairs = vec![];
             for info in infos.into_iter() {
@@ -281,7 +319,7 @@ mod sys {
         collector: &mut Vec<ServerInfoItem>,
     ) {
         let current = sysinfo::IOLoad::snapshot();
-        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        let rate = |cur, prev| (cur - prev) as f64;
         for (name, cur) in current.into_iter() {
             let prev = match prev_io.get(&name) {
                 Some(p) => p,
@@ -324,15 +362,28 @@ mod sys {
         }
     }
 
+    pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
+        let t1 = LiunxStyleCpuTime::current();
+        if t1.is_err() {
+            return None;
+        }
+        let t1 = t1.unwrap();
+        if t1.total() == 0 {
+            return None;
+        }
+        Some(t1)
+    }
+
     /// load_info collects CPU/Memory/IO/Network load information
     pub fn load_info(
-        (prev_nic, prev_io): (
+        (prev_cpu, prev_nic, prev_io): (
+            CpuTimeSnapshot,
             HashMap<String, sysinfo::NICLoad>,
             HashMap<String, sysinfo::IOLoad>,
         ),
         collector: &mut Vec<ServerInfoItem>,
     ) {
-        cpu_load_info(collector);
+        cpu_load_info(prev_cpu, collector);
         mem_load_info(collector);
         nic_load_info(prev_nic, collector);
         io_load_info(prev_io, collector);
@@ -344,19 +395,15 @@ mod sys {
         let mut infos = vec![
             (
                 "cpu-logical-cores",
-                sysinfo::get_logical_cores().to_string(),
+                SysQuota::new().cpu_cores_quota().to_string(),
             ),
-            (
-                "cpu-physical-cores",
-                sysinfo::get_physical_cores().to_string(),
-            ),
+            ("cpu-physical-cores", num_cpus::get_physical().to_string()),
             (
                 "cpu-frequency",
                 format!("{}MHz", sysinfo::get_cpu_frequency()),
             ),
         ];
         // cache
-        use sysinfo::cache_size;
         let caches = vec![
             ("l1-cache-size", cache_size::l1_cache_size()),
             ("l1-cache-line-size", cache_size::l1_cache_line_size()),
@@ -389,7 +436,7 @@ mod sys {
         system.refresh_all();
         let mut pair = ServerInfoPair::default();
         pair.set_key("capacity".to_string());
-        pair.set_value(system.get_total_memory().to_string());
+        pair.set_value((system.get_total_memory() * KB).to_string());
         let mut item = ServerInfoItem::default();
         item.set_tp("memory".to_string());
         item.set_name("memory".to_string());
@@ -406,7 +453,7 @@ mod sys {
             let free = disk.get_available_space();
             let used = total - free;
             let free_pct = (free as f64) / (total as f64);
-            let used_pct = (free as f64) / (total as f64);
+            let used_pct = (used as f64) / (total as f64);
             let infos = vec![
                 ("type", format!("{:?}", disk.get_type())),
                 (
@@ -449,7 +496,7 @@ mod sys {
     }
 
     fn nic_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-        let nics = sysinfo::datalink::interfaces();
+        let nics = pnet_datalink::interfaces();
         for nic in nics.into_iter() {
             let mut infos = vec![
                 ("mac", nic.mac_address().to_string()),
@@ -490,7 +537,7 @@ mod sys {
     /// system_info collects system related information, e.g: kernel
     pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
         // sysctl
-        let sysctl = sysinfo::get_sysctl_list();
+        let sysctl = get_sysctl_list();
         let mut pairs = vec![];
         for (key, val) in sysctl.into_iter() {
             let mut pair = ServerInfoPair::default();
@@ -505,6 +552,26 @@ mod sys {
         item.set_name("sysctl".to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
+    }
+
+    /// Returns system wide configuration
+    ///
+    /// # Note
+    ///
+    /// Current only can be used in operating system mounted `procfs`
+    fn get_sysctl_list() -> HashMap<String, String> {
+        const DIR: &str = "/proc/sys/";
+        WalkDir::new(DIR)
+            .into_iter()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let content = std::fs::read_to_string(entry.path()).ok()?;
+                let path = entry.path().to_str()?;
+
+                let name = path.trim_start_matches(DIR).replace("/", ".");
+                Some((name, content.trim().to_string()))
+            })
+            .collect()
     }
 
     /// process_info collects all process list
@@ -547,10 +614,11 @@ mod sys {
         use super::*;
         #[test]
         fn test_load_info() {
+            let prev_cpu = cpu_time_snapshot();
             let prev_nic = sysinfo::NICLoad::snapshot();
             let prev_io = sysinfo::IOLoad::snapshot();
             let mut collector = vec![];
-            load_info((prev_nic, prev_io), &mut collector);
+            load_info((prev_cpu, prev_nic, prev_io), &mut collector);
             #[cfg(linux)]
             let tps = vec!["cpu", "memory", "net", "io"];
             #[cfg(not(linux))]
@@ -573,30 +641,27 @@ mod sys {
                 .collect::<Vec<&str>>();
             assert_eq!(keys, vec!["load1", "load5", "load15"]);
             // cpu_stat
-            #[cfg(linux)]
-            {
-                let cpu_stat = cpu_info.next().unwrap();
-                let keys = cpu_load
-                    .get_pairs()
-                    .iter()
-                    .map(|x| x.get_key())
-                    .collect::<Vec<&str>>();
-                assert_eq!(
-                    keys,
-                    vec![
-                        "user",
-                        "nice",
-                        "system",
-                        "idle",
-                        "iowait",
-                        "irq",
-                        "softirq",
-                        "steal",
-                        "guest",
-                        "guest_nice",
-                    ]
-                );
-            }
+            let cpu_stat = cpu_info.next().unwrap();
+            let keys = cpu_stat
+                .get_pairs()
+                .iter()
+                .map(|x| x.get_key())
+                .collect::<Vec<&str>>();
+            assert_eq!(
+                keys,
+                vec![
+                    "user",
+                    "system",
+                    "idle",
+                    "nice",
+                    "iowait",
+                    "irq",
+                    "softirq",
+                    "steal",
+                    "guest",
+                    "guest_nice",
+                ]
+            );
             // memory
             for name in vec!["virtual", "swap"].into_iter() {
                 let item = collector
@@ -766,15 +831,18 @@ mod log {
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
+    use lazy_static::lazy_static;
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
+    use regex::Regex;
     use rev_lines;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
 
+    #[derive(Default)]
     struct LogIterator {
         search_files: Vec<(i64, File)>,
         currrent_lines: Option<std::io::Lines<BufReader<File>>>,
@@ -808,6 +876,11 @@ mod log {
             level_flag: usize,
             patterns: Vec<regex::Regex>,
         ) -> Result<Self, Error> {
+            let end_time = if end_time > 0 {
+                end_time
+            } else {
+                std::i64::MAX
+            };
             let log_path = log_file.as_ref();
             let log_name = match log_path.file_name() {
                 Some(file_name) => match file_name.to_str() {
@@ -848,7 +921,7 @@ mod log {
                     None => continue,
                 };
                 // Rotated file name have the same prefix with the original
-                if !file_name.starts_with(log_name) {
+                if !is_log_file(file_name, log_name) {
                     continue;
                 }
                 // Open the file
@@ -953,6 +1026,26 @@ mod log {
         }
     }
 
+    lazy_static! {
+        static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
+    }
+
+    // Returns true if target 'filename' is part of given 'log_file'
+    fn is_log_file(filename: &str, log_file: &str) -> bool {
+        // for not rotated nomral file
+        if filename == log_file {
+            return true;
+        }
+
+        // for rotated *.<rotated-datetime> file
+        if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
+            if NUM_REGEX.is_match(res) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn parse_time(input: &str) -> IResult<&str, &str> {
         let (input, (_, _, time, _)) =
             tuple((space0, tag("["), take(TIMESTAMP_LENGTH), tag("]")))(input)?;
@@ -1032,6 +1125,9 @@ mod log {
         log_file: P,
         mut req: SearchLogRequest,
     ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
+        if !log_file.as_ref().exists() {
+            return Ok(bacth_log_item(LogIterator::default()));
+        }
         let begin_time = req.get_start_time();
         let end_time = req.get_end_time();
         let levels = req.take_levels();
@@ -1234,7 +1330,7 @@ mod log {
             )
             .unwrap();
 
-            let log_file2 = dir.path().join("tikv.log.2");
+            let log_file2 = dir.path().join("tikv.log.2019-08-23-18:10:00.387000");
             let mut file = File::create(&log_file2).unwrap();
             write!(
                 file,
@@ -1337,26 +1433,29 @@ mod log {
                 log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
                 expected
             );
-            let log_iter = LogIterator::new(
-                &log_file,
-                timestamp("2019/08/23 18:09:53.387 +08:00"),
-                std::i64::MAX,
-                1 << (LogLevel::Warn as usize),
-                vec![],
-            )
-            .unwrap();
-            let expected = vec![
-                "2019/08/23 18:09:58.387 +08:00",
-                "2019/08/23 18:09:59.387 +08:00",
-                "2019/08/23 18:10:06.387 +08:00",
-            ]
-            .iter()
-            .map(|s| timestamp(s))
-            .collect::<Vec<i64>>();
-            assert_eq!(
-                log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
-                expected
-            );
+
+            for time in vec![0, std::i64::MAX].into_iter() {
+                let log_iter = LogIterator::new(
+                    &log_file,
+                    timestamp("2019/08/23 18:09:53.387 +08:00"),
+                    time,
+                    1 << (LogLevel::Warn as usize),
+                    vec![],
+                )
+                .unwrap();
+                let expected = vec![
+                    "2019/08/23 18:09:58.387 +08:00",
+                    "2019/08/23 18:09:59.387 +08:00",
+                    "2019/08/23 18:10:06.387 +08:00",
+                ]
+                .iter()
+                .map(|s| timestamp(s))
+                .collect::<Vec<i64>>();
+                assert_eq!(
+                    log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
+                    expected
+                );
+            }
 
             // filter by pattern
             let log_iter = LogIterator::new(
@@ -1403,7 +1502,21 @@ mod log {
 [2019/08/23 18:10:03.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:04.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:05.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
-[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]"#
+[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter"#
+            )
+            .unwrap();
+
+            let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.123456789");
+            let mut file = File::create(&log_file3).unwrap();
+            write!(
+                file,
+                r#"[2019/08/23 18:11:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:11:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
+[2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]"#
             )
             .unwrap();
 
@@ -1412,11 +1525,15 @@ mod log {
             req.set_end_time(std::i64::MAX);
             req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
-            let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
-                .iter()
-                .map(|s| timestamp(s))
-                .collect::<Vec<i64>>();
+            let expected = vec![
+                "2019/08/23 18:09:58.387 +08:00",
+                "2019/08/23 18:11:58.387 +08:00",
+            ]
+            .iter()
+            .map(|s| timestamp(s))
+            .collect::<Vec<i64>>();
             assert_eq!(
+                expected,
                 search(log_file, req)
                     .unwrap()
                     .wait()
@@ -1427,8 +1544,7 @@ mod log {
                     .into_iter()
                     .flatten()
                     .map(|msg| msg.get_time())
-                    .collect::<Vec<i64>>(),
-                expected
+                    .collect::<Vec<i64>>()
             );
         }
     }

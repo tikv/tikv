@@ -5,16 +5,18 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
+use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
+use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::time::monotonic_raw_now;
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -134,9 +136,6 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
-        ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-            unimplemented!()
-        }
     }
 }
 
@@ -272,6 +271,19 @@ pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
             peer_id
         ))
     }
+}
+
+#[inline]
+pub fn build_key_range(start_key: &[u8], end_key: &[u8], reverse_scan: bool) -> KeyRange {
+    let mut range = KeyRange::default();
+    if reverse_scan {
+        range.set_start_key(end_key.to_vec());
+        range.set_end_key(start_key.to_vec());
+    } else {
+        range.set_start_key(start_key.to_vec());
+        range.set_end_key(end_key.to_vec());
+    }
+    range
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -592,7 +604,7 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
         if p.get_is_learner() {
             conf_state.mut_learners().push(p.get_id());
         } else {
-            conf_state.mut_nodes().push(p.get_id());
+            conf_state.mut_voters().push(p.get_id());
         }
     }
     conf_state
@@ -625,6 +637,75 @@ impl<
                 hex::encode_upper(it.next_back().unwrap())
             ),
         }
+    }
+}
+
+pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
+    (voters + 1) / 2 + 1
+}
+
+#[macro_export]
+macro_rules! report_perf_context {
+    ($ctx: expr, $metric: ident) => {
+        if $ctx.perf_level != PerfLevel::Disable {
+            let perf_context = PerfContext::get();
+            let pre_and_post_process = perf_context.write_pre_and_post_process_time();
+            let write_thread_wait = perf_context.write_thread_wait_nanos();
+            observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
+            observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
+            observe_perf_context_type!($ctx, $metric, pre_and_post_process);
+            observe_perf_context_type!($ctx, $metric, write_thread_wait);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! observe_perf_context_type {
+    ($s:expr, $metric: expr, $v:ident) => {
+        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $s.$v = $v;
+    };
+    ($s:expr, $context: expr, $metric: expr, $v:ident) => {
+        let $v = $context.$v();
+        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $s.$v = $v;
+    };
+}
+
+pub struct PerfContextStatistics {
+    pub perf_level: PerfLevel,
+    pub write_wal_time: u64,
+    pub pre_and_post_process: u64,
+    pub write_memtable_time: u64,
+    pub write_thread_wait: u64,
+    pub db_mutex_lock_nanos: u64,
+}
+
+impl PerfContextStatistics {
+    /// Create an instance which stores instant statistics values, retrieved at creation.
+    pub fn new(perf_level: PerfLevel) -> Self {
+        PerfContextStatistics {
+            perf_level,
+            write_wal_time: 0,
+            pre_and_post_process: 0,
+            write_thread_wait: 0,
+            write_memtable_time: 0,
+            db_mutex_lock_nanos: 0,
+        }
+    }
+
+    pub fn start(&mut self) {
+        if self.perf_level == PerfLevel::Disable {
+            return;
+        }
+        PerfContext::get().reset();
+        set_perf_level(self.perf_level);
+        self.write_wal_time = 0;
+        self.pre_and_post_process = 0;
+        self.db_mutex_lock_nanos = 0;
+        self.write_thread_wait = 0;
+        self.write_memtable_time = 0;
     }
 }
 
@@ -816,7 +897,7 @@ mod tests {
         region.mut_peers().push(peer);
 
         let cs = conf_state_from_region(&region);
-        assert!(cs.get_nodes().contains(&1));
+        assert!(cs.get_voters().contains(&1));
         assert!(cs.get_learners().contains(&2));
     }
 
@@ -1116,6 +1197,16 @@ mod tests {
                 check_region_epoch(&req, &region, false).unwrap_err();
                 check_region_epoch(&req, &region, true).unwrap_err();
             }
+        }
+    }
+
+    #[test]
+    fn test_integration_on_half_fail_quorum_fn() {
+        let voters = vec![1, 2, 3, 4, 5, 6, 7];
+        let quorum = vec![2, 2, 3, 3, 4, 4, 5];
+        for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
+            let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
+            assert_eq!(quorum, expected_quorum);
         }
     }
 }

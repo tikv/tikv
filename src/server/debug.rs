@@ -3,7 +3,6 @@
 use std::cmp::Ordering;
 use std::iter::FromIterator;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
@@ -11,14 +10,17 @@ use std::{error, result};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
-    Writable, WriteBatch, WriteOptions, DB,
+    DB,
 };
 use engine::IterOptionsExt;
-use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::Compat;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
-use kvproto::debugpb::{self, Db as DBType, Module};
+use engine::{self, Engines};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
+use engine_traits::{
+    IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, WriteBatch, WriteOptions,
+};
+use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
@@ -26,18 +28,15 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
+use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RangeProperties;
-use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
-use raftstore::store::{
-    init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
-    write_peer_state,
-};
+use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -46,8 +45,6 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
-const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
-
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
 
@@ -55,17 +52,14 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
-            description(msg)
             display("Invalid Argument {:?}", msg)
         }
         NotFound(msg: String) {
-            description(msg)
             display("Not Found {:?}", msg)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
     }
@@ -136,14 +130,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger {
     engines: Engines,
-    gc_worker_cfg: Option<GcWorkerConfigManager>,
+    cfg_controller: ConfigController,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+    pub fn new(engines: Engines, cfg_controller: ConfigController) -> Debugger {
         Debugger {
             engines,
-            gc_worker_cfg,
+            cfg_controller,
         }
     }
 
@@ -158,7 +152,7 @@ impl Debugger {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
+        box_try!(db.c().scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -169,7 +163,7 @@ impl Debugger {
         Ok(regions)
     }
 
-    fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
+    fn get_db_from_type(&self, db: DBType) -> Result<&Arc<DB>> {
         match db {
             DBType::Kv => Ok(&self.engines.kv),
             DBType::Raft => Ok(&self.engines.raft),
@@ -180,7 +174,7 @@ impl Debugger {
     pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
-        match db.get_value_cf(cf, key) {
+        match db.c().get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(format!(
                 "value for key {:?} in db {:?}",
@@ -192,7 +186,7 @@ impl Debugger {
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
         let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft.get_msg(&key) {
+        match self.engines.raft.c().get_msg(&key) {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
@@ -204,18 +198,24 @@ impl Debugger {
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
         let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self
+            .engines
+            .raft
+            .c()
+            .get_msg::<RaftLocalState>(&raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state = box_try!(self
             .engines
             .kv
+            .c()
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
 
         let region_state_key = keys::region_state_key(region_id);
         let region_state = box_try!(self
             .engines
             .kv
+            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
 
         match (raft_state, apply_state, region_state) {
@@ -235,6 +235,7 @@ impl Debugger {
         match self
             .engines
             .kv
+            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
             Ok(Some(region_state)) => {
@@ -244,7 +245,7 @@ impl Debugger {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
-                    box_try!(self.engines.kv.scan_cf(
+                    box_try!(self.engines.kv.c().scan_cf(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -335,12 +336,12 @@ impl Debugger {
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_id()?;
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let mut wb = db.c().write_batch();
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &wb) {
+            if let Err(e) = set_region_tombstone(db, store_id, region, &mut wb) {
                 errors.push((region_id, e));
             }
         }
@@ -348,18 +349,18 @@ impl Debugger {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(&wb, &write_opts));
+            box_try!(db.c().write_opt(&wb, &write_opts));
         }
         Ok(errors)
     }
 
     pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let mut wb = db.c().write_batch();
         let mut errors = Vec::with_capacity(regions.len());
         for region_id in regions {
             let key = keys::region_state_key(region_id);
-            let region_state = match db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+            let region_state = match db.c().get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
                 Ok(Some(state)) => state,
                 Ok(None) => {
                     let error = box_err!("{} region local state not exists", region_id);
@@ -377,12 +378,12 @@ impl Debugger {
                 continue;
             }
             let region = &region_state.get_region();
-            write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
+            write_peer_state(&mut wb, region, PeerState::Tombstone, None).unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        db.write_opt(&wb, &write_opts).unwrap();
+        db.c().write_opt(&wb, &write_opts).unwrap();
         Ok(errors)
     }
 
@@ -471,7 +472,7 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(
+        let readopts = IterOptions::new(
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
@@ -501,25 +502,13 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines, region));
-            let apply_state = box_try!(init_apply_state(&self.engines, region));
-            if raft_state.get_last_index() < apply_state.get_applied_index() {
-                return Err(Error::Other("last index < applied index".into()));
-            }
-            if raft_state.get_hard_state().get_commit() < apply_state.get_applied_index() {
-                return Err(Error::Other("commit index < applied index".into()));
-            }
-            if raft_state.get_last_index() < raft_state.get_hard_state().get_commit() {
-                return Err(Error::Other("last index < commit index".into()));
-            }
-
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::new(
-                self.engines.clone(),
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
+                self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
-                tag.clone(),
+                tag,
             ));
 
             let raft_cfg = raft::Config {
@@ -528,14 +517,16 @@ impl Debugger {
                 heartbeat_tick: 2,
                 max_size_per_msg: ReadableSize::mb(1).0,
                 max_inflight_msgs: 256,
-                applied: apply_state.get_applied_index(),
                 check_quorum: true,
-                tag,
                 skip_bcast_commit: true,
                 ..Default::default()
             };
 
-            box_try!(RawNode::new(&raft_cfg, peer_storage));
+            box_try!(RawNode::new(
+                &raft_cfg,
+                peer_storage,
+                &slog_global::get_global()
+            ));
             Ok(())
         };
 
@@ -562,12 +553,11 @@ impl Debugger {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let wb = WriteBatch::default();
-        let handle = box_try!(get_cf_handle(self.engines.kv.as_ref(), CF_RAFT));
+        let mut wb = self.engines.kv.c().write_batch();
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
-            let remove_stores = |key: &[u8], value: &[u8]| {
+            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(());
@@ -592,7 +582,7 @@ impl Debugger {
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state.mut_region().set_peers(new_peers.into());
-                box_try!(wb.put_msg_cf(handle, key, &region_state));
+                box_try!(kv_wb.put_msg_cf(CF_RAFT, key, &region_state));
                 Ok(())
             };
 
@@ -600,44 +590,43 @@ impl Debugger {
                 let kv = &self.engines.kv;
                 for region_id in region_ids {
                     let key = keys::region_state_key(region_id);
-                    if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
-                        box_try!(remove_stores(&key, &value));
+                    if let Some(value) = box_try!(kv.c().get_value_cf(CF_RAFT, &key)) {
+                        box_try!(remove_stores(&key, &value, &mut wb));
                     } else {
                         let msg = format!("No such region {} on the store", region_id);
                         return Err(Error::Other(msg.into()));
                     }
                 }
             } else {
-                box_try!(self.engines.kv.scan_cf(
+                box_try!(self.engines.kv.c().scan_cf(
                     CF_RAFT,
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
                     false,
-                    |key, value| remove_stores(key, value).map(|_| true)
+                    |key, value| remove_stores(key, value, &mut wb).map(|_| true)
                 ));
             }
         }
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
+        box_try!(self.engines.kv.c().write_opt(&wb, &write_opts));
         Ok(())
     }
 
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
-        let kv = self.engines.kv.as_ref();
-        let raft: &DB = self.engines.raft.as_ref();
+        let kv = &self.engines.kv;
+        let raft = &self.engines.raft;
 
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
-        let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+        let mut kv_wb = self.engines.kv.c().write_batch();
+        let mut raft_wb = self.engines.raft.c().write_batch();
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
             return Err(box_err!("Bad region: {:?}", region));
         }
 
-        box_try!(self.engines.kv.scan_cf(
+        box_try!(self.engines.kv.c().scan_cf(
             CF_RAFT,
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
@@ -674,37 +663,38 @@ impl Debugger {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
         let key = keys::region_state_key(region_id);
-        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
+        if box_try!(kv.c().get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other(
                 "Store already has the RegionLocalState".into(),
             ));
         }
-        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &region_state));
+        box_try!(kv_wb.put_msg_cf(CF_RAFT, &key, &region_state));
 
         // RaftApplyState.
         let key = keys::apply_state_key(region_id);
-        if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
+        if box_try!(kv.c().get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(write_initial_apply_state(kv, &kv_wb, region_id));
+        box_try!(write_initial_apply_state(&mut kv_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
-        if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
+        if box_try!(raft.c().get_msg::<RaftLocalState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
-        box_try!(write_initial_raft_state(&raft_wb, region_id));
+        box_try!(write_initial_raft_state(&mut raft_wb, region_id));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(kv.write_opt(&kv_wb, &write_opts));
-        box_try!(raft.write_opt(&raft_wb, &write_opts));
+        box_try!(self.engines.kv.c().write_opt(&kv_wb, &write_opts));
+        box_try!(self.engines.kv.c().write_opt(&raft_wb, &write_opts));
         Ok(())
     }
 
     pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.c()
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
@@ -714,7 +704,8 @@ impl Debugger {
 
     pub fn get_cluster_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.c()
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_cluster_id()),
@@ -722,115 +713,13 @@ impl Debugger {
             })
     }
 
-    fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-        let rocksdb = self.get_db_from_type(db)?;
-        let handle = box_try!(get_cf_handle(rocksdb, cf_name));
-        let opt = rocksdb.get_options_cf(handle);
-        let capacity = ReadableSize::from_str(config_value);
-        if let Err(e) = capacity {
-            return Err(Error::InvalidArgument(format!(
-                "bad block cache size: {:?}",
-                e
-            )));
+    pub fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
+        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
+            return Err(Error::Other(
+                format!("failed to update config, err: {:?}", e).into(),
+            ));
         }
-        let cache_size = capacity.unwrap().0;
-        box_try!(opt.set_block_cache_capacity(cache_size));
-        CONFIG_ROCKSDB_GAUGE
-            .with_label_values(&[cf_name, "block_cache_size"])
-            .set(cache_size as f64);
         Ok(())
-    }
-
-    pub fn modify_tikv_config(
-        &self,
-        module: Module,
-        config_name: &str,
-        config_value: &str,
-    ) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-
-        match module {
-            Module::Storage => {
-                if config_name != "block_cache.capacity" {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                if !self.engines.shared_block_cache {
-                    return Err(Error::InvalidArgument(
-                        "shared block cache is disabled".to_string(),
-                    ));
-                }
-                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
-                // the size through any of them. Here we change it through default CF in kvdb.
-                // A better way to do it is to hold the cache reference somewhere, and use it to
-                // change cache size.
-                self.modify_block_cache_size(DBType::Kv, CF_DEFAULT, config_value)
-            }
-            Module::Kvdb | Module::Raftdb => {
-                let db = if module == Module::Kvdb {
-                    DBType::Kv
-                } else {
-                    DBType::Raft
-                };
-                let rocksdb = self.get_db_from_type(db)?;
-                let vec: Vec<&str> = config_name.split('.').collect();
-                if vec.len() == 1 {
-                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-                } else if vec.len() == 2 {
-                    let cf = vec[0];
-                    let config_name = vec[1];
-                    validate_db_and_cf(db, cf)?;
-
-                    // currently we can't modify block_cache_size via set_options_cf
-                    if config_name == "block_cache_size" {
-                        if self.engines.shared_block_cache {
-                            return Err(Error::InvalidArgument(
-                                "shared block cache is enabled, change cache size through \
-                                 block_cache.capacity in storage module instead"
-                                    .to_string(),
-                            ));
-                        }
-                        self.modify_block_cache_size(db, cf, config_value)?
-                    } else {
-                        let handle = box_try!(get_cf_handle(rocksdb, cf));
-                        let mut opt = Vec::new();
-                        opt.push((config_name, config_value));
-                        box_try!(rocksdb.set_options_cf(handle, &opt));
-                        if let Ok(v) = config_value.parse::<f64>() {
-                            CONFIG_ROCKSDB_GAUGE
-                                .with_label_values(&[cf, config_name])
-                                .set(v);
-                        }
-                    }
-                } else {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                Ok(())
-            }
-            Module::Server => {
-                if config_name == GC_IO_LIMITER_CONFIG_NAME {
-                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        self.gc_worker_cfg.as_ref().expect("must be some").update(
-                            move |cfg: &mut GcConfig| {
-                                cfg.max_write_bytes_per_sec = bytes_per_sec;
-                            },
-                        );
-                        return Ok(());
-                    }
-                }
-                Err(Error::InvalidArgument(format!(
-                    "bad argument: {} {}",
-                    config_name, config_value
-                )))
-            }
-            _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        }
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -838,6 +727,7 @@ impl Debugger {
         let region_state = box_try!(self
             .engines
             .kv
+            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
         match region_state {
             Some(v) => Ok(v),
@@ -861,7 +751,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(get_region_approximate_middle(db, &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -877,6 +767,7 @@ impl Debugger {
             ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
             ("mvcc.num_rows", mvcc_properties.num_rows),
             ("mvcc.num_puts", mvcc_properties.num_puts),
+            ("mvcc.num_deletes", mvcc_properties.num_deletes),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
@@ -918,15 +809,15 @@ fn recover_mvcc_for_range(
     let wb_limit: usize = 10240;
 
     loop {
-        let wb = WriteBatch::default();
-        mvcc_checker.check_mvcc(&wb, Some(wb_limit))?;
+        let mut wb = db.c().write_batch();
+        mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();
 
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(&wb, &write_opts));
+            box_try!(db.c().write_opt(&wb, &write_opts));
         } else {
             v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
@@ -947,7 +838,6 @@ fn recover_mvcc_for_range(
 }
 
 pub struct MvccChecker {
-    db: Arc<DB>,
     lock_iter: DBIterator,
     default_iter: DBIterator,
     write_iter: DBIterator,
@@ -965,7 +855,7 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(
+            let readopts = IterOptions::new(
                 Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
@@ -978,7 +868,6 @@ impl MvccChecker {
         };
 
         Ok(MvccChecker {
-            db: Arc::clone(&db),
             write_iter: gen_iter(CF_WRITE)?,
             lock_iter: gen_iter(CF_LOCK)?,
             default_iter: gen_iter(CF_DEFAULT)?,
@@ -1010,7 +899,7 @@ impl MvccChecker {
         }
     }
 
-    pub fn check_mvcc(&mut self, wb: &WriteBatch, limit: Option<usize>) -> Result<()> {
+    pub fn check_mvcc(&mut self, wb: &mut RocksWriteBatch, limit: Option<usize>) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
             let mut key = MvccChecker::min_key(None, &self.default_iter, |k| {
@@ -1032,7 +921,7 @@ impl MvccChecker {
         }
     }
 
-    fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
+    fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
             v1!(
@@ -1192,18 +1081,17 @@ impl MvccChecker {
 
     fn delete(
         &mut self,
-        wb: &WriteBatch,
+        wb: &mut RocksWriteBatch,
         cf: &str,
         key: &[u8],
         ts: Option<TimeStamp>,
     ) -> Result<()> {
-        let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
         match ts {
             Some(ts) => {
                 let key = Key::from_encoded_slice(key).append_ts(ts);
-                box_try!(wb.delete_cf(handle, &keys::data_key(key.as_encoded())));
+                box_try!(wb.delete_cf(cf, &keys::data_key(key.as_encoded())));
             }
-            None => box_try!(wb.delete_cf(handle, &keys::data_key(key))),
+            None => box_try!(wb.delete_cf(cf, &keys::data_key(key))),
         };
         Ok(())
     }
@@ -1241,7 +1129,7 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOption::new(None, to, false).build_read_opts();
+            let readopts = IterOptions::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from)).unwrap();
@@ -1411,11 +1299,17 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     }
 }
 
-fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch) -> Result<()> {
+fn set_region_tombstone(
+    db: &Arc<DB>,
+    store_id: u64,
+    region: Region,
+    wb: &mut RocksWriteBatch,
+) -> Result<()> {
     let id = region.get_id();
     let key = keys::region_state_key(id);
 
     let region_state = db
+        .c()
         .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
         .map_err(|e| box_err!(e))
         .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))?;
@@ -1450,13 +1344,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state(
-        db,
-        wb,
-        &region,
-        PeerState::Tombstone,
-        None
-    ));
+    box_try!(write_peer_state(wb, &region, PeerState::Tombstone, None));
     Ok(())
 }
 
@@ -1464,8 +1352,13 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_WRITE, &region));
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(
+        db.c(),
+        CF_DEFAULT,
+        &region,
+        0
+    ));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region, 0));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
@@ -1544,13 +1437,11 @@ mod tests {
     use crate::storage::mvcc::{Lock, LockType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::Mutable;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
-    use engine_traits::CFHandleExt;
+    use engine_traits::{CFHandleExt, Mutable, SyncMutable};
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-    fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+    fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
         let mut region = Region::default();
         region.set_id(region_id);
         for (i, &store_id) in stores.iter().enumerate() {
@@ -1563,13 +1454,14 @@ mod tests {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region.clone());
         let key = keys::region_state_key(region_id);
-        engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+        engine.c().put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         region
     }
 
-    fn get_region_state(engine: &DB, region_id: u64) -> RegionLocalState {
+    fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
         let key = keys::region_state_key(region_id);
         engine
+            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
             .unwrap()
             .unwrap()
@@ -1661,13 +1553,14 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines, Some(Default::default()))
+        Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
-            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            db.c()
+                .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
                 .map_err(|e| box_err!(e))
                 .and_then(|ident| match ident {
                     Some(ident) => Ok(ident),
@@ -1679,7 +1572,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_store_id(store_id);
                 let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
 
@@ -1687,7 +1580,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_cluster_id(cluster_id);
                 let db = &self.engines.kv;
-                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
     }
@@ -1720,8 +1613,8 @@ mod tests {
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(&key, &entry).unwrap();
-        assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
+        engine.c().put_msg(&key, &entry).unwrap();
+        assert_eq!(engine.c().get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
         match debugger.raft_log(region_id + 1, log_index + 1) {
@@ -1735,15 +1628,18 @@ mod tests {
         let debugger = new_debugger();
         let raft_engine = &debugger.engines.raft;
         let kv_engine = &debugger.engines.kv;
-        let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
         let region_id = 1;
 
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(42);
-        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+        raft_engine
+            .c()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         assert_eq!(
             raft_engine
+                .c()
                 .get_msg::<RaftLocalState>(&raft_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1754,10 +1650,12 @@ mod tests {
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(42);
         kv_engine
-            .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+            .c()
+            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert_eq!(
             kv_engine
+                .c()
                 .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1768,10 +1666,12 @@ mod tests {
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Tombstone);
         kv_engine
-            .put_msg_cf(raft_cf, &region_state_key, &region_state)
+            .c()
+            .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
             .unwrap();
         assert_eq!(
             kv_engine
+                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1801,9 +1701,9 @@ mod tests {
         region.set_end_key(b"zz".to_vec());
         let mut state = RegionLocalState::default();
         state.set_region(region);
-        let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
         engine
-            .put_msg_cf(cf_raft, &region_state_key, &state)
+            .c()
+            .put_msg_cf(CF_RAFT, &region_state_key, &state)
             .unwrap();
 
         let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
@@ -1895,7 +1795,7 @@ mod tests {
     fn test_tombstone_regions() {
         let debugger = new_debugger();
         debugger.set_store_id(11);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
         let region_1 = init_region_state(engine, 1, &[11, 12, 13]);
@@ -1943,7 +1843,7 @@ mod tests {
     fn test_tombstone_regions_by_id() {
         let debugger = new_debugger();
         debugger.set_store_id(11);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
         // tombstone region 1 which currently not exists.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
@@ -1969,9 +1869,9 @@ mod tests {
     fn test_remove_failed_stores() {
         let debugger = new_debugger();
         debugger.set_store_id(100);
-        let engine = debugger.engines.kv.as_ref();
+        let engine = &debugger.engines.kv;
 
-        let get_region_stores = |engine: &DB, region_id: u64| {
+        let get_region_stores = |engine: &Arc<DB>, region_id: u64| {
             get_region_state(engine, region_id)
                 .get_region()
                 .get_peers()
@@ -2009,18 +1909,18 @@ mod tests {
     #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
-        let kv_engine = debugger.engines.kv.as_ref();
-        let raft_engine = debugger.engines.raft.as_ref();
+        let kv_engine = &debugger.engines.kv;
+        let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
 
-        let wb1 = WriteBatch::default();
-        let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
+        let mut wb1 = raft_engine.c().write_batch();
+        let cf1 = CF_DEFAULT;
 
-        let wb2 = WriteBatch::default();
-        let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
+        let mut wb2 = kv_engine.c().write_batch();
+        let cf2 = CF_RAFT;
 
         {
-            let mock_region_state = |region_id: u64, peers: &[u64]| {
+            let mock_region_state = |wb: &mut RocksWriteBatch, region_id: u64, peers: &[u64]| {
                 let region_state_key = keys::region_state_key(region_id);
                 let mut region_state = RegionLocalState::default();
                 region_state.set_state(PeerState::Normal);
@@ -2039,73 +1939,52 @@ mod tests {
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
                 }
-                wb2.put_msg_cf(handle2, &region_state_key, &region_state)
+                wb.put_msg_cf(cf2, &region_state_key, &region_state)
                     .unwrap();
             };
-            let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
-                let raft_state_key = keys::raft_state_key(region_id);
-                let mut raft_state = RaftLocalState::default();
-                raft_state.set_last_index(last_index);
-                raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
-                    .unwrap();
-            };
-            let mock_apply_state = |region_id: u64, apply_index: u64| {
+            let mock_raft_state =
+                |wb: &mut RocksWriteBatch, region_id: u64, last_index: u64, commit_index: u64| {
+                    let raft_state_key = keys::raft_state_key(region_id);
+                    let mut raft_state = RaftLocalState::default();
+                    raft_state.set_last_index(last_index);
+                    raft_state.mut_hard_state().set_commit(commit_index);
+                    wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
+                };
+            let mock_apply_state = |wb: &mut RocksWriteBatch, region_id: u64, apply_index: u64| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();
                 apply_state.set_applied_index(apply_index);
-                wb2.put_msg_cf(handle2, &raft_apply_key, &apply_state)
-                    .unwrap();
+                wb.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
             };
 
             for &region_id in &[10, 11, 12] {
-                mock_region_state(region_id, &[store_id]);
+                mock_region_state(&mut wb2, region_id, &[store_id]);
             }
 
             // last index < commit index
-            mock_raft_state(10, 100, 110);
+            mock_raft_state(&mut wb1, 10, 100, 110);
 
             // commit index < last index < apply index, or commit index < apply index < last index.
-            mock_raft_state(11, 100, 90);
-            mock_apply_state(11, 110);
-            mock_raft_state(12, 100, 90);
-            mock_apply_state(12, 95);
+            mock_raft_state(&mut wb1, 11, 100, 90);
+            mock_apply_state(&mut wb2, 11, 110);
+            mock_raft_state(&mut wb1, 12, 100, 90);
+            mock_apply_state(&mut wb2, 12, 95);
 
             // region state doesn't contains the peer itself.
-            mock_region_state(13, &[]);
+            mock_region_state(&mut wb2, 13, &[]);
         }
 
-        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
+        raft_engine
+            .c()
+            .write_opt(&wb1, &WriteOptions::new())
+            .unwrap();
+        kv_engine.c().write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
         for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);
         }
-    }
-
-    #[test]
-    fn test_modify_tikv_config() {
-        let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "max_background_jobs", "8")
-            .unwrap();
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 8);
-
-        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "default.disable_auto_compactions", "true")
-            .unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
     }
 
     #[test]
@@ -2117,7 +1996,6 @@ mod tests {
 
         for (region_id, (start, end)) in metadata.into_iter().enumerate() {
             let region_id = region_id as u64;
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
             let mut region = Region::default();
             region.set_id(region_id);
             region.set_start_key(start.to_owned().into_bytes());
@@ -2127,10 +2005,7 @@ mod tests {
             region_state.set_state(PeerState::Normal);
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
-            engine
-                .as_inner()
-                .put_msg_cf(cf_raft.as_inner(), &key, &region_state)
-                .unwrap();
+            engine.put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         }
 
         let remove_region_state = |region_id: u64| {
@@ -2290,21 +2165,16 @@ mod tests {
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
         // Write initial KVs.
-        let wb = WriteBatch::default();
+        let mut wb = db.c().write_batch();
         for &(cf, ref k, ref v, _) in &kv {
-            wb.put_cf(
-                get_cf_handle(&db, cf).unwrap(),
-                &keys::data_key(k.as_encoded()),
-                v,
-            )
-            .unwrap();
+            wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
-        db.write(&wb).unwrap();
+        db.c().write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
-        let wb = WriteBatch::default();
-        checker.check_mvcc(&wb, None).unwrap();
-        db.write(&wb).unwrap();
+        let mut wb = db.c().write_batch();
+        checker.check_mvcc(&mut wb, None).unwrap();
+        db.c().write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -2342,13 +2212,13 @@ mod tests {
 
         let debugger = new_debugger();
 
-        let wb = WriteBatch::default();
+        let mut wb = debugger.engines.kv.c().write_batch();
         for key in keys {
             let data_key = keys::data_key(key);
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(&wb).unwrap();
+        debugger.engines.kv.c().write(&wb).unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(
@@ -2395,19 +2265,5 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
-    }
-
-    #[test]
-    fn test_modify_gc_io_limit() {
-        let debugger = new_debugger();
-        debugger
-            .modify_tikv_config(Module::Server, "gc", "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap();
     }
 }

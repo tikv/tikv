@@ -1,20 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine::rocks::DB;
-use engine::rocks::{self, Range};
-use engine::CF_WRITE;
-use engine_rocks::Compat;
-use engine_traits::{TableProperties, TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::CF_WRITE;
+use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use std::marker::PhantomData;
 use std::mem;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use super::super::error::Result;
 use super::super::metrics::*;
-use super::super::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use engine_rocks::properties::{get_range_entries_and_versions, RangeProperties};
 
 pub struct Checker {
     max_keys_count: u64,
@@ -43,7 +42,10 @@ impl Checker {
     }
 }
 
-impl SplitChecker for Checker {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
@@ -83,31 +85,43 @@ impl SplitChecker for Checker {
 }
 
 #[derive(Clone)]
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver<C, E> {
     router: Arc<Mutex<C>>,
+    _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
-    pub fn new(router: C) -> KeysCheckObserver<C> {
+impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
+    pub fn new(router: C) -> KeysCheckObserver<C, E> {
         KeysCheckObserver {
             router: Arc::new(Mutex::new(router)),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<C: Send> Coprocessor for KeysCheckObserver<C> {}
+impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match get_region_approximate_keys(engine, region) {
+        let region_keys = match get_region_approximate_keys(
+            engine,
+            region,
+            host.cfg.region_max_keys * host.cfg.batch_split_limit,
+        ) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
@@ -163,9 +177,13 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
 }
 
 /// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys(
+    db: &impl KvEngine,
+    region: &Region,
+    large_threshold: u64,
+) -> Result<u64> {
     // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+    match get_region_approximate_keys_cf(db, CF_WRITE, region, large_threshold) {
         Ok(v) => {
             return Ok(v);
         }
@@ -177,39 +195,73 @@ pub fn get_region_approximate_keys(db: &Arc<DB>, region: &Region) -> Result<u64>
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
+    let cf = box_try!(db.cf_handle(CF_WRITE));
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(db: &Arc<DB>, cfname: &str, region: &Region) -> Result<u64> {
+pub fn get_region_approximate_keys_cf(
+    db: &impl KvEngine,
+    cfname: &str,
+    region: &Region,
+    large_threshold: u64,
+) -> Result<u64> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let range = Range::new(&start_key, &end_key);
-    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let mut total_keys = 0;
+    let (mem_keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
+    total_keys += mem_keys;
 
-    let collection = box_try!(db.c().get_range_properties_cf(cfname, &start_key, &end_key));
+    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+        total_keys += props.get_approximate_keys_in_range(&start_key, &end_key);
     }
-    Ok(keys)
+
+    if large_threshold != 0 && total_keys > large_threshold {
+        let ssts = collection
+            .iter()
+            .map(|(k, v)| {
+                let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
+                let keys = props.get_approximate_keys_in_range(&start_key, &end_key);
+                format!(
+                    "{}:{}",
+                    Path::new(&*k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(&*k),
+                    keys
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "region contains too many keys";
+            "region_id" => region.get_id(),
+            "total_keys" => total_keys,
+            "memtable" => mem_keys,
+            "ssts_keys" => ssts,
+            "cf" => cfname,
+        )
+    }
+    Ok(total_keys)
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use crate::coprocessor::properties::{
-        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-    };
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_rocks::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
+    use engine_rocks::Compat;
+    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
@@ -284,7 +336,7 @@ mod tests {
         cfg.batch_split_limit = 5;
 
         let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
+            engine.c().clone(),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
@@ -397,7 +449,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }
 
@@ -450,13 +502,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
         assert_eq!(range_keys, 1);
     }
 }

@@ -4,7 +4,7 @@ use crate::db_vector::PanicDBVector;
 use crate::snapshot::PanicSnapshot;
 use crate::write_batch::PanicWriteBatch;
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, Result, SeekKey,
+    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SeekKey, SyncMutable,
     WriteOptions,
 };
 
@@ -13,24 +13,11 @@ pub struct PanicEngine;
 
 impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
-    type WriteBatch = PanicWriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
-        panic!()
-    }
-    fn write_batch(&self) -> Self::WriteBatch {
-        panic!()
-    }
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        panic!()
-    }
     fn snapshot(&self) -> Self::Snapshot {
         panic!()
     }
     fn sync(&self) -> Result<()> {
-        panic!()
-    }
-    fn cf_names(&self) -> Vec<&str> {
         panic!()
     }
     fn bad_downcast<T: 'static>(&self) -> &T {
@@ -54,18 +41,21 @@ impl Peekable for PanicEngine {
     }
 }
 
-impl Mutable for PanicEngine {
-    fn put_opt(&self, opts: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+impl SyncMutable for PanicEngine {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
-    fn put_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
 
-    fn delete_opt(&self, opts: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         panic!()
     }
-    fn delete_cf_opt(&self, opts: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+        panic!()
+    }
+    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
 }

@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{ConfigChange, Configuration};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use std::sync::Arc;
 use tikv_util::config::{ReadableSize, VersionTrack};
-
-use configuration::ConfigManager;
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;

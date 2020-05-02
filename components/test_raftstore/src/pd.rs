@@ -1,30 +1,31 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use std::{cmp, thread};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{ConfigClient, Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::check_key_in_region;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::*;
 
@@ -228,6 +229,8 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+
+    replication_status: Option<ReplicationStatus>,
 }
 
 impl Cluster {
@@ -256,6 +259,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            replication_status: None,
         }
     }
 
@@ -286,18 +290,43 @@ impl Cluster {
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = Store::default();
         let store_id = store.get_id();
-        s.store = store;
-        self.stores.insert(store_id, s);
+        // There is a race between put_store and handle_region_heartbeat_response. If store id is
+        // 0, it means it's a placeholder created by latter, we just need to update the meta.
+        // Otherwise we should overwrite it.
+        if self
+            .stores
+            .get(&store_id)
+            .map_or(true, |s| s.store.get_id() != 0)
+        {
+            let mut s = Store::default();
+            s.store = store;
+            self.stores.insert(store_id, s);
+        } else {
+            self.stores.get_mut(&store_id).unwrap().store = store;
+        }
         Ok(())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
-            None => Err(box_err!("store {} not found", store_id)),
-            Some(s) => Ok(s.store.clone()),
+            Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
+            _ => Err(box_err!("store {} not found", store_id)),
         }
+    }
+
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        Ok(self
+            .stores
+            .values()
+            .filter_map(|s| {
+                if s.store.get_id() != 0 {
+                    Some(s.store.clone())
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -331,7 +360,11 @@ impl Cluster {
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
-        self.stores.values().map(|s| s.store.clone()).collect()
+        self.stores
+            .values()
+            .filter(|s| s.store.get_id() != 0)
+            .map(|s| s.store.clone())
+            .collect()
     }
 
     fn get_regions_number(&self) -> usize {
@@ -668,6 +701,8 @@ pub struct TestPdClient {
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
     is_incompatible: bool,
+    tso: AtomicUsize,
+    trigger_tso_failure: AtomicBool,
 }
 
 impl TestPdClient {
@@ -677,6 +712,8 @@ impl TestPdClient {
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
+            tso: AtomicUsize::new(1),
+            trigger_tso_failure: AtomicBool::new(false),
         }
     }
 
@@ -969,6 +1006,23 @@ impl TestPdClient {
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
+
+    pub fn trigger_tso_failure(&self) {
+        self.trigger_tso_failure.store(true, Ordering::SeqCst);
+    }
+
+    pub fn shutdown_store(&self, store_id: u64) {
+        match self.cluster.write() {
+            Ok(mut c) => {
+                c.stores.remove(&store_id);
+            }
+            Err(e) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock: {:?}", e)
+                }
+            }
+        }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -976,15 +1030,19 @@ impl PdClient for TestPdClient {
         Ok(self.cluster_id)
     }
 
-    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        store: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.cluster.wl().bootstrap(store, region);
-
-        Ok(())
+        let mut cluster = self.cluster.wl();
+        cluster.bootstrap(store, region);
+        Ok(cluster.replication_status.clone())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -995,9 +1053,16 @@ impl PdClient for TestPdClient {
         self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         self.check_bootstrap()?;
-        self.cluster.wl().put_store(store)
+        let mut cluster = self.cluster.wl();
+        cluster.put_store(store)?;
+        Ok(cluster.replication_status.clone())
+    }
+
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        self.check_bootstrap()?;
+        self.cluster.rl().get_all_stores()
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -1075,7 +1140,10 @@ impl PdClient for TestPdClient {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
         let mut cluster = self.cluster.wl();
-        let store = cluster.stores.get_mut(&store_id).unwrap();
+        let store = cluster
+            .stores
+            .entry(store_id)
+            .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
         Box::new(
             rx.map(|resp| vec![resp])
@@ -1210,44 +1278,17 @@ impl PdClient for TestPdClient {
         resp.set_region_id(region_id);
         Ok(resp)
     }
-}
 
-impl ConfigClient for TestPdClient {
-    fn register_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        cfg: String,
-    ) -> Result<configpb::CreateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::CreateResponse::default();
-        resp.set_status(status);
-        resp.set_config(cfg);
-        resp.set_version(version);
-        Ok(resp)
-    }
-
-    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::NotChange);
-        let mut resp = configpb::GetResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
-    }
-
-    fn update_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        _entries: Vec<configpb::ConfigEntry>,
-    ) -> Result<configpb::UpdateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::UpdateResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
+            return Box::new(futures::future::result(Err(
+                pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+                    grpcio::RpcStatusCode::UNKNOWN,
+                    Some("tso error".to_owned()),
+                ))),
+            )));
+        }
+        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
+        Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
     }
 }

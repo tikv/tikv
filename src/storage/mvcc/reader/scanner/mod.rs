@@ -3,7 +3,7 @@
 mod backward;
 mod forward;
 
-use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
@@ -14,7 +14,7 @@ use self::forward::{
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
-use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
 pub use self::forward::{test_util, DeltaScanner, EntryScanner};
@@ -96,6 +96,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
+    /// if this option is not set.
+    ///
+    /// Default is false.
+    #[inline]
+    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
+        self.0.check_has_newer_ts_data = enabled;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
@@ -166,11 +176,21 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
+
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
+        }
+    }
+
+    /// Returns whether data with newer ts is found. The result is meaningful only when
+    /// `check_has_newer_ts_data` is set to true.
+    fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        match self {
+            Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
+            Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
         }
     }
 }
@@ -195,6 +215,8 @@ pub struct ScannerConfig<S: Snapshot> {
     desc: bool,
 
     bypass_locks: TsSet,
+
+    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -211,13 +233,14 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc,
             bypass_locks: Default::default(),
+            check_has_newer_ts_data: false,
         }
     }
 
     #[inline]
     fn scan_mode(&self) -> ScanMode {
         if self.desc {
-            ScanMode::Backward
+            ScanMode::Mixed
         } else {
             ScanMode::Forward
         }
@@ -326,7 +349,7 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOption::new(None, None, true);
+    let iter_opt = IterOptions::new(None, None, true);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
     if iter.seek(left, statistic)? {
         if iter.key(statistic) < right.as_encoded().as_slice() {
@@ -339,6 +362,7 @@ pub fn has_data_in_range<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::kv::SEEK_BOUND;
     use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
@@ -558,5 +582,84 @@ mod tests {
     fn test_scan_bypass_locks() {
         test_scan_bypass_locks_impl(false);
         test_scan_bypass_locks_impl(true);
+    }
+
+    fn must_met_newer_ts_data<E: Engine>(
+        engine: &E,
+        scanner_ts: impl Into<TimeStamp>,
+        key: &[u8],
+        value: Option<&[u8]>,
+        desc: bool,
+        expected_met_newer_ts_data: bool,
+    ) {
+        let mut scanner = ScannerBuilder::new(
+            engine.snapshot(&Context::default()).unwrap(),
+            scanner_ts.into(),
+            desc,
+        )
+        .range(Some(Key::from_raw(key)), None)
+        .check_has_newer_ts_data(true)
+        .build()
+        .unwrap();
+
+        let result = scanner.next().unwrap();
+        if let Some(value) = value {
+            let (k, v) = result.unwrap();
+            assert_eq!(k, Key::from_raw(key));
+            assert_eq!(v, value);
+        } else {
+            assert!(result.is_none());
+        }
+
+        let expected = if expected_met_newer_ts_data {
+            NewerTsCheckState::Met
+        } else {
+            NewerTsCheckState::NotMetYet
+        };
+        assert_eq!(expected, scanner.met_newer_ts_data());
+    }
+
+    fn test_met_newer_ts_data_impl(deep_write_seek: bool, desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (key, val1) = (b"foo", b"bar1");
+
+        if deep_write_seek {
+            for i in 0..SEEK_BOUND {
+                must_prewrite_put(&engine, key, val1, key, i);
+                must_commit(&engine, key, i, i);
+            }
+        }
+
+        must_prewrite_put(&engine, key, val1, key, 100);
+        must_commit(&engine, key, 100, 200);
+        let (key, val2) = (b"foo", b"bar2");
+        must_prewrite_put(&engine, key, val2, key, 300);
+        must_commit(&engine, key, 300, 400);
+
+        must_met_newer_ts_data(
+            &engine,
+            100,
+            key,
+            if deep_write_seek { Some(val1) } else { None },
+            desc,
+            true,
+        );
+        must_met_newer_ts_data(&engine, 200, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 300, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&engine, 400, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, false);
+
+        must_prewrite_lock(&engine, key, key, 600);
+
+        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, true);
+    }
+
+    #[test]
+    fn test_met_newer_ts_data() {
+        test_met_newer_ts_data_impl(false, false);
+        test_met_newer_ts_data_impl(false, true);
+        test_met_newer_ts_data_impl(true, false);
+        test_met_newer_ts_data_impl(true, true);
     }
 }

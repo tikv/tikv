@@ -6,6 +6,8 @@ mod test_compact_after_delete;
 mod test_compact_lock_cf;
 mod test_compact_log;
 mod test_conf_change;
+mod test_early_apply;
+mod test_hibernate;
 mod test_lease_read;
 mod test_merge;
 mod test_multi;

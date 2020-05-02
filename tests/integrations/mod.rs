@@ -2,9 +2,12 @@
 
 #![feature(test)]
 #![feature(box_patterns)]
+#![feature(custom_test_frameworks)]
+#![test_runner(test_util::run_tests)]
 
 extern crate test;
 
+extern crate encryption;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
@@ -18,20 +21,3 @@ mod pd;
 mod raftstore;
 mod server;
 mod storage;
-
-// The prefix "_" here is to guarantee running this case first.
-#[test]
-fn _0_ci_setup() {
-    test_util::setup_for_ci();
-}
-
-#[test]
-fn _1_check_system_requirement() {
-    if let Err(e) = tikv_util::config::check_max_open_fds(4096) {
-        panic!(
-            "To run test, please make sure the maximum number of open file descriptors not \
-             less than 2000: {:?}",
-            e
-        );
-    }
-}

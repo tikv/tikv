@@ -7,6 +7,8 @@ use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
+use engine_rocks::config as rocks_config;
+use engine_rocks::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -155,6 +157,8 @@ pub struct Config {
     pub future_poll_size: usize,
     #[config(hidden)]
     pub hibernate_regions: bool,
+    #[config(hidden)]
+    pub early_apply: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -166,6 +170,9 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub region_split_size: ReadableSize,
+    #[serde(with = "rocks_config::perf_level_serde")]
+    #[config(skip)]
+    pub perf_level: PerfLevel,
 }
 
 impl Default for Config {
@@ -193,7 +200,7 @@ impl Default for Config {
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            clean_stale_peer_delay: ReadableDuration::minutes(10),
+            clean_stale_peer_delay: ReadableDuration::minutes(11),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
@@ -224,16 +231,18 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            apply_max_batch_size: 1024,
+            apply_max_batch_size: 256,
             apply_pool_size: 2,
-            store_max_batch_size: 1024,
+            store_max_batch_size: 256,
             store_pool_size: 2,
             future_poll_size: 1,
             hibernate_regions: true,
+            early_apply: true,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            perf_level: PerfLevel::Disable,
         }
     }
 }

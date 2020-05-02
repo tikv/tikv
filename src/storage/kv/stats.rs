@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::server::metrics::{GcKeysCF, GcKeysDetail};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
-
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 const STAT_TOTAL: &str = "total";
@@ -48,6 +48,19 @@ impl CfStatistics {
         ]
     }
 
+    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 8] {
+        [
+            (GcKeysDetail::total, self.total_op_count()),
+            (GcKeysDetail::processed, self.processed),
+            (GcKeysDetail::get, self.get),
+            (GcKeysDetail::next, self.next),
+            (GcKeysDetail::prev, self.prev),
+            (GcKeysDetail::seek, self.seek),
+            (GcKeysDetail::seek_for_prev, self.seek_for_prev),
+            (GcKeysDetail::over_seek_bound, self.over_seek_bound),
+        ]
+    }
+
     pub fn add(&mut self, other: &Self) {
         self.processed = self.processed.saturating_add(other.processed);
         self.get = self.get.saturating_add(other.get);
@@ -88,6 +101,14 @@ impl Statistics {
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
+        ]
+    }
+
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 8]); 3] {
+        [
+            (GcKeysCF::default, self.data.details_enum()),
+            (GcKeysCF::lock, self.lock.details_enum()),
+            (GcKeysCF::write, self.write.details_enum()),
         ]
     }
 
