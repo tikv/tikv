@@ -47,7 +47,7 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics, RaftProposeMetrics};
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -217,13 +217,14 @@ impl BatchRaftCmdRequestBuilder {
         false
     }
 
-    fn build(&mut self) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
+            metric.batch += self.callbacks.len() - 1;
             let cbs = mem::replace(&mut self.callbacks, vec![]);
             let cb = Callback::Write(Box::new(move |resp| {
                 let mut last_index = 0;
@@ -1772,8 +1773,7 @@ impl Peer {
     }
 
     pub fn propose_batch_request<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        if let Some((req, cb)) = self.batch_req_builder.build() {
-            let term = req.get_header().get_term();
+        if let Some((req, cb)) = self.batch_req_builder.build(&mut ctx.raft_metrics.propose) {
             if let Err(e) = util::check_term(&req, self.term()) {
                 let mut resp = RaftCmdResponse::default();
                 cmd_resp::bind_error(&mut resp, e);
