@@ -56,7 +56,6 @@ fn test_serde_custom_tikv_config() {
     value.log_file = "foo".to_owned();
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
-    value.rocksdb_log_file = "".to_owned();
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
@@ -211,7 +210,7 @@ fn test_serde_custom_tikv_config() {
         purge_obsolete_files_period: ReadableDuration::secs(1),
     };
     value.rocksdb = DbConfig {
-        rocksdb_log_level: LogLevel::Info,
+        info_log_level: LogLevel::Info,
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,

@@ -88,11 +88,11 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
             Some(slow_log_drainer)
         };
-        let rocksdb_log_drainer = if config.rocksdb_log_file.is_empty() {
+        let rocksdb_log_drainer = if config.rocksdb.info_log_dir.is_empty() {
             None
         } else {
             let rocksdb_log_drainer = logger::file_drainer(
-                &config.rocksdb_log_file,
+                &config.rocksdb.info_log_dir,
                 config.log_rotation_timespan,
                 config.log_rotation_size,
                 rename_by_timestamp,
@@ -100,7 +100,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             .unwrap_or_else(|e| {
                 fatal!(
                     "failed to initialize log with file {}: {}",
-                    config.rocksdb_log_file,
+                    config.rocksdb.info_log_dir,
                     e
                 );
             });

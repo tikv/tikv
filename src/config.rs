@@ -732,7 +732,7 @@ impl TitanDBConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[config(skip)]
-    pub rocksdb_log_level: LogLevel,
+    pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -833,7 +833,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
-            rocksdb_log_level: LogLevel::Info,
+            info_log_level: LogLevel::Info,
         }
     }
 }
@@ -858,17 +858,6 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        /*
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
-        */
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
@@ -892,7 +881,7 @@ impl DbConfig {
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
-        opts.set_info_log_level(self.rocksdb_log_level.into());
+        opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1870,9 +1859,6 @@ pub struct TiKvConfig {
     pub log_file: String,
 
     #[config(skip)]
-    pub rocksdb_log_file: String,
-
-    #[config(skip)]
     pub slow_log_file: String,
 
     #[config(skip)]
@@ -1943,7 +1929,6 @@ impl Default for TiKvConfig {
             enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
-            rocksdb_log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
