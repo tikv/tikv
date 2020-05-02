@@ -3,6 +3,7 @@
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
+use hex;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
@@ -26,6 +27,26 @@ pub fn oct_int(num: &Option<Int>) -> Result<Option<Bytes>> {
 #[inline]
 pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(content) = arg {
+        // hex::decode will fail on odd-length content
+        // but mysql won't
+        // so do some padding
+        let padded_content = if content.len() % 2 == 1 {
+            let mut result = b"0".to_vec();
+            result.extend_from_slice(content);
+            result
+        } else {
+            content.clone()
+        };
+        Ok(hex::decode(padded_content).ok())
+    } else {
+        Ok(None)
+    }
 }
 
 #[rpn_fn]
@@ -535,6 +556,34 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
+    #[test]
+    fn test_unhex() {
+        let cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"GG".to_vec()), None),
+            (
+                hex_str_arg(&Some(b"string".to_vec())).unwrap(),
+                Some(b"string".to_vec()),
+            ),
+            (
+                hex_str_arg(&Some(b"1267".to_vec())).unwrap(),
+                Some(b"1267".to_vec()),
+            ),
+            (Some(b"41\0".to_vec()), None),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"b".to_vec()), Some(vec![0xb])),
+            (None, None),
+        ];
+        for (arg, expect_output) in cases {
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
