@@ -32,10 +32,6 @@
 ## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
 # log-rotation-size = "300MB"
 
-## The interval at which to refresh the local config
-## Set it small are good to debug and tuning.
-# refresh-config-interval = "30s"
-
 # Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
