@@ -72,5 +72,5 @@ impl Collector for MemoryCollector {
 }
 
 lazy_static! {
-    static ref PAGESIZE: f64 = { unsafe { libc::sysconf(libc::_SC_PAGESIZE) as f64 } };
+    static ref PAGESIZE: f64 = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as f64 };
 }
