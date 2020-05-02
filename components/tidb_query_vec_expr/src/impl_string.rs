@@ -472,6 +472,69 @@ pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn substring_index(
+    s: &Option<Bytes>,
+    delim: &Option<Bytes>,
+    count: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    Ok(
+        if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
+            if *count > 0 {
+                // last already-found `delim` pattern start at this index
+                let mut current_pattern_start_at = None;
+                // find the count-th `delim` pattern
+                for _ in 0..*count {
+                    // this round of found start at last round's pattern's start at + pattern's length
+                    let find_start_index = current_pattern_start_at
+                        .map(|it| it + delim.len())
+                        .unwrap_or(0);
+                    // this result is the offset from "last round's pattern's start at + pattern's length"
+                    let result = twoway::find_bytes(&s[find_start_index..], &delim);
+                    if let Some(result) = result {
+                        current_pattern_start_at = Some(find_start_index + result);
+                    } else {
+                        // no more matched pattern, break out of the loop
+                        current_pattern_start_at = None;
+                        break;
+                    }
+                }
+                if let Some(pattern_start_at) = current_pattern_start_at {
+                    Some(s[..pattern_start_at].to_vec())
+                } else {
+                    // no enough patterns, just return the full string
+                    Some(s.clone())
+                }
+            } else if *count < 0 {
+                // same as above, just from opposite direction
+                let mut current_pattern_end_at = None;
+                for _ in 0..-*count {
+                    let find_end_index = current_pattern_end_at
+                        .map(|it| it - delim.len())
+                        .unwrap_or(s.len());
+                    let result = twoway::rfind_bytes(&s[..find_end_index], &delim);
+                    if let Some(result) = result {
+                        current_pattern_end_at = Some(result + delim.len())
+                    } else {
+                        current_pattern_end_at = Some(0);
+                        break;
+                    }
+                }
+                if let Some(pattern_end_at) = current_pattern_end_at {
+                    Some(s[pattern_end_at..].to_vec())
+                } else {
+                    Some(s.clone())
+                }
+            } else {
+                Some(Vec::<u8>::new())
+            }
+        } else {
+            None
+        },
+    )
+}
+
+#[rpn_fn]
+#[inline]
 pub fn strcmp(left: Option<&Bytes>, right: Option<&Bytes>) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
     Ok(match (left, right) {
@@ -1931,6 +1994,166 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Space)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_index() {
+        let test_cases = vec![
+            (None, None, None, None),
+            (Some(vec![]), None, None, None),
+            (Some(vec![]), Some(vec![]), Some(1i64), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(1), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(-1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(-1), Some(vec![])),
+            (
+                Some(b"abc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(0),
+                Some(vec![]),
+            ),
+            (
+                Some(b"aaaaaaaa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"bbbbbbbb".to_vec()),
+                Some(b"bb".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"cccccccc".to_vec()),
+                Some(b"cc".to_vec()),
+                Some(2),
+                Some(b"cc".to_vec()),
+            ),
+            (
+                Some(b"dddddddd".to_vec()),
+                Some(b"dd".to_vec()),
+                Some(-2),
+                Some(b"dd".to_vec()),
+            ),
+            (
+                Some(b"eeeeeeee".to_vec()),
+                Some(b"ee".to_vec()),
+                Some(5),
+                Some(b"eeeeeeee".to_vec()),
+            ),
+            (
+                Some(b"ffffffff".to_vec()),
+                Some(b"ff".to_vec()),
+                Some(-5),
+                Some(b"ffffffff".to_vec()),
+            ),
+            (
+                Some(b"gggggggg".to_vec()),
+                Some(b"gg".to_vec()),
+                Some(6),
+                Some(b"gggggggg".to_vec()),
+            ),
+            (
+                Some(b"hhhhhhhh".to_vec()),
+                Some(b"hh".to_vec()),
+                Some(-6),
+                Some(b"hhhhhhhh".to_vec()),
+            ),
+            (
+                Some(b"iiiii".to_vec()),
+                Some(b"ii".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"jjjjj".to_vec()),
+                Some(b"jj".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"kkkkk".to_vec()),
+                Some(b"kk".to_vec()),
+                Some(3),
+                Some(b"kkkkk".to_vec()),
+            ),
+            (
+                Some(b"lllll".to_vec()),
+                Some(b"ll".to_vec()),
+                Some(-3),
+                Some(b"lllll".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(2),
+                Some(b"www.mysql".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(-2),
+                Some(b"mysql.com".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-1),
+                Some(b"c".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(2),
+                Some(b"abc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-2),
+                Some(b"cabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(-1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+        ];
+        for (s, delim, count, exp) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(delim)
+                .push_param(count)
+                .evaluate(ScalarFuncSig::SubstringIndex)
                 .unwrap();
             assert_eq!(output, exp);
         }
