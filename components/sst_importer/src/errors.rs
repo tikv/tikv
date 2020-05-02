@@ -106,13 +106,12 @@ quick_error! {
         }
         Encryption(err: EncryptionError) {
             from()
-            description("encryption error")
             display("Encryption {:?}", err)
         }
         CodecError(err: CodecError) {
             from()
             cause(err)
-            description(err.description())
+            display("Codec {}", err)
         }
     }
 }

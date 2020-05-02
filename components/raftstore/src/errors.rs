@@ -130,7 +130,6 @@ quick_error! {
         SstImporter(err: sst_importer::Error) {
             from()
             cause(err)
-            description(err.description())
             display("SstImporter {}", err)
         }
         Encryption(err: encryption::Error) {
