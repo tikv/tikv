@@ -293,3 +293,19 @@ pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<()> {
     let d = Duration::parse(&mut EvalContext::default(), &buf, fsp)?;
     fuzz_duration(d, cursor)
 }
+
+pub fn fuzz_coprocessor_codec_row_v2_binary_search(data: &[u8]) -> Result<()> {
+    use tidb_query_datatype::codec::row::v2::RowSlice;
+
+    let mut cursor = Cursor::new(data);
+    let id = cursor.read_as_i64()?;
+    let first_byte = cursor.read_as_u8()?;
+
+    if first_byte == 128 {
+        let row_slice = RowSlice::from_bytes(&data[8..])?;
+        let _ = row_slice.search_in_non_null_ids(id);
+        let _ = row_slice.search_in_null_ids(id);
+    }
+
+    Ok(())
+}
