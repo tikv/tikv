@@ -26,6 +26,11 @@ use tame_gcs::{
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
 
+const HARDCODED_ENDPOINTS: &[&str] = &[
+    "https://www.googleapis.com/upload/storage/v1",
+    "https://www.googleapis.com/storage/v1",
+];
+
 // GCS compatible storage
 #[derive(Clone)]
 pub struct GCSStorage {
@@ -161,6 +166,26 @@ impl GCSStorage {
         mut req: reqwest::Request,
         scope: tame_gcs::Scopes,
     ) -> Result<reqwest::Response> {
+        // replace the hard-coded GCS endpoint by the custom one.
+        let endpoint = self.config.get_endpoint();
+        if !endpoint.is_empty() {
+            let url = req.url().as_str();
+            for hardcoded in HARDCODED_ENDPOINTS {
+                if url.starts_with(hardcoded) {
+                    *req.url_mut() = reqwest::Url::parse(
+                        &[endpoint.trim_end_matches('/'), &url[hardcoded.len()..]].concat(),
+                    )
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::InvalidInput,
+                            format!("invalid custom GCS endpoint: {}", e),
+                        )
+                    })?;
+                    break;
+                }
+            }
+        }
+
         self.set_auth(&mut req, scope)?;
         let response = block_on_external_io(self.client.execute(req))
             .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;

@@ -123,11 +123,11 @@ impl SSTImporter {
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
-                info!("download"; "meta" => ?meta, "range" => ?r);
+                info!("download"; "meta" => ?meta, "url" => %url_of_backend(backend), "range" => ?r);
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "err" => %e);
+                error!("download failed"; "meta" => ?meta, "url" => %url_of_backend(backend), "err" => %e);
                 Err(e)
             }
         }
