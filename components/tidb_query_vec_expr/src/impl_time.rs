@@ -964,13 +964,9 @@ mod tests {
         let cases = vec![
             (None, Some(b"11:30:45.123456".to_vec()), None),
             (None, None, None),
+            (zero_duration, zero_duration_string.clone(), zero_duration),
             (
-                zero_duration.clone(),
-                zero_duration_string.clone(),
-                zero_duration.clone(),
-            ),
-            (
-                zero_duration.clone(),
+                zero_duration,
                 Some(b"01:00:00".to_vec()),
                 Some(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
             ),
