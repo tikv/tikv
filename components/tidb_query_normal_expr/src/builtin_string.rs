@@ -13,24 +13,16 @@ use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
 use tidb_query_shared_expr::string::{
-    encoded_size, line_wrap, validate_target_len_for_pad, BASE64_ENCODED_CHUNK_LENGTH,
-    BASE64_INPUT_CHUNK_LENGTH,
+    encoded_size, line_wrap, trim, validate_target_len_for_pad, TrimDirection,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
 };
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
-use tidb_query_common::string::{trim, TrimDirection};
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
 const SPACE: u8 = 0o40u8;
-
-enum TrimDirection {
-    Both = 1,
-    Leading,
-    Trailing,
-}
 
 impl ScalarFunc {
     #[inline]

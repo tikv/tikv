@@ -3,11 +3,12 @@
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
-use tidb_query_common::string::{trim, TrimDirection};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
-use tidb_query_shared_expr::string::{encoded_size, line_wrap, validate_target_len_for_pad};
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, trim, validate_target_len_for_pad, TrimDirection,
+};
 
 const SPACE: u8 = 0o40u8;
 
@@ -450,18 +451,6 @@ pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
             Vec::new()
         }
     }))
-}
-
-#[rpn_fn]
-#[inline]
-pub fn trim_2_args(arg: &Option<Bytes>, pat: &Option<Bytes>) -> Result<Option<Bytes>> {
-    if let (Some(arg), Some(pat)) = (arg, pat) {
-        let arg = String::from_utf8_lossy(arg);
-        let pat = String::from_utf8_lossy(pat);
-        Ok(Some(trim(&arg, &pat, TrimDirection::Both)))
-    } else {
-        Ok(None)
-    }
 }
 
 #[rpn_fn]
@@ -1837,38 +1826,6 @@ mod tests {
             invalid_utf8_output,
             Some(b"\xF0 Hello \x90 World \x80".to_vec())
         );
-    }
-
-    #[test]
-    fn test_trim_2_args() {
-        let tests = vec![
-            (Some("xxxbarxxx"), Some("x"), Some("bar")),
-            (Some("bar"), Some("x"), Some("bar")),
-            (Some("   bar   "), Some(""), Some("   bar   ")),
-            (Some(""), Some("x"), Some("")),
-            (Some("张三和张三"), Some("张三"), Some("和")),
-        ];
-        for (arg, pat, expect_output) in tests {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.map(|s| s.as_bytes().to_vec()))
-                .push_param(pat.map(|s| s.as_bytes().to_vec()))
-                .evaluate(ScalarFuncSig::Trim2Args)
-                .unwrap();
-            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
-        }
-
-        let invalid_tests = vec![
-            (None, Some(b"x".to_vec()), None as Option<Bytes>),
-            (Some(b"bar".to_vec()), None, None as Option<Bytes>),
-        ];
-        for (arg, pat, expect_output) in invalid_tests {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
-                .push_param(pat)
-                .evaluate(ScalarFuncSig::Trim2Args)
-                .unwrap();
-            assert_eq!(output, expect_output);
-        }
     }
 
     #[test]
