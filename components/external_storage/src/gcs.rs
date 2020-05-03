@@ -7,6 +7,7 @@ use super::{
 
 use std::{
     convert::TryInto,
+    fmt::Display,
     io::{Error, ErrorKind, Read, Result},
     sync::Arc,
 };
@@ -39,6 +40,28 @@ pub struct GCSStorage {
     client: Client,
 }
 
+trait ResultExt {
+    type Ok;
+
+    // Maps the error of this result as an `std::io::Error` with `Other` error
+    // kind.
+    fn or_io_error<D: Display>(self, msg: D) -> Result<Self::Ok>;
+
+    // Maps the error of this result as an `std::io::Error` with `InvalidInput`
+    // error kind.
+    fn or_invalid_input<D: Display>(self, msg: D) -> Result<Self::Ok>;
+}
+
+impl<T, E: Display> ResultExt for std::result::Result<T, E> {
+    type Ok = T;
+    fn or_io_error<D: Display>(self, msg: D) -> Result<T> {
+        self.map_err(|e| Error::new(ErrorKind::Other, format!("{}: {}", msg, e)))
+    }
+    fn or_invalid_input<D: Display>(self, msg: D) -> Result<T> {
+        self.map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
+    }
+}
+
 impl GCSStorage {
     /// Create a new GCS storage for the given config.
     pub fn new(config: &Config) -> Result<GCSStorage> {
@@ -48,24 +71,13 @@ impl GCSStorage {
         if config.credentials_blob.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing credentials"));
         }
-        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid credentials_blob: {}", e),
-            )
-        })?;
-        let svc_access = ServiceAccountAccess::new(svc_info).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid credentials_blob {}", e),
-            )
-        })?;
-        let client = Client::builder().build().map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("unable to create reqwest client: {}", e),
-            )
-        })?;
+        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob)
+            .or_invalid_input("invalid credentials_blob")?;
+        let svc_access =
+            ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
+        let client = Client::builder()
+            .build()
+            .or_io_error("unable to create reqwest client")?;
         Ok(GCSStorage {
             config: config.clone(),
             svc_access: Arc::new(svc_access),
@@ -85,23 +97,14 @@ impl GCSStorage {
         R: AsyncRead + Send + Unpin,
     {
         let uri = req.uri().to_string();
-        let builder = match req.method().clone() {
-            Method::GET => self.client.get(&uri),
-            Method::POST => self.client.post(&uri),
-            method => {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("method unimplemented: {}", method.as_str()),
-                ))
-            }
-        };
-        Ok(builder
+        self.client
+            .request(req.method().clone(), &uri)
             .headers(req.headers().clone())
             .body(Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(
                 req.into_body(),
             )))
             .build()
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to build request: {}", e)))?)
+            .or_io_error("failed to build request")
     }
 
     fn convert_response(&self, res: reqwest::Response) -> Result<http::Response<Bytes>> {
@@ -126,7 +129,7 @@ impl GCSStorage {
         let token_or_request = self
             .svc_access
             .get_token(&[scope])
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to get token: {}", e)))?;
+            .or_io_error("failed to get token")?;
         let token = match token_or_request {
             TokenOrRequest::Token(token) => token,
             TokenOrRequest::Request {
@@ -143,19 +146,14 @@ impl GCSStorage {
 
                 self.svc_access
                     .parse_token_response(scope_hash, response)
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::Other,
-                            format!("failed to parse token response: {}", e),
-                        )
-                    })?
+                    .or_io_error("failed to parse GCS token response")?
             }
         };
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
-            token.try_into().map_err(|e| {
-                Error::new(ErrorKind::Other, format!("failed to set auth token: {}", e))
-            })?,
+            token
+                .try_into()
+                .or_io_error("failed to set GCS auth token")?,
         );
 
         Ok(())
@@ -175,12 +173,7 @@ impl GCSStorage {
                     *req.url_mut() = reqwest::Url::parse(
                         &[endpoint.trim_end_matches('/'), &url[hardcoded.len()..]].concat(),
                     )
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::InvalidInput,
-                            format!("invalid custom GCS endpoint: {}", e),
-                        )
-                    })?;
+                    .or_invalid_input("invalid custom GCS endpoint")?;
                     break;
                 }
             }
@@ -188,7 +181,7 @@ impl GCSStorage {
 
         self.set_auth(&mut req, scope)?;
         let response = block_on_external_io(self.client.execute(req))
-            .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;
+            .or_io_error("make GCS request failed")?;
         if !response.status().is_success() {
             let status = response.status();
             let text = block_on_external_io(response.text()).map_err(|e| {
@@ -238,12 +231,10 @@ impl ExternalStorage for GCSStorage {
             None
         } else {
             Some(
-                serde_json::from_str(&self.config.storage_class).map_err(|e| {
-                    Error::new(
-                        ErrorKind::InvalidInput,
-                        format!("invalid storage_class {}: {}", self.config.storage_class, e),
-                    )
-                })?,
+                serde_json::from_str(&self.config.storage_class).or_invalid_input(format_args!(
+                    "invalid storage_class {}",
+                    self.config.storage_class
+                ))?,
             )
         };
         // Convert manually since PredefinedAcl doesn't implement Deserialize.
