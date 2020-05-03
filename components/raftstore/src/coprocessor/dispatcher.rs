@@ -310,7 +310,7 @@ where
         CoprocessorHost { registry }
     }
 
-    /// Call all prepose hooks until bypass is set to true.
+    /// Call all propose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
             let query = req.mut_requests();

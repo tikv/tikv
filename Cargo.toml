@@ -63,6 +63,7 @@ async-trait = "0.1"
 batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
+cache-size = "0.5"
 chrono = "0.4"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
@@ -90,6 +91,7 @@ itertools = "0.8"
 openssl = "0.10"
 tokio-openssl = "0.2"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
+into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
@@ -100,8 +102,10 @@ mime = "0.3.13"
 more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+num_cpus = "1"
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
+pnet_datalink = "0.23"
 prost = "0.6"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
@@ -110,6 +114,7 @@ raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore" }
 rand = "0.7.3"
 regex = "1.3"
+reqwest = { version = "0.10.4", features = ["blocking"] }
 rev_lines = "0.2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
@@ -147,7 +152,7 @@ txn_types = { path = "components/txn_types" }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
-into_other = { path = "components/into_other" }
+walkdir = "2"
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

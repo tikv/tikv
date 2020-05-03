@@ -13,7 +13,7 @@ use engine_rocks::{CloneCompat, Compat};
 use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{bootstrap_store, fsm, SnapManager};
+use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
@@ -63,6 +63,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
+        Arc::default(),
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
@@ -104,6 +105,7 @@ fn test_node_bootstrap_with_prepared_data() {
         coprocessor_host,
         importer,
         Worker::new("split"),
+        AutoSplitController::default(),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

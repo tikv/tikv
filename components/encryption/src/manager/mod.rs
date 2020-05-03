@@ -260,9 +260,10 @@ impl Dicts {
             // creation time.
             let (_, key) = self.current_data_key();
 
-            // Generate a new data key if the current data key was
-            // exposed and the master key backend is secure.
-            if !(key.was_exposed && master_key.is_secure()) {
+            // Generate a new data key if
+            //   1. encryption method is not the same, or
+            //   2. the current data key was exposed and the new master key is secure.
+            if compat(method) == key.method && !(key.was_exposed && master_key.is_secure()) {
                 let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
                 match now.duration_since(creation_time) {
                     Ok(duration) => {

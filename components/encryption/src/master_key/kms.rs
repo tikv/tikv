@@ -9,6 +9,8 @@ use futures::future::{self, TryFutureExt};
 use kvproto::encryptionpb::EncryptedContent;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
+use rusoto_core::RusotoError;
+use rusoto_kms::DecryptError;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
 
@@ -69,7 +71,7 @@ impl AwsKms {
             // Use default algorithm SYMMETRIC_DEFAULT.
             encryption_algorithm: None,
             // Use key_id encoded in ciphertext.
-            key_id: None,
+            key_id: Some(self.current_key_id.clone()),
             // Encryption context and grant tokens are not used.
             encryption_context: None,
             grant_tokens: None,
@@ -77,10 +79,16 @@ impl AwsKms {
         let runtime = &mut self.runtime;
         let client = &self.client;
         let decrypt_response = retry(runtime, || {
-            client
-                .decrypt(decrypt_request.clone())
-                .map_err(|e| Error::Other(e.into()))
-        });
+            client.decrypt(decrypt_request.clone()).map_err(|e| {
+                if let RusotoError::Service(DecryptError::IncorrectKey(e)) = e {
+                    Error::WrongMasterKey(e.into())
+                } else {
+                    // To keep it simple, retry all errors, even though only
+                    // some of them are retriable.
+                    Error::Other(e.into())
+                }
+            })
+        })?;
         let plaintext = decrypt_response.plaintext.unwrap().as_ref().to_vec();
         Ok(plaintext)
     }
@@ -99,20 +107,22 @@ impl AwsKms {
             client
                 .generate_data_key(generate_request.clone())
                 .map_err(|e| Error::Other(e.into()))
-        });
+        })
+        .unwrap();
         let ciphertext_key = generate_response.ciphertext_blob.unwrap().as_ref().to_vec();
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
         Ok((ciphertext_key, plaintext_key))
     }
 }
 
-fn retry<T, U, F>(runtime: &mut Runtime, mut func: F) -> T
+fn retry<T, U, F>(runtime: &mut Runtime, mut func: F) -> Result<T>
 where
     F: FnMut() -> U,
     U: Future<Output = Result<T>> + std::marker::Unpin,
 {
     let retry_limit = 6;
     let timeout_duration = Duration::from_secs(10);
+    let mut last_err = None;
     for _ in 0..retry_limit {
         let fut = func();
 
@@ -120,16 +130,20 @@ where
             let timeout = tokio::time::delay_for(timeout_duration);
             future::select(fut, timeout).await
         }) {
-            future::Either::Left((Ok(resp), _)) => return resp,
+            future::Either::Left((Ok(resp), _)) => return Ok(resp),
             future::Either::Left((Err(e), _)) => {
                 error!("kms request failed"; "error"=>?e);
+                if let Error::WrongMasterKey(e) = e {
+                    return Err(Error::WrongMasterKey(e));
+                }
+                last_err = Some(e);
             }
             future::Either::Right((_, _)) => {
                 error!("kms request timeout"; "timeout" => ?timeout_duration);
             }
         }
     }
-    panic!("kms request failed in {} times", retry_limit)
+    Err(Error::Other(box_err!("{:?}", last_err)))
 }
 
 struct Inner {
@@ -406,5 +420,35 @@ mod tests {
         backend
             .decrypt_content(&ciphertext_key_not_found)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_kms_wrong_key_id() {
+        let config = KmsConfig {
+            key_id: "test_key_id".to_string(),
+            region: "ap-southeast-2".to_string(),
+            access_key: "abc".to_string(),
+            secret_access_key: "xyz".to_string(),
+            endpoint: String::new(),
+        };
+
+        // IncorrectKeyException
+        //
+        // HTTP Status Code: 400
+        // Json, see:
+        // https://github.com/rusoto/rusoto/blob/mock-v0.43.0/rusoto/services/kms/src/generated.rs#L1970
+        // https://github.com/rusoto/rusoto/blob/mock-v0.43.0/rusoto/core/src/proto/json/error.rs#L7
+        // https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html#API_Decrypt_Errors
+        let dispatcher = MockRequestDispatcher::with_status(400).with_body(
+            r#"{
+                "__type": "IncorrectKeyException",
+                "Message": "mock"
+            }"#,
+        );
+        let mut aws_kms = AwsKms::with_request_dispatcher(&config, dispatcher).unwrap();
+        match aws_kms.decrypt(b"invalid") {
+            Err(Error::WrongMasterKey(_)) => (),
+            other => panic!("{:?}", other),
+        }
     }
 }

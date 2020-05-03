@@ -616,6 +616,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -1056,8 +1066,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "rocksdb",
- "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "sysinfo",
@@ -1081,23 +1089,28 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
+ "configuration",
  "encryption",
  "engine",
  "engine_traits",
  "keys",
  "kvproto",
  "lazy_static",
+ "num_cpus",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.7.3",
  "rocksdb",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
- "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "toml",
  "txn_types",
 ]
 
@@ -1953,7 +1966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e0c6e8842f22790e4f26ba3abbd9e01983ab95f1"
+source = "git+https://github.com/pingcap/kvproto.git#c3b73d03dde2f54154d396f44dc9a25c3e8bdb79"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2010,7 +2023,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2029,7 +2042,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2493,9 +2506,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.6.0+1.1.1d"
+version = "111.9.0+1.1.1g"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9c2da1de8a7a3f860919c01540b03a6db16de042405a8a07a5e9d0b4b825d9c"
+checksum = "a2dbe10ddd1eb335aba3780eb2eaa13e1b7b441d2562fd962398740927f39ec4"
 dependencies = [
  "cc",
 ]
@@ -3387,7 +3400,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#35e59387e284671e3750151eb9b0335d3860feb1"
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3593,9 +3606,9 @@ dependencies = [
 
 [[package]]
 name = "ryu"
-version = "1.0.0"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c92464b447c0ee8c4fb3824ecc8383b81717b9f1e74ba2e72540aef7b9f82997"
+checksum = "ed3d612bc64430efeb3f7ee6ef26d590dce0c43249217bddc62112540c7941e1"
 
 [[package]]
 name = "safemem"
@@ -3712,16 +3725,6 @@ dependencies = [
  "itoa",
  "serde",
  "url",
-]
-
-[[package]]
-name = "servo_arc"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98238b800e0d1576d8b6e3de32827c2d74bee68bb97748dcf5071fb53965432"
-dependencies = [
- "nodrop",
- "stable_deref_trait",
 ]
 
 [[package]]
@@ -3897,12 +3900,6 @@ dependencies = [
  "txn_types",
  "uuid",
 ]
-
-[[package]]
-name = "stable_deref_trait"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 
 [[package]]
 name = "standback"
@@ -4478,7 +4475,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "regex",
- "safemem",
  "slog",
  "slog-global",
  "tidb_query_common",
@@ -4495,6 +4491,7 @@ name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
  "rand 0.6.5",
+ "safemem",
  "tidb_query_datatype",
  "time 0.1.42",
 ]
@@ -4523,7 +4520,6 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
- "servo_arc",
  "slog",
  "slog-global",
  "smallvec 0.6.10",
@@ -4542,6 +4538,7 @@ dependencies = [
 name = "tidb_query_vec_expr"
 version = "0.0.1"
 dependencies = [
+ "base64 0.10.1",
  "bstr",
  "byteorder",
  "chrono",
@@ -4576,6 +4573,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "cache-size",
  "chrono",
  "codec",
  "configuration",
@@ -4613,11 +4611,13 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
+ "num_cpus",
  "openssl",
  "panic_hook",
  "parking_lot 0.10.0",
  "pd_client",
  "pin-project",
+ "pnet_datalink",
  "pprof",
  "procinfo",
  "prometheus",
@@ -4629,6 +4629,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",
@@ -4667,6 +4668,7 @@ dependencies = [
  "url",
  "uuid",
  "vlog",
+ "walkdir",
  "yatp",
  "zipf",
 ]
@@ -4709,6 +4711,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "num_cpus",
  "openssl",
  "panic_hook",
  "procinfo",
@@ -5518,7 +5521,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#9d3ccd00673965bb9a8d5ff672707b52863ba69c"
+source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
