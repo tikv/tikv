@@ -5145,6 +5145,7 @@ checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
 name = "tracer"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "crossbeam",
  "futures 0.1.29",
  "futures 0.3.4",

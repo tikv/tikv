@@ -4,6 +4,7 @@ extern crate lazy_static;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+pub mod collector;
 pub mod future;
 pub mod time_measure;
 pub mod util;
