@@ -9,7 +9,7 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::WeekdayExtension;
-use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::mysql::{Duration, Time};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
 
@@ -279,6 +279,37 @@ pub fn last_day(ctx: &mut EvalContext, t: &Option<Time>) -> Result<Option<Time>>
         return Ok(adjusted_t.last_date_of_month());
     }
     Ok(t.last_date_of_month())
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn add_duration_and_string(
+    ctx: &mut EvalContext,
+    duration: &Option<Duration>,
+    string_val: &Option<Bytes>,
+) -> Result<Option<Duration>> {
+    match (duration, string_val) {
+        (Some(d), Some(bytes)) => {
+            let s = std::str::from_utf8(&bytes).map_err(Error::Encoding)?;
+            let s = match Duration::parse(ctx, bytes, Time::parse_fsp(s)) {
+                Ok(arg1) => arg1,
+                Err(_) => return Ok(None),
+            };
+            let res = match d.checked_add(s) {
+                Some(res) => res,
+                None => {
+                    return ctx
+                        .handle_invalid_time_error(Error::overflow(
+                            "DURATION",
+                            &format!("({} + {})", &d, &s),
+                        ))
+                        .map(|_| Ok(None))?;
+                }
+            };
+            Ok(Some(res))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -900,6 +931,75 @@ mod tests {
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<Time>)
             .evaluate::<Time>(ScalarFuncSig::LastDay)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_add_duration_and_string() {
+        let cases = vec![
+            ("01:00:00.999999", "02:00:00.999998", "03:00:01.999997"),
+            ("23:59:59", "00:00:01", "24:00:00"),
+            ("235959", "00:00:01", "24:00:00"),
+            ("110:00:00", "1 02:00:00", "136:00:00"),
+            ("-110:00:00", "1 02:00:00", "-84:00:00"),
+            ("00:00:01", "-00:00:01", "00:00:00"),
+            ("00:00:03", "-00:00:01", "00:00:02"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let output: Option<Duration> = RpnFnScalarEvaluator::new()
+                .push_param(Some(
+                    Duration::parse(&mut EvalContext::default(), arg1.as_ref(), 6).unwrap(),
+                ))
+                .push_param(Some(arg2.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::AddDurationAndString)
+                .unwrap();
+            let exp = Some(Duration::parse(&mut EvalContext::default(), exp.as_ref(), 6).unwrap());
+            assert_eq!(output, exp);
+        }
+
+        let zero_duration = Some(Duration::zero());
+        let zero_duration_string = Some(b"00:00:00".to_vec());
+        let cases = vec![
+            (None, Some(b"11:30:45.123456".to_vec()), None),
+            (None, None, None),
+            (
+                zero_duration.clone(),
+                zero_duration_string.clone(),
+                zero_duration.clone(),
+            ),
+            (
+                zero_duration.clone(),
+                Some(b"01:00:00".to_vec()),
+                Some(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+            ),
+            (
+                Some(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+                zero_duration_string,
+                Some(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+            ),
+            (
+                Some(Duration::parse(&mut ctx, b"01:00:00", 6).unwrap()),
+                Some(b"-01:00:00".to_vec()),
+                zero_duration,
+            ),
+        ];
+        for (arg1, arg2, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::AddDurationAndString)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+
+        let output: Option<Duration> = RpnFnScalarEvaluator::new()
+            .push_param(Some(
+                Duration::parse(&mut EvalContext::default(), b"01:00:00", 6).unwrap(),
+            ))
+            .push_param(Some(b"xxx".to_vec()))
+            .evaluate(ScalarFuncSig::AddDurationAndString)
             .unwrap();
         assert_eq!(output, None);
     }
