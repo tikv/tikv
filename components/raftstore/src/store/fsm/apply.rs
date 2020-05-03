@@ -1994,12 +1994,11 @@ where
                 self.tag, source_region, e
             ),
         };
-        match state.get_state() {
-            PeerState::Normal | PeerState::Merging => {}
-            _ => panic!(
+        if state.get_state() != PeerState::Merging {
+            panic!(
                 "{} unexpected state of merging region {:?}",
                 self.tag, state
-            ),
+            );
         }
         let exist_region = state.get_region().to_owned();
         if *source_region != exist_region {
@@ -2445,12 +2444,12 @@ impl Debug for GenSnapTask {
 static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ObserveID(usize);
 
 impl ObserveID {
     pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -2650,6 +2649,7 @@ where
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
+        fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
@@ -2901,25 +2901,18 @@ where
                 observe_id,
                 region_id,
                 enabled,
-            } => {
-                assert!(
-                    !self
-                        .delegate
-                        .observe_cmd
-                        .as_ref()
-                        .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                    "{} observer already exists {:?} {:?}",
-                    self.delegate.tag,
-                    self.delegate.observe_cmd,
-                    observe_id
-                );
-                (observe_id, region_id, Some(enabled))
-            }
+            } => (observe_id, region_id, Some(enabled)),
             ChangeCmd::Snapshot {
                 observe_id,
                 region_id,
             } => (observe_id, region_id, None),
         };
+        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
+            if observe_cmd.id > observe_id {
+                notify_stale_req(self.delegate.term, cb);
+                return;
+            }
+        }
 
         assert_eq!(self.delegate.region_id(), region_id);
         let resp = match compare_region_epoch(
@@ -2942,19 +2935,32 @@ where
                     )),
                 }
             }
-            Err(e) => ReadResponse {
-                response: cmd_resp::new_error(e),
-                snapshot: None,
-            },
+            Err(e) => {
+                // Return error if epoch not match
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                });
+                return;
+            }
         };
         if let Some(enabled) = enabled {
+            assert!(
+                !self
+                    .delegate
+                    .observe_cmd
+                    .as_ref()
+                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
+                "{} observer already exists {:?} {:?}",
+                self.delegate.tag,
+                self.delegate.observe_cmd,
+                observe_id
+            );
             // TODO(cdc): take observe_cmd when enabled is false.
             self.delegate.observe_cmd = Some(ObserveCmd {
                 id: observe_id,
                 enabled,
             });
-        } else if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            observe_cmd.id = observe_id;
         }
 
         cb.invoke_read(resp);

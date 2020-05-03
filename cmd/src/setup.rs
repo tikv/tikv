@@ -197,7 +197,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     config.compatible_adjust();
     if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
+        fatal!("invalid configuration: {}", e);
     }
 
     if let Err(e) = check_critical_config(config) {

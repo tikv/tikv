@@ -28,7 +28,7 @@ fn setup_cfg_controller(
     let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
     gc_worker.start().unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));
 
     (gc_worker, cfg_controller)
@@ -55,7 +55,7 @@ where
 fn test_gc_worker_config_update() {
     let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
-    let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
+    let (gc_worker, cfg_controller) = setup_cfg_controller(cfg.clone());
     let scheduler = gc_worker.scheduler();
 
     // update of other module's config should not effect gc worker config
@@ -87,7 +87,7 @@ fn test_gc_worker_config_update() {
 fn test_change_io_limit_by_config_manager() {
     let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
-    let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
+    let (gc_worker, cfg_controller) = setup_cfg_controller(cfg.clone());
     let scheduler = gc_worker.scheduler();
 
     validate(&scheduler, move |_, limiter: &Limiter| {

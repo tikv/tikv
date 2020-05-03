@@ -1184,7 +1184,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             engines.kv,
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
@@ -1329,13 +1329,35 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             );
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
                 .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
+
+            if need_gc_msg && !not_exist {
+                let mut send_msg = RaftMessage::default();
+                send_msg.set_region_id(region_id);
+                send_msg.set_from_peer(msg.get_to_peer().clone());
+                send_msg.set_to_peer(msg.get_from_peer().clone());
+                send_msg.set_region_epoch(region_epoch.clone());
+                let extra_msg = send_msg.mut_extra_msg();
+                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                extra_msg.set_check_peers(region.get_peers().into());
+                if let Err(e) = self.ctx.trans.send(send_msg) {
+                    error!(
+                        "send check stale peer response message failed";
+                        "region_id" => region_id,
+                        "err" => ?e
+                    );
+                }
+                self.ctx.need_flush_trans = true;
+            }
 
             return Ok(true);
         }
