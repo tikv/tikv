@@ -305,7 +305,7 @@ lazy_static! {
     .unwrap();
     pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
         register_static_histogram_vec!(
-            RequestBatchSizeHistogramVec
+            RequestBatchSizeHistogramVec,
             "tikv_server_request_batch_size",
             "Size of request batch input",
             &["type"],
