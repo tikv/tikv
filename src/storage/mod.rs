@@ -187,7 +187,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get a snapshot of `engine`.
-    fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output=Result<E::Snap>> {
+    fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         // make engine not cross yield point
@@ -203,8 +203,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     #[inline]
     fn with_tls_engine<F, R>(f: F) -> R
-        where
-            F: FnOnce(&E) -> R,
+    where
+        F: FnOnce(&E) -> R,
     {
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
@@ -218,7 +218,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Item=Option<Value>, Error=Error> {
+    ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -286,7 +286,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get_command(
         &self,
         gets: Vec<PointGetCommand>,
-    ) -> impl Future<Item=Vec<Result<Option<Vec<u8>>>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
@@ -365,7 +365,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Item=Vec<Result<KvPair>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -456,7 +456,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item=Vec<Result<KvPair>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -627,7 +627,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Item=Option<Vec<u8>>, Error=Error> {
+    ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -681,7 +681,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         cf: String,
         gets: Vec<PointGetCommand>,
-    ) -> impl Future<Item=Vec<Result<Option<Vec<u8>>>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
@@ -741,7 +741,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
-    ) -> impl Future<Item=Vec<Result<KvPair>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1033,7 +1033,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item=Vec<Result<KvPair>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1078,7 +1078,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
-                            .map_err(Error::from)
+                        .map_err(Error::from)
                     } else {
                         Self::forward_raw_scan(
                             &snapshot,
@@ -1089,7 +1089,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
-                            .map_err(Error::from)
+                        .map_err(Error::from)
                     };
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
@@ -1160,7 +1160,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         each_limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Item=Vec<Result<KvPair>>, Error=Error> {
+    ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -1395,8 +1395,8 @@ mod tests {
     }
 
     fn expect_error<T, F>(err_matcher: F, x: Result<T>)
-        where
-            F: FnOnce(Error) + Send + 'static,
+    where
+        F: FnOnce(Error) + Send + 'static,
     {
         match x {
             Err(e) => err_matcher(e),
@@ -1412,8 +1412,8 @@ mod tests {
     }
 
     fn expect_fail_callback<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
-        where
-            F: FnOnce(Error) + Send + 'static,
+    where
+        F: FnOnce(Error) + Send + 'static,
     {
         Box::new(move |x: Result<T>| {
             expect_error(err_matcher, x);
@@ -1468,8 +1468,8 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                               box mvcc::ErrorInner::KeyIsLocked { .. },
-                                                                           ))))) => (),
+                    box mvcc::ErrorInner::KeyIsLocked { .. },
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1520,10 +1520,10 @@ mod tests {
                 ),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                                                                                       ..,
-                                                                                   ))),
-                                                                               ))))) => {}
+                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
+                            ..,
+                        ))),
+                    ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -1532,8 +1532,8 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                               box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
-                                                                           ))))) => (),
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1543,8 +1543,8 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                               box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
-                                                                           ))))) => (),
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1562,8 +1562,8 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                               box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
-                                                                           ))))) => (),
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1585,10 +1585,10 @@ mod tests {
             expect_error(
                 |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                                                                                       ..,
-                                                                                   ))),
-                                                                               ))))) => {}
+                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
+                            ..,
+                        ))),
+                    ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
@@ -1835,7 +1835,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_scan_with_key_only() {
         let storage = TestStorageBuilder::new().build().unwrap();
@@ -2002,10 +2001,7 @@ mod tests {
         );
         // Forward with bound
         expect_multi_values(
-            vec![
-                Some((b"a".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-            ],
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             storage
                 .scan(
                     Context::default(),
@@ -2020,10 +2016,7 @@ mod tests {
         );
         // Backward with bound
         expect_multi_values(
-            vec![
-                Some((b"c".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-            ],
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             storage
                 .scan(
                     Context::default(),
@@ -2039,10 +2032,7 @@ mod tests {
 
         // Forward with limit
         expect_multi_values(
-            vec![
-                Some((b"a".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-            ],
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             storage
                 .scan(
                     Context::default(),
@@ -2057,10 +2047,7 @@ mod tests {
         );
         // Backward with limit
         expect_multi_values(
-            vec![
-                Some((b"c".to_vec(), vec![])),
-                Some((b"b".to_vec(), vec![])),
-            ],
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
             storage
                 .scan(
                     Context::default(),
@@ -2170,8 +2157,8 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                               box mvcc::ErrorInner::KeyIsLocked(..),
-                                                                           ))))) => (),
+                    box mvcc::ErrorInner::KeyIsLocked(..),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             x.remove(0),
@@ -2287,8 +2274,8 @@ mod tests {
                 ),
                 expect_fail_callback(tx, 6, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::WriteConflict { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -2401,8 +2388,8 @@ mod tests {
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::KeyIsLocked(info),
-                                                                               ))))) => assert_eq!(info.get_lock_ttl(), 100),
+                        box mvcc::ErrorInner::KeyIsLocked(info),
+                    ))))) => assert_eq!(info.get_lock_ttl(), 100),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3200,8 +3187,8 @@ mod tests {
             (b"d1".to_vec(), b"dd11".to_vec()),
             (b"d2".to_vec(), b"dd22".to_vec()),
         ]
-            .into_iter()
-            .map(|(k, v)| Some((k, v)));
+        .into_iter()
+        .map(|(k, v)| Some((k, v)));
         let engine = storage.get_engine();
         expect_multi_values(
             results.clone().collect(),
@@ -3509,14 +3496,14 @@ mod tests {
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]
-            .into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::default();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::default();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage
@@ -3563,14 +3550,14 @@ mod tests {
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
         ]
-            .into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::default();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::default();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage
@@ -4030,8 +4017,8 @@ mod tests {
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::TxnLockNotFound { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4076,8 +4063,8 @@ mod tests {
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::TxnLockNotFound { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4111,8 +4098,8 @@ mod tests {
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::TxnNotFound { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::TxnNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4146,8 +4133,8 @@ mod tests {
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::WriteConflict { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4243,8 +4230,8 @@ mod tests {
                 commands::Commit::new(vec![k], ts(25, 0), ts(28, 0), Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                                                                                   box mvcc::ErrorInner::TxnLockNotFound { .. },
-                                                                               ))))) => (),
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
