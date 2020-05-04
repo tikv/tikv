@@ -13,18 +13,12 @@ use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
 use tidb_query_shared_expr::string::{
-    encoded_size, line_wrap, validate_target_len_for_pad, BASE64_ENCODED_CHUNK_LENGTH,
-    BASE64_INPUT_CHUNK_LENGTH,
+    encoded_size, line_wrap, strip_whitespace, validate_target_len_for_pad,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
 };
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
-use tidb_query_common::string::strip_whitespace;
-use tidb_query_common::string::{
-    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH, BASE64_LINE_WRAP,
-    BASE64_LINE_WRAP_LENGTH,
-};
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
@@ -1026,13 +1020,6 @@ impl ScalarFunc {
             .map(|p| p as i64 + 1)
             .or(Some(0)))
     }
-}
-
-#[inline]
-fn strip_whitespace(input: &[u8]) -> Vec<u8> {
-    let mut input_copy = Vec::<u8>::with_capacity(input.len());
-    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
-    input_copy
 }
 
 #[inline]

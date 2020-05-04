@@ -4,12 +4,13 @@ use base64;
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
-use tidb_query_common::string::strip_whitespace;
-use tidb_query_common::string::{BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
-use tidb_query_shared_expr::string::{encoded_size, line_wrap, validate_target_len_for_pad};
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, strip_whitespace, validate_target_len_for_pad,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
+};
 
 const SPACE: u8 = 0o40u8;
 

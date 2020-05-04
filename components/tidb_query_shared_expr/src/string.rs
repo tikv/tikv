@@ -80,8 +80,16 @@ pub fn line_wrap(buf: &mut [u8], input_len: usize) {
     }
 }
 
+#[inline]
+pub fn strip_whitespace(input: &[u8]) -> Vec<u8> {
+    let mut input_copy = Vec::<u8>::with_capacity(input.len());
+    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
+    input_copy
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn test_validate_target_len_for_pad() {
         let cases = vec![
@@ -109,6 +117,17 @@ mod tests {
             let got =
                 super::validate_target_len_for_pad(true, case.0 as i64, case.1, case.2, case.3);
             assert_eq!(got, case.4);
+        }
+    }
+
+    #[test]
+    fn test_strip_whitespace() {
+        let cases: Vec<(&str, &str)> = vec![(" \naa \nbc\n\t\r\x0b\x0c", "aabc")];
+        for (s, expect) in cases {
+            assert_eq!(
+                strip_whitespace(&s.as_bytes().to_vec()),
+                expect.as_bytes().to_vec()
+            );
         }
     }
 }
