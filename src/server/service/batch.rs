@@ -202,7 +202,7 @@ impl BatchLimiter {
         self.last_submit_time = now;
         if self.enable_batch {
             REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-                .get(tag)
+                .get(self.cmd)
                 .observe(self.batch_input as f64);
             if size > 0 {
                 REQUEST_BATCH_RATIO_HISTOGRAM_VEC
