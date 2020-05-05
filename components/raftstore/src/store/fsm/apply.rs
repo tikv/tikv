@@ -3008,8 +3008,14 @@ where
             }
         }
         if let Some(timer) = channel_timer {
-            let elapsed = duration_to_sec(timer.elapsed());
-            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+            let elapsed = timer.elapsed();
+            slow_log!(
+                elapsed,
+                "region {} apply {:?} wait too long",
+                self.delegate.region_id(),
+                self.delegate.apply_state,
+            );
+            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         }
     }
 }
