@@ -78,11 +78,11 @@ impl SSTImporter {
     pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
         match self.dir.ingest(meta, engine, self.key_manager.as_ref()) {
             Ok(_) => {
-                info!("ingest"; "meta" => ?meta);
+                info!("ingest"; "meta" => log_wrappers::ProtobufValue(meta));
                 Ok(())
             }
             Err(e) => {
-                error!("ingest failed"; "meta" => ?meta, "err" => %e);
+                error!("ingest failed"; "meta" => log_wrappers::ProtobufValue(meta), "err" => %e);
                 Err(e)
             }
         }
@@ -117,16 +117,22 @@ impl SSTImporter {
             "meta" => ?meta,
             "url" => ?backend,
             "name" => name,
-            "rewrite_rule" => ?rewrite_rule,
+            "rewrite_rule" => log_wrappers::ProtobufValue(rewrite_rule),
             "speed_limit" => speed_limiter.speed_limit(),
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
-                info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
+                info!("download";
+                      "meta" => log_wrappers::ProtobufValue(meta),
+                      "name" => name,
+                      "range" => r.as_ref().map(log_wrappers::ProtobufValue));
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "name" => name, "err" => %e);
+                error!("download failed"; 
+                       "meta" => log_wrappers::ProtobufValue(meta),
+                       "name" => name,
+                       "err" => %e);
                 Err(e)
             }
         }
@@ -190,7 +196,7 @@ impl SSTImporter {
         sst_reader.verify_checksum()?;
 
         debug!("downloaded file and verified";
-            "meta" => ?meta,
+            "meta" => log_wrappers::ProtobufValue(meta),
             "url" => %url,
             "name" => name,
             "path" => path_str,
@@ -309,7 +315,7 @@ impl SSTImporter {
                     .map_err(|e| {
                         Error::BadFormat(format!(
                             "key {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?
@@ -319,7 +325,7 @@ impl SSTImporter {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
-                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            log_wrappers::Key(keys::origin_key(iter.key())),
                             e
                         ))
                     })?;

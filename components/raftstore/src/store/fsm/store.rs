@@ -791,7 +791,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
-                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                debug!("region is tombstone";
+                       "region" => log_wrappers::ProtobufValue(region),
+                       "store_id" => store_id);
                 self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
@@ -816,7 +818,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 region,
             ));
             if local_state.get_state() == PeerState::Merging {
-                info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                info!("region is merging";
+                      "region" => log_wrappers::ProtobufValue(region),
+                      "store_id" => store_id);
                 merging_count += 1;
                 peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
             }
@@ -844,7 +848,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
         // schedule applying snapshot after raft writebatch were written.
         for region in applying_regions {
-            info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
+            info!("region is applying snapshot"; "region" => log_wrappers::ProtobufValue(&region), "store_id" => store_id);
             let (tx, mut peer) = PeerFsm::create(
                 store_id,
                 &self.cfg.value(),
@@ -1471,7 +1475,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "msg is overlapped with exist region";
                 "region_id" => region_id,
                 "msg" => ?msg,
-                "exist_region" => ?exist_region,
+                "exist_region" => log_wrappers::ProtobufValue(exist_region),
             );
             if util::is_first_vote_msg(msg.get_message()) {
                 meta.pending_votes.push(msg.to_owned());

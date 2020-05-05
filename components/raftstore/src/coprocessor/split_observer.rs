@@ -46,9 +46,9 @@ impl SplitObserver {
             Ok(()) => Ok(key),
             Err(_) => Err(format!(
                 "key {} should be in ({}, {})",
-                hex::encode_upper(&key),
-                hex::encode_upper(region.get_start_key()),
-                hex::encode_upper(region.get_end_key()),
+                log_wrappers::Key(&key),
+                log_wrappers::Key(&region.get_start_key()),
+                log_wrappers::Key(&region.get_end_key()),
             )),
         }
     }

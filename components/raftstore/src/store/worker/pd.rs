@@ -475,7 +475,7 @@ where
                         "try to split region";
                         "region_id" => region.get_id(),
                         "new_region_id" => resp.get_new_region_id(),
-                        "region" => ?region,
+                        "region" => log_wrappers::ProtobufValue(&region),
                         "task"=>task,
                     );
 
@@ -523,7 +523,7 @@ where
                             "try to batch split region";
                             "region_id" => region.get_id(),
                             "new_region_ids" => ?resp.get_ids(),
-                            "region" => ?region,
+                            "region" => log_wrappers::ProtobufValue(&region),
                             "task" => task,
                         );
 
@@ -749,7 +749,7 @@ where
                                  destroyed soon";
                                 "region_id" => local_region.get_id(),
                                 "peer_id" => peer.get_id(),
-                                "pd_region" => ?pd_region
+                                "pd_region" => log_wrappers::ProtobufValue(&pd_region)
                             );
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
@@ -765,7 +765,7 @@ where
                             "peer is still a valid member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
-                            "pd_region" => ?pd_region
+                            "pd_region" => log_wrappers::ProtobufValue(&pd_region)
                         );
                         PD_VALIDATE_PEER_COUNTER_VEC
                             .with_label_values(&["peer valid"])
@@ -851,7 +851,7 @@ where
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
 
                     let merge = resp.take_merge();
-                    info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
+                    info!("try to merge"; "region_id" => region_id, "merge" => log_wrappers::ProtobufValue(&merge));
                     let req = new_merge_request(merge);
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
                 } else {

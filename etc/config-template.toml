@@ -778,6 +778,11 @@
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+#
+## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
+## user data altogether, but greatly reduce those logs.
+## Default is true when encryption is enabled and default to false otherwise.
+# redact-info-log = false
 
 [import]
 ## Number of threads to handle RPC requests.

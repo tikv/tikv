@@ -1290,8 +1290,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 panic!(
                     "{} meta corrupted: {:?} != {:?}",
                     self.fsm.peer.tag,
-                    meta.regions[&self.region_id()],
-                    self.region()
+                    log_wrappers::ProtobufValue(&meta.regions[&self.region_id()]),
+                    log_wrappers::ProtobufValue(self.region())
                 );
             }
         }
@@ -1305,8 +1305,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "pending region overlapped";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "region" => ?region,
-                    "snap" => ?snap_region,
+                    "region" => log_wrappers::ProtobufValue(region),
+                    "snap" => log_wrappers::ProtobufValue(&snap_region),
                 );
                 self.ctx.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(Some(key));
@@ -1336,8 +1336,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "region overlapped";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "exist" => ?exist_region,
-                "snap" => ?snap_region,
+                "exist" => log_wrappers::ProtobufValue(exist_region),
+                "snap" => log_wrappers::ProtobufValue(&snap_region),
             );
             if ready
                 && maybe_destroy_source(
@@ -1571,7 +1571,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "notify pd with change peer region";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "region" => ?self.fsm.peer.region(),
+                "region" => log_wrappers::ProtobufValue(self.fsm.peer.region()),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
@@ -1672,7 +1672,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             info!(
                 "insert new region";
                 "region_id" => new_region_id,
-                "region" => ?new_region,
+                "region" => log_wrappers::ProtobufValue(&new_region),
             );
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
@@ -1684,7 +1684,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if !r.get_peers().is_empty() {
                     panic!(
                         "[region {}] duplicated region {:?} for split region {:?}",
-                        new_region_id, r, new_region
+                        new_region_id,
+                        log_wrappers::ProtobufValue(r),
+                        log_wrappers::ProtobufValue(&new_region)
                     );
                 }
                 self.ctx.router.close(new_region_id);
@@ -1701,7 +1703,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 Err(e) => {
                     // peer information is already written into db, can't recover.
                     // there is probably a bug.
-                    panic!("create new split region {:?} err {:?}", new_region, e);
+                    panic!(
+                        "create new split region {:?} err {:?}",
+                        log_wrappers::ProtobufValue(&new_region),
+                        e
+                    );
                 }
             };
             let meta_peer = new_peer.peer.peer.clone();
@@ -1783,8 +1789,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "target region still not catch up, skip.";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "target_region" => ?target_region,
-                    "exist_region" => ?r,
+                    "target_region" => log_wrappers::ProtobufValue(target_region),
+                    "exist_region" => log_wrappers::ProtobufValue(&r),
                 );
                 return Ok(false);
             }
@@ -2105,8 +2111,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "notify pd with merge";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "source_region" => ?source,
-                "target_region" => ?self.fsm.peer.region(),
+                "source_region" => log_wrappers::ProtobufValue(&source),
+                "target_region" => log_wrappers::ProtobufValue(self.fsm.peer.region()),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
@@ -2215,7 +2221,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "snapshot is applied";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "region" => ?region,
+            "region" => log_wrappers::ProtobufValue(&region),
         );
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2223,7 +2229,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "check snapshot range";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "prev_region" => ?prev_region,
+            "prev_region" => log_wrappers::ProtobufValue(&prev_region),
         );
         let initialized = !prev_region.get_peers().is_empty();
         if initialized {
@@ -2231,14 +2237,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "region changed after applying snapshot";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "prev_region" => ?prev_region,
-                "region" => ?region,
+                "prev_region" => log_wrappers::ProtobufValue(&prev_region),
+                "region" => log_wrappers::ProtobufValue(&region),
             );
             let prev = meta.region_ranges.remove(&enc_end_key(&prev_region));
             if prev != Some(region.get_id()) {
                 panic!(
                     "{} meta corrupted, expect {:?} got {:?}",
-                    self.fsm.peer.tag, prev_region, prev
+                    self.fsm.peer.tag,
+                    log_wrappers::ProtobufValue(&prev_region),
+                    prev
                 );
             }
         }

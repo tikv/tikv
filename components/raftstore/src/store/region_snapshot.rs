@@ -214,14 +214,14 @@ where
             set_panic_mark();
             panic!(
                 "failed to get value of key {} in region {}: {:?}",
-                hex::encode_upper(&key),
+                log_wrappers::Key(&key),
                 self.region.get_id(),
                 e,
             );
         } else {
             error!(
                 "failed to get value of key in cf";
-                "key" => hex::encode_upper(&key),
+                "key" => log_wrappers::Key(&key),
                 "region" => self.region.get_id(),
                 "cf" => cf,
                 "error" => ?e,

@@ -48,7 +48,6 @@ use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -168,7 +167,7 @@ where
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct ChangePeer {
     pub index: u64,
     pub conf_change: ConfChange,
@@ -176,11 +175,35 @@ pub struct ChangePeer {
     pub region: Region,
 }
 
-#[derive(Debug)]
+impl Debug for ChangePeer {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ index: {:?}, conf_change: {:?}, peer: {:?}, region: {:?} }}",
+            self.index,
+            self.conf_change,
+            self.peer,
+            log_wrappers::ProtobufValue(&self.region)
+        )
+    }
+}
+
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
+}
+
+impl Debug for Range {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
+            self.cf,
+            log_wrappers::Key(&self.start_key),
+            log_wrappers::Key(&self.end_key)
+        )
+    }
 }
 
 impl Range {
@@ -1216,7 +1239,7 @@ where
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
-                "command" => ?request
+                "command" => log_wrappers::ProtobufValue(request),
             );
         }
 
@@ -1283,7 +1306,7 @@ where
                         "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "command" => ?req
+                        "command" => log_wrappers::ProtobufValue(req)
                     );
                     continue;
                 }
@@ -1343,8 +1366,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Key(&key),
+                    log_wrappers::Value(&value),
                     cf,
                     e
                 )
@@ -1354,8 +1377,8 @@ where
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
+                    log_wrappers::Key(&key),
+                    log_wrappers::Value(&value),
                     e
                 );
             });
@@ -1379,7 +1402,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     e
                 )
             });
@@ -1395,7 +1418,7 @@ where
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
-                    hex::encode_upper(&key),
+                    log_wrappers::Key(&key),
                     e
                 )
             });
@@ -1449,8 +1472,8 @@ where
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Key(&start_key),
+                        log_wrappers::Key(&end_key),
                         e
                     )
                 });
@@ -1462,8 +1485,8 @@ where
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                         self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
+                        log_wrappers::Key(&start_key),
+                        log_wrappers::Key(&end_key),
                         cf,
                         e
                     );
@@ -1490,8 +1513,8 @@ where
                  "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
-                 "sst" => ?sst,
-                 "region" => ?&self.region,
+                 "sst" => log_wrappers::ProtobufValue(sst),
+                 "region" => log_wrappers::ProtobufValue(&self.region),
                  "err" => ?e
             );
             // This file is not valid, we can delete it here.
@@ -1502,7 +1525,12 @@ where
         importer.ingest(sst, engine).unwrap_or_else(|e| {
             // If this failed, it means that the file is corrupted or something
             // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            panic!(
+                "{} ingest {:?}: {:?}",
+                self.tag,
+                log_wrappers::ProtobufValue(sst),
+                e
+            );
         });
 
         ssts.push(sst.clone());
@@ -1577,7 +1605,7 @@ where
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
-                            "region" => ?&self.region
+                            "region" => log_wrappers::ProtobufValue(&self.region)
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1601,7 +1629,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region
+                    "region" => log_wrappers::ProtobufValue(&self.region)
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1637,7 +1665,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region,
+                        "region" => log_wrappers::ProtobufValue(&self.region),
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1654,7 +1682,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region
+                    "region" => log_wrappers::ProtobufValue(&self.region)
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1668,7 +1696,7 @@ where
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
-                        "region" => ?&self.region
+                        "region" => log_wrappers::ProtobufValue(&self.region)
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1686,7 +1714,7 @@ where
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
-                    "region" => ?&self.region,
+                    "region" => log_wrappers::ProtobufValue(&self.region),
                 );
             }
         }
@@ -1786,7 +1814,7 @@ where
             "split region";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "region" => ?derived,
+            "region" => log_wrappers::ProtobufValue(&derived),
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
@@ -1823,7 +1851,9 @@ where
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} fails to save split region {:?}: {:?}",
-                        self.tag, new_region, e
+                        self.tag,
+                        log_wrappers::ProtobufValue(&new_region),
+                        e
                     )
                 });
             regions.push(new_region);
@@ -1833,7 +1863,12 @@ where
             regions.push(derived.clone());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
+            panic!(
+                "{} fails to update region {:?}: {:?}",
+                self.tag,
+                log_wrappers::ProtobufValue(&derived),
+                e
+            )
         });
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
@@ -1889,7 +1924,10 @@ where
         .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
-                self.tag, merging_state, region, e
+                self.tag,
+                merging_state,
+                log_wrappers::ProtobufValue(&region),
+                e
             )
         });
         fail_point!("apply_after_prepare_merge");
@@ -1978,7 +2016,7 @@ where
             "entries" => merge.get_entries().len(),
             "term" => ctx.exec_ctx.as_ref().unwrap().term,
             "index" => ctx.exec_ctx.as_ref().unwrap().index,
-            "source_region" => ?source_region
+            "source_region" => log_wrappers::ProtobufValue(source_region)
         );
 
         self.ready_source_region_id = 0;
@@ -1988,7 +2026,9 @@ where
             Ok(Some(s)) => s,
             e => panic!(
                 "{} failed to get regions state of {:?}: {:?}",
-                self.tag, source_region, e
+                self.tag,
+                log_wrappers::ProtobufValue(source_region),
+                e
             ),
         };
         if state.get_state() != PeerState::Merging {
@@ -2001,7 +2041,9 @@ where
         if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
-                self.tag, source_region, exist_region
+                self.tag,
+                log_wrappers::ProtobufValue(source_region),
+                log_wrappers::ProtobufValue(&exist_region)
             );
         }
         let mut region = self.region.clone();
@@ -2032,7 +2074,9 @@ where
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",
-                    self.tag, region, e
+                    self.tag,
+                    log_wrappers::ProtobufValue(&region),
+                    e
                 )
             });
 
@@ -3263,7 +3307,7 @@ impl ApplyRouter {
                     warn!(
                         "region is removed before merged, are we shutting down?";
                         "region_id" => region_id,
-                        "merge" => ?cul.merge,
+                        "merge" => log_wrappers::ProtobufValue(&cul.merge),
                     );
                     return;
                 }

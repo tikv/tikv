@@ -2,7 +2,6 @@
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
-use log_wrappers::DisplayValue;
 use raft::StateRole;
 use std::cmp::Ordering;
 use std::sync::mpsc;
@@ -527,12 +526,12 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // TODO: Find a better way to handle errors. Maybe we should retry.
         debug!(
             "trying gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
-            "end_key" => next_key.as_ref().map(DisplayValue)
+            "end_key" => ?next_key
         );
         if let Err(e) = sync_gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
             error!(
                 "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
-                "end_key" => next_key.as_ref().map(DisplayValue),
+                "end_key" => ?next_key,
                 "err" => ?e
             );
         }

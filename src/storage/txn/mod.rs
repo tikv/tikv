@@ -110,10 +110,10 @@ quick_error! {
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
             display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
-                        start.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        end.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
+                        start.as_ref().map(|v| format!("{}", log_wrappers::Key(&v)).to_owned()).unwrap_or_else(|| "(none)".to_owned()),
+                        end.as_ref().map(|v| format!("{}", log_wrappers::Key(&v)).to_owned()).unwrap_or_else(|| "(none)".to_owned()),
+                        lower_bound.as_ref().map(|v| format!("{}", log_wrappers::Key(&v)).to_owned()).unwrap_or_else(|| "(none)".to_owned()),
+                        upper_bound.as_ref().map(|v| format!("{}", log_wrappers::Key(&v)).to_owned()).unwrap_or_else(|| "(none)".to_owned()))
         }
     }
 }

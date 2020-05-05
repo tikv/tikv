@@ -34,12 +34,12 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
-hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 failure = "0.1"
 futures = "0.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client" }
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore" }

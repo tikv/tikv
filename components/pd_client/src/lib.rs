@@ -9,7 +9,6 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_global;
-extern crate hex;
 extern crate kvproto;
 
 #[allow(unused_extern_crates)]

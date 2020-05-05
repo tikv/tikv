@@ -177,8 +177,8 @@ impl PendingDeleteRanges {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                hex::encode_upper(&start_key),
-                hex::encode_upper(&end_key),
+                log_wrappers::Key(&start_key),
+                log_wrappers::Key(&end_key)
             );
         }
         let info = StalePeerInfo {
@@ -509,7 +509,7 @@ where
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
-                hex::encode_upper(&key)
+                log_wrappers::Key(&key)
             );
         }
     }

@@ -652,8 +652,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
                         "region" => ?brange.region,
-                        "start_key" => hex::encode_upper(&start_key),
-                        "end_key" => hex::encode_upper(&end_key),
+                        "start_key" => log_wrappers::Key(&start_key),
+                        "end_key" => log_wrappers::Key(&end_key),
                         "details" => ?stat);
                     summary.add(&stat);
                     // Fill key range and ts.
@@ -668,8 +668,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 Err(e) => {
                     error!("backup region failed";
                         "region" => ?brange.region,
-                        "start_key" => hex::encode_upper(response.get_start_key()),
-                        "end_key" => hex::encode_upper(response.get_end_key()),
+                        "start_key" => log_wrappers::Key(&response.get_start_key()),
+                        "end_key" => log_wrappers::Key(&response.get_end_key()),
                         "error" => ?e);
                     response.set_error(e.into());
                 }

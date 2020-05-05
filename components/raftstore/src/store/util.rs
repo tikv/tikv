@@ -628,13 +628,13 @@ impl<
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", hex::encode_upper(it.next().unwrap())),
+            1 => write!(f, "key {}", log_wrappers::Key(it.next().unwrap())),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                hex::encode_upper(it.next().unwrap()),
-                hex::encode_upper(it.next_back().unwrap())
+                log_wrappers::Key(it.next().unwrap()),
+                log_wrappers::Key(it.next_back().unwrap())
             ),
         }
     }

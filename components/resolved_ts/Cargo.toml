@@ -10,6 +10,7 @@ prost-codec = ["txn_types/prost-codec"]
 
 [dependencies]
 hex = "0.4"
+log_wrappers = { path = "../log_wrappers" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

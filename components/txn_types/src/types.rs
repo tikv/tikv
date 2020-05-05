@@ -214,13 +214,13 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{}", log_wrappers::Key(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{}", log_wrappers::Key(&self.0))
     }
 }
 

@@ -14,7 +14,7 @@ quick_error! {
         NotInRange( key: Vec<u8>, region_id: u64, start: Vec<u8>, end: Vec<u8>) {
             display(
                 "Key {} is out of [region {}] [{}, {})",
-                hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
+                log_wrappers::Key(&key), region_id, log_wrappers::Key(&start), log_wrappers::Key(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {

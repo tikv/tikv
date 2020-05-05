@@ -15,6 +15,7 @@ hex = "0.4"
 derive-new = "0.5"
 codec = { path = "../codec" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+log_wrappers = { path = "../log_wrappers" }
 slog = "2.3"
 quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }

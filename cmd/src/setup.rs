@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Local;
 use clap::ArgMatches;
+use kvproto::encryptionpb::EncryptionMethod;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
@@ -109,6 +110,15 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
         };
     };
+
+    // Set redact_info_log.
+    let redact_info_log = if let Some(redact_info_log) = config.security.redact_info_log {
+        redact_info_log
+    } else {
+        config.encryption.data_encryption_method != EncryptionMethod::Plaintext
+    };
+    log_wrappers::set_redact_info_log(redact_info_log);
+
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 

@@ -1181,7 +1181,7 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "apply_index" => self.get_store().applied_index(),
                         "last_applying_index" => self.last_applying_idx,
-                        "overlap_region" => ?r,
+                        "overlap_region" => log_wrappers::ProtobufValue(r),
                     );
                     return None;
                 }
@@ -2890,7 +2890,7 @@ where
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        log_wrappers::Key(&key),
                         cf,
                         e
                     )
@@ -2902,7 +2902,7 @@ where
                     panic!(
                         "[region {}] failed to get {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        log_wrappers::Key(&key),
                         e
                     )
                 })

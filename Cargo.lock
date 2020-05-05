@@ -215,6 +215,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "raft",
  "raftstore",
@@ -474,9 +475,9 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -596,6 +597,7 @@ dependencies = [
  "kvproto",
  "libc",
  "log",
+ "log_wrappers",
  "nix 0.11.1",
  "pd_client",
  "prometheus",
@@ -1118,7 +1120,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
+ "log_wrappers",
  "protobuf",
  "quick-error",
  "slog",
@@ -2104,6 +2106,8 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "kvproto",
+ "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -2605,10 +2609,10 @@ version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",
@@ -3364,6 +3368,7 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3886,6 +3891,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "serde",
@@ -5160,6 +5166,7 @@ dependencies = [
  "farmhash",
  "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",

@@ -1114,7 +1114,7 @@ where
             "apply snapshot with state ok";
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
-            "region" => ?region,
+            "region" => log_wrappers::ProtobufValue(&region),
             "state" => ?ctx.apply_state,
         );
 

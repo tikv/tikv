@@ -679,7 +679,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other, "key" => hex::encode_upper(key));
+            debug!("skip write record"; "write" => ?other, "key" => log_wrappers::Key(&key));
             return true;
         }
     };
@@ -710,7 +710,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
             debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
-                "key" => hex::encode_upper(key),
+                "key" => log_wrappers::Key(&key),
                 "for_update_ts" => ?lock.for_update_ts);
             return true;
         }
