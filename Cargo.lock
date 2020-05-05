@@ -3401,11 +3401,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#6028deb55e1988d857ec71af9d48b68ca43e8fa2"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
->>>>>>> 08e83655686c19028df941e8aa674aa0a2ab51a5
 dependencies = [
  "libc",
  "librocksdb_sys",
