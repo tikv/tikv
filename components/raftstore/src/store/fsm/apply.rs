@@ -740,7 +740,7 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written: bool,
+    written_count: usize,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -796,7 +796,7 @@ where
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            written: false,
+            written_count: 0,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -940,10 +940,10 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written {
+                if self.written_count >= 16 {
                     return ApplyResult::Yield;
                 }
-                self.written = true;
+                self.written_count += 1;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -3124,7 +3124,7 @@ where
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written = false;
+        normal.delegate.written_count = 0;
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
