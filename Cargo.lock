@@ -1967,7 +1967,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#038e31959c2a66085aad455db6e34fa4e98a58f9"
+source = "git+https://github.com/pingcap/kvproto.git#c3b73d03dde2f54154d396f44dc9a25c3e8bdb79"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3401,7 +3401,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#6028deb55e1988d857ec71af9d48b68ca43e8fa2"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+>>>>>>> 08e83655686c19028df941e8aa674aa0a2ab51a5
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3729,16 +3733,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "servo_arc"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98238b800e0d1576d8b6e3de32827c2d74bee68bb97748dcf5071fb53965432"
-dependencies = [
- "nodrop",
- "stable_deref_trait",
-]
-
-[[package]]
 name = "sha1"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3911,12 +3905,6 @@ dependencies = [
  "txn_types",
  "uuid",
 ]
-
-[[package]]
-name = "stable_deref_trait"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 
 [[package]]
 name = "standback"
@@ -4492,7 +4480,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "regex",
- "safemem",
  "slog",
  "slog-global",
  "tidb_query_common",
@@ -4509,6 +4496,7 @@ name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
  "rand 0.6.5",
+ "safemem",
  "tidb_query_datatype",
  "time 0.1.42",
 ]
@@ -4537,7 +4525,6 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
- "servo_arc",
  "slog",
  "slog-global",
  "smallvec 0.6.10",
@@ -4556,6 +4543,7 @@ dependencies = [
 name = "tidb_query_vec_expr"
 version = "0.0.1"
 dependencies = [
+ "base64 0.10.1",
  "bstr",
  "byteorder",
  "chrono",
@@ -4646,6 +4634,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",
@@ -5537,7 +5526,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#9d3ccd00673965bb9a8d5ff672707b52863ba69c"
+source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
