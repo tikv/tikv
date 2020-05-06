@@ -57,11 +57,10 @@ mod profiler_guard {
         }
     }
 
-    #[allow(unused_must_use)]
     impl Drop for ProfGuard {
         fn drop(&mut self) {
             // TODO: handle error here
-            deactivate_prof();
+            let _ = deactivate_prof();
         }
     }
 
