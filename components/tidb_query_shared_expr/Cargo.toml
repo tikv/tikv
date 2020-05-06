@@ -7,6 +7,7 @@ description = "Shared utility of expression used by tidb_query_normal_expr and t
 
 [dependencies]
 rand = "0.6.5"
+safemem = { version = "0.3", default-features = false }
 time = "0.1"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 

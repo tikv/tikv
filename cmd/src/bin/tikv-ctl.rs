@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
+use std::path::PathBuf;
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -74,9 +75,12 @@ fn new_debug_executor(
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
+                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
+                    .canonicalize()
+                    .unwrap();
+                String::from(db_path.to_str().unwrap())
+            });
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
@@ -2235,7 +2239,13 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let opts = cfg.rocksdb.build_opt();
+    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
+    let env = get_env(key_manager, None).unwrap();
+    let mut opts = cfg.rocksdb.build_opt();
+    opts.set_env(env);
+
     engine::rocks::run_ldb_tool(&args, &opts);
 }
 
