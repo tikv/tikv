@@ -33,8 +33,8 @@ use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod profiler_guard {
-    use tikv_alloc::activate_prof;
     use tikv_alloc::error::ProfResult;
+    use tikv_alloc::{activate_prof, deactivate_prof};
 
     use futures::{Future, Poll};
     use futures_locks::{Mutex, MutexFut, MutexGuard};
@@ -57,12 +57,11 @@ mod profiler_guard {
         }
     }
 
+    #[allow(unused_must_use)]
     impl Drop for ProfGuard {
         fn drop(&mut self) {
-            /* TODO: handle error here
-            match tikv_alloc::deactivate_prof() {
-                _ => {},
-            } */
+            // TODO: handle error here
+            deactivate_prof();
         }
     }
 
