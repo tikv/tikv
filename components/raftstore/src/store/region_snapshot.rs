@@ -24,7 +24,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
-    snap: S::SyncSnapshot,
+    snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -35,14 +35,14 @@ where
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
     pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), ps.region().clone())
     }
 
     pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(db.snapshot().into_sync(), region)
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region)
     }
 
-    pub fn from_snapshot(snap: S::SyncSnapshot, region: Region) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, region: Region) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -269,7 +269,7 @@ where
     S: Snapshot,
 {
     pub fn new(
-        snap: &S::SyncSnapshot,
+        snap: &S,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
     ) -> RegionIterator<S> {
@@ -282,7 +282,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &S::SyncSnapshot,
+        snap: &S,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,
