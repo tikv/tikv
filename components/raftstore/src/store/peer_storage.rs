@@ -181,9 +181,9 @@ impl EntryCache {
                 {
                     let old_capacity = self.cache.capacity();
                     self.cache.shrink_to_fit();
-                    self.mem_size_change += self.get_deque_mem_size_change(
-                        old_capacity as i64,
+                    self.mem_size_change += self.get_cache_vec_mem_size_change(
                         self.cache.capacity() as i64,
+                        old_capacity as i64,
                     )
                 }
             } else if cache_last_index + 1 < first_index {
@@ -218,7 +218,7 @@ impl EntryCache {
             entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }
         self.mem_size_change += self
-            .get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
+        self.get_cache_vec_mem_size_change(self.cache.capacity() as i64,old_capacity as i64)
             + entries_mem_size;
     }
 
@@ -243,16 +243,16 @@ impl EntryCache {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
-            self.mem_size_change +=
-                self.get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
+            self.mem_size_change += self
+                .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
         }
     }
 
-    fn get_deque_mem_size_change(&self, old_capacity: i64, new_capacity: i64) -> i64 {
+    fn get_cache_vec_mem_size_change(&self, new_capacity: i64, old_capacity: i64) -> i64 {
         ENTRY_MEM_SIZE as i64 * (new_capacity - old_capacity)
     }
 
-    fn get_mem_size(&self) -> i64 {
+    fn get_total_mem_size(&self) -> i64 {
         let data_size: usize = self
             .cache
             .iter()
@@ -285,7 +285,7 @@ impl Default for EntryCache {
 
 impl Drop for EntryCache {
     fn drop(&mut self) {
-        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_mem_size());
+        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
     }
 }
 
