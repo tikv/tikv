@@ -15,9 +15,8 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-
-use engine_rocks::RocksEngine;
 use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -66,20 +65,20 @@ const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
-pub struct PendingCmd<E>
+pub struct PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<E>>,
+    pub cb: Option<Callback<S>>,
 }
 
-impl<E> PendingCmd<E>
+impl<S> PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<E>) -> PendingCmd<E> {
+    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
@@ -88,9 +87,9 @@ where
     }
 }
 
-impl<E> Drop for PendingCmd<E>
+impl<S> Drop for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn drop(&mut self) {
         if self.cb.is_some() {
@@ -103,9 +102,9 @@ where
     }
 }
 
-impl<E> Debug for PendingCmd<E>
+impl<S> Debug for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -120,26 +119,26 @@ where
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<E>
+pub struct PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    normals: VecDeque<PendingCmd<E>>,
-    conf_change: Option<PendingCmd<E>>,
+    normals: VecDeque<PendingCmd<S>>,
+    conf_change: Option<PendingCmd<S>>,
 }
 
-impl<E> PendingCmdQueue<E>
+impl<S> PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new() -> PendingCmdQueue<E> {
+    fn new() -> PendingCmdQueue<S> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<S>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -154,18 +153,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<E>) {
+    fn append_normal(&mut self, cmd: PendingCmd<S>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<E>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<S>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<E>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -196,10 +195,7 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<E>
-where
-    E: KvEngine,
-{
+pub enum ExecResult<S> {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -224,8 +220,7 @@ where
     ComputeHash {
         region: Region,
         index: u64,
-        snap: E::Snapshot,
-        _phantom: PhantomData<E>,
+        snap: S,
     },
     VerifyHash {
         index: u64,
@@ -240,14 +235,11 @@ where
 }
 
 /// The possible returned value when applying logs.
-pub enum ApplyResult<E>
-where
-    E: KvEngine,
-{
+pub enum ApplyResult<S> {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<E>),
+    Res(ExecResult<S>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -270,19 +262,19 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<E>
+struct ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<E>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
 }
 
-impl<E> ApplyCallback<E>
+impl<S> ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(region: Region) -> ApplyCallback<E> {
+    fn new(region: Region) -> ApplyCallback<S> {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
@@ -296,7 +288,7 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<E>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -335,11 +327,11 @@ where
     timer: Option<Instant>,
     host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<E>>,
+    region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
     notifier: Notifier<E>,
     engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E>>,
+    cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
     apply_res: Vec<ApplyRes<E>>,
     exec_ctx: Option<ExecContext>,
 
@@ -369,7 +361,7 @@ where
         tag: String,
         host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<E>>,
+        region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter,
         notifier: Notifier<E>,
@@ -500,7 +492,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<E>,
-        results: VecDeque<ExecResult<E>>,
+        results: VecDeque<ExecResult<E::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -575,7 +567,7 @@ where
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl KvEngine>) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl Snapshot>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -586,7 +578,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -597,7 +589,7 @@ fn notify_stale_command(
     region_id: u64,
     peer_id: u64,
     term: u64,
-    mut cmd: PendingCmd<impl KvEngine>,
+    mut cmd: PendingCmd<impl Snapshot>,
 ) {
     info!(
         "command is stale, skip";
@@ -609,7 +601,7 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -744,7 +736,7 @@ where
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<E>,
+    pending_cmds: PendingCmdQueue<E::Snapshot>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -917,7 +909,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
@@ -963,7 +955,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -993,7 +985,12 @@ where
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E>> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<E::Snapshot>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -1030,7 +1027,7 @@ where
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1085,7 +1082,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<E>) {
+    ) -> (RaftCmdResponse, ApplyResult<E::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1194,7 +1191,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1210,7 +1207,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1253,7 +1250,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1523,7 +1520,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1562,7 +1559,7 @@ where
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        { self.id == 2 && self.region_id() == 1 },
+                        self.id == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -1722,7 +1719,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1744,10 +1741,10 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
-            { self.id == 3 && self.region_id() == 1 },
+            self.id == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -1853,7 +1850,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1924,12 +1921,12 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
-                    { self.region_id() == 1 && self.id != 4 },
+                    self.region_id() == 1 && self.id != 4,
                     |_| {}
                 );
             };
@@ -1995,12 +1992,11 @@ where
                 self.tag, source_region, e
             ),
         };
-        match state.get_state() {
-            PeerState::Normal | PeerState::Merging => {}
-            _ => panic!(
+        if state.get_state() != PeerState::Merging {
+            panic!(
                 "{} unexpected state of merging region {:?}",
                 self.tag, state
-            ),
+            );
         }
         let exist_region = state.get_region().to_owned();
         if *source_region != exist_region {
@@ -2057,7 +2053,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2099,7 +2095,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2159,7 +2155,7 @@ where
         &self,
         ctx: &ApplyContext<E, W>,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2171,7 +2167,6 @@ where
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
                 snap: ctx.engine.snapshot(),
-                _phantom: PhantomData,
             }),
         ))
     }
@@ -2180,7 +2175,7 @@ where
         &self,
         _: &ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
@@ -2304,14 +2299,14 @@ impl Registration {
     }
 }
 
-pub struct Proposal<E>
+pub struct Proposal<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
-    pub cb: Callback<E>,
+    pub cb: Callback<S>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
 }
@@ -2366,7 +2361,7 @@ impl GenSnapTask {
         kv_snap: E::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<E>>,
+        region_sched: &Scheduler<RegionTask<E::Snapshot>>,
     ) -> Result<()>
     where
         E: KvEngine,
@@ -2397,12 +2392,12 @@ impl Debug for GenSnapTask {
 static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ObserveID(usize);
 
 impl ObserveID {
     pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -2446,7 +2441,7 @@ where
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -2526,7 +2521,7 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E>>,
+    pub exec_res: VecDeque<ExecResult<E::Snapshot>>,
     pub metrics: ApplyMetrics,
 }
 
@@ -2600,6 +2595,7 @@ where
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
+        fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
@@ -2639,12 +2635,12 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props: Vec<Proposal<E>>) {
+    fn append_proposal(&mut self, props: Vec<Proposal<E::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props.len();
         if self.delegate.stopped {
             for p in props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -2816,7 +2812,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
+        if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
             apply_ctx.engine.snapshot(),
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
@@ -2844,32 +2840,25 @@ where
         apply_ctx: &mut ApplyContext<E, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
                 observe_id,
                 region_id,
                 enabled,
-            } => {
-                assert!(
-                    !self
-                        .delegate
-                        .observe_cmd
-                        .as_ref()
-                        .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                    "{} observer already exists {:?} {:?}",
-                    self.delegate.tag,
-                    self.delegate.observe_cmd,
-                    observe_id
-                );
-                (observe_id, region_id, Some(enabled))
-            }
+            } => (observe_id, region_id, Some(enabled)),
             ChangeCmd::Snapshot {
                 observe_id,
                 region_id,
             } => (observe_id, region_id, None),
         };
+        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
+            if observe_cmd.id > observe_id {
+                notify_stale_req(self.delegate.term, cb);
+                return;
+            }
+        }
 
         assert_eq!(self.delegate.region_id(), region_id);
         let resp = match compare_region_epoch(
@@ -2886,25 +2875,38 @@ where
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<E>::from_snapshot(
+                    snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
                         apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
                 }
             }
-            Err(e) => ReadResponse {
-                response: cmd_resp::new_error(e),
-                snapshot: None,
-            },
+            Err(e) => {
+                // Return error if epoch not match
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                });
+                return;
+            }
         };
         if let Some(enabled) = enabled {
+            assert!(
+                !self
+                    .delegate
+                    .observe_cmd
+                    .as_ref()
+                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
+                "{} observer already exists {:?} {:?}",
+                self.delegate.tag,
+                self.delegate.observe_cmd,
+                observe_id
+            );
             // TODO(cdc): take observe_cmd when enabled is false.
             self.delegate.observe_cmd = Some(ObserveCmd {
                 id: observe_id,
                 enabled,
             });
-        } else if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            observe_cmd.id = observe_id;
         }
 
         cb.invoke_read(resp);
@@ -3104,7 +3106,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
     sender: Notifier<RocksEngine>,
     router: ApplyRouter,
@@ -3187,7 +3189,7 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in apply.cbs {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3301,7 +3303,9 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{util::new_engine, RocksEngine, RocksWriteBatch, WRITE_BATCH_MAX_KEYS};
+    use engine_rocks::{
+        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
+    };
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -4262,7 +4266,7 @@ mod tests {
                     region_id: 1,
                     enabled: enabled.clone(),
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::Read(Box::new(|resp: ReadResponse<RocksSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -4694,7 +4698,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
         });
         res.unwrap_err();
     }
@@ -4702,7 +4706,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
