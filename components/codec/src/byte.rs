@@ -1055,12 +1055,11 @@ mod tests {
             let output_len = unsafe {
                 let src_ptr = buffer.as_mut_ptr().add(encoded_prefix_len);
                 let slice_len = buffer.len() - encoded_prefix_len;
-                let src = std::slice::from_raw_parts(src_ptr, slice_len);
-                let dest = std::slice::from_raw_parts_mut(src_ptr, slice_len);
+                let buf = std::slice::from_raw_parts_mut(src_ptr, slice_len);
                 if is_desc {
-                    MemComparableByteCodec::try_decode_first_desc(src, dest).unwrap()
+                    MemComparableByteCodec::try_decode_first_in_place_desc(buf).unwrap()
                 } else {
-                    MemComparableByteCodec::try_decode_first(src, dest).unwrap()
+                    MemComparableByteCodec::try_decode_first_in_place(buf).unwrap()
                 }
             };
             assert_eq!(output_len.0, encoded_len);
