@@ -357,6 +357,8 @@ where
     use_delete_range: bool,
 
     perf_context_statistics: PerfContextStatistics,
+
+    max_written_count: usize,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -395,6 +397,7 @@ where
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            max_written_count: cfg.apply_yield_count,
         }
     }
 
@@ -940,7 +943,7 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written_count >= 4 {
+                if self.written_count >= apply_ctx.max_written_count {
                     return ApplyResult::Yield;
                 }
                 self.written_count += 1;
@@ -3365,6 +3368,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
     let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
+        cfg.reschedule_count,
         tx,
         Box::new(ControlFsm),
     );

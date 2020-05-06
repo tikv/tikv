@@ -1232,6 +1232,7 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine>, RaftB
     let (router, system) = batch_system::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
+        cfg.reschedule_count,
         store_tx,
         store_fsm,
     );

@@ -22,7 +22,7 @@ fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
 /// A better router and lightweight batch scheduling can lead to better result.
 fn bench_spawn_many(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
-    let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
+    let (router, mut system) = batch_system::create_system(2, 2, 2, control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     const ID_LIMIT: u64 = 32;
     const MESSAGE_LIMIT: usize = 256;
@@ -55,7 +55,7 @@ fn bench_spawn_many(c: &mut Criterion) {
 /// all available threads as soon as possible.
 fn bench_imbalance(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
-    let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
+    let (router, mut system) = batch_system::create_system(2, 2, 2, control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     const ID_LIMIT: u64 = 10;
     const MESSAGE_LIMIT: usize = 512;
@@ -90,7 +90,7 @@ fn bench_imbalance(c: &mut Criterion) {
 /// A good scheduling algorithm should not starve the quick tasks.
 fn bench_fairness(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
-    let (router, mut system) = batch_system::create_system(2, 2, control_tx, control_fsm);
+    let (router, mut system) = batch_system::create_system(2, 2, 2, control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     for id in 0..10 {
         let (normal_tx, normal_fsm) = Runner::new(100000);
