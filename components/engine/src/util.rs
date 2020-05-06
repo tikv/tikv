@@ -3,12 +3,16 @@
 use std::u64;
 
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use crate::rocks::{
+    EnvOptions, IngestExternalFileOptions, Range, SstFileWriter, TablePropertiesCollection,
+    Writable, WriteBatch, DB,
+};
 use crate::CF_LOCK;
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
 use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::time::time_now_sec;
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -32,6 +36,10 @@ pub fn check_key_in_range(
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
 pub const MAX_DELETE_BATCH_SIZE: usize = 4096;
+#[cfg(not(test))]
+const DELETE_KEYS_SST_LIMIT: usize = 1024 * 32;
+#[cfg(test)]
+const DELETE_KEYS_SST_LIMIT: usize = 2;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -58,9 +66,10 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::new();
     if use_delete_range && cf != CF_LOCK {
+        let wb = WriteBatch::new();
         wb.delete_range_cf(handle, start_key, end_key)?;
+        db.write(&wb)?;
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
@@ -72,26 +81,59 @@ pub fn delete_all_in_range_cf(
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into())?;
+        let mut data = Vec::with_capacity(DELETE_KEYS_SST_LIMIT);
+        let mut writer = None;
         while it.valid()? {
-            wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Can't use write_without_wal here.
-                // Otherwise it may cause dirty data when applying snapshot.
-                db.write(&wb)?;
-                wb.clear();
+            if writer.is_none() {
+                data.push(it.key().to_vec());
+                if data.len() >= DELETE_KEYS_SST_LIMIT {
+                    let name = String::from_utf8_lossy(start_key).into_owned();
+                    writer = Some(create_sst_writer(db, cf, name)?);
+                    for key in data.iter() {
+                        writer.as_mut().unwrap().delete(key)?;
+                    }
+                    data.clear();
+                }
+            } else {
+                writer.as_mut().unwrap().delete(it.key())?;
             }
 
             if !it.next()? {
                 break;
             }
         }
-    }
 
-    if wb.count() > 0 {
-        db.write(&wb)?;
+        if data.len() > 0 {
+            let wb = WriteBatch::new();
+            for key in data.iter() {
+                wb.delete(key);
+                if wb.data_size() > MAX_DELETE_BATCH_SIZE {
+                    db.write(&wb)?;
+                    wb.clear();
+                }
+            }
+            if wb.count() > 0 {
+                db.write(&wb)?;
+            }
+        }
+        if let Some(mut w) = writer {
+            let f = w.finish()?;
+            let mut ingest_opt = IngestExternalFileOptions::new();
+            ingest_opt.move_files(true);
+            db.ingest_external_file_cf(handle, &ingest_opt, &[f.file_path().to_str().unwrap()])?;
+        }
     }
 
     Ok(())
+}
+
+fn create_sst_writer(db: &DB, cf: &str, name: String) -> Result<SstFileWriter> {
+    let handle = db.cf_handle(cf).unwrap();
+    let opts = db.get_options_cf(handle);
+    let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
+    let ts = time_now_sec();
+    writer.open(&format!("temp.{}.{}.sst", name, ts))?;
+    Ok(writer)
 }
 
 pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
