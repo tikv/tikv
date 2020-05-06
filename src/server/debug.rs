@@ -75,6 +75,7 @@ pub struct RegionInfo {
     pub raft_local_state: Option<RaftLocalState>,
     pub raft_apply_state: Option<RaftApplyState>,
     pub region_local_state: Option<RegionLocalState>,
+    pub snapshot_raft_state: Option<RaftLocalState>,
 }
 
 impl RegionInfo {
@@ -87,6 +88,7 @@ impl RegionInfo {
             raft_local_state: raft_local,
             raft_apply_state: raft_apply,
             region_local_state: region_local,
+            snapshot_raft_state: None,
         }
     }
 }
@@ -213,10 +215,18 @@ impl<E: Engine> Debugger<E> {
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
 
+        let snap_raft_state_key = keys::snapshot_raft_state_key(region_id);
+        let snap_raft_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RaftLocalState>(CF_RAFT, &snap_raft_state_key));
+
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
             (raft_state, apply_state, region_state) => {
-                Ok(RegionInfo::new(raft_state, apply_state, region_state))
+                let mut info = RegionInfo::new(raft_state, apply_state, region_state);
+                info.snapshot_raft_state = snap_raft_state;
+                Ok(info)
             }
         }
     }

@@ -149,6 +149,7 @@ trait DebugExecutor {
         let region_state_key = keys::region_state_key(region);
         let raft_state_key = keys::raft_state_key(region);
         let apply_state_key = keys::apply_state_key(region);
+        let snap_raft_state_key = keys::snapshot_raft_state_key(region);
         v1!("region id: {}", region);
         v1!("region state key: {}", escape(&region_state_key));
         v1!("region state: {:?}", r.region_local_state);
@@ -156,6 +157,8 @@ trait DebugExecutor {
         v1!("raft state: {:?}", r.raft_local_state);
         v1!("apply state key: {}", escape(&apply_state_key));
         v1!("apply state: {:?}", r.raft_apply_state);
+        v1!("snapshot raft state key: {}", escape(&snap_raft_state_key));
+        v1!("snapshot raft state: {:?}", r.snapshot_raft_state);
     }
 
     fn dump_all_region_info(&self, skip_tombstone: bool) {
