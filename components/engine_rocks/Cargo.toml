@@ -30,7 +30,6 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types"}
 lazy_static = "1.4.0"
-libc = "0.2"
 time = "0.1"
 configuration = { path = "../configuration" }
 serde = "1.0"
