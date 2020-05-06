@@ -13,7 +13,9 @@ use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{IterOptions, Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt, KvEngine};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey, WriteBatchExt,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -53,10 +55,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(Arc::new(self.0.kv.c().snapshot())),
-            )),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.c().snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }

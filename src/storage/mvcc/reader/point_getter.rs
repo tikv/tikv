@@ -325,9 +325,9 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
     use engine_rocks::RocksSnapshot;
     use kvproto::kvrpcpb::Context;
+    use std::sync::Arc;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
