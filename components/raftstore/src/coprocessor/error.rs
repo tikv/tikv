@@ -9,7 +9,6 @@ quick_error! {
         Other(err: Box<dyn StdError + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{}", err)
         }
     }

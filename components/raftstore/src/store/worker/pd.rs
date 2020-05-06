@@ -80,7 +80,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -88,7 +88,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -305,6 +305,10 @@ where
     ) -> Result<(), io::Error> {
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
         let collect_interval = self.collect_interval;
+        if self.thread_info_interval < self.collect_interval {
+            info!("running in test mode, skip starting monitor.");
+            return Ok(());
+        }
         let thread_info_interval = self
             .thread_info_interval
             .div_duration_f64(self.collect_interval) as i32;
@@ -430,10 +434,10 @@ where
         router: RaftRouter<E>,
         db: E,
         scheduler: Scheduler<Task<E>>,
-        store_heartbeat_interval: u64,
+        store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
     ) -> Runner<E, T> {
-        let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
+        let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
@@ -461,7 +465,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -505,7 +509,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -1120,7 +1124,7 @@ fn send_admin_request<E>(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<E>,
+    callback: Callback<E::Snapshot>,
 ) where
     E: KvEngine,
 {
