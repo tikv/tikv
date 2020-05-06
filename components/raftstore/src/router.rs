@@ -21,7 +21,7 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -72,7 +72,7 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<E>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<E::Snapshot>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -142,7 +142,7 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         if LocalReader::<RaftRouter<E>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
