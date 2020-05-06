@@ -8,8 +8,7 @@ use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Peekable};
+use engine_traits::{KvEngine, KvEngines, Peekable, CF_RAFT};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -1118,11 +1117,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             }
         }
-        if let Some(epoch) = meta
-            .regions
-            .get(&target_region_id)
-            .map(|r| r.get_region_epoch())
-        {
+        let target_peer_id = if let Some(p) = util::find_peer(merge_target, self.ctx.store_id()) {
+            p.get_id()
+        } else {
+            error!(
+                "failed to find target peer from merge target region by using local store id";
+                "store_id" => meta.store_id.unwrap(),
+                "merge_target" => ?merge_target,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return Ok(false);
+        };
+        if let Some(r) = meta.regions.get(&target_region_id) {
             // In the case that the source peer's range isn't overlapped with target's anymore:
             //     | region 2 | region 3 | region 1 |
             //                   || merge 3 into 2
@@ -1139,63 +1146,73 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             //
             // If that, source peer still need to decide whether to destroy itself. When the target
             // peer has already moved on, source peer can destroy itself.
-            if epoch.get_version() > merge_target.get_region_epoch().get_version() {
+            if util::is_epoch_stale(merge_target.get_region_epoch(), r.get_region_epoch()) {
                 return Ok(true);
+            }
+            let local_target_peer_id = util::find_peer(r, self.ctx.store_id()).unwrap().get_id();
+            if target_peer_id != local_target_peer_id {
+                error!(
+                    "the local target peer id is not equal to the one in merge target";
+                    "local_target_peer_id" => local_target_peer_id,
+                    "target_peer_id" => target_peer_id,
+                    "merge_target" => ?merge_target,
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                debug_assert!(false, "something is wrong, maybe PD do not ensure all target peers exist before merging");
             }
             return Ok(false);
         }
 
-        // Check whether target peer is set to tombstone already.
+        // All of the target peers must exist before merging which is guaranteed by PD.
+        // Now the target peer is not in region map, so if everything is ok, the target peer must be
+        // in tombstone state and target peer id in local is equal to target_peer_id from merge_target.
         let state_key = keys::region_state_key(target_region_id);
-        if let Some(state) = self
+        if let Some(target_state) = self
             .ctx
             .engines
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            debug!(
-                "check target region local state";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "target_region_id" => target_region_id,
-                "state" => ?state,
-            );
-            if state.get_state() == PeerState::Tombstone
-                && state.get_region().get_region_epoch().get_conf_ver()
-                    >= merge_target.get_region_epoch().get_conf_ver()
-            {
-                // Replica was destroyed.
-                return Ok(true);
+            match target_state.get_region().get_id().cmp(&target_peer_id) {
+                cmp::Ordering::Equal => {
+                    if target_state.get_state() == PeerState::Tombstone {
+                        // This target peer has already destroyed. So we can safely remove this source peer.
+                        return Ok(true);
+                    }
+                    error!(
+                        "the local target peer state is not Tombstone";
+                        "target_peer_id" => target_peer_id,
+                        "target_peer_state" => ?target_state.get_state(),
+                        "merge_target" => ?merge_target,
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                    );
+                }
+                _ => {
+                    error!(
+                        "the local target peer id in rocksdb is not equal to the one in merge target";
+                        "local_target_peer_id" => target_state.get_region().get_id(),
+                        "target_peer_id" => target_peer_id,
+                        "merge_target" => ?merge_target,
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                    );
+                }
             }
-        }
-
-        info!(
-            "no replica of target region exist, check pd.";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "target_region_id" => target_region_id,
-        );
-        // We can't know whether the peer is destroyed or not for sure locally, ask
-        // pd for help.
-        let target_peer = merge_target
-            .get_peers()
-            .iter()
-            .find(|p| p.get_store_id() == self.store_id())
-            .unwrap();
-        let task = PdTask::ValidatePeer {
-            peer: target_peer.to_owned(),
-            region: merge_target.to_owned(),
-            merge_source: Some(self.region_id()),
-        };
-        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+        } else {
             error!(
-                "failed to validate target peer";
+                "failed to find target peer's RegionLocalState from rocksdb";
+                "target_peer_id" => target_peer_id,
+                "merge_target" => ?merge_target,
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "target_peer" => ?target_peer,
-                "err" => %e,
             );
         }
+        debug_assert!(
+            false,
+            "something is wrong, maybe PD do not ensure all target peers exist before merging"
+        );
         Ok(false)
     }
 
@@ -1776,53 +1793,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             return Ok(true);
         }
-
-        let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
-            Err(e) => {
-                error!(
-                    "failed to load region state, ignore";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
-                    "target_region_id" => region_id,
-                );
-                return Ok(false);
-            }
-            Ok(None) => {
-                info!(
-                    "seems to merge into a new replica of region, let's wait.";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "target_region_id" => region_id,
-                );
-                return Ok(false);
-            }
-            Ok(Some(state)) => state,
-        };
-        if state.get_state() != PeerState::Tombstone {
-            info!(
-                "wait for region split";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "target_region_id" => region_id,
-            );
-            return Ok(false);
-        }
-
-        let tombstone_region = state.get_region();
-        if tombstone_region.get_region_epoch().get_conf_ver()
-            < target_region.get_region_epoch().get_conf_ver()
-        {
-            info!(
-                "seems to merge into a new replica of region, let's wait.";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "target_region_id" => region_id,
-            );
-            return Ok(false);
-        }
-
+        // Target peers must all exist before merging and the target peer is not in region map,
+        // it means the target peer has already destroyed.
         Err(box_err!("region {} is destroyed", region_id))
     }
 
@@ -2941,7 +2913,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
                     region: self.fsm.peer.region().clone(),
-                    merge_source: None,
                 };
                 if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
                     error!(

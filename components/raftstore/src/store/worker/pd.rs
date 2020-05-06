@@ -28,7 +28,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -114,7 +114,6 @@ where
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     },
     ReadStats {
         read_stats: ReadStats,
@@ -228,11 +227,10 @@ where
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-                ref merge_source,
             } => write!(
                 f,
-                "validate peer {:?} with region {:?}, merge_source {:?}",
-                peer, region, merge_source
+                "validate peer {:?} with region {:?}",
+                peer, region
             ),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
@@ -703,7 +701,6 @@ where
         handle: &Handle,
         local_region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     ) {
         let router = self.router.clone();
         let f = self
@@ -751,11 +748,7 @@ where
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
                                 .inc();
-                            if let Some(source) = merge_source {
-                                send_merge_fail(&router, source, peer);
-                            } else {
-                                send_destroy_peer_message(&router, local_region, peer, pd_region);
-                            }
+                            send_destroy_peer_message(&router, local_region, peer, pd_region);
                             return Ok(());
                         }
                         info!(
@@ -1036,11 +1029,7 @@ where
                 self.handle_store_heartbeat(handle, stats, store_info)
             }
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(handle, regions),
-            Task::ValidatePeer {
-                region,
-                peer,
-                merge_source,
-            } => self.handle_validate_peer(handle, region, peer, merge_source),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
@@ -1137,27 +1126,6 @@ fn send_admin_request<E>(
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
-        );
-    }
-}
-
-/// Sends merge fail message to gc merge source.
-fn send_merge_fail(
-    router: &RaftRouter<impl KvEngine>,
-    source_region_id: u64,
-    target: metapb::Peer,
-) {
-    let target_id = target.get_id();
-    if let Err(e) = router.force_send(
-        source_region_id,
-        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-            target,
-            stale: true,
-        }),
-    ) {
-        error!(
-            "source region report merge failed";
-            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
         );
     }
 }

@@ -826,22 +826,21 @@ impl Peer {
                 continue;
             }
             if progress.matched < truncated_idx {
-                if let Some(p) = self.get_peer_from_cache(id) {
-                    pending_peers.push(p);
-                    if !self
-                        .peers_start_pending_time
-                        .iter()
-                        .any(|&(pid, _)| pid == id)
-                    {
-                        let now = Instant::now();
-                        self.peers_start_pending_time.push((id, now));
-                        debug!(
-                            "peer start pending";
-                            "region_id" => self.region_id,
-                            "peer_id" => self.peer.get_id(),
-                            "time" => ?now,
-                        );
-                    }
+                let p = self.get_peer_from_cache(id).unwrap();
+                pending_peers.push(p);
+                if !self
+                    .peers_start_pending_time
+                    .iter()
+                    .any(|&(pid, _)| pid == id)
+                {
+                    let now = Instant::now();
+                    self.peers_start_pending_time.push((id, now));
+                    debug!(
+                        "peer start pending";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "time" => ?now,
+                    );
                 }
             }
         }
