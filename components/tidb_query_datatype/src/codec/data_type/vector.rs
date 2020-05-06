@@ -537,24 +537,27 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
         assert_eq!(column.as_real_slice(), &[]);
-        assert_eq!(column.capacity(), 0);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 0);
+        assert_eq!(column_cloned.as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(1.0).ok());
         assert_eq!(column.len(), 1);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
-        assert_eq!(column.capacity(), 1);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 1);
+        assert_eq!(column_cloned.as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
         assert_eq!(column.len(), 2);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.capacity(), 2);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 2);
+        assert_eq!(column_cloned.as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(4.5).ok());
         assert_eq!(column.len(), 3);
@@ -564,8 +567,9 @@ mod tests {
             column.as_real_slice(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
         );
-        assert_eq!(column.capacity(), 3);
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
+        let column_cloned = column.clone();
+        assert_eq!(column_cloned.capacity(), 3);
+        assert_eq!(column_cloned.as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
         assert_eq!(column.len(), 4);
