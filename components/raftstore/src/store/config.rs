@@ -159,6 +159,10 @@ pub struct Config {
     pub hibernate_regions: bool,
     #[config(hidden)]
     pub early_apply: bool,
+    #[config(hidden)]
+    pub apply_yield_count: usize,
+    #[config(hidden)]
+    pub reschedule_count: usize,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -238,6 +242,8 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             early_apply: true,
+            apply_yield_count: 2,
+            reschedule_count: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

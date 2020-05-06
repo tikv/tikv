@@ -233,6 +233,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
+    reschedule_count: usize,
 }
 
 enum ReschedulePolicy {
@@ -292,7 +293,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
                 } else {
-                    if batch.counters[i] > 3 {
+                    if batch.counters[i] > self.reschedule_count {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -364,6 +365,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
+    reschedule_count: usize,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -388,6 +390,7 @@ where
                 fsm_receiver: self.receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
+                reschedule_count: self.reschedule_count,
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
@@ -431,6 +434,7 @@ pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlSchedule
 pub fn create_system<N: Fsm, C: Fsm>(
     pool_size: usize,
     max_batch_size: usize,
+    reschedule_count: usize,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
@@ -445,6 +449,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         receiver: rx,
         pool_size,
         max_batch_size,
+        reschedule_count,
         workers: vec![],
     };
     (router, system)
