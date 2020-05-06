@@ -680,13 +680,16 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        self.cleanup(key, TimeStamp::zero())
+        // Rollback is called only if the transaction is known to fail. Under the circumstances,
+        // the rollback record needn't be protected.
+        self.cleanup(key, TimeStamp::zero(), false)
     }
 
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
         rollback_if_not_exist: bool,
+        protect_rollback: bool,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
@@ -711,9 +714,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                     // Insert a Rollback to Write CF in case that a stale prewrite
                     // command is received after a cleanup command.
-                    // The rollback must be protected, see more on
-                    // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-                    let write = Write::new_rollback(ts, true);
+                    let write = Write::new_rollback(ts, protect_rollback);
                     self.put_write(primary_key, ts, write.as_ref().to_bytes());
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
@@ -735,7 +736,12 @@ impl<S: Snapshot> MvccTxn<S> {
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
+    pub fn cleanup(
+        &mut self,
+        key: Key,
+        current_ts: TimeStamp,
+        protect_rollback: bool,
+    ) -> Result<Option<ReleasedLock>> {
         fail_point!("cleanup", |err| Err(make_txn_error(
             err,
             &key,
@@ -757,7 +763,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.rollback_lock(key, lock, is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(key, true)? {
+            _ => match self.check_txn_status_missing_lock(key, true, protect_rollback)? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(ErrorInner::Committed { commit_ts }.into())
@@ -889,11 +895,17 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Ok((TxnStatus::TtlExpire, released));
                 }
 
-                // If lock.minCommitTS is 0, it's not a large transaction and we can't push forward
-                // its minCommitTS otherwise the transaction can't be committed by old version TiDB
+                // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
+                // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
                 // during rolling update.
-                // If this is a large transaction and the lock is active, push forward the minCommitTS.
-                if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
+                if !lock.min_commit_ts.is_zero()
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
+                    // next time because it's not committed.
+                    && !caller_start_ts.is_max()
+                    // Push forward the min_commit_ts so that reading won't be blocked by locks.
+                    && caller_start_ts >= lock.min_commit_ts
+                {
                     lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
@@ -906,8 +918,10 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 Ok((TxnStatus::uncommitted(lock.ttl, lock.min_commit_ts), None))
             }
+            // The rollback must be protected, see more on
+            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             _ => self
-                .check_txn_status_missing_lock(primary_key, rollback_if_not_exist)
+                .check_txn_status_missing_lock(primary_key, rollback_if_not_exist, true)
                 .map(|s| (s, None)),
         }
     }
@@ -2021,11 +2035,13 @@ mod tests {
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, 30, 31);
 
-        // Rollback
+        // Rollback collapsed.
         must_rollback_collapsed(&engine, k, 32);
         must_rollback_collapsed(&engine, k, 33);
         must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 34);
+        // Currently we cannot avoid this.
+        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
+        must_pessimistic_rollback(&engine, k, 32, 34);
         must_unlocked(&engine, k);
 
         // Acquire lock when there is lock with different for_update_ts.
@@ -2280,15 +2296,8 @@ mod tests {
         // Try to check a not exist thing.
         if r {
             must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, LockNotExist);
-            // A rollback record will be written.
-            must_seek_write(
-                &engine,
-                k,
-                TimeStamp::max(),
-                ts(3, 0),
-                ts(3, 0),
-                WriteType::Rollback,
-            );
+            // A protected rollback record will be written.
+            must_get_rollback_protected(&engine, k, ts(3, 0), true);
         } else {
             must_check_txn_status_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r);
         }
@@ -2590,6 +2599,29 @@ mod tests {
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
+        must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);
+        // Don't push forward the min_commit_ts if caller_start_ts is max.
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(310, 0),
+            TimeStamp::max(),
+            ts(320, 0),
+            r,
+            uncommitted(100, ts(310, 1)),
+        );
+        must_commit(&engine, k, ts(310, 0), ts(315, 0));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(310, 0),
+            TimeStamp::max(),
+            ts(320, 0),
+            r,
+            committed(ts(315, 0)),
+        );
     }
 
     #[test]

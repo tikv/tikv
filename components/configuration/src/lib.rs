@@ -18,10 +18,7 @@ pub enum ConfigValue {
     Usize(usize),
     Bool(bool),
     String(String),
-    // `String` represent config field that has type `String`,
-    // `Other` represent config field with type that can be
-    // coverted to `String` as temporary representation i.e enum type.
-    Other(String),
+    BlobRunMode(String),
     Module(ConfigChange),
     Skip,
 }
@@ -38,7 +35,7 @@ impl Display for ConfigValue {
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
-            ConfigValue::Other(v) => write!(f, "{}", v),
+            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
         }
@@ -94,48 +91,6 @@ impl_into!(usize, Usize);
 impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
-
-// TODO: remove
-pub struct RollbackCollector<'a, 'b, T> {
-    pub cfg: &'a T,
-    change: &'b mut ConfigChange,
-}
-
-impl<'a, 'b, T> RollbackCollector<'a, 'b, T> {
-    pub fn new(cfg: &'a T, change: &'b mut ConfigChange) -> Self {
-        RollbackCollector { cfg, change }
-    }
-
-    pub fn push(&mut self, name: String, val: impl Into<ConfigValue>) {
-        self.change.insert(name, val.into());
-    }
-}
-
-#[macro_export]
-macro_rules! rollback_or {
-    ($rollback: ident, $($name: ident),+ , $err: block) => {{
-        let err = $err;
-        if let Some(rb_collector) = &mut $rollback {
-            $(
-                rb_collector.push(
-                    stringify!($name).to_owned(),
-                    rb_collector.cfg.$name.clone()
-                );
-            )*
-            warn!("Invalid config"; "err" => ?err)
-        } else { return err; }
-    }};
-    ($rollback: ident, $name: ident, $valid_or_rb: expr, $else_branch: expr) => {
-        if let Some(rb_collector) = &mut $rollback {
-            let mut r = std::collections::HashMap::new();
-            let sub_rb_collector = RollbackCollector::new(&rb_collector.cfg.$name, &mut r);
-            let _ = $valid_or_rb(Some(sub_rb_collector));
-            if !r.is_empty() {
-                rb_collector.push(stringify!($name).to_owned(), r);
-            }
-        } else {$else_branch;}
-    };
-}
 
 /// The Configuration trait
 ///

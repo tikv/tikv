@@ -2,7 +2,10 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
+use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{
+    RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
+};
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
@@ -29,6 +32,8 @@ use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::observe_perf_context_type;
+use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -44,17 +49,18 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::is_initial_msg;
+use crate::store::util::{is_initial_msg, PerfContextStatistics};
 use crate::store::worker::{
-    CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
+    StoreTick,
 };
+
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -176,8 +182,8 @@ impl<E: KvEngine> RaftRouter<E> {
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<E>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
+        cmd: RaftCommand<E::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
@@ -200,12 +206,12 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -230,6 +236,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
+    pub perf_context_statistics: PerfContextStatistics,
 }
 
 impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
@@ -466,7 +473,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
-    pending_proposals: Vec<RegionProposal<RocksEngine>>,
+    pending_proposals: Vec<RegionProposal<RocksSnapshot>>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
@@ -548,10 +555,15 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.raft_wb.clear();
             }
         }
+
+        report_perf_context!(
+            self.poll_ctx.perf_context_statistics,
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+        );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for (ready, invoke_ctx) in ready_res.drain(..) {
                 let region_id = invoke_ctx.region_id;
                 if peers[batch_pos].region_id() == region_id {
@@ -605,6 +617,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         }
         self.timer = TiInstant::now_coarse();
         // update config
+        self.poll_ctx.perf_context_statistics.start();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -724,11 +737,11 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -949,6 +962,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -967,12 +981,12 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksEngine>>,
+    region_worker: Worker<RegionTask<RocksSnapshot>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }
@@ -1008,6 +1022,7 @@ impl RaftBatchSystem {
         mut coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1055,9 +1070,19 @@ impl RaftBatchSystem {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(workers, region_peers, builder)?;
+            self.start_system::<T, C, RocksWriteBatchVec>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(workers, region_peers, builder)?;
+            self.start_system::<T, C, RocksWriteBatch>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
         }
         Ok(())
     }
@@ -1071,6 +1096,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1160,7 +1186,8 @@ impl RaftBatchSystem {
             self.router.clone(),
             engines.kv,
             workers.pd_worker.scheduler(),
-            cfg.pd_store_heartbeat_tick_interval.as_secs(),
+            cfg.pd_store_heartbeat_tick_interval.0,
+            auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1304,13 +1331,35 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             );
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             let not_exist = util::find_peer(region, from_store_id).is_none();
             self.ctx
                 .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
+
+            if need_gc_msg && !not_exist {
+                let mut send_msg = RaftMessage::default();
+                send_msg.set_region_id(region_id);
+                send_msg.set_from_peer(msg.get_to_peer().clone());
+                send_msg.set_to_peer(msg.get_from_peer().clone());
+                send_msg.set_region_epoch(region_epoch.clone());
+                let extra_msg = send_msg.mut_extra_msg();
+                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                extra_msg.set_check_peers(region.get_peers().into());
+                if let Err(e) = self.ctx.trans.send(send_msg) {
+                    error!(
+                        "send check stale peer response message failed";
+                        "region_id" => region_id,
+                        "err" => ?e
+                    );
+                }
+                self.ctx.need_flush_trans = true;
+            }
 
             return Ok(true);
         }

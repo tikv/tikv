@@ -523,7 +523,7 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask<EK>>,
+    region_sched: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -575,7 +575,7 @@ where
     pub fn new(
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask<EK>>,
+        region_sched: Scheduler<RegionTask<EK::Snapshot>>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -1514,7 +1514,6 @@ where
         state.get_region(),
         &mut snap_data,
         &mut stat,
-        Box::new(mgr.clone()),
     )?;
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
@@ -1584,7 +1583,7 @@ mod tests {
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
+    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1603,7 +1602,7 @@ mod tests {
     use super::*;
 
     fn new_storage(
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         path: &TempDir,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
         let kv_db =
@@ -1655,7 +1654,7 @@ mod tests {
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<RocksEngine, RocksEngine> {
@@ -1902,7 +1901,7 @@ mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &KvEngines<RocksEngine, RocksEngine>,
-        sched: &Scheduler<RegionTask<RocksEngine>>,
+        sched: &Scheduler<RegionTask<RocksSnapshot>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -1915,7 +1914,7 @@ mod tests {
             .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
             .unwrap()
             .unwrap();
-        gen_task.generate_and_schedule_snapshot(
+        gen_task.generate_and_schedule_snapshot::<RocksEngine>(
             engines.kv.clone().snapshot(),
             entry.get_term(),
             apply_state,

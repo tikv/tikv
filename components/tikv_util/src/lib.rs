@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+#![feature(str_strip)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -33,7 +34,6 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use rand;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;

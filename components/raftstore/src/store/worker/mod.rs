@@ -10,6 +10,8 @@ mod raftlog_gc;
 mod read;
 mod region;
 mod split_check;
+mod split_config;
+mod split_controller;
 
 pub use self::cleanup::{Runner as CleanupRunner, Task as CleanupTask};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
@@ -23,3 +25,5 @@ pub use self::region::{
     STALE_PEER_CHECK_INTERVAL,
 };
 pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
+pub use self::split_config::{SplitConfig, SplitConfigManager};
+pub use self::split_controller::{AutoSplitController, ReadStats};
