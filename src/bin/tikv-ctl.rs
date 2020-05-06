@@ -442,6 +442,8 @@ trait DebugExecutor {
 
     fn print_bad_regions(&self);
 
+    fn fix_bad_regions(&self);
+
     fn set_region_tombstone_after_remove_peer(
         &self,
         mgr: Arc<SecurityManager>,
@@ -709,6 +711,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
+    fn fix_bad_regions(&self) {
+        unimplemented!("only available for local mode");
+    }
+
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
         self.check_local_mode();
     }
@@ -871,6 +877,11 @@ impl<E: Engine> DebugExecutor for Debugger<E> {
             return;
         }
         v1!("all regions are healthy")
+    }
+
+    fn fix_bad_regions(&self) {
+        self.fix_bad_regions()
+            .unwrap_or_else(|e| perror_and_exit("Debugger::fix_bad_regions", e));
     }
 
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
@@ -1512,7 +1523,15 @@ fn main() {
                         .help("The target region"),
                 ),
         )
-        .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
+        .subcommand(
+            SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft")
+            .arg(
+                Arg::with_name("autofix")
+                    .long("autofix")
+                    .takes_value(false)
+                    .help("Auto fix"),
+            ),
+        )
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
                 .about("Modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
@@ -1936,8 +1955,12 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
-    } else if matches.subcommand_matches("bad-regions").is_some() {
-        debug_executor.print_bad_regions();
+    } else if let Some(matches) = matches.subcommand_matches("bad-regions") {
+        if matches.is_present("autofix") {
+            debug_executor.fix_bad_regions();
+        } else {
+            debug_executor.print_bad_regions();
+        }
     } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
         let module = matches.value_of("module").unwrap();
         let config_name = matches.value_of("config_name").unwrap();
