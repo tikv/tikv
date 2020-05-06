@@ -247,7 +247,7 @@ impl EntryCache {
     }
 
     fn get_deque_mem_size_change(&self, old_capacity: i64, new_capacity: i64) -> i64 {
-        ENTRY_MEM_SIZE as i64 * (old_capacity - new_capacity)
+        ENTRY_MEM_SIZE as i64 * (new_capacity - old_capacity)
     }
 
     fn get_mem_size(&self) -> i64 {
