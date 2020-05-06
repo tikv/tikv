@@ -18,7 +18,7 @@ Replication mode is controlled by PD. You can use following example configuratio
 
 ```toml
 [replication-mode]
-replication-mode = "dr_auto_sync"
+replication-mode = "dr-auto-sync"
 
 [replication-mode.dr-auto-sync]
 label-key = "zone"
@@ -30,15 +30,15 @@ wait-store-timeout = "1m"
 wait-sync-timeout = "1m"
 ```
 
-In the above configuration, `dr_auto_sync` is the mode to enable synchronous replication. Label key `zone` is used to distinguish different data centers. TiKV instances with "z1" value are considered in primary data center, and "z2" are in dr data center. `primary-replicas` and `dr-replicas` are the numbers of replicas should be placed in the data centers respectively. `wait-store-timeout` is the time to wait before falling back to asynchronous replication. `wait-sync-timeout` is the time to wait before forcing TiKV to change replication mode, it's not supported yet.
+In the above configuration, `dr-auto-sync` is the mode to enable synchronous replication. Label key `zone` is used to distinguish different data centers. TiKV instances with "z1" value are considered in primary data center, and "z2" are in dr data center. `primary-replicas` and `dr-replicas` are the numbers of replicas should be placed in the data centers respectively. `wait-store-timeout` is the time to wait before falling back to asynchronous replication. `wait-sync-timeout` is the time to wait before forcing TiKV to change replication mode, it's not supported yet.
 
 You can use following URL to check current replication status of the cluster:
 ```bash
 % curl http://pd_ip:pd_port/pd/api/v1/replication_mode/status
 {
   "mode": "dr-auto-sync",
-  "dr_auto_sync": {
-    "label_key": "zone",
+  "dr-auto-sync": {
+    "label-key": "zone",
     "state": "sync"
   }
 }
@@ -51,7 +51,7 @@ After the cluster becomes `sync`, it won't become `async` unless the number of d
 You can use `pd-ctl` to change a cluster from `asynchronous` to `synchronous`. Currently, TiKV can't support any of following command online. So after changing the configuration, you need to restart all TiKV instances to make it apply the changes correctly.
 
 ```bash
->> config set replication-mode dr_auto_sync
+>> config set replication-mode dr-auto-sync
 ```
 
 Or change back to `asynchronous`:
