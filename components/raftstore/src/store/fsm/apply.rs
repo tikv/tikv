@@ -2273,9 +2273,9 @@ where
     pub region_id: u64,
     pub term: u64,
     pub entries: Vec<Entry>,
-    pub last_commit_index: u64,
-    pub commit_index: u64,
-    pub commit_term: u64,
+    pub last_committed_index: u64,
+    pub committed_index: u64,
+    pub committed_term: u64,
     pub cbs: Vec<Proposal<E>>,
 }
 
@@ -2614,9 +2614,9 @@ where
             self.delegate.apply_state.get_commit_term(),
         );
         let cur_state = (
-            apply.last_commit_index,
-            apply.commit_index,
-            apply.commit_term,
+            apply.last_committed_index,
+            apply.committed_index,
+            apply.committed_term,
         );
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 || prev_state.2 > cur_state.2 {
             panic!(
@@ -3442,7 +3442,7 @@ mod tests {
         }
     }
 
-    fn proposl<E: KvEngine>(
+    fn proposal<E: KvEngine>(
         is_conf_change: bool,
         index: u64,
         term: u64,
@@ -3462,9 +3462,9 @@ mod tests {
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
-        last_commit_index: u64,
-        commit_term: u64,
-        commit_index: u64,
+        last_committed_index: u64,
+        committed_term: u64,
+        committed_index: u64,
         cbs: Vec<Proposal<E>>,
     ) -> Apply<E> {
         Apply {
@@ -3472,9 +3472,9 @@ mod tests {
             region_id,
             term,
             entries,
-            last_commit_index,
-            commit_index,
-            commit_term,
+            last_committed_index,
+            committed_index,
+            committed_term,
             cbs,
         }
     }
@@ -3519,7 +3519,7 @@ mod tests {
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = proposl(
+        let p = proposal(
             false,
             1,
             0,
@@ -3547,7 +3547,7 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            proposl(
+            proposal(
                 false,
                 4,
                 4,
@@ -3555,7 +3555,7 @@ mod tests {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
-            proposl(false, 4, 5, Callback::None),
+            proposal(false, 4, 5, Callback::None),
         ];
         router.schedule_task(
             2,
@@ -3633,7 +3633,7 @@ mod tests {
 
         // Stopped peer should be removed.
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = proposl(
+        let p = proposal(
             false,
             1,
             0,
@@ -3667,7 +3667,7 @@ mod tests {
     }
 
     fn cb<E: KvEngine>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<E> {
-        proposl(
+        proposal(
             false,
             idx,
             term,

@@ -88,9 +88,14 @@ impl<E: KvEngine> ProposalQueue<E> {
         None
     }
 
+    // Return all proposals that before (and included) the proposal
+    // at the given term and index
     fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<E>> {
         let mut propos = Vec::new();
         while let Some(p) = self.queue.pop_front() {
+            // Comparing the term first then the index, because the term is
+            // increasing among all log entries and the index is increasing
+            // inside a given term
             if (p.term, p.index) > (term, index) {
                 self.queue.push_front(p);
                 break;
@@ -1384,9 +1389,9 @@ impl Peer {
                     region_id: self.region_id,
                     term: self.term(),
                     entries: committed_entries,
-                    last_commit_index: self.get_store().committed_index(),
-                    commit_term: term,
-                    commit_index: committed_index,
+                    last_committed_index: self.get_store().committed_index(),
+                    committed_term: term,
+                    committed_index: committed_index,
                     cbs,
                 };
                 ctx.apply_router
