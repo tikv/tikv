@@ -91,7 +91,7 @@ quick_error! {
         }
         CannotReadExternalStorage(url: String, name: String, err: IoError) {
             cause(err)
-            display("Cannot read {}/{}", url, name)
+            display("Cannot read {}/{}: {}", url, name, err)
         }
         WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
             display("\

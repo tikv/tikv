@@ -837,7 +837,6 @@ mod log {
     use nom::sequence::tuple;
     use nom::*;
     use regex::Regex;
-    use rev_lines;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -1080,7 +1079,7 @@ mod log {
     /// timestamp in unix milliseconds.
     fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
         let buffer = BufReader::new(file);
-        let file_start_time = match buffer.lines().nth(0) {
+        let file_start_time = match buffer.lines().next() {
             Some(Ok(line)) => {
                 let (_, (time, _)) = parse(&line)
                     .map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
@@ -1094,7 +1093,7 @@ mod log {
 
         let buffer = BufReader::new(file);
         let mut rev_lines = rev_lines::RevLines::with_capacity(512, buffer)?;
-        let file_end_time = match rev_lines.nth(0) {
+        let file_end_time = match rev_lines.next() {
             Some(line) => {
                 let (_, (time, _)) = parse(&line)
                     .map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
