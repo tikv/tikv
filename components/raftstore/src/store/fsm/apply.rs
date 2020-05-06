@@ -940,7 +940,7 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written_count >= 16 {
+                if self.written_count >= 4 {
                     return ApplyResult::Yield;
                 }
                 self.written_count += 1;
