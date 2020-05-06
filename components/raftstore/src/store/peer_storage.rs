@@ -285,7 +285,7 @@ impl Default for EntryCache {
 
 impl Drop for EntryCache {
     fn drop(&mut self) {
-        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
+        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size() - self.mem_size_change);
     }
 }
 
