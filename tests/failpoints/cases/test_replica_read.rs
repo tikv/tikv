@@ -4,7 +4,6 @@ use crossbeam::channel;
 use engine::DB;
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
-use fail;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
