@@ -218,7 +218,7 @@ impl EntryCache {
             entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }
         self.mem_size_change += self
-        self.get_cache_vec_mem_size_change(self.cache.capacity() as i64,old_capacity as i64)
+            .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
             + entries_mem_size;
     }
 
