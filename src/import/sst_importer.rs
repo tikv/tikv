@@ -3,7 +3,11 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
+<<<<<<< HEAD:src/import/sst_importer.rs
 use std::io::Write as _;
+=======
+use std::io::{self, Write};
+>>>>>>> 1bdab7b... external_storage: fix GCS download error, support GCS endpoints, and refactoring (#7734):components/sst_importer/src/sst_importer.rs
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -115,11 +119,11 @@ impl SSTImporter {
         );
         match self.do_download(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
-                info!("download"; "meta" => ?meta, "range" => ?r);
+                info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "err" => %e);
+                error!("download failed"; "meta" => ?meta, "name" => name, "err" => %e);
                 Err(e)
             }
         }
@@ -151,8 +155,18 @@ impl SSTImporter {
                     Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
                 })?;
             if meta.length != 0 && meta.length != file_length {
-                let reason = format!("length {}, expect {}", file_length, meta.length);
-                return Err(Error::FileCorrupted(path.temp, reason));
+                let reason = format!(
+                    "downloaded size {}, expected {}, local path {}",
+                    file_length,
+                    meta.length,
+                    path.temp.display()
+                );
+                let reason = io::Error::new(io::ErrorKind::InvalidData, reason);
+                return Err(Error::CannotReadExternalStorage(
+                    url.to_string(),
+                    name.to_owned(),
+                    reason,
+                ));
             }
             IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
             file_writer.into_inner().sync_data()?;
