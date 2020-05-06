@@ -8,7 +8,6 @@ use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
-use pprof;
 use pprof::protos::Message;
 use regex::Regex;
 use reqwest::{self, blocking::Client};
@@ -60,9 +59,8 @@ mod profiler_guard {
 
     impl Drop for ProfGuard {
         fn drop(&mut self) {
-            match deactivate_prof() {
-                _ => {} // TODO: handle error here
-            }
+            // TODO: handle error here
+            let _ = deactivate_prof();
         }
     }
 

@@ -10,7 +10,6 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use engine;
 use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};

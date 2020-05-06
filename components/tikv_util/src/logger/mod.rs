@@ -61,7 +61,7 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            let module = record.module().splitn(2, "::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true

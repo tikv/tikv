@@ -344,7 +344,7 @@ mod tests {
             let expect = Some(expect.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(date.clone())
+                .push_param(date)
                 .push_param(format.clone())
                 .evaluate(ScalarFuncSig::DateFormatSig)
                 .unwrap();
@@ -405,7 +405,7 @@ mod tests {
             let format = format.map(|s| s.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(date.clone())
+                .push_param(date)
                 .push_param(format.clone())
                 .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
                 .unwrap();
@@ -446,7 +446,7 @@ mod tests {
         for (arg1, arg2, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg1, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .push_param(arg2)
                 .evaluate(ScalarFuncSig::WeekWithMode)
                 .unwrap();
@@ -478,7 +478,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::WeekDay)
                 .unwrap();
             assert_eq!(output, exp);
@@ -510,7 +510,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::WeekOfYear)
                 .unwrap();
             assert_eq!(output, exp);
@@ -541,7 +541,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::DayOfWeek)
                 .unwrap();
             assert_eq!(output, exp);
@@ -569,7 +569,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::DayOfYear)
                 .unwrap();
             assert_eq!(output, exp);
@@ -601,7 +601,7 @@ mod tests {
                 None => None,
             };
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)
                 .unwrap();
             assert_eq!(output, exp);
@@ -693,7 +693,7 @@ mod tests {
                 Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
-                    .push_param(duration.clone())
+                    .push_param(duration)
                     .evaluate::<Int>(sig)
                     .unwrap();
                 assert_eq!(output, Some(res));
@@ -883,7 +883,7 @@ mod tests {
             let time = Some(Time::parse_date(&mut ctx, arg).unwrap());
             let exp_val = Some(Time::parse_date(&mut ctx, exp).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, exp_val);
@@ -892,7 +892,7 @@ mod tests {
         for case in none_cases {
             let time = Some(Time::parse_date(&mut ctx, case).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate::<Time>(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, None);

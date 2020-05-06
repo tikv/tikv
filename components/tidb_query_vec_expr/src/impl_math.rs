@@ -681,7 +681,7 @@ mod tests {
             let arg = arg.parse::<Decimal>().ok();
             let expect_output = expect_output.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::AbsDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
