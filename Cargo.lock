@@ -1891,13 +1891,8 @@ dependencies = [
 
 [[package]]
 name = "kvproto"
-<<<<<<< HEAD
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#c211b473fe439e5635e63471714ab7ec758b5071"
-=======
-version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#038e31959c2a66085aad455db6e34fa4e98a58f9"
->>>>>>> 30198b2... external_storage: pass sse_kms_key_id to S3 (#7627)
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#3a6b8b9cb29e46141990b024577ee67299accf2b"
 dependencies = [
  "bytes 0.4.12",
  "futures 0.1.29",
@@ -2886,7 +2881,7 @@ version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1a649b870f7fe03c965bf2fa6728361f6abbb6f3b72079515af8cb56d769cf"
 dependencies = [
- "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
 ]
 
 [[package]]
@@ -2975,7 +2970,7 @@ version = "0.4.3"
 source = "git+https://github.com/tikv/raft-rs?rev=9782199fa6318f94bf0974129664d974b03f8f11#9782199fa6318f94bf0974129664d974b03f8f11"
 dependencies = [
  "fxhash",
- "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8",
  "protobuf",
  "quick-error 1.2.2",
  "rand 0.5.5",
