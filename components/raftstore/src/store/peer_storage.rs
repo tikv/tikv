@@ -160,17 +160,31 @@ impl EntryCache {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
+                    self.mem_size_change -= self
+                        .cache
+                        .iter()
+                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                        .sum::<i64>();
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    self.mem_size_change -= self
+                        .cache
+                        .iter()
+                        .skip(left)
+                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                        .sum::<i64>();
                     self.cache.truncate(left);
                 }
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
                     && self.cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
-                    let current_mem_size = self.get_mem_size();
+                    let old_capacity = self.cache.capacity();
                     self.cache.shrink_to_fit();
-                    self.update_mem_size_change(current_mem_size, self.get_mem_size());
+                    self.mem_size_change += self.get_deque_mem_size_change(
+                        old_capacity as i64,
+                        self.cache.capacity() as i64,
+                    )
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -182,17 +196,28 @@ impl EntryCache {
         let mut start_idx = 0;
         if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
             if len < self.cache.len() {
-                self.cache.drain(..len);
+                let mut drained_cache_entries_size = 0;
+                self.cache.drain(..len).for_each(|e| {
+                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                });
+                self.mem_size_change -= drained_cache_entries_size;
             } else {
                 start_idx = len - self.cache.len();
+                self.mem_size_change -= self
+                    .cache
+                    .iter()
+                    .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                    .sum::<i64>();
                 self.cache.clear();
             }
         }
-        let current_mem_size = self.get_mem_size();
+        let old_capacity = self.cache.capacity();
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
+            self.mem_size_change += (e.data.capacity() + e.context.capacity()) as i64;
         }
-        self.update_mem_size_change(current_mem_size, self.get_mem_size());
+        self.mem_size_change +=
+            self.get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -200,19 +225,29 @@ impl EntryCache {
         if cache_first_idx > idx {
             return;
         }
+        let mut drained_cache_entries_size = 0;
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+            .for_each(|e| {
+                drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+            });
+        self.mem_size_change -= drained_cache_entries_size;
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
-            let current_mem_size = self.get_mem_size();
+            let old_capacity = self.cache.capacity();
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
-            self.update_mem_size_change(current_mem_size, self.get_mem_size());
+            self.mem_size_change +=
+                self.get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
         }
+    }
+
+    fn get_deque_mem_size_change(&self, old_capacity: i64, new_capacity: i64) -> i64 {
+        ENTRY_MEM_SIZE as i64 * (old_capacity - new_capacity)
     }
 
     fn get_mem_size(&self) -> i64 {
@@ -222,16 +257,6 @@ impl EntryCache {
             .map(|e| e.data.capacity() + e.context.capacity())
             .sum();
         (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
-    }
-
-    fn update_mem_size_change(&mut self, old_size: i64, new_size: i64) {
-        let size_change = new_size - old_size;
-        if size_change == 0 {
-            return;
-        }
-        // If size_change is greater than 0, it means that the memory usage increases,
-        // otherwise it means that the memory usage decreases.
-        self.mem_size_change += size_change;
     }
 
     fn flush_mem_size_change(&mut self) {
