@@ -506,6 +506,39 @@ impl<E: Engine> Debugger<E> {
                 return Err(Error::Other("last index < commit index".into()));
             }
 
+            let mut raft_log_iter = {
+                let from = keys::raft_log_key(region.get_id(), 0).to_vec();
+                let to = keys::raft_state_key(region.get_id()).to_vec();
+                let readopts = IterOption::new(
+                    Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                    Some(KeyBuilder::from_vec(to, 0, 0)),
+                    false,
+                )
+                .build_read_opts();
+                DBIterator::new(Arc::clone(&self.engines.raft), readopts)
+            };
+            match raft_log_iter.seek(SeekKey::End) {
+                Err(_) => return Err(Error::Other("seek to raft state key".into())),
+                Ok(false) => return Err(Error::Other("no raft state key".into())),
+                _ => {}
+            }
+            match raft_log_iter.prev() {
+                Err(_) => return Err(Error::Other("seek prev to raft log".into())),
+                Ok(false) => return Err(Error::Other("no raft logs".into())),
+                _ => {}
+            }
+            let log_key = raft_log_iter.key();
+            let last_log = keys::raft_log_index(log_key).unwrap();
+            if last_log < apply_state.get_applied_index() {
+                return Err(Error::Other("last log index < applied index".into()));
+            }
+            if last_log < raft_state.get_hard_state().get_commit() {
+                return Err(Error::Other("last log index < commit index".into()));
+            }
+            if last_log < raft_state.get_last_index() {
+                return Err(Error::Other("last log index < last index".into()));
+            }
+
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
                 self.engines.clone(),
@@ -1951,6 +1984,7 @@ mod tests {
         let kv_engine = debugger.engines.kv.as_ref();
         let raft_engine = debugger.engines.raft.as_ref();
         let store_id = 1; // It's a fake id.
+        debugger.set_store_id(store_id);
 
         let wb1 = WriteBatch::new();
         let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
@@ -1993,6 +2027,13 @@ mod tests {
                     .unwrap();
             };
 
+            let mock_raft_logs = |region_id: u64, start_index: u64, end_index: u64| {
+                for idx in start_index..=end_index {
+                    let key = keys::raft_log_key(region_id, idx);
+                    wb1.put_cf(handle1, &key, b"mock_raft_log").unwrap();
+                }
+            };
+
             for &region_id in &[10, 11, 12] {
                 mock_region_state(region_id, &[store_id]);
             }
@@ -2008,14 +2049,20 @@ mod tests {
 
             // region state doesn't contains the peer itself.
             mock_region_state(13, &[]);
+
+            // lost some raft logs
+            mock_region_state(14, &[store_id]);
+            mock_raft_state(14, 200, 150);
+            mock_apply_state(14, 100);
+            mock_raft_logs(14, 5, 80);
         }
 
         raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
         kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
-        assert_eq!(bad_regions.len(), 4);
-        for (i, (region_id, _)) in bad_regions.into_iter().enumerate() {
+        assert_eq!(bad_regions.len(), 5);
+        for (i, (region_id, _err)) in bad_regions.into_iter().enumerate() {
             assert_eq!(region_id, (10 + i) as u64);
         }
     }
