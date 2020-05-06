@@ -212,12 +212,14 @@ impl EntryCache {
             }
         }
         let old_capacity = self.cache.capacity();
+        let mut entries_mem_size = 0;
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
-            self.mem_size_change += (e.data.capacity() + e.context.capacity()) as i64;
+            entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }
-        self.mem_size_change +=
-            self.get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
+        self.mem_size_change += self
+            .get_deque_mem_size_change(old_capacity as i64, self.cache.capacity() as i64)
+            + entries_mem_size;
     }
 
     pub fn compact_to(&mut self, idx: u64) {
