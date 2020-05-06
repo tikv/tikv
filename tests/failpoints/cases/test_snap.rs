@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::*;
 
-use fail;
 use raft::eraftpb::MessageType;
 
 use raftstore::store::*;
