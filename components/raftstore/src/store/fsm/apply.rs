@@ -2260,9 +2260,9 @@ pub fn compact_raft_log(
     Ok(())
 }
 
-pub struct Apply<E>
+pub struct Apply<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub peer_id: u64,
     pub region_id: u64,
@@ -2271,7 +2271,7 @@ where
     pub last_committed_index: u64,
     pub committed_index: u64,
     pub committed_term: u64,
-    pub cbs: Vec<Proposal<E>>,
+    pub cbs: Vec<Proposal<S>>,
 }
 
 #[derive(Default, Clone)]
@@ -2431,7 +2431,7 @@ where
 {
     Apply {
         start: Instant,
-        apply: Apply<E>,
+        apply: Apply<E::Snapshot>,
     },
     Registration(Registration),
     LogsUpToDate(CatchUpLogs),
@@ -2452,7 +2452,7 @@ impl<E> Msg<E>
 where
     E: KvEngine,
 {
-    pub fn apply(apply: Apply<E>) -> Msg<E> {
+    pub fn apply(apply: Apply<E::Snapshot>) -> Msg<E> {
         Msg::Apply {
             start: Instant::now(),
             apply,
@@ -2588,7 +2588,7 @@ where
     fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        apply: Apply<E>,
+        apply: Apply<E::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -3446,12 +3446,12 @@ mod tests {
         }
     }
 
-    fn proposal<E: KvEngine>(
+    fn proposal<S: Snapshot>(
         is_conf_change: bool,
         index: u64,
         term: u64,
-        cb: Callback<E>,
-    ) -> Proposal<E> {
+        cb: Callback<S>,
+    ) -> Proposal<S> {
         Proposal {
             is_conf_change,
             index,
@@ -3461,7 +3461,7 @@ mod tests {
         }
     }
 
-    fn apply<E: KvEngine>(
+    fn apply<S: Snapshot>(
         peer_id: u64,
         region_id: u64,
         term: u64,
@@ -3469,8 +3469,8 @@ mod tests {
         last_committed_index: u64,
         committed_term: u64,
         committed_index: u64,
-        cbs: Vec<Proposal<E>>,
-    ) -> Apply<E> {
+        cbs: Vec<Proposal<S>>,
+    ) -> Apply<S> {
         Apply {
             peer_id,
             region_id,
@@ -3670,7 +3670,7 @@ mod tests {
         system.shutdown();
     }
 
-    fn cb<E: KvEngine>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<E> {
+    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<S> {
         proposal(
             false,
             idx,

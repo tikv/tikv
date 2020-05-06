@@ -66,15 +66,15 @@ pub enum StaleState {
     LeaderMissing,
 }
 
-struct ProposalQueue<E>
+struct ProposalQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    queue: VecDeque<Proposal<E>>,
+    queue: VecDeque<Proposal<S>>,
 }
 
-impl<E: KvEngine> ProposalQueue<E> {
-    fn new() -> ProposalQueue<E> {
+impl<S: Snapshot> ProposalQueue<S> {
+    fn new() -> ProposalQueue<S> {
         ProposalQueue {
             queue: VecDeque::new(),
         }
@@ -91,7 +91,7 @@ impl<E: KvEngine> ProposalQueue<E> {
 
     // Return all proposals that before (and included) the proposal
     // at the given term and index
-    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<E>> {
+    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<S>> {
         let mut propos = Vec::new();
         while let Some(p) = self.queue.pop_front() {
             // Comparing the term first then the index, because the term is
@@ -108,7 +108,7 @@ impl<E: KvEngine> ProposalQueue<E> {
         propos
     }
 
-    fn push(&mut self, p: Proposal<E>) {
+    fn push(&mut self, p: Proposal<S>) {
         self.queue.push_back(p);
     }
 
@@ -306,7 +306,7 @@ impl Peer {
             peer,
             region_id: region.get_id(),
             raft_group,
-            proposals: ProposalQueue::new(),
+            proposals: ProposalQueue::<RocksSnapshot>::new(),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
