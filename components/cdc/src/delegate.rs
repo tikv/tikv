@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "prost-codec")]
@@ -18,23 +18,25 @@ use kvproto::cdcpb::{
     Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
+use kvproto::errorpb;
 
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
+use crate::metrics::*;
 use crate::{Error, Result};
 
-static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
+static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -42,7 +44,50 @@ pub struct DownstreamID(usize);
 
 impl DownstreamID {
     pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+#[derive(Clone)]
+pub struct DownstreamState(Arc<AtomicU8>);
+
+impl DownstreamState {
+    const UNINITIALIZED: u8 = 0;
+    const NORMAL: u8 = 1;
+    const STOPPED: u8 = 2;
+
+    pub fn new() -> Self {
+        DownstreamState(Arc::new(AtomicU8::new(Self::UNINITIALIZED)))
+    }
+
+    pub fn is_normal(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::NORMAL
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::STOPPED
+    }
+
+    pub fn is_uninitialized(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::UNINITIALIZED
+    }
+
+    pub fn set_normal(&self) {
+        self.0.store(Self::NORMAL, Ordering::SeqCst);
+    }
+
+    pub fn set_stopped(&self) {
+        self.0.store(Self::STOPPED, Ordering::SeqCst);
+    }
+
+    pub fn set_uninitialized(&self) {
+        self.0.store(Self::UNINITIALIZED, Ordering::SeqCst);
+    }
+
+    pub fn uninitialized_to_normal(&self) -> bool {
+        self.0
+            .compare_and_swap(Self::UNINITIALIZED, Self::NORMAL, Ordering::SeqCst)
+            == Self::UNINITIALIZED
     }
 }
 
@@ -57,6 +102,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
+    state: DownstreamState,
 }
 
 impl Downstream {
@@ -71,6 +117,7 @@ impl Downstream {
             peer,
             region_epoch,
             sink: None,
+            state: DownstreamState::new(),
         }
     }
 
@@ -97,6 +144,10 @@ impl Downstream {
         self.id
     }
 
+    pub fn get_state(&self) -> DownstreamState {
+        self.state.clone()
+    }
+
     pub fn sink_duplicate_error(&self, region_id: u64) {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
@@ -111,10 +162,37 @@ impl Downstream {
 
 #[derive(Default)]
 struct Pending {
-    // Batch of RaftCommand observed from raftstore
-    multi_batch: Vec<CmdBatch>,
-    downstreams: Vec<Downstream>,
-    scan: Vec<(DownstreamID, Vec<Option<TxnEntry>>)>,
+    pub downstreams: Vec<Downstream>,
+    pub locks: Vec<PendingLock>,
+    pub pending_bytes: usize,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        CDC_PENDING_BYTES_GAUGE.sub(self.pending_bytes as i64);
+    }
+}
+
+impl Pending {
+    fn take_downstreams(&mut self) -> Vec<Downstream> {
+        mem::take(&mut self.downstreams)
+    }
+
+    fn take_locks(&mut self) -> Vec<PendingLock> {
+        mem::take(&mut self.locks)
+    }
+}
+
+enum PendingLock {
+    Track {
+        key: Vec<u8>,
+        start_ts: TimeStamp,
+    },
+    Untrack {
+        key: Vec<u8>,
+        start_ts: TimeStamp,
+        commit_ts: Option<TimeStamp>,
+    },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -122,6 +200,7 @@ struct Pending {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
+    pub id: ObserveID,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
@@ -136,6 +215,7 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
+            id: ObserveID::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,
@@ -174,18 +254,31 @@ impl Delegate {
         true
     }
 
-    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
-        let change_data_error = err.map(|err| self.error_event(err));
-        let downstreams = if self.pending.is_some() {
+    pub fn downstreams(&self) -> &Vec<Downstream> {
+        if self.pending.is_some() {
+            &self.pending.as_ref().unwrap().downstreams
+        } else {
+            &self.downstreams
+        }
+    }
+
+    pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
+        if self.pending.is_some() {
             &mut self.pending.as_mut().unwrap().downstreams
         } else {
             &mut self.downstreams
-        };
+        }
+    }
+
+    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
+        let change_data_error = err.map(|err| self.error_event(err));
+        let downstreams = self.downstreams_mut();
         downstreams.retain(|d| {
             if d.id == id {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
+                d.state.set_stopped();
             }
             d.id != id
         });
@@ -200,20 +293,17 @@ impl Delegate {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
         let mut err = err.extract_error_header();
-        if err.has_region_not_found() {
-            let region_not_found = err.take_region_not_found();
-            cdc_err.set_region_not_found(region_not_found);
-        } else if err.has_not_leader() {
+        if err.has_not_leader() {
             let not_leader = err.take_not_leader();
             cdc_err.set_not_leader(not_leader);
         } else if err.has_epoch_not_match() {
             let epoch_not_match = err.take_epoch_not_match();
             cdc_err.set_epoch_not_match(epoch_not_match);
         } else {
-            panic!(
-                "region met unknown error region_id: {}, error: {:?}",
-                self.region_id, err
-            );
+            // TODO: Add more errors to the cdc protocol
+            let mut region_not_found = errorpb::RegionNotFound::default();
+            region_not_found.set_region_id(self.region_id);
+            cdc_err.set_region_not_found(region_not_found);
         }
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = self.region_id;
@@ -240,16 +330,24 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
-        self.broadcast(change_data_err, 0);
+        for downstream in &self.downstreams {
+            downstream.state.set_stopped();
+        }
+        self.broadcast(change_data_err, 0, false);
     }
 
-    fn broadcast(&self, change_data_event: Event, size: usize) {
-        let downstreams = if self.pending.is_some() {
-            &self.pending.as_ref().unwrap().downstreams
-        } else {
-            &self.downstreams
-        };
+    fn broadcast(&self, change_data_event: Event, size: usize, normal_only: bool) {
+        let downstreams = self.downstreams();
+        assert!(
+            !downstreams.is_empty(),
+            "region {} miss downstream, event: {:?}",
+            self.region_id,
+            change_data_event,
+        );
         for i in 0..downstreams.len() - 1 {
+            if normal_only && !downstreams[i].state.is_normal() {
+                continue;
+            }
             downstreams[i].sink_event(change_data_event.clone(), size);
         }
         downstreams
@@ -259,53 +357,63 @@ impl Delegate {
     }
 
     /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, resolver: Resolver, region: Region) -> Result<()> {
+    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Result<()> {
         assert!(
             self.resolver.is_none(),
-            "region resolver should not be ready"
+            "region {} resolver should not be ready",
+            self.region_id,
         );
-        self.resolver = Some(resolver);
+        // Mark the delegate as initialized.
         self.region = Some(region);
-        if let Some(pending) = self.pending.take() {
+        if let Some(mut pending) = self.pending.take() {
             // Re-subscribe pending downstreams.
-            for downstream in pending.downstreams {
+            for downstream in pending.take_downstreams() {
                 self.subscribe(downstream);
             }
-            for (downstream_id, entries) in pending.scan {
-                self.on_scan(downstream_id, entries);
-            }
-            for batch in pending.multi_batch {
-                self.on_batch(batch)?;
+
+            for lock in pending.take_locks() {
+                match lock {
+                    PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                    PendingLock::Untrack {
+                        key,
+                        start_ts,
+                        commit_ts,
+                    } => resolver.untrack_lock(start_ts, commit_ts, key),
+                }
             }
         }
+        self.resolver = Some(resolver);
         info!("region is ready"; "region_id" => self.region_id);
         Ok(())
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         if self.resolver.is_none() {
             debug!("region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
-            return;
+            return None;
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
-            None => return,
+            None => return None,
         };
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         let mut change_data_event = Event::default();
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
-        self.broadcast(change_data_event, 0);
+        self.broadcast(change_data_event, 0, true);
+        CDC_RESOLVED_TS_GAP_HISTOGRAM
+            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+        Some(resolved_ts)
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
-        if let Some(pending) = self.pending.as_mut() {
-            pending.multi_batch.push(batch);
+        // Stale CmdBatch, drop it sliently.
+        if batch.observe_id != self.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -330,14 +438,15 @@ impl Delegate {
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        if let Some(pending) = self.pending.as_mut() {
-            pending.scan.push((downstream_id, entries));
-            return;
-        }
-        let d = if let Some(d) = self.downstreams.iter_mut().find(|d| d.id == downstream_id) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
             d
         } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id);
+            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
             return;
         };
 
@@ -408,7 +517,7 @@ impl Delegate {
                 let mut change_data_event = Event::default();
                 change_data_event.region_id = self.region_id;
                 change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-                d.sink_event(change_data_event, s);
+                downstream.sink_event(change_data_event, s);
             }
         }
     }
@@ -441,18 +550,29 @@ impl Delegate {
 
                     // In order to advance resolved ts,
                     // we must untrack inflight txns if they are committed.
-                    assert!(self.resolver.is_some(), "region resolver should be ready");
-                    let resolver = self.resolver.as_mut().unwrap();
                     let commit_ts = if row.commit_ts == 0 {
                         None
                     } else {
                         Some(row.commit_ts)
                     };
-                    resolver.untrack_lock(
-                        row.start_ts.into(),
-                        commit_ts.map(Into::into),
-                        row.key.clone(),
-                    );
+                    match self.resolver {
+                        Some(ref mut resolver) => resolver.untrack_lock(
+                            row.start_ts.into(),
+                            commit_ts.map(Into::into),
+                            row.key.clone(),
+                        ),
+                        None => {
+                            assert!(self.pending.is_some(), "region resolver not ready");
+                            let pending = self.pending.as_mut().unwrap();
+                            pending.locks.push(PendingLock::Untrack {
+                                key: row.key.clone(),
+                                start_ts: row.start_ts.into(),
+                                commit_ts: commit_ts.map(Into::into),
+                            });
+                            pending.pending_bytes += row.key.len();
+                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                        }
+                    }
 
                     let r = rows.insert(row.key.clone(), row);
                     assert!(r.is_none());
@@ -474,9 +594,21 @@ impl Delegate {
 
                     // In order to compute resolved ts,
                     // we must track inflight txns.
-                    assert!(self.resolver.is_some(), "region resolver should be ready");
-                    let resolver = self.resolver.as_mut().unwrap();
-                    resolver.track_lock(row.start_ts.into(), row.key.clone());
+                    match self.resolver {
+                        Some(ref mut resolver) => {
+                            resolver.track_lock(row.start_ts.into(), row.key.clone())
+                        }
+                        None => {
+                            assert!(self.pending.is_some(), "region resolver not ready");
+                            let pending = self.pending.as_mut().unwrap();
+                            pending.locks.push(PendingLock::Track {
+                                key: row.key.clone(),
+                                start_ts: row.start_ts.into(),
+                            });
+                            pending.pending_bytes += row.key.len();
+                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                        }
+                    }
 
                     *occupied = row;
                 }
@@ -501,7 +633,7 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        self.broadcast(change_data_event, total_size);
+        self.broadcast(change_data_event, total_size, true);
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
@@ -547,7 +679,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other);
+            debug!("skip write record"; "write" => ?other, "key" => hex::encode_upper(key));
             return true;
         }
     };
@@ -575,9 +707,10 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            info!("skip lock record";
+            debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
+                "key" => hex::encode_upper(key),
                 "for_update_ts" => ?lock.for_update_ts);
             return true;
         }
@@ -629,7 +762,7 @@ mod tests {
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(region_id);
         resolver.init();
         delegate.on_region_ready(resolver, region).unwrap();
 
@@ -816,12 +949,6 @@ mod tests {
             None,
         ];
         delegate.on_scan(downstream_id, entries);
-        assert_eq!(delegate.pending.as_ref().unwrap().scan.len(), 1);
-
-        let mut resolver = Resolver::new();
-        resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
-
         // Flush all pending entries.
         let mut row1 = EventRow::default();
         row1.start_ts = 1;
@@ -840,5 +967,9 @@ mod tests {
         let mut row3 = EventRow::default();
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
+
+        let mut resolver = Resolver::new(region_id);
+        resolver.init();
+        delegate.on_region_ready(resolver, region).unwrap();
     }
 }

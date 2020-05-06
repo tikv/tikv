@@ -8,22 +8,26 @@ use crate::master_key::Backend;
 #[cfg(test)]
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
     #[serde(with = "encryption_method_serde")]
-    pub method: EncryptionMethod,
+    #[config(skip)]
+    pub data_encryption_method: EncryptionMethod,
+    #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
+    #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }
 
 impl Default for EncryptionConfig {
     fn default() -> EncryptionConfig {
         EncryptionConfig {
-            method: EncryptionMethod::Plaintext,
+            data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
@@ -31,7 +35,49 @@ impl Default for EncryptionConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct FileCofnig {
+    pub path: String,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct KmsConfig {
+    pub key_id: String,
+
+    // Providing access_key and secret_access_key is recommended as it has
+    // security risk.
+    #[doc(hidden)]
+    // We don's want to write access_key and secret_access_key to config file
+    // accidentally.
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub access_key: String,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
+    pub secret_access_key: String,
+
+    pub region: String,
+    pub endpoint: String,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct Mock(pub Arc<dyn Backend>);
+#[cfg(test)]
+impl PartialEq for Mock {
+    fn eq(&self, _: &Self) -> bool {
+        false
+    }
+}
+#[cfg(test)]
+impl Eq for Mock {}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
@@ -42,36 +88,24 @@ pub enum MasterKeyConfig {
     // with newline.
     #[serde(rename_all = "kebab-case")]
     File {
-        #[serde(with = "encryption_method_serde")]
-        method: EncryptionMethod,
-        path: String,
+        #[serde(flatten)]
+        config: FileCofnig,
+    },
+
+    #[serde(rename_all = "kebab-case")]
+    Kms {
+        #[serde(flatten)]
+        config: KmsConfig,
     },
 
     #[cfg(test)]
     #[serde(skip)]
-    Mock(Arc<dyn Backend>),
+    Mock(Mock),
 }
 
 impl Default for MasterKeyConfig {
     fn default() -> Self {
         MasterKeyConfig::Plaintext
-    }
-}
-
-// Derive directive does not work, since MasterKeyConfig::Mock cannot implement PartialEq.
-impl PartialEq for MasterKeyConfig {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (MasterKeyConfig::Plaintext, MasterKeyConfig::Plaintext) => true,
-            (
-                MasterKeyConfig::File { method, path },
-                MasterKeyConfig::File {
-                    method: other_method,
-                    path: other_path,
-                },
-            ) => method == other_method && path == other_path,
-            _ => false,
-        }
     }
 }
 
@@ -131,5 +165,48 @@ mod encryption_method_serde {
         }
 
         deserializer.deserialize_str(EncryptionMethodVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kms_config() {
+        let kms_cfg = EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            data_key_rotation_period: ReadableDuration::days(14),
+            master_key: MasterKeyConfig::Kms {
+                config: KmsConfig {
+                    key_id: "key_id".to_owned(),
+                    access_key: "access_key".to_owned(),
+                    secret_access_key: "secret_access_key".to_owned(),
+                    region: "region".to_owned(),
+                    endpoint: "endpoint".to_owned(),
+                },
+            },
+            previous_master_key: MasterKeyConfig::Plaintext,
+        };
+        let kms_str = r#"
+        data-encryption-method = "aes128-ctr"
+        data-key-rotation-period = "14d"
+        [previous-master-key]
+        type = "plaintext"
+        [master-key]
+        type = "kms"
+        key-id = "key_id"
+        access-key = "access_key"
+        secret-access-key = "secret_access_key"
+        region = "region"
+        endpoint = "endpoint"
+        "#;
+        let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
+        assert_eq!(
+            cfg,
+            kms_cfg,
+            "\n{}\n",
+            toml::to_string_pretty(&kms_cfg).unwrap()
+        );
     }
 }

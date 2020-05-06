@@ -3,8 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
-
-use servo_arc::Arc;
+use std::sync::Arc;
 
 use tipb::{Expr, FieldType, TopN};
 
@@ -347,6 +346,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.src.take_scanned_range()
+    }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.src.can_be_cached()
     }
 }
 

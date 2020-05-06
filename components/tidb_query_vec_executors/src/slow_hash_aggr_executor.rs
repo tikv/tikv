@@ -59,6 +59,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     fn take_scanned_range(&mut self) -> IntervalRange {
         self.0.take_scanned_range()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        self.0.can_be_cached()
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -272,7 +277,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             )?;
         }
 
-        let buffer_ptr = (&*self.group_key_buffer).into();
         for logical_row_idx in 0..logical_rows_len {
             let offset_begin = self.group_key_buffer.len();
 
@@ -356,6 +360,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 }
             }
 
+            let buffer_ptr = (&*self.group_key_buffer).into();
             // Extra column is not included in `GroupKeyRefUnsafe` to avoid being aggr on.
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
                 buffer_ptr,

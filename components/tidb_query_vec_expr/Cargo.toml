@@ -6,6 +6,7 @@ publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
 [dependencies]
+base64 = "0.10"
 byteorder = "1.2"
 codec = { path = "../codec" }
 derive_more = "0.15.0"
@@ -26,7 +27,7 @@ uuid = { version = "0.8.1", features = ["v4"] }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
-rev = "a626d449eaebd5e8ce337f95c1d6dc9800f25df7"
+rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 
 [dev-dependencies]
 bstr = "0.2.8"

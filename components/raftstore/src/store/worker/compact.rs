@@ -5,9 +5,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
-use engine_traits::{CompactExt, KvEngine};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -77,18 +76,20 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("compact failed {:?}", err)
         }
     }
 }
 
-pub struct Runner {
-    engine: RocksEngine,
+pub struct Runner<E> {
+    engine: E,
 }
 
-impl Runner {
-    pub fn new(engine: RocksEngine) -> Runner {
+impl<E> Runner<E>
+where
+    E: KvEngine,
+{
+    pub fn new(engine: E) -> Runner<E> {
         Runner { engine }
     }
 
@@ -118,7 +119,10 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<E> Runnable<Task> for Runner<E>
+where
+    E: KvEngine,
+{
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact {

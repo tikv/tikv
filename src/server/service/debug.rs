@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
+use engine_rocks::RocksEngine;
 use fail;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
@@ -16,8 +17,8 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
+use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error};
-use crate::server::gc_worker::GcWorkerConfigManager;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
 use tikv_util::metrics;
@@ -47,30 +48,27 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter<RocksEngine>> {
     pool: CpuPool,
     debugger: Debugger,
     raft_router: T,
-    dynamic_config: bool,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
+impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
         engines: Engines,
         pool: CpuPool,
         raft_router: T,
-        gc_worker_cfg: GcWorkerConfigManager,
-        dynamic_config: bool,
+        cfg_controller: ConfigController,
         security_mgr: Arc<SecurityManager>,
     ) -> Service<T> {
-        let debugger = Debugger::new(engines, Some(gc_worker_cfg));
+        let debugger = Debugger::new(engines, cfg_controller);
         Service {
             pool,
             debugger,
             raft_router,
-            dynamic_config,
             security_mgr,
         }
     }
@@ -93,7 +91,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -417,24 +415,15 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
         }
         const TAG: &str = "modify_tikv_config";
 
-        if self.dynamic_config {
-            let msg =
-                "Dynamic config feature is enabled, please modify tikv config through PD instead";
-            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(msg.to_owned()));
-            ctx.spawn(sink.fail(status).map_err(move |e| on_grpc_error(TAG, &e)));
-            return;
-        }
-
-        let module = req.get_module();
         let config_name = req.take_config_name();
         let config_value = req.take_config_value();
 
-        let f = self
-            .pool
-            .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
-                debugger.modify_tikv_config(module, &config_name, &config_value)
-            }))
-            .map(|_| ModifyTikvConfigResponse::default());
+        let f =
+            self.pool
+                .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
+                    debugger.modify_tikv_config(&config_name, &config_value)
+                }))
+                .map(|_| ModifyTikvConfigResponse::default());
 
         self.handle_response(ctx, sink, f, TAG);
     }
@@ -517,7 +506,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     }
 }
 
-fn region_detail<T: RaftStoreRouter>(
+fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
@@ -555,7 +544,7 @@ fn region_detail<T: RaftStoreRouter>(
         })
 }
 
-fn consistency_check<T: RaftStoreRouter>(
+fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
 ) -> impl Future<Item = (), Error = Error> {

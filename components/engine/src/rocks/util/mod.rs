@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod config;
 pub mod engine_metrics;
 pub mod stats;
 
@@ -44,7 +43,7 @@ pub fn get_fastest_supported_compression_type() -> DBCompressionType {
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     let handle = db
         .cf_handle(cf)
-        .ok_or_else(|| Error::RocksDb(format!("cf {} not found", cf)))?;
+        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
     Ok(handle)
 }
 
