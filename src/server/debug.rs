@@ -544,11 +544,18 @@ impl<E: Engine> Debugger<E> {
             let (mut raft_state_changed, mut apply_state_changed) = (false, false);
             let (old_rs, old_as) = (raft_state.clone(), apply_state.clone());
 
-            let last_raft_log_index =
-                get_last_raft_log_index(self.engines.raft.clone(), region.get_id()).unwrap_or(0);
-            if last_raft_log_index != raft_state.get_last_index() {
+            let (first_log, last_log) =
+                get_raft_log_index(self.engines.raft.clone(), region.get_id()).unwrap_or((0, 0));
+
+            if first_log > apply_state.get_truncated_state().get_index() + 1 {
+                // set `truncated_index` if needed.
+                apply_state.mut_truncated_state().set_index(first_log - 1);
+                apply_state_changed = true;
+            }
+
+            if last_log != raft_state.get_last_index() {
                 // Set `last_index` to `last_log_index` so `term(last_index)` is valid.
-                raft_state.set_last_index(last_raft_log_index);
+                raft_state.set_last_index(last_log);
                 raft_state_changed = true;
             }
 
@@ -558,6 +565,7 @@ impl<E: Engine> Debugger<E> {
                 raft_state.set_last_index(truncated);
                 raft_state_changed = true;
             }
+
             // Commit index is less than truncated index.
             if raft_state.get_hard_state().get_commit()
                 < apply_state.get_truncated_state().get_index()
@@ -574,6 +582,10 @@ impl<E: Engine> Debugger<E> {
             }
             if raft_state.get_hard_state().get_commit() < apply_state.get_applied_index() {
                 apply_state.set_applied_index(raft_state.get_hard_state().get_commit());
+                apply_state_changed = true;
+            }
+            if apply_state.get_applied_index() + 1 < first_log {
+                apply_state.set_applied_index(first_log - 1);
                 apply_state_changed = true;
             }
 
@@ -1576,10 +1588,10 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
     Ok(res)
 }
 
-fn get_last_raft_log_index(raft: Arc<DB>, region_id: u64) -> Option<u64> {
+fn get_raft_log_index(raft: Arc<DB>, region_id: u64) -> Option<(u64, u64)> {
     let mut raft_log_iter = {
         let from = keys::raft_log_key(region_id, 0).to_vec();
-        let to = keys::raft_log_key(region_id + 1, 0).to_vec();
+        let to = keys::raft_state_key(region_id).to_vec();
         let readopts = IterOption::new(
             Some(KeyBuilder::from_vec(from, 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
@@ -1588,18 +1600,18 @@ fn get_last_raft_log_index(raft: Arc<DB>, region_id: u64) -> Option<u64> {
         .build_read_opts();
         DBIterator::new(raft, readopts)
     };
-    let raft_state_key = keys::raft_state_key(region_id);
-    match raft_log_iter.seek(SeekKey::Key(&raft_state_key)) {
-        Err(_) | Ok(false) => return None,
-        _ => {}
-    }
-    match raft_log_iter.prev() {
+    match raft_log_iter.seek(SeekKey::End) {
         Err(_) | Ok(false) => return None,
         _ => {}
     }
     let log_key = raft_log_iter.key();
     let last_log = keys::raft_log_index(log_key).unwrap();
-    return Some(last_log);
+
+    // The iterator must be valid because it's already checked above.
+    assert!(raft_log_iter.seek(SeekKey::Start).unwrap());
+    let log_key = raft_log_iter.key();
+    let first_log = keys::raft_log_index(log_key).unwrap();
+    return Some((first_log, last_log));
 }
 
 fn do_region_raft_check(
@@ -1618,8 +1630,11 @@ fn do_region_raft_check(
     if raft_state.get_last_index() < raft_state.get_hard_state().get_commit() {
         return Err(Error::Other("last index < commit index".into()));
     }
+    if apply_state.get_applied_index() < apply_state.get_truncated_state().get_index() {
+        return Err(Error::Other("applied index < truncated index".into()));
+    }
 
-    if let Some(last_log) = get_last_raft_log_index(engines.raft.clone(), region.get_id()) {
+    if let Some((first_log, last_log)) = get_raft_log_index(engines.raft.clone(), region.get_id()) {
         if last_log < apply_state.get_applied_index() {
             return Err(Error::Other("last log index < applied index".into()));
         }
@@ -1628,6 +1643,12 @@ fn do_region_raft_check(
         }
         if last_log < raft_state.get_last_index() {
             return Err(Error::Other("last log index < last index".into()));
+        }
+        if first_log > apply_state.get_truncated_state().get_index() + 1 {
+            return Err(Error::Other("first log index > truncated index + 1".into()));
+        }
+        if apply_state.get_applied_index() + 1 < first_log {
+            return Err(Error::Other("applied index < first log index".into()));
         }
     }
 
@@ -2111,6 +2132,33 @@ mod tests {
     }
 
     #[test]
+    fn test_get_raft_log_index() {
+        let debugger = new_debugger();
+
+        let wb = WriteBatch::new();
+        let handle = get_cf_handle(&debugger.engines.raft, CF_DEFAULT).unwrap();
+        let mock_raft_logs = |region_id: u64, start_index: u64, end_index: u64| {
+            for idx in start_index..=end_index {
+                let key = keys::raft_log_key(region_id, idx);
+                let mut entry = Entry::new();
+                entry.set_term(10);
+                let value = entry.write_to_bytes().unwrap();
+                wb.put_cf(handle, &key, &value).unwrap();
+            }
+        };
+        mock_raft_logs(14, 10, 90);
+        debugger
+            .engines
+            .raft
+            .write_opt(&wb, &WriteOptions::new())
+            .unwrap();
+
+        let (s, e) = get_raft_log_index(debugger.engines.raft.clone(), 14).unwrap();
+        assert_eq!(s, 10);
+        assert_eq!(e, 90);
+    }
+
+    #[test]
     fn test_bad_regions() {
         let debugger = new_debugger();
         let kv_engine = debugger.engines.kv.as_ref();
@@ -2192,12 +2240,12 @@ mod tests {
             // region state doesn't contains the peer itself.
             mock_region_state(13, &[]);
 
-            // last_index: 200, commit_index: 150, apply_index: 100, truncated_index: 70.
+            // last_index: 200, commit_index: 150, apply_index: 100, truncated_index: 40.
             // logs: [50, 90].
-            // after fix: (90, 90, 90, 70).
+            // after fix: (90, 90, 90, 50).
             mock_raft_state(14, 200, 150);
-            mock_apply_state(14, 100, 70);
-            mock_raft_logs(14, 5, 90);
+            mock_apply_state(14, 100, 40);
+            mock_raft_logs(14, 50, 90);
         }
 
         raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
@@ -2227,7 +2275,7 @@ mod tests {
             (10, 100, 100, 100, 100),
             (11, 105, 105, 105, 105),
             (12, 90, 90, 90, 90),
-            (14, 90, 90, 90, 70),
+            (14, 90, 90, 90, 49),
         ];
         for (region_id, last, commit, apply, truncate) in expect_states {
             let key = keys::raft_state_key(region_id);
