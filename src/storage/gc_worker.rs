@@ -380,22 +380,19 @@ impl<E: Engine> GCRunner<E> {
         region_ranges.sort();
         const DELETE_REGION_LIMIT: usize = 8;
         let l = region_ranges.len() / DELETE_REGION_LIMIT;
-        if l < 2 {
+        if l <= 2 {
             return;
         } else {
-            let mut last_key = start_data_key.clone();
             for i in 1..l {
-                results.push((last_key, region_ranges[i * DELETE_REGION_LIMIT].clone()));
-                last_key = region_ranges[i * DELETE_REGION_LIMIT].clone();
+                results.push(region_ranges[i * DELETE_REGION_LIMIT].clone());
             }
-            results.push((last_key, end_data_key));
             let cfs = &[CF_DEFAULT, CF_WRITE];
             for cf in cfs {
                 let cf_handle = get_cf_handle(local_storage, cf).unwrap();
-                for (range_start, range_end) in &results {
+                for range_end in &results {
                     let _ = local_storage.delete_files_in_range_cf(
                         cf_handle,
-                        range_start,
+                        &start_data_key,
                         range_end,
                         false,
                     );
