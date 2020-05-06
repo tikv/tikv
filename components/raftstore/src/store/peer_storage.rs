@@ -160,11 +160,7 @@ impl EntryCache {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
-                    self.mem_size_change -= self
-                        .cache
-                        .iter()
-                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
-                        .sum::<i64>();
+                    self.update_mem_size_change_before_clear();
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
@@ -203,11 +199,7 @@ impl EntryCache {
                 self.mem_size_change -= drained_cache_entries_size;
             } else {
                 start_idx = len - self.cache.len();
-                self.mem_size_change -= self
-                    .cache
-                    .iter()
-                    .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
-                    .sum::<i64>();
+                self.update_mem_size_change_before_clear();
                 self.cache.clear();
             }
         }
@@ -246,6 +238,14 @@ impl EntryCache {
             self.mem_size_change += self
                 .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
         }
+    }
+
+    fn update_mem_size_change_before_clear(&mut self) {
+        self.mem_size_change -= self
+            .cache
+            .iter()
+            .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+            .sum::<i64>();
     }
 
     fn get_cache_vec_mem_size_change(&self, new_capacity: i64, old_capacity: i64) -> i64 {
