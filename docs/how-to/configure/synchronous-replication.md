@@ -57,11 +57,11 @@ You can use `pd-ctl` to change a cluster from `asynchronous` to `synchronous`. C
 Or change back to `asynchronous`:
 
 ```bash
->> config set replication_mode majority
+>> config set replication-mode majority
 ```
 
 You can also update label key:
 
 ```bash
->> config set replication_mode dr-auto-sync label-key dc
+>> config set replication-mode dr-auto-sync label-key dc
 ```
