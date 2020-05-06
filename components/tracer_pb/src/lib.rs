@@ -16,9 +16,9 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
-            s.set_id(span.id as u32);
-            if let Some(p) = span.parent {
-                s.set_parent_value(p as u32);
+            s.set_id(0 as u32);
+            if let Some(_) = span.parent {
+                s.set_parent_value(1 as u32);
             }
             s.set_start(span.elapsed_start.as_nanos() as u64);
             s.set_end(span.elapsed_end.as_nanos() as u64);

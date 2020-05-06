@@ -46,25 +46,25 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
         #vis #constness #unsafety #asyncness #abi fn #ident<#gen_params>(#params) #return_type
         #where_clause
         {
-            let (__span_tx, __span_rx) = crossbeam::channel::unbounded();
+            let tracer::Collector {tx: __span_tx, rx: __span_rx } = 
+                tracer::Collector::new(tracer::COLLECTOR_TYPE);
             let __span = tracer::new_span_root(#tag, __span_tx, tracer::TIME_MEASURE_TYPE);
             let __g = __span.enter();
 
             {
                 #block
             }.inspect(move |_| {
-                let _spans = __span_rx.iter();
+                let _spans = __span_rx.collect_all();
 
-                let _bytes = tracer_pb::serialize(_spans);
-                // avoid dead-code elimination
-                let _bytes = unsafe {
-                    let ret = std::ptr::read_volatile(&_bytes);
-                    std::mem::forget(_bytes);
-                    ret
-                };
+                // let _bytes = tracer_pb::serialize(_spans.into_iter());
+                // // avoid dead-code elimination
+                // let _bytes = unsafe {
+                //     let ret = std::ptr::read_volatile(&_bytes);
+                //     std::mem::forget(_bytes);
+                //     ret
+                // };
 
-                // let _spans: Vec<_> = _spans.collect();
-                // tracer::util::draw_stdout(_spans.collect());
+                tracer::util::draw_stdout(_spans);
             })
         }
     )

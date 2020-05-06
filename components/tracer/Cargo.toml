@@ -5,11 +5,10 @@ edition = "2018"
 
 [dependencies]
 crossbeam = "0.7"
-sharded-slab = "0.0.9"
-lazy_static = "1.4"
 pin-project = "0.4"
 tracer-attribute = { path = "./tracer-attribute" }
 tikv_alloc = { path = "../tikv_alloc" }
+snowflake = "1.2"
 
 [dependencies.futures_01]
 version = "0.1"
@@ -22,7 +21,6 @@ package = "futures"
 [dev-dependencies]
 criterion = "0.3"
 crossbeam = "0.7"
-sharded-slab = "0.0.9"
 
 [[bench]]
 name = "tracer"

@@ -43,11 +43,11 @@ impl TimeMeasureRoot {
 }
 
 impl TimeMeasureHandle {
-    pub fn end(self) -> (std::time::Duration, std::time::Duration) {
+    pub fn end(&self) -> (std::time::Duration, std::time::Duration) {
         let TimeMeasureHandle { root, start } = self;
         match root {
-            TimeMeasureRoot::SystemTime(s) => (start, s.elapsed().unwrap()),
-            TimeMeasureRoot::Instant(s) => (start, s.elapsed()),
+            TimeMeasureRoot::SystemTime(s) => (*start, s.elapsed().unwrap()),
+            TimeMeasureRoot::Instant(s) => (*start, s.elapsed()),
         }
     }
 }

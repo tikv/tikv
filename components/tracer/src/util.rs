@@ -4,15 +4,20 @@ pub fn draw_stdout(spans: Vec<crate::Span>) {
     let mut children = std::collections::HashMap::new();
     let mut spans_map = std::collections::HashMap::new();
     let mut root = None;
+    let mut max_end = 0;
     for span in spans {
         let start = span.elapsed_start.as_nanos();
         let end = span.elapsed_end.as_nanos();
         assert_eq!(
             spans_map.insert(span.id, (span.tag, start, end - start)),
             None,
-            "duplicated id {}",
+            "duplicated id {:#?}",
             span.id
         );
+
+        if end > max_end {
+            max_end = end;
+        }
 
         if let Some(parent) = span.parent {
             children
@@ -26,18 +31,18 @@ pub fn draw_stdout(spans: Vec<crate::Span>) {
 
     let root = root.expect("can not find root");
     let pivot = spans_map.get(&root).unwrap().1;
-    let factor = BAR_LEN as f64 / spans_map.get(&root).unwrap().2 as f64;
+    let factor = BAR_LEN as f64 / max_end as f64;
 
     draw_rec(root, pivot, factor, &children, &spans_map);
     println!();
 }
 
 fn draw_rec(
-    cur_id: usize,
+    cur_id: crate::SpanID,
     pivot: u128,
     factor: f64,
-    children_map: &std::collections::HashMap<usize, Vec<usize>>,
-    spans_map: &std::collections::HashMap<usize, (&'static str, u128, u128)>,
+    children_map: &std::collections::HashMap<crate::SpanID, Vec<crate::SpanID>>,
+    spans_map: &std::collections::HashMap<crate::SpanID, (&'static str, u128, u128)>,
 ) {
     let (tag, start, duration) = *spans_map.get(&cur_id).expect("can not get span");
 
