@@ -1539,9 +1539,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             region_id,
             target.clone(),
         )?;
-        let mut guard = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_commit_group(&mut *guard);
-        drop(guard);
+        let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+        peer.peer.init_commit_group(&mut *replication_state);
+        drop(replication_state);
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         meta.regions
