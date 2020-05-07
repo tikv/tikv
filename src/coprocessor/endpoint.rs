@@ -348,18 +348,13 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
 
-        let mut handler = {
-            let span = minitrace::new_span(0u32);
-            let _g = span.enter();
-
-            if tracker.req_ctx.cache_match_version.is_some()
-                && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
-            {
-                // Build a cached request handler instead if cache version is matching.
-                CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
-            } else {
-                handler_builder(snapshot, &tracker.req_ctx)?
-            }
+        let mut handler = if tracker.req_ctx.cache_match_version.is_some()
+            && tracker.req_ctx.cache_match_version == snapshot.get_data_version() 
+        {
+            // Build a cached request handler instead if cache version is matching.
+            CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
+        } else {
+            handler_builder(snapshot, &tracker.req_ctx)?
         };
 
         tracker.on_begin_all_items();

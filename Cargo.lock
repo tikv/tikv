@@ -2128,6 +2128,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchers"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f099785f7595cc4b4553a174ce30dd7589ef93391ff414dbb67f62392b9e0ce1"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "matches"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2205,13 +2214,55 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#82dd78553478a1b2beb76a9c76011f56b7cb8810"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "minitrace-attribute 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=busy)",
+ "pin-project",
+]
+
+[[package]]
+name = "minitrace"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=dev#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "minitrace-attribute 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=dev)",
+ "pin-project",
+]
+
+[[package]]
+name = "minitrace"
+version = "0.0.1"
 source = "git+https://github.com/zhongzc/minitrace.git#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
  "futures 0.3.4",
- "minitrace-attribute",
+ "minitrace-attribute 0.0.1 (git+https://github.com/zhongzc/minitrace.git)",
  "pin-project",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#82dd78553478a1b2beb76a9c76011f56b7cb8810"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=dev#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -3328,6 +3379,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92b73c2a1770c255c240eaa4ee600df1704a38dc3feaa6e949e7fcd4f8dc09f9"
 dependencies = [
  "byteorder",
+ "regex-syntax",
+ "utf8-ranges",
 ]
 
 [[package]]
@@ -3764,6 +3817,15 @@ dependencies = [
  "digest",
  "fake-simd",
  "opaque-debug",
+]
+
+[[package]]
+name = "sharded-slab"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d5a3f5166fb5b42a5439f2eee8b9de149e235961e3eb21c5808fc3ea17ff3e"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]
@@ -4541,7 +4603,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
- "minitrace",
+ "minitrace 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=busy)",
  "slog",
  "slog-global",
  "smallvec 0.6.10",
@@ -4630,7 +4692,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "mime",
- "minitrace",
+ "minitrace 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=busy)",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -4689,6 +4751,7 @@ dependencies = [
  "toml",
  "trace_codegen",
  "trace_pb",
+ "tracer",
  "txn_types",
  "url",
  "uuid",
@@ -5166,11 +5229,95 @@ name = "trace_pb"
 version = "0.0.1"
 dependencies = [
  "lazy_static",
- "minitrace",
+ "minitrace 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=busy)",
  "prost",
  "prost-derive",
  "protobuf",
  "protobuf-build",
+]
+
+[[package]]
+name = "tracer"
+version = "0.0.1"
+dependencies = [
+ "criterion",
+ "minitrace 0.0.1 (git+https://github.com/zhongzc/minitrace.git?branch=dev)",
+ "minitrace 0.0.1 (git+https://github.com/zhongzc/minitrace.git)",
+ "tikv_util",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tracing"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1721cc8cf7d770cc4257872507180f35a4797272f5962f24c806af9e7faf52ab"
+dependencies = [
+ "cfg-if",
+ "tracing-attributes",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fbad39da2f9af1cae3016339ad7f2c7a9e870f12e8fd04c4fd7ef35b30c0d2b"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "tracing-core"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aa83a9a47081cd522c09c81b31aec2c9273424976f922ad61c053b58350b715"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e0f8c7178e13481ff6765bd169b33e8d554c5d2bbede5e32c356194be02b9b9"
+dependencies = [
+ "lazy_static",
+ "log",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-serde"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6ccba2f8f16e0ed268fc765d9b7ff22e965e7185d32f8f1ec8294fe17d86e79"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d53c40489aa69c9aed21ff483f26886ca8403df33bdc2d2f87c60c1617826d2"
+dependencies = [
+ "ansi_term",
+ "chrono",
+ "lazy_static",
+ "matchers",
+ "regex",
+ "serde",
+ "serde_json",
+ "sharded-slab",
+ "smallvec 1.1.0",
+ "tracing-core",
+ "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -5290,6 +5437,12 @@ dependencies = [
  "matches",
  "percent-encoding",
 ]
+
+[[package]]
+name = "utf8-ranges"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ae116fef2b7fea257ed6440d3cfcff7f190865f170cdad00bb6465bf18ecba"
 
 [[package]]
 name = "utime"

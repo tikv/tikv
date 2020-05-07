@@ -44,6 +44,11 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
             let __span = minitrace::new_span_root(__span_tx, #tag);
             let __g = __span.enter();
 
+            for _ in 0..100 {
+                let __child_span = minitrace::new_span(#tag);
+                let __child_g = __child_span.enter();
+            }
+
             {
                 #block
             }.inspect(move |_| {

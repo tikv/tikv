@@ -54,6 +54,7 @@ use rand::prelude::*;
 use std::sync::{atomic, Arc};
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
+use minitrace::future::Instrument;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -272,7 +273,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             start_ts.into_inner(),
         );
@@ -351,7 +352,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok(results)
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );
@@ -436,7 +437,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.elapsed_secs());
                     result
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             start_ts.into_inner(),
         );
@@ -534,7 +535,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .collect()
                     })
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             start_ts.into_inner(),
         );
@@ -673,7 +674,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok(r)
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );
@@ -734,7 +735,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok(results)
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );
@@ -805,7 +806,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.elapsed_secs());
                     Ok(result)
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );
@@ -870,6 +871,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete a raw key from the storage.
+    #[minitrace::trace(0u32)]
     pub fn raw_delete(
         &self,
         ctx: Context,
@@ -1113,7 +1115,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );
@@ -1247,7 +1249,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(command_duration.elapsed_secs());
                     Ok(result)
                 }
-            },
+            }.in_current_span(0u32),
             priority,
             thread_rng().next_u64(),
         );

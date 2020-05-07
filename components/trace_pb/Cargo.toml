@@ -9,7 +9,7 @@ protobuf-codec = ["protobuf-build/protobuf-codec"]
 prost-codec = ["prost", "prost-derive", "lazy_static", "protobuf-build/prost-codec"]
 
 [dependencies]
-minitrace = { git = "https://github.com/zhongzc/minitrace.git" }
+minitrace = { git = "https://github.com/zhongzc/minitrace.git", branch = "busy" }
 protobuf = "2"
 prost = { version = "0.6", optional = true }
 prost-derive = { version = "0.6", optional = true }

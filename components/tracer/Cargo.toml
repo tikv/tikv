@@ -5,7 +5,18 @@ edition = "2018"
 
 [dev-dependencies]
 criterion = "0.3"
-minitrace = { git = "https://github.com/zhongzc/minitrace.git" }
+tikv_util = { path = "../tikv_util" }
+tracing = "0.1.13"
+tracing-core = "0.1.10"
+tracing-subscriber = "0.2.3"
+
+[dependencies.minitrace_cmp]
+package = "minitrace"
+git = "https://github.com/zhongzc/minitrace.git"
+branch = "dev"
+
+[dependencies.minitrace]
+git = "https://github.com/zhongzc/minitrace.git"
 
 [[bench]]
 name = "tracer"
