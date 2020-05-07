@@ -424,7 +424,7 @@ lazy_static! {
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_read_index_pending",
-            "pending read index count"
+            "Pending read index count"
         ).unwrap();
 
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
@@ -454,5 +454,9 @@ lazy_static! {
             "tikv_read_qps_topn",
             "collect topN of read qps",
         &["order"]
+        ).unwrap();
+    pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_entries_caches",
+        "Total memory size of raft entries caches"
         ).unwrap();
 }

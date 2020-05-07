@@ -4376,10 +4376,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::AcquirePessimisticLock::new(
-                    vec![
-                        (Key::from_raw(b"foo"), false),
-                        (Key::from_raw(&k.clone()), false),
-                    ],
+                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
                     k.clone(),
                     20.into(),
                     3000,
@@ -4412,7 +4409,7 @@ mod tests {
                     lock,
                     Lock {
                         ts: 10.into(),
-                        hash: Key::from_raw(&k.clone()).gen_hash(),
+                        hash: Key::from_raw(&k).gen_hash(),
                     }
                 );
                 assert_eq!(is_first_lock, true);
