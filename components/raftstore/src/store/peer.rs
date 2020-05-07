@@ -1405,7 +1405,7 @@ impl Peer {
                     entries: committed_entries,
                     last_committed_index: self.get_store().committed_index(),
                     committed_term: term,
-                    committed_index: committed_index,
+                    committed_index,
                     cbs,
                 };
                 ctx.apply_router
