@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
@@ -350,7 +351,7 @@ where
 
     perf_context_statistics: PerfContextStatistics,
 
-    max_written_count: usize,
+    yield_duration: Duration,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -389,7 +390,7 @@ where
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
-            max_written_count: cfg.apply_yield_count,
+            yield_duration: cfg.apply_yield_duration.0,
         }
     }
 
@@ -732,7 +733,7 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written_count: usize,
+    handle_start: Option<Instant>,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -786,7 +787,7 @@ where
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            written_count: 0,
+            handle_start: None,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -925,10 +926,11 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written_count >= apply_ctx.max_written_count {
-                    return ApplyResult::Yield;
+                if let Some(start) = self.handle_start.as_ref() {
+                    if start.elapsed() >= apply_ctx.yield_duration {
+                        return ApplyResult::Yield;
+                    }
                 }
-                self.written_count += 1;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -3098,7 +3100,7 @@ where
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written_count = 0;
+        normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
@@ -3339,7 +3341,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
     let (router, system) = batch_system::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
-        cfg.reschedule_count,
+        cfg.reschedule_duration.0,
         tx,
         Box::new(ControlFsm),
     );

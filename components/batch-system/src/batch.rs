@@ -11,7 +11,9 @@ use crate::router::Router;
 use crossbeam::channel::{self, SendError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use tikv_util::mpsc;
+use tikv_util::time::Instant;
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -71,7 +73,7 @@ impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 #[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
-    counters: Vec<usize>,
+    timers: Vec<Instant>,
     control: Option<Box<C>>,
 }
 
@@ -80,7 +82,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     pub fn with_capacity(cap: usize) -> Batch<N, C> {
         Batch {
             normals: Vec::with_capacity(cap),
-            counters: Vec::with_capacity(cap),
+            timers: Vec::with_capacity(cap),
             control: None,
         }
     }
@@ -89,7 +91,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         match fsm {
             FsmTypes::Normal(n) => {
                 self.normals.push(n);
-                self.counters.push(0);
+                self.timers.push(Instant::now_coarse());
             }
             FsmTypes::Control(c) => {
                 assert!(self.control.is_none());
@@ -106,7 +108,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn clear(&mut self) {
         self.normals.clear();
-        self.counters.clear();
+        self.timers.clear();
         self.control.take();
     }
 
@@ -120,7 +122,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm);
         if mailbox.len() == checked_len {
-            self.counters.swap_remove(index);
+            self.timers.swap_remove(index);
         } else {
             match mailbox.take_fsm() {
                 None => (),
@@ -144,7 +146,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         let mailbox = fsm.take_mailbox().unwrap();
         if mailbox.is_empty() {
             mailbox.release(fsm);
-            self.counters.swap_remove(index);
+            self.timers.swap_remove(index);
         } else {
             fsm.set_mailbox(Cow::Owned(mailbox));
             let last_index = self.normals.len();
@@ -156,7 +158,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// Schedule the normal FSM located at `index`.
     pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
         let fsm = self.normals.swap_remove(index);
-        self.counters.swap_remove(index);
+        self.timers.swap_remove(index);
         router.normal_scheduler.schedule(fsm);
     }
 
@@ -233,7 +235,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
-    reschedule_count: usize,
+    reschedule_duration: Duration,
 }
 
 enum ReschedulePolicy {
@@ -289,11 +291,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
                 let len = self.handler.handle_normal(p);
-                batch.counters[i] += 1;
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
                 } else {
-                    if batch.counters[i] > self.reschedule_count {
+                    if batch.timers[i].elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -320,7 +321,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     break;
                 }
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
-                batch.counters[fsm_cnt] += 1;
                 if batch.normals[fsm_cnt].is_stopped() {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
                 } else {
@@ -365,7 +365,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
-    reschedule_count: usize,
+    reschedule_duration: Duration,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -390,7 +390,7 @@ where
                 fsm_receiver: self.receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
-                reschedule_count: self.reschedule_count,
+                reschedule_duration: self.reschedule_duration,
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
@@ -434,7 +434,7 @@ pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlSchedule
 pub fn create_system<N: Fsm, C: Fsm>(
     pool_size: usize,
     max_batch_size: usize,
-    reschedule_count: usize,
+    reschedule_duration: Duration,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
@@ -449,7 +449,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         receiver: rx,
         pool_size,
         max_batch_size,
-        reschedule_count,
+        reschedule_duration,
         workers: vec![],
     };
     (router, system)
