@@ -30,8 +30,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         self.src.schema()
     }
 
-    #[minitrace::trace(0u32)]
     #[inline]
+    #[minitrace::trace(0u32)]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(scan_rows);
         if result.logical_rows.len() < self.remaining_rows {

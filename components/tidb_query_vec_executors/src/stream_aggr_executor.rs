@@ -31,8 +31,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
         self.0.schema()
     }
 
-    #[minitrace::trace(0u32)]
     #[inline]
+    #[minitrace::trace(0u32)]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }
@@ -201,8 +201,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         }
     }
 
-    #[minitrace::trace(0u32)]
     #[inline]
+    #[minitrace::trace(0u32)]
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,

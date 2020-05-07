@@ -148,8 +148,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         })
     }
 
-    #[minitrace::trace(0u32)]
     #[inline]
+    #[minitrace::trace(0u32)]
     fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
@@ -289,8 +289,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         self.src.schema()
     }
 
-    #[minitrace::trace(0u32)]
     #[inline]
+    #[minitrace::trace(0u32)]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
