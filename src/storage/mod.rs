@@ -1370,7 +1370,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 mod tests {
     use super::*;
 
-    use crate::config::{DbConfig, TitanDBConfig};
+    use crate::config::{TitanDBConfig};
     use crate::storage::config::BlockCacheConfig;
     use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
     use engine::rocks::util::CFOptions;
