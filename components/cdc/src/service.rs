@@ -27,7 +27,7 @@ pub struct ConnID(usize);
 
 impl ConnID {
     pub fn new() -> ConnID {
-        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 

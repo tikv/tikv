@@ -342,9 +342,8 @@ docker:
 
 # Cargo only has two non-test profiles, dev and release, and we have
 # more than two use cases for which a cargo profile is required. This
-# is a hack to manage more cargo profiles, written in
-# `etc/cargo.config.*`. These make use of the unstable
-# `-Zconfig-profile` cargo option to specify profiles in
+# is a hack to manage more cargo profiles, written in `etc/cargo.config.*`.
+# So we use cargo `config-profile` feature to specify profiles in
 # `.cargo/config`, which `scripts/run-cargo.sh copies into place.
 #
 # Presently the only thing this is used for is the `dist_release`

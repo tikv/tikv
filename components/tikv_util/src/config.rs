@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use url;
 
 use super::time::Instant;
 use crate::slow_log;
@@ -579,7 +578,6 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use libc;
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::path::Path;
@@ -611,6 +609,9 @@ mod check_data_dir {
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            if afile.is_null() {
+                return Err(ConfigError::FileSystem("error opening fstab".to_string()));
+            }
             let mut fs = FsInfo::default();
             loop {
                 let ent = libc::getmntent(afile);
@@ -1117,7 +1118,6 @@ mod tests {
 
     use super::*;
     use tempfile::Builder;
-    use toml;
 
     #[test]
     fn test_readable_size() {

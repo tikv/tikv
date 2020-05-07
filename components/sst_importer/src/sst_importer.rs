@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,14 +16,13 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
-    SstWriter, CF_WRITE,
+    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstExt,
+    SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend};
 use futures_util::io::{copy, AllowStdIo};
-use keys;
 use tikv_util::time::Limiter;
-use txn_types::{Key, TimeStamp, WriteRef};
+use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
 use super::{Error, Result};
 use crate::metrics::*;
@@ -123,11 +122,11 @@ impl SSTImporter {
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
-                info!("download"; "meta" => ?meta, "range" => ?r);
+                info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
             }
             Err(e) => {
-                error!("download failed"; "meta" => ?meta, "err" => %e);
+                error!("download failed"; "meta" => ?meta, "name" => name, "err" => %e);
                 Err(e)
             }
         }
@@ -163,8 +162,18 @@ impl SSTImporter {
                     Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
                 })?;
             if meta.length != 0 && meta.length != file_length {
-                let reason = format!("length {}, expect {}", file_length, meta.length);
-                return Err(Error::FileCorrupted(path.temp, reason));
+                let reason = format!(
+                    "downloaded size {}, expected {}, local path {}",
+                    file_length,
+                    meta.length,
+                    path.temp.display()
+                );
+                let reason = io::Error::new(io::ErrorKind::InvalidData, reason);
+                return Err(Error::CannotReadExternalStorage(
+                    url.to_string(),
+                    name.to_owned(),
+                    reason,
+                ));
             }
             IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
             OpenOptions::new()
@@ -347,6 +356,125 @@ impl SSTImporter {
 
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
+    }
+
+    pub fn new_writer<E: KvEngine>(
+        &self,
+        default: E::SstWriter,
+        write: E::SstWriter,
+        meta: SstMeta,
+    ) -> Result<SSTWriter<E>> {
+        let mut default_meta = meta.clone();
+        default_meta.set_cf_name(CF_DEFAULT.to_owned());
+        let default_path = self.dir.join(&default_meta)?;
+
+        let mut write_meta = meta;
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        let write_path = self.dir.join(&write_meta)?;
+        Ok(SSTWriter::new(
+            default,
+            write,
+            default_path,
+            write_path,
+            default_meta,
+            write_meta,
+        ))
+    }
+}
+
+pub struct SSTWriter<E: KvEngine> {
+    default: E::SstWriter,
+    default_entries: u64,
+    default_path: ImportPath,
+    default_meta: SstMeta,
+    write: E::SstWriter,
+    write_entries: u64,
+    write_path: ImportPath,
+    write_meta: SstMeta,
+}
+
+impl<E: KvEngine> SSTWriter<E> {
+    pub fn new(
+        default: E::SstWriter,
+        write: E::SstWriter,
+        default_path: ImportPath,
+        write_path: ImportPath,
+        default_meta: SstMeta,
+        write_meta: SstMeta,
+    ) -> Self {
+        SSTWriter {
+            default,
+            default_path,
+            default_entries: 0,
+            default_meta,
+            write,
+            write_path,
+            write_entries: 0,
+            write_meta,
+        }
+    }
+
+    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
+        let commit_ts = TimeStamp::new(batch.get_commit_ts());
+        for m in batch.get_pairs().iter() {
+            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
+            self.put(k.as_encoded(), m.get_value())?;
+        }
+        Ok(())
+    }
+
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        let k = keys::data_key(key);
+        let (_, commit_ts) = Key::split_on_ts_for(key)?;
+        if is_short_value(value) {
+            let w = KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec()));
+            self.write.put(&k, &w.as_ref().to_bytes())?;
+            self.write_entries += 1;
+        } else {
+            let w = KvWrite::new(WriteType::Put, commit_ts, None);
+            self.write.put(&k, &w.as_ref().to_bytes())?;
+            self.write_entries += 1;
+            self.default.put(&k, value)?;
+            self.default_entries += 1;
+        }
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<Vec<SstMeta>> {
+        let default_meta = self.default_meta.clone();
+        let write_meta = self.write_meta.clone();
+        let mut metas = Vec::with_capacity(2);
+        let (default_entries, write_entries) = (self.default_entries, self.write_entries);
+        let (p1, p2) = (self.default_path.clone(), self.write_path.clone());
+        let (w1, w2) = (self.default, self.write);
+        if default_entries > 0 {
+            let (_, sst_reader) = w1.finish_read()?;
+            Self::save(sst_reader, p1)?;
+            metas.push(default_meta);
+        }
+        if write_entries > 0 {
+            let (_, sst_reader) = w2.finish_read()?;
+            Self::save(sst_reader, p2)?;
+            metas.push(write_meta);
+        }
+        info!("finish write to sst";
+            "default entries" => default_entries,
+            "write entries" => write_entries,
+        );
+        Ok(metas)
+    }
+
+    fn save(
+        mut sst_reader: <<E as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader,
+        import_path: ImportPath,
+    ) -> Result<()> {
+        let tmp_path = import_path.temp;
+        let mut tmp_f = File::create(&tmp_path)?;
+        std::io::copy(&mut sst_reader, &mut tmp_f)?;
+        tmp_f.metadata()?.permissions().set_readonly(true);
+        tmp_f.sync_all()?;
+        fs::rename(tmp_path, import_path.save)?;
+        Ok(())
     }
 }
 
@@ -579,11 +707,12 @@ const SST_SUFFIX: &str = ".sst";
 
 fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
-        "{}_{}_{}_{}{}",
+        "{}_{}_{}_{}_{}{}",
         UuidBuilder::from_slice(meta.get_uuid())?.build(),
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
+        meta.get_cf_name(),
         SST_SUFFIX,
     )))
 }
@@ -596,12 +725,12 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     };
 
     // A valid file name should be in the format:
-    // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}.sst"
+    // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}_{cf}.sst"
     if !file_name.ends_with(SST_SUFFIX) {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
-    if elems.len() != 4 {
+    if elems.len() != 5 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
@@ -611,6 +740,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.set_region_id(elems[1].parse()?);
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
+    meta.set_cf_name(elems[4].to_owned());
     Ok(meta)
 }
 
@@ -775,11 +905,12 @@ mod tests {
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_region_id(1);
+        meta.set_cf_name(CF_DEFAULT.to_owned());
         meta.mut_region_epoch().set_conf_ver(2);
         meta.mut_region_epoch().set_version(3);
 
         let path = sst_meta_to_path(&meta).unwrap();
-        let expected_path = format!("{}_1_2_3.sst", uuid);
+        let expected_path = format!("{}_1_2_3_default.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
         let new_meta = path_to_sst_meta(path).unwrap();
@@ -1350,5 +1481,54 @@ mod tests {
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
+    }
+    #[test]
+    fn test_write_sst() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let name = importer.get_path(&meta);
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+        let default = <TestEngine as SstExt>::SstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_db(&db)
+            .set_cf(CF_DEFAULT)
+            .build(&name.to_str().unwrap())
+            .unwrap();
+        let write = <TestEngine as SstExt>::SstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_db(&db)
+            .set_cf(CF_WRITE)
+            .build(&name.to_str().unwrap())
+            .unwrap();
+
+        let mut w = importer
+            .new_writer::<TestEngine>(default, write, meta)
+            .unwrap();
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // wirte cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 2);
     }
 }
