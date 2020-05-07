@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use tipb;
 
 /// Bucket is an element of histogram.
 struct Bucket {

@@ -11,7 +11,6 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 
 use engine_traits::KvEngine;
-use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};

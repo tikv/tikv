@@ -28,7 +28,6 @@ use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};

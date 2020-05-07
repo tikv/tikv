@@ -30,7 +30,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 num_cpus = "1"
 openssl = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
-quick-error = "1.2.2"
+quick-error = "1.2.3"
 rand = "0.7"
 serde = "1.0"
 serde_derive = "1.0"

@@ -5,8 +5,6 @@ use std::sync::*;
 use std::thread;
 use std::time::*;
 
-use fail;
-
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
