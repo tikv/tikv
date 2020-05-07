@@ -2016,10 +2016,10 @@ impl TiKvConfig {
             .into());
         }
         if self.rocksdb.info_log_dir.is_empty() {
-            self.rocksdb.info_log_dir = self.storage.data_dir;
+            self.rocksdb.info_log_dir = self.storage.data_dir.clone();
         }
         if self.raftdb.info_log_dir.is_empty() {
-            self.rocksdb.info_log_dir = self.storage.data_dir;
+            self.raftdb.info_log_dir = self.storage.data_dir.clone();
         }
 
         self.rocksdb.validate()?;

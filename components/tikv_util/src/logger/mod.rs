@@ -333,7 +333,7 @@ pub struct LogDispatcher<N: Drain, R: Drain, S: Drain, T: Drain> {
 }
 
 impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
-    pub fn new(normal: N, rocksdb: R, slow: Option<S>, raft: T) -> Self {
+    pub fn new(normal: N, rocksdb: R, slow: Option<S>, raftdb: T) -> Self {
         Self {
             normal,
             rocksdb,

@@ -42,7 +42,7 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
     assert!(config.rocksdb.info_log_dir.is_empty());
-    assert!(config. info_log_dir.is_empty());
+    assert!(config.raftdb.info_log_dir.is_empty());
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
@@ -92,19 +92,19 @@ pub fn initial_logger(config: &TiKvConfig) {
         };
 
         let rocksdb_log_drainer = logger::file_drainer(
-                &config.rocksdb.info_log_dir,
-                config.log_rotation_timespan,
-                config.log_rotation_size,
-                rename_by_timestamp,
-            )
-            .unwrap_or_else(|e| {
-                fatal!(
-                    "failed to initialize log with file {}: {}",
-                    config.rocksdb.info_log_dir,
-                    e
-                );
-            });
-        };
+            &config.rocksdb.info_log_dir,
+            config.log_rotation_timespan,
+            config.log_rotation_size,
+            rename_by_timestamp,
+        )
+        .unwrap_or_else(|e| {
+            fatal!(
+                "failed to initialize log with file {}: {}",
+                config.rocksdb.info_log_dir,
+                e
+            );
+        });
+
         let raftdb_log_drainer = logger::file_drainer(
             &config.rocksdb.info_log_dir,
             config.log_rotation_timespan,
@@ -118,7 +118,12 @@ pub fn initial_logger(config: &TiKvConfig) {
                 e
             );
         });
-        let drainer = logger::LogDispatcher::new(drainer,  slow_log_drainer, rocksdb_log_drainer,raftdb_log_drainer);
+        let drainer = logger::LogDispatcher::new(
+            drainer,
+            rocksdb_log_drainer,
+            slow_log_drainer,
+            raftdb_log_drainer,
+        );
         logger::init_log(
             drainer,
             config.log_level,
