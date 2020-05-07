@@ -1097,7 +1097,6 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
- "libc",
  "num_cpus",
  "prometheus",
  "prometheus-static-metric",

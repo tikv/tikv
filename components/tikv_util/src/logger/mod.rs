@@ -325,27 +325,30 @@ impl slog::Value for LogCost {
 }
 
 /// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
-pub struct LogDispatcher<N: Drain, R: Drain, S: Drain> {
+pub struct LogDispatcher<N: Drain, R: Drain, S: Drain, T: Drain> {
     normal: N,
-    rocksdb: Option<R>,
+    rocksdb: R,
     slow: Option<S>,
+    raftdb: T,
 }
 
-impl<N: Drain, R: Drain, S: Drain> LogDispatcher<N, R, S> {
-    pub fn new(normal: N, rocksdb: Option<R>, slow: Option<S>) -> Self {
+impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
+    pub fn new(normal: N, rocksdb: R, slow: Option<S>, raft: T) -> Self {
         Self {
             normal,
             rocksdb,
             slow,
+            raftdb,
         }
     }
 }
 
-impl<N, R, S> Drain for LogDispatcher<N, R, S>
+impl<N, R, S, T> Drain for LogDispatcher<N, R, S, T>
 where
     N: Drain<Ok = (), Err = io::Error>,
     R: Drain<Ok = (), Err = io::Error>,
     S: Drain<Ok = (), Err = io::Error>,
+    T: Drain<Ok = (), Err = io::Error>,
 {
     type Ok = ();
     type Err = io::Error;
@@ -354,8 +357,10 @@ where
         let tag = record.tag();
         if self.slow.is_some() && tag.starts_with("slow_log") {
             self.slow.as_ref().unwrap().log(record, values)
-        } else if self.rocksdb.is_some() && tag.starts_with("rocksdb_log") {
-            self.rocksdb.as_ref().unwrap().log(record, values)
+        } else if tag.starts_with("rocksdb_log") {
+            self.rocksdb.log(record, values)
+        } else if tag.starts_with("raftdb_log") {
+            self.raftdb.log(record, values)
         } else {
             self.normal.log(record, values)
         }

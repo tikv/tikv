@@ -36,7 +36,7 @@ use engine::rocks::util::{
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
@@ -1030,6 +1030,8 @@ pub struct RaftDbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     #[config(skip)]
+    pub info_log_level: LogLevel,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[config(skip)]
@@ -1071,6 +1073,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -1105,6 +1108,8 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
+        opts.set_info_log(RaftDBLogger::default());
+        opts.set_info_log_level(self.info_log_level.into());
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -2009,6 +2014,12 @@ impl TiKvConfig {
                 duration_to_sec(expect_keepalive)
             )
             .into());
+        }
+        if self.rocksdb.info_log_dir.is_empty() {
+            self.rocksdb.info_log_dir = self.storage.data_dir;
+        }
+        if self.raftdb.info_log_dir.is_empty() {
+            self.rocksdb.info_log_dir = self.storage.data_dir;
         }
 
         self.rocksdb.validate()?;
