@@ -1374,7 +1374,6 @@ mod tests {
     use crate::storage::config::BlockCacheConfig;
     use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
     use engine::rocks::util::CFOptions;
-    use engine::rocks::ColumnFamilyOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};
@@ -1848,6 +1847,7 @@ mod tests {
         db_config.titan = titan_db_config;
         let engine = {
             let path = "".to_owned();
+            let cfs = crate::storage::ALL_CFS.to_vec();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
