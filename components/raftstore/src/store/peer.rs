@@ -1790,7 +1790,6 @@ impl Peer {
                     cb.invoke_with_response(resp);
                 }
                 Ok(idx) => {
-                    self.should_wake_up = true;
                     let meta = ProposalMeta {
                         index: idx,
                         term: self.term(),
@@ -1830,11 +1829,12 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
                 let req_size = req.compute_size();
-                if self.consistency_state && self.batch_req_builder.can_add_to_batch(&req, req_size) {
+                if self.batch_req_builder.can_add_to_batch(&req, req_size) {
                     if self.batch_req_builder.should_finish(&req) {
                         self.propose_batch_request(ctx);
                     }
                     self.batch_req_builder.add(req, req_size, cb);
+                    self.should_wake_up = true;
                     return true;
                 }
                 self.propose_normal(ctx, req)
