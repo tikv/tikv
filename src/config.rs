@@ -13,7 +13,7 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{
@@ -1850,9 +1850,6 @@ pub struct TiKvConfig {
     pub cfg_path: String,
 
     #[config(skip)]
-    pub enable_dynamic_config: bool,
-
-    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
 
@@ -1873,8 +1870,6 @@ pub struct TiKvConfig {
 
     #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
-
-    pub refresh_config_interval: ReadableDuration,
 
     #[config(skip)]
     pub readpool: ReadPoolConfig,
@@ -1927,7 +1922,6 @@ impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
             cfg_path: "".to_owned(),
-            enable_dynamic_config: true,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             slow_log_file: "".to_owned(),
@@ -1935,7 +1929,6 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
-            refresh_config_interval: ReadableDuration::secs(30),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2340,9 +2333,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
             }
             return match typed.get(&f) {
                 None => Err(format!("unexpect fields: {}", f).into()),
-                Some(ConfigValue::Skip) => {
-                    Err(format!("fields {:?} can not be change", fields).into())
-                }
+                Some(ConfigValue::Skip) => Err(format!("config {:?} can not be change", f).into()),
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
                         .entry(f)
@@ -2378,6 +2369,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
 }
 
 fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
+    let v = v.trim_matches('\"');
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
@@ -2483,8 +2475,13 @@ impl From<&str> for Module {
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
 /// return the change if the incoming change is invalid.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ConfigController {
+    inner: Arc<RwLock<ConfigInner>>,
+}
+
+#[derive(Default)]
+struct ConfigInner {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
 }
@@ -2492,27 +2489,30 @@ pub struct ConfigController {
 impl ConfigController {
     pub fn new(current: TiKvConfig) -> Self {
         ConfigController {
-            current,
-            config_mgrs: HashMap::new(),
+            inner: Arc::new(RwLock::new(ConfigInner {
+                current,
+                config_mgrs: HashMap::new(),
+            })),
         }
     }
 
-    pub fn update(&mut self, change: HashMap<String, String>) -> CfgResult<()> {
+    pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
         {
-            let mut incoming = self.current.clone();
+            let mut incoming = self.get_current();
             incoming.update(diff.clone());
             incoming.validate()?;
         }
+        let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
             match change {
                 ConfigValue::Module(change) => {
                     // update a submodule's config only if changes had been sucessfully
                     // dispatched to corresponding config manager, to avoid double dispatch change
-                    if let Some(mgr) = self.config_mgrs.get_mut(&Module::from(name.as_str())) {
+                    if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            self.current.update(to_update);
+                            inner.current.update(to_update);
                             return Err(e);
                         }
                     }
@@ -2524,12 +2524,12 @@ impl ConfigController {
             }
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
-        self.current.update(to_update);
+        inner.current.update(to_update);
         // Write change to the config file
         let content = {
             let change = to_toml_encode(change)?;
-            let src = if Path::new(&self.current.cfg_path).exists() {
-                fs::read_to_string(&self.current.cfg_path)?
+            let src = if Path::new(&inner.current.cfg_path).exists() {
+                fs::read_to_string(&inner.current.cfg_path)?
             } else {
                 String::new()
             };
@@ -2538,31 +2538,28 @@ impl ConfigController {
             t.finish()
         };
         write_config(
-            &self.current.storage.data_dir,
-            &self.current.cfg_path,
+            &inner.current.storage.data_dir,
+            &inner.current.cfg_path,
             &content,
         )?;
         Ok(())
     }
 
-    pub fn update_config(&mut self, name: &str, value: &str) -> CfgResult<()> {
+    pub fn update_config(&self, name: &str, value: &str) -> CfgResult<()> {
         let mut m = HashMap::new();
         m.insert(name.to_owned(), value.to_owned());
         self.update(m)
     }
 
-    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
-        if self.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
+    pub fn register(&self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        let mut inner = self.inner.write().unwrap();
+        if inner.config_mgrs.insert(module.clone(), cfg_mgr).is_some() {
             warn!("config manager for module {:?} already registered", module)
         }
     }
 
-    pub fn get_current(&self) -> &TiKvConfig {
-        &self.current
-    }
-
-    pub fn get_current_mut(&mut self) -> &mut TiKvConfig {
-        &mut self.current
+    pub fn get_current(&self) -> TiKvConfig {
+        self.inner.read().unwrap().current.clone()
     }
 }
 
@@ -2730,14 +2727,12 @@ mod tests {
 
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
-        incoming.refresh_config_interval = ReadableDuration::hours(10);
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.raft_store.sync_log = false;
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
-        change.insert("refresh-config-interval".to_owned(), "10h".to_owned());
         change.insert(
             "coprocessor.region-split-keys".to_owned(),
             "10000".to_owned(),
@@ -2833,7 +2828,7 @@ mod tests {
             .unwrap(),
         );
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg);
         cfg_controller.register(
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
@@ -2849,7 +2844,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
-        let (db, mut cfg_controller) = new_engines(cfg);
+        let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();
