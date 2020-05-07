@@ -1370,7 +1370,11 @@ impl<E: Engine> TestStorageBuilder<E> {
 mod tests {
     use super::*;
 
+    use crate::config::{DbConfig, TitanDBConfig};
+    use crate::storage::config::BlockCacheConfig;
     use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::ColumnFamilyOptions;
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
@@ -1837,7 +1841,31 @@ mod tests {
 
     #[test]
     fn test_scan_with_key_only() {
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let mut titan_db_config = TitanDBConfig::default();
+        titan_db_config.enabled = true;
+        let mut db_config = crate::config::DbConfig::default();
+        db_config.titan = titan_db_config;
+        let engine = {
+            let path = "".to_owned();
+            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfg_rocksdb = db_config;
+            let cache = BlockCacheConfig::default().build_shared_cache();
+            let cfs_opts = cfs
+                .iter()
+                .map(|cf| match *cf {
+                    CF_DEFAULT => {
+                        CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache))
+                    }
+                    CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                    CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                    CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                    _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
+                })
+                .collect();
+            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        }
+        .unwrap();
+        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
