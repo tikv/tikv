@@ -3,7 +3,9 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
+use engine_rocks::{
+    RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
+};
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
@@ -180,8 +182,8 @@ impl<E: KvEngine> RaftRouter<E> {
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<E>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<E>>> {
+        cmd: RaftCommand<E::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
@@ -204,12 +206,12 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -471,7 +473,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
-    pending_proposals: Vec<RegionProposal<RocksEngine>>,
+    pending_proposals: Vec<RegionProposal<RocksSnapshot>>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
@@ -561,7 +563,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for (ready, invoke_ctx) in ready_res.drain(..) {
                 let region_id = invoke_ctx.region_id;
                 if peers[batch_pos].region_id() == region_id {
@@ -735,11 +737,11 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     apply_router: ApplyRouter,
     pub router: RaftRouter<RocksEngine>,
     pub importer: Arc<SSTImporter>,
@@ -979,12 +981,12 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksEngine>>,
+    region_worker: Worker<RegionTask<RocksSnapshot>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }

@@ -2,7 +2,6 @@
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer};
-use serde_json;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;

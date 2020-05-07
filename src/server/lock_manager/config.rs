@@ -100,7 +100,6 @@ impl ConfigManager for LockManagerConfigManager {
 #[cfg(test)]
 mod tests {
     use super::Config;
-    use toml;
 
     #[test]
     fn test_config_deserialize() {

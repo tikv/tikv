@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::conv::i64_to_usize;
-use safemem;
 
 const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 
