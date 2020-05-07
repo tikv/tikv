@@ -1,6 +1,6 @@
 [package]
-name = "tracer_codegen"
-version = "0.1.0"
+name = "trace_codegen"
+version = "0.0.1"
 edition = "2018"
 
 [lib]

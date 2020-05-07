@@ -1130,7 +1130,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     }
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
@@ -1153,7 +1153,7 @@ fn future_handle_empty(
     }
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
@@ -1179,7 +1179,7 @@ fn future_get<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 pub fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1235,7 +1235,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
@@ -1267,7 +1267,7 @@ fn future_scan<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
@@ -1286,7 +1286,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_gc<E: Engine>(
     gc_worker: &GcWorker<E>,
     mut req: GcRequest,
@@ -1305,7 +1305,7 @@ fn future_gc<E: Engine>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: DeleteRangeRequest,
@@ -1330,7 +1330,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
@@ -1352,7 +1352,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1408,7 +1408,7 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchGetRequest,
@@ -1427,7 +1427,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawPutRequest,
@@ -1452,7 +1452,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_batch_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchPutRequest,
@@ -1478,7 +1478,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRequest,
@@ -1497,7 +1497,7 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_batch_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchDeleteRequest,
@@ -1518,7 +1518,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawScanRequest,
@@ -1549,7 +1549,7 @@ fn future_raw_scan<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_batch_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
@@ -1574,7 +1574,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
         })
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_raw_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRangeRequest,
@@ -1600,7 +1600,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_get<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerGetRequest,
@@ -1610,7 +1610,7 @@ fn future_ver_get<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_batch_get<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerBatchGetRequest,
@@ -1620,7 +1620,7 @@ fn future_ver_batch_get<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_mut<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerMutRequest,
@@ -1630,7 +1630,7 @@ fn future_ver_mut<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_batch_mut<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerBatchMutRequest,
@@ -1640,7 +1640,7 @@ fn future_ver_batch_mut<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_scan<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerScanRequest,
@@ -1650,7 +1650,7 @@ fn future_ver_scan<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_ver_delete_range<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
     mut _req: VerDeleteRangeRequest,
@@ -1659,7 +1659,7 @@ fn future_ver_delete_range<E: Engine, L: LockManager>(
     future::ok(resp)
 }
 
-#[tracer_codegen::future01_fn_root]
+#[trace_codegen::future01_fn_root(0u32)]
 fn future_cop<E: Engine>(
     cop: &Endpoint<E>,
     peer: Option<String>,
@@ -1671,7 +1671,7 @@ fn future_cop<E: Engine>(
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        #[tracer_codegen::future01_fn_root]
+        #[trace_codegen::future01_fn_root(0u32)]
         fn $fn_name<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
             $req: $req_ty,

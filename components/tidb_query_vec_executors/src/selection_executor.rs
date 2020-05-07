@@ -168,7 +168,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         self.src.schema()
     }
 
-    #[tracer::tracer_attribute::instrument("BatchSelectionExecutor.next_batch")]
+    #[minitrace::trace(0u32)]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);

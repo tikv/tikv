@@ -19,7 +19,7 @@ tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }
 tidb_query_vec_aggr = { path = "../tidb_query_vec_aggr" }
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-tracer = { path = "../tracer" }
+minitrace = { git = "https://github.com/zhongzc/minitrace.git" }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

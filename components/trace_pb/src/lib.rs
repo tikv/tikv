@@ -7,21 +7,21 @@ mod protos {
     include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 }
 
-pub use crate::protos::tracer_pb::*;
+pub use crate::protos::trace_pb::*;
 
 #[cfg(feature = "protobuf-codec")]
-pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
+pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
     use protobuf::{Message, RepeatedField};
 
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
-            s.set_id(0 as u32);
-            if let Some(_) = span.parent {
-                s.set_parent_value(1 as u32);
+            s.set_id(span.id.into());
+            if let Some(p) = span.parent {
+                s.set_parent_value(p.into());
             }
-            s.set_start(span.elapsed_start.as_nanos() as u64);
-            s.set_end(span.elapsed_end.as_nanos() as u64);
+            s.set_start(span.elapsed_start);
+            s.set_end(span.elapsed_end);
             s
         })
         .collect();
@@ -33,20 +33,20 @@ pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
 }
 
 #[cfg(feature = "prost-codec")]
-pub fn serialize(spans: impl Iterator<Item = tracer::Span>) -> Vec<u8> {
+pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
     use prost::Message;
 
     let spans: Vec<_> = spans
         .map(|span| {
             let mut s = self::Span::default();
-            s.id = span.id as u32;
+            s.id = span.id.into();
             s.parent = if let Some(p) = span.parent {
-                Some(self::span::Parent::ParentValue(p as u32))
+                Some(self::span::Parent::ParentValue(p.into()))
             } else {
                 Some(self::span::Parent::ParentNone(true))
             };
-            s.start = span.elapsed_start.as_nanos() as u64;
-            s.end = span.elapsed_end.as_nanos() as u64;
+            s.start = span.elapsed_start;
+            s.end = span.elapsed_end;
             s
         })
         .collect();

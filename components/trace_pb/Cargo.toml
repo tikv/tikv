@@ -1,6 +1,6 @@
 [package]
-name = "tracer_pb"
-version = "0.1.0"
+name = "trace_pb"
+version = "0.0.1"
 edition = "2018"
 
 [features]
@@ -8,11 +8,8 @@ default = []
 protobuf-codec = ["protobuf-build/protobuf-codec"]
 prost-codec = ["prost", "prost-derive", "lazy_static", "protobuf-build/prost-codec"]
 
-[lib]
-name = "tracer_pb"
-
 [dependencies]
-tracer = { path = "../tracer" }
+minitrace = { git = "https://github.com/zhongzc/minitrace.git" }
 protobuf = "2"
 prost = { version = "0.6", optional = true }
 prost-derive = { version = "0.6", optional = true }

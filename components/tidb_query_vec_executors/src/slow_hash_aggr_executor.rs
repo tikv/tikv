@@ -40,7 +40,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
         self.0.schema()
     }
 
-    #[tracer::tracer_attribute::instrument("BatchSlowHashAggregationExecutor.next_batch")]
+    #[minitrace::trace(0u32)]
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
@@ -242,7 +242,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         }
     }
 
-    #[tracer::tracer_attribute::instrument("SlowHashAggregationImpl.process_batch_input")]
+    #[minitrace::trace(0u32)]
     #[inline]
     fn process_batch_input(
         &mut self,
@@ -416,7 +416,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         self.groups.len()
     }
 
-    #[tracer::tracer_attribute::instrument("SlowHashAggregationImpl.iterate_available_groups")]
+    #[minitrace::trace(0u32)]
     #[inline]
     fn iterate_available_groups(
         &mut self,

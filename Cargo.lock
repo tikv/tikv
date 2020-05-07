@@ -2203,6 +2203,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "minitrace"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "minitrace-attribute",
+ "pin-project",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3852,12 +3873,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snowflake"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27207bb65232eda1f588cf46db2fee75c0808d557f6b3cf19a75f5d6d7c94df1"
-
-[[package]]
 name = "socket2"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4526,6 +4541,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
+ "minitrace",
  "slog",
  "slog-global",
  "smallvec 0.6.10",
@@ -4537,7 +4553,6 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
- "tracer",
  "yatp",
 ]
 
@@ -4615,6 +4630,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "mime",
+ "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -4671,9 +4687,8 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
- "tracer",
- "tracer_codegen",
- "tracer_pb",
+ "trace_codegen",
+ "trace_pb",
  "txn_types",
  "url",
  "uuid",
@@ -5139,45 +5154,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
 
 [[package]]
-name = "tracer"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "crossbeam",
- "futures 0.1.29",
- "futures 0.3.4",
- "pin-project",
- "snowflake",
- "tikv_alloc",
- "tracer-attribute",
-]
-
-[[package]]
-name = "tracer-attribute"
-version = "0.1.0"
+name = "trace_codegen"
+version = "0.0.1"
 dependencies = [
  "quote 1.0.3",
  "syn 1.0.5",
 ]
 
 [[package]]
-name = "tracer_codegen"
-version = "0.1.0"
-dependencies = [
- "quote 1.0.3",
- "syn 1.0.5",
-]
-
-[[package]]
-name = "tracer_pb"
-version = "0.1.0"
+name = "trace_pb"
+version = "0.0.1"
 dependencies = [
  "lazy_static",
+ "minitrace",
  "prost",
  "prost-derive",
  "protobuf",
  "protobuf-build",
- "tracer",
 ]
 
 [[package]]
