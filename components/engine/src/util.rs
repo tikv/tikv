@@ -13,6 +13,8 @@ use super::{Error, Result};
 use super::{IterOption, Iterable};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::time::time_now_sec;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -87,7 +89,9 @@ pub fn delete_all_in_range_cf(
             if writer.is_none() {
                 data.push(it.key().to_vec());
                 if data.len() >= DELETE_KEYS_SST_LIMIT {
-                    let name = String::from_utf8_lossy(start_key).into_owned();
+                    let mut s = DefaultHasher::new();
+                    start_key.hash(&mut s);
+                    let name = s.finish().to_string();
                     writer = Some(create_sst_writer(db, cf, name)?);
                     for key in data.iter() {
                         writer.as_mut().unwrap().delete(key)?;
