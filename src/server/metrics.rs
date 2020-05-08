@@ -317,7 +317,7 @@ lazy_static! {
             &["type"],
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
-    .unwrap();
+        .unwrap();
     pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_server_request_batch_ratio",
         "Ratio of request batch output to input",
