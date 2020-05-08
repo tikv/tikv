@@ -92,11 +92,11 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 pub struct StatusServer {
     thread_pool: ThreadPool,
     tx: Sender<()>,
-    cfg_controller: ConfigController,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     router: Option<RaftRouter<RocksEngine>>,
     pd_client: Option<Arc<RpcClient>>,
+    cfg_controller: ConfigController,
 }
 
 impl StatusServer {
@@ -121,9 +121,9 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            cfg_controller,
             router: None,
             pd_client,
+            cfg_controller,
         }
     }
 
@@ -467,13 +467,13 @@ impl StatusServer {
                 ) {
                     Ok(_) => (),
                     Err(raftstore::Error::RegionNotFound(_)) => {
-                        return not_found(format!("region({}) not found", id))
+                        return not_found(format!("region({}) not found", id));
                     }
                     Err(err) => {
                         return err_resp(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             format!("channel pending or disconnect: {}", err),
-                        )
+                        );
                     }
                 }
 
