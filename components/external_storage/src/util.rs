@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::READ_BUF_SIZE;
+
 use bytes::Bytes;
 use futures::stream::{self, Stream};
-use futures_io::AsyncRead;
+use futures_util::io::AsyncRead;
 use std::{
     future::Future,
     io, iter,
@@ -25,10 +27,10 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
 }
 
 impl<R> AsyncReadAsSyncStreamOfBytes<R> {
-    pub fn with_capacity(reader: R, capacity: usize) -> Self {
+    pub fn new(reader: R) -> Self {
         Self {
             reader: Mutex::new(reader),
-            buf: vec![0; capacity],
+            buf: vec![0; READ_BUF_SIZE],
         }
     }
 }
@@ -55,6 +57,14 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 }
 
 /// Runs a future on the current thread involving external storage.
+///
+/// # Caveat
+///
+/// This function must never be nested. The future invoked by
+/// `block_on_external_io` must never call `block_on_external_io` again itself,
+/// otherwise the executor's states may be disrupted.
+///
+/// This means the future must only use async functions.
 // FIXME: get rid of this function, so that futures_executor::block_on is sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
     // we need a Tokio runtime rather than futures_executor::block_on because

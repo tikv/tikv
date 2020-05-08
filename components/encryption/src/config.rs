@@ -42,13 +42,23 @@ pub struct FileCofnig {
     pub path: String,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
     pub key_id: String,
 
+    // Providing access_key and secret_access_key is recommended as it has
+    // security risk.
+    #[doc(hidden)]
+    // We don's want to write access_key and secret_access_key to config file
+    // accidentally.
+    #[serde(skip_serializing)]
+    #[config(skip)]
     pub access_key: String,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[config(skip)]
     pub secret_access_key: String,
 
     pub region: String,
