@@ -99,7 +99,7 @@ fn test_check_conf_change() {
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     pd_client.must_add_peer(1, new_learner_peer(2, 4));
     let region = cluster.get_region(b"k1");
-    // Peer 2 can be promoted as there will be enough quorum alive.
+    // Peer 4 can be promoted as there will be enough quorum alive.
     let cc = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 4));
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cc);
     let res = cluster
@@ -115,7 +115,7 @@ fn test_check_conf_change() {
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     pd_client.must_add_peer(1, new_learner_peer(3, 5));
     let region = cluster.get_region(b"k1");
-    // Peer 2 can be promoted as there will be enough quorum alive.
+    // Peer 5 can not be promoted as there is no enough quorum alive.
     let cc = new_change_peer_request(ConfChangeType::AddNode, new_peer(3, 5));
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cc);
     let res = cluster
@@ -131,7 +131,7 @@ fn test_check_conf_change() {
     );
 }
 
-// Tests if group id is updated when adding new node and apply snapshot.
+// Tests if group id is updated when adding new node and applying snapshot.
 #[test]
 fn test_update_group_id() {
     let mut cluster = new_server_cluster(0, 3);
