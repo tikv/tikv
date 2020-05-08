@@ -158,7 +158,6 @@ walkdir = "2"
 minitrace = { git = "https://github.com/zhongzc/minitrace.git", branch = "busy" }
 trace_codegen = { path = "components/trace_codegen" }
 trace_pb = { path = "components/trace_pb", default-features = false }
-tracer = { path = "components/tracer" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
@@ -229,7 +228,6 @@ members = [
   "components/raftstore",
   "components/into_other",
   "components/encryption",
-  "components/tracer",
   "components/trace_codegen",
   "components/trace_pb",
 ]

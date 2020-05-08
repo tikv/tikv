@@ -99,7 +99,6 @@ impl<E: Engine> Endpoint<E> {
 
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
-    #[minitrace::trace(0u32)]
     fn parse_request(
         &self,
         mut req: coppb::Request,
@@ -325,7 +324,6 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
-    #[minitrace::trace(0u32)]
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
@@ -360,7 +358,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_begin_all_items();
 
         let handle_request_future =
-            track(handler.handle_request(), &mut tracker).in_current_span(0u32);
+            track(handler.handle_request(), &mut tracker).in_current_span_heavy(0u32);
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {

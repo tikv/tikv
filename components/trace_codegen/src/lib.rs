@@ -40,14 +40,9 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
         #vis #constness #unsafety #asyncness #abi fn #ident<#gen_params>(#params) #return_type
         #where_clause
         {
-            let (__span_tx, __span_rx) = minitrace::Collector::new(minitrace::CollectorType::Void);
+            let (__span_tx, __span_rx) = minitrace::Collector::new(minitrace::DEFAULT_COLLECTOR);
             let __span = minitrace::new_span_root(__span_tx, #tag);
             let __g = __span.enter();
-
-            for _ in 0..100 {
-                let __child_span = minitrace::new_span(#tag);
-                let __child_g = __child_span.enter();
-            }
 
             {
                 #block
@@ -63,10 +58,11 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
                     ret
                 };
 
-                // for __s in __spans {
-                //     println!("{:?} {:?} {:?} {:?} {:?}", __s.id, __s.parent, __s.elapsed_start, __s.elapsed_end, __s.tag);
+                // let mut s = String::new();
+                // for span in __spans.into_iter() {
+                //     s.push_str(&format!("{:?}\n", span));
                 // }
-                // println!();
+                // println!("{}\n", s);
             })
         }
     )
