@@ -123,10 +123,6 @@ make_auto_flush_static_metric! {
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
     }
-
-    pub struct RequestBatchSizeHistogramVec: LocalHistogram {
-        "type" => BatchableRequestKind,
-    }
 }
 
 make_static_metric! {
@@ -134,8 +130,18 @@ make_static_metric! {
         kv_get,
     }
 
+    pub label_enum BatchableRequestKind {
+        point_get,
+        prewrite,
+        commit,
+    }
+
     pub struct GrpcMsgHistogramGlobal: Histogram {
         "type" => GlobalGrpcTypeKind,
+    }
+
+    pub struct RequestBatchSizeHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
     }
 }
 
@@ -303,8 +309,7 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
-    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
-        register_static_histogram_vec!(
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec = register_static_histogram_vec!(
             RequestBatchSizeHistogramVec,
             "tikv_server_request_batch_size",
             "Size of request batch input",
