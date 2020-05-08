@@ -91,7 +91,7 @@ quick_error! {
         }
         CannotReadExternalStorage(url: String, name: String, err: IoError) {
             cause(err)
-            display("Cannot read {}/{}", url, name)
+            display("Cannot read {}/{}: {}", url, name, err)
         }
         WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
             display("\
@@ -106,13 +106,12 @@ quick_error! {
         }
         Encryption(err: EncryptionError) {
             from()
-            description("encryption error")
             display("Encryption {:?}", err)
         }
         CodecError(err: CodecError) {
             from()
             cause(err)
-            description(err.description())
+            display("Codec {}", err)
         }
     }
 }

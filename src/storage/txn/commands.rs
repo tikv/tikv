@@ -61,7 +61,6 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
         } else {
             let is_pessimistic_lock = req.take_is_pessimistic_lock();
             let mutations = req
@@ -80,7 +79,6 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
         }
     }
 }
@@ -220,7 +218,7 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLock::new(txn_status, None, vec![], req.take_context()).into()
+            ResolveLock::new(txn_status, None, vec![], req.take_context())
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());

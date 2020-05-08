@@ -1563,7 +1563,7 @@ where
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        { self.id == 2 && self.region_id() == 1 },
+                        self.id == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -1748,7 +1748,7 @@ where
     ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
-            { self.id == 3 && self.region_id() == 1 },
+            self.id == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -1930,7 +1930,7 @@ where
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
-                    { self.region_id() == 1 && self.id != 4 },
+                    self.region_id() == 1 && self.id != 4,
                     |_| {}
                 );
             };

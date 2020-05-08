@@ -208,8 +208,7 @@ impl Tracker {
             );
         }
 
-        let total_storage_stats =
-            std::mem::replace(&mut self.total_storage_stats, Statistics::default());
+        let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
         // req time
         COPR_REQ_HISTOGRAM_STATIC

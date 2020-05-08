@@ -323,10 +323,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
                 if batch.normals[fsm_cnt].is_stopped() {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
-                } else {
-                    if let Some(l) = len {
-                        reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
-                    }
+                } else if let Some(l) = len {
+                    reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
                 }
                 fsm_cnt += 1;
             }

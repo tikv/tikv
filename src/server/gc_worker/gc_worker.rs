@@ -515,7 +515,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn update_statistics_metrics(&mut self) {
-        let stats = mem::replace(&mut self.stats, Statistics::default());
+        let stats = mem::take(&mut self.stats);
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
