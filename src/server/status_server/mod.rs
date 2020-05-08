@@ -1,16 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_rocks::RocksEngine;
 use futures::future::{err, ok};
 use futures::stream::Stream;
+use futures::sync::oneshot;
 use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
-use pprof;
 use pprof::protos::Message;
+use raftstore::store::{transport::CasualRouter, CasualMessage, RaftRouter};
 use regex::Regex;
+use reqwest::{self, blocking::Client};
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -20,18 +23,19 @@ use tokio_threadpool::{Builder, ThreadPool};
 
 use std::error::Error as StdError;
 use std::net::SocketAddr;
-use std::result::Result as StdResult;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use super::debug::{self, Debugger, RegionInfo};
 use super::Result;
 use crate::config::ConfigController;
+use pd_client::RpcClient;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
 use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
+pub mod region_meta;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -60,9 +64,8 @@ mod profiler_guard {
 
     impl Drop for ProfGuard {
         fn drop(&mut self) {
-            match deactivate_prof() {
-                _ => {} // TODO: handle error here
-            }
+            // TODO: handle error here
+            let _ = deactivate_prof();
         }
     }
 
@@ -75,6 +78,10 @@ mod profiler_guard {
     }
 }
 
+const COMPONENT_REQUEST_RETRY: usize = 5;
+
+static COMPONENT: &str = "tikv";
+
 #[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
 #[cfg(feature = "failpoints")]
@@ -85,14 +92,19 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 pub struct StatusServer {
     thread_pool: ThreadPool,
     tx: Sender<()>,
+    cfg_controller: ConfigController,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    cfg_controller: Option<ConfigController>,
-    debugger: Option<Debugger>,
+    router: Option<RaftRouter<RocksEngine>>,
+    pd_client: Option<Arc<RpcClient>>,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, cfg_controller: ConfigController) -> Self {
+    pub fn new(
+        status_thread_pool_size: usize,
+        pd_client: Option<Arc<RpcClient>>,
+        cfg_controller: ConfigController,
+    ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -109,13 +121,14 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            cfg_controller: Some(cfg_controller),
-            debugger: None,
+            cfg_controller,
+            router: None,
+            pd_client,
         }
     }
 
-    pub fn set_debugger(&mut self, debugger: Option<Debugger>) {
-        self.debugger = debugger
+    pub fn set_router(&mut self, router: Option<RaftRouter<RocksEngine>>) {
+        self.router = router
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
@@ -222,7 +235,7 @@ impl StatusServer {
     fn get_config(
         cfg_controller: &ConfigController,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let res = match serde_json::to_string(cfg_controller.get_current()) {
+        let res = match serde_json::to_string(&cfg_controller.get_current()) {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
@@ -236,12 +249,12 @@ impl StatusServer {
     }
 
     fn update_config(
-        cfg_controller: Arc<RwLock<ConfigController>>,
+        cfg_controller: ConfigController,
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
             let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
-                Ok(change) => match cfg_controller.write().unwrap().update(change) {
+                Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("fail to update, error: {:?}", e),
@@ -407,197 +420,93 @@ impl StatusServer {
         )
     }
 
-    /// Serialize region info to json.
-    ///
-    /// ## Example
-    ///
-    /// ```text
-    /// {
-    ///     "size": {
-    ///         "default": 4096,
-    ///         "write": 2048,
-    ///         "lock": 1024
-    ///     },
-    ///     "region_local_state": {
-    ///         "state": "normal",
-    ///         "merge_state": {
-    ///             "min_index": 0,
-    ///             "commit": 16,
-    ///             "target" {
-    ///                 "id": 1,
-    ///                 "start_key": b"aaa",
-    ///                 "end_key": b"bbb",
-    ///                 "region_epoch": {
-    ///                     "conf_ver": 3,
-    ///                     "version": 4
-    ///                 },
-    ///                 "peers": [
-    ///                     {"id": 0, "store_id": 0, "is_learner": false },
-    ///                     {"id": 2, "store_id": 2, "is_learner": false }
-    ///                 ]
-    ///             }
-    ///         },
-    ///         "region": {
-    ///             "id": 0,
-    ///             "start_key": b"aaa",
-    ///             "end_key": b"ccc",
-    ///             "region_epoch": {
-    ///                 "conf_ver": 3,
-    ///                 "version": 5
-    ///             },
-    ///             "peers": [
-    ///                 {"id": 1, "store_id": 1, "is_learner": false },
-    ///                 {"id": 2, "store_id": 2, "is_learner": false }
-    ///             ]
-    ///         }
-    ///     },
-    ///     "raft_apply_state": {
-    ///         "applied_index": 16,
-    ///         "last_commit_index": 15,
-    ///         "commit_index": 16,
-    ///         "commit_term": 2,
-    ///         "truncated_state": {
-    ///             "index": 16,
-    ///             "term": 2
-    ///         }
-    ///     },
-    ///     "raft_local_state": {
-    ///         "last_index": 16,
-    ///         "hard_state": {
-    ///             "term": 2,
-    ///             "vote": 2,
-    ///             "commit": 16
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    fn region_info_json(
-        size_info: Vec<(&str, usize)>,
-        region_info: RegionInfo,
-    ) -> serde_json::Value {
-        use kvproto::metapb::Region;
-        use kvproto::raft_serverpb::PeerState::*;
-        use serde_json::{json, Map, Value};
-
-        fn region_to_json(region: &Region) -> Value {
-            let peers: Vec<_> = region
-                .get_peers()
-                .iter()
-                .map(|peer| {
-                    json!({
-                        "id": peer.get_id(),
-                        "store_id": peer.get_store_id(),
-                        "is_learner": peer.get_is_learner()
-                    })
-                })
-                .collect();
-            json!({
-                "id": region.get_id(),
-                "start_key": region.get_start_key(),
-                "end_key": region.get_end_key(),
-                "region_epoch": {
-                    "conf_ver": region.get_region_epoch().get_conf_ver(),
-                    "version": region.get_region_epoch().get_version()
-                },
-                "peers": peers
-            })
-        }
-
-        let mut size_map = Map::new();
-        for (cf, size) in size_info {
-            size_map.insert(cf.to_string(), size.into());
-        }
-        let region_local_state = region_info.region_local_state.map(|state| {
-            json!({
-                "state": match state.get_state() {
-                    Normal => "normal",
-                    Applying => "applying",
-                    Tombstone => "tombstone",
-                    Merging => "merging"
-                },
-                "region": region_to_json(state.get_region()),
-                "merge_state": {
-                    "min_index": state.get_merge_state().get_min_index(),
-                    "commit": state.get_merge_state().get_commit(),
-                    "target": region_to_json(state.get_merge_state().get_target())
-                }
-            })
-        });
-
-        let raft_apply_state = region_info.raft_apply_state.map(|state| {
-            json!({
-                "applied_index": state.get_applied_index(),
-                "last_commit_index": state.get_last_commit_index(),
-                "commit_index": state.get_commit_index(),
-                "commit_term": state.get_commit_term(),
-                "truncated_state": {
-                    "index": state.get_truncated_state().get_index(),
-                    "term": state.get_truncated_state().get_term()
-                }
-            })
-        });
-
-        let raft_local_state = region_info.raft_local_state.map(|state| {
-            json!({
-                "last_index": state.get_last_index(),
-                "hard_state": {
-                    "term": state.get_hard_state().get_term(),
-                    "vote": state.get_hard_state().get_vote(),
-                    "commit": state.get_hard_state().get_commit()
-                }
-            })
-        });
-        json!({
-            "size": size_map,
-            "region_local_state": region_local_state,
-            "raft_local_state": raft_local_state,
-            "raft_apply_state": raft_apply_state
-        })
-    }
-
-    pub fn dump_region_info(
+    pub fn dump_region_meta(
         req: Request<Body>,
-        debugger: Option<&Debugger>,
-    ) -> StdResult<Response<Body>, debug::Error> {
-        fn to_debug_error(err: impl 'static + StdError + Sync + Send) -> debug::Error {
-            debug::Error::Other(Box::new(err))
+        router: Option<&RaftRouter<RocksEngine>>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        lazy_static! {
+            static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
         }
-        match debugger {
-            None => Ok(StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "debugger uninitialized",
-            )),
-            Some(debugger) => {
-                let cfs = vec!["default", "write", "lock"];
-                let id: Option<u64> = req
-                    .uri()
-                    .query()
-                    .and_then(|query| {
-                        url::form_urlencoded::parse(query.as_bytes()).find(|(key, _)| key == "id")
-                    })
-                    .and_then(|(_, value)| value.parse().ok());
-                let body = match id {
-                    Some(id) => serde_json::to_vec(&Self::region_info_json(
-                        debugger.region_size(id, cfs)?,
-                        debugger.region_info(id)?,
-                    )),
-                    None => {
-                        let region_ids = debugger.get_all_meta_regions()?;
-                        let mut regions = Vec::with_capacity(region_ids.len());
-                        for id in region_ids {
-                            regions.push(Self::region_info_json(
-                                debugger.region_size(id, cfs.clone())?,
-                                debugger.region_info(id)?,
-                            ));
+
+        let err_resp =
+            |status_code, body| Box::new(ok(StatusServer::err_response(status_code, body)));
+
+        let not_found = || {
+            err_resp(
+                StatusCode::NOT_FOUND,
+                format!("{} not found", req.uri().path()),
+            )
+        };
+
+        let router = match router {
+            None => {
+                return err_resp(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "router not set".to_string(),
+                )
+            }
+            Some(r) => r,
+        };
+
+        match REGION.captures(req.uri().path()) {
+            None => not_found(),
+            Some(cap) => {
+                let id: u64 = match cap["id"].parse() {
+                    Ok(id) => id,
+                    Err(err) => {
+                        return err_resp(
+                            StatusCode::BAD_REQUEST,
+                            format!("invalid region id: {}", err),
+                        );
+                    }
+                };
+                let (tx, rx) = oneshot::channel();
+                match CasualRouter::send(
+                    router,
+                    id,
+                    CasualMessage::Test(Box::new(move |peer| {
+                        if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                            error!("receiver dropped, region meta: {:?}", meta)
                         }
-                        serde_json::to_vec(&regions)
+                    })),
+                ) {
+                    Ok(_) => (),
+                    Err(raftstore::Error::RegionNotFound(_)) => return not_found(),
+                    Err(err) => {
+                        return err_resp(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("channel pending or disconnect: {}", err),
+                        )
                     }
                 }
-                .map_err(to_debug_error)?;
-                Response::builder()
-                    .header("content-type", "application/json")
-                    .body(body.into())
-                    .map_err(to_debug_error)
+
+                Box::new(
+                    rx.map_err(|_| {
+                        Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, "query cancelled")
+                    })
+                    .and_then(|meta| {
+                        serde_json::to_vec(&meta).map_err(|err| {
+                            Self::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("fails to json: {}", err),
+                            )
+                        })
+                    })
+                    .and_then(|body| {
+                        Response::builder()
+                            .header("content-type", "application/json")
+                            .body(hyper::Body::from(body))
+                            .map_err(|err| {
+                                Self::err_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("fails to build response: {}", err),
+                                )
+                            })
+                    })
+                    .then(|ret| match ret {
+                        Ok(resp) | Err(resp) => Ok(resp),
+                    }),
+                )
             }
         }
     }
@@ -608,58 +517,46 @@ impl StatusServer {
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite + Send + 'static,
     {
-        // TODO: use future lock
-        let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
-        let debugger = self.debugger.clone();
+        let cfg_controller = self.cfg_controller.clone();
+        let router = self.router.clone();
         // Start to serve.
         let server = builder.serve(move || {
             let cfg_controller = cfg_controller.clone();
-            let debugger = debugger.clone();
+            let router = router.clone();
             // Create a status service.
             service_fn(
-                    move |req: Request<Body>| -> Box<
-                        dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
-                    > {
-                        let path = req.uri().path().to_owned();
-                        let method = req.method().to_owned();
+                move |req: Request<Body>| -> Box<
+                    dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
+                > {
+                    let path = req.uri().path().to_owned();
+                    let method = req.method().to_owned();
 
-                        #[cfg(feature = "failpoints")]
+                    #[cfg(feature = "failpoints")]
                         {
                             if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
                                 return handle_fail_points_request(req);
                             }
                         }
 
-                        match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
-                            (Method::GET, "/status") => Box::new(ok(Response::default())),
-                            (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/region") => {
-                                Box::new(ok(match Self::dump_region_info(req, debugger.as_ref()) {
-                                    Ok(resp) => resp,
-                                    Err(debug::Error::NotFound(msg)) => {
-                                        Self::err_response(StatusCode::NOT_FOUND, msg)
-                                    }
-                                    Err(err) => Self::err_response(
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        err.to_string(),
-                                    ),
-                                }))
-                            }
-                            (Method::GET, "/config") => {
-                                Self::get_config(&cfg_controller.read().unwrap())
-                            }
-                            (Method::POST, "/config") => {
-                                Self::update_config(cfg_controller.clone(), req)
-                            }
-                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
-                            _ => Box::new(ok(StatusServer::err_response(
-                                StatusCode::NOT_FOUND,
-                                "path not found",
-                            ))),
+                    match (method, path.as_ref()) {
+                        (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
+                        (Method::GET, "/status") => Box::new(ok(Response::default())),
+                        (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
+                        (Method::GET, "/config") => Self::get_config(&cfg_controller),
+                        (Method::POST, "/config") => {
+                            Self::update_config(cfg_controller.clone(), req)
                         }
-                    },
-                )
+                        (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
+                        (Method::GET, path) if path.starts_with("/region") => {
+                            Self::dump_region_meta(req, router.as_ref())
+                        }
+                        _ => Box::new(ok(StatusServer::err_response(
+                            StatusCode::NOT_FOUND,
+                            "path not found",
+                        ))),
+                    }
+                },
+            )
         });
 
         let graceful = server
@@ -737,10 +634,14 @@ impl StatusServer {
             let server = Server::builder(tcp_stream);
             self.start_serve(server);
         }
+        // register the status address to pd
+        self.register_addr(status_addr);
         Ok(())
     }
 
     pub fn stop(self) {
+        // unregister the status address to pd
+        self.unregister_addr();
         let _ = self.tx.send(());
         self.thread_pool
             .shutdown_now()
@@ -753,6 +654,72 @@ impl StatusServer {
     // in test to avoid port conflict.
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
+    }
+
+    fn register_addr(&self, status_addr: String) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        let json = {
+            let mut body = std::collections::HashMap::new();
+            body.insert("component".to_owned(), COMPONENT.to_owned());
+            body.insert("addr".to_owned(), status_addr);
+            serde_json::to_string(&body).unwrap()
+        };
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path("pd/api/v1/component");
+                let res = client
+                    .post(url.as_str())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(json.clone())
+                    .send();
+                match res {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to register addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
+    }
+
+    fn unregister_addr(&self) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let status_addr = format!("{}", self.listening_addr());
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
+                match client.delete(url.as_str()).send() {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to unregister addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
     }
 }
 
@@ -853,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -898,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -934,7 +901,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1066,7 +1033,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1107,7 +1074,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1168,7 +1135,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start(
             "127.0.0.1:0".to_string(),
             &new_security_cfg(Some(allowed_cn)),

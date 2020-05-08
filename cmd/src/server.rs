@@ -27,8 +27,8 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, AutoSplitController, LocalReader, SnapManagerBuilder,
-        SplitCheckRunner, SplitConfigManager,
+        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
 use std::{
@@ -48,8 +48,7 @@ use tikv::{
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
-        debug::Debugger,
-        gc_worker::{AutoGcConfig, GcWorker, GcWorkerConfigManager},
+        gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -74,9 +73,6 @@ pub fn run_tikv(config: TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
-    // TODO: currently the logger config can not be managed
-    // by PD and has to be provided when starting (or default
-    // config will be use). Consider remove this constraint.
     initial_logger(&config);
 
     // Print version information.
@@ -98,12 +94,11 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_encryption();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
-    let gc_worker_cfg = gc_worker.get_config_manager();
     let server_config = tikv.init_servers(&gc_worker);
-    tikv.register_services(gc_worker);
+    tikv.register_services();
     tikv.init_metrics_flusher();
     tikv.run_server(server_config);
-    tikv.run_status_server(gc_worker_cfg);
+    tikv.run_status_server();
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -121,6 +116,7 @@ struct TiKVServer {
     router: RaftRouter<RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
+    state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
@@ -151,23 +147,24 @@ impl TiKVServer {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
-        let security_mgr =
-            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
-                fatal!("failed to create security manager: {}", e.description())
-            }));
+        let security_mgr = Arc::new(
+            SecurityManager::new(&config.security)
+                .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
+        );
         let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
-        let config = cfg_controller.get_current().clone();
+        let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
-        let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
-
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+
+        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
+            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
@@ -180,6 +177,7 @@ impl TiKVServer {
             router,
             system: Some(system),
             resolver,
+            state,
             store_path,
             encryption_key_manager: None,
             engines: None,
@@ -203,8 +201,6 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
-        // TODO: register addr to pd
-
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
 
@@ -565,6 +561,7 @@ impl TiKVServer {
             &server_config,
             raft_store,
             self.pd_client.clone(),
+            self.state.clone(),
         );
 
         node.start(
@@ -617,10 +614,7 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(
-        &mut self,
-        gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
-    ) {
+    fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
@@ -651,8 +645,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker.get_config_manager(),
-            self.config.enable_dynamic_config,
+            self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
         );
         if servers
@@ -767,21 +760,17 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 
-    fn run_status_server(&mut self, gc_worker_cfg: GcWorkerConfigManager) {
+    fn run_status_server(&mut self) {
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
                 self.config.server.status_thread_pool_size,
+                Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
             ));
-            let debugger = self
-                .engines
-                .as_ref()
-                .map(|e| e.engines.clone())
-                .map(move |engines| Debugger::new(engines, Some(gc_worker_cfg)));
-            status_server.set_debugger(debugger);
+            status_server.set_router(Some(self.router.clone()));
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),

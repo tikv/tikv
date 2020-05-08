@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -189,6 +189,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -224,7 +225,7 @@ impl Simulator for NodeCluster {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
-        let mut cfg_controller = ConfigController::new(cfg.clone());
+        let cfg_controller = ConfigController::new(cfg.clone());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
@@ -326,7 +327,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         if !self
             .trans
