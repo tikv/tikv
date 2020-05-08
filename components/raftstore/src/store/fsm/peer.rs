@@ -23,6 +23,7 @@ use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
     RegionLocalState,
 };
+use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -564,6 +565,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
+            }
+            SignificantMsg::StoreResolved { store_id, group_id } => {
+                let state = self.ctx.global_replication_state.lock().unwrap();
+                if state.status.get_mode() != ReplicationMode::DrAutoSync {
+                    return;
+                }
+                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                    return;
+                }
+                drop(state);
+                self.fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .assign_commit_groups(&[(store_id, group_id)]);
             }
             SignificantMsg::CaptureChange {
                 cmd,
@@ -1532,6 +1548,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
+                let group_id = self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .group
+                    .group_id(peer.store_id);
+                if let Some(group_id) = group_id {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer.id, group_id)]);
+                }
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
                 }
@@ -1704,6 +1734,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     panic!("create new split region {:?} err {:?}", new_region, e);
                 }
             };
+            let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+            new_peer.peer.init_commit_group(&mut *replication_state);
+            drop(replication_state);
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {
@@ -2217,6 +2250,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "region" => ?region,
         );
+
+        if prev_region.get_peers() != region.get_peers() {
+            let mut state = self.ctx.global_replication_state.lock().unwrap();
+            state.calculate_commit_group(region.get_peers());
+            self.fsm
+                .peer
+                .raft_group
+                .raft
+                .assign_commit_groups(&state.group_buffer);
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
