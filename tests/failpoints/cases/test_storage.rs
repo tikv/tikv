@@ -4,7 +4,6 @@ use std::sync::{mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;
 
-use fail;
 use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;

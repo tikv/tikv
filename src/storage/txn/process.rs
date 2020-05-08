@@ -456,7 +456,7 @@ fn process_read_impl<E: Engine>(
                 };
                 Ok(ProcessResult::NextCommand {
                     cmd: ResolveLock::new(
-                        mem::replace(txn_status, Default::default()),
+                        mem::take(txn_status),
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),

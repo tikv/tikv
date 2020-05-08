@@ -359,7 +359,7 @@ mod tests {
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
@@ -453,7 +453,7 @@ mod tests {
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate::<Decimal>(ScalarFuncSig::UnaryMinusDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);

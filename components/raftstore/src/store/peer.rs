@@ -8,7 +8,7 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -178,7 +178,7 @@ pub struct Peer {
     pub peer_heartbeats: HashMap<u64, Instant>,
 
     proposals: ProposalQueue,
-    apply_proposals: Vec<Proposal<RocksEngine>>,
+    apply_proposals: Vec<Proposal<RocksSnapshot>>,
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
@@ -250,13 +250,17 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    /// The known newest conf version and its corresponding peer list
+    /// Send to these peers to check whether itself is stale.
+    pub check_stale_conf_ver: u64,
+    pub check_stale_peers: Vec<metapb::Peer>,
 }
 
 impl Peer {
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -329,6 +333,8 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            check_stale_conf_ver: 0,
+            check_stale_peers: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -725,7 +731,7 @@ impl Peer {
     ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
-            { self.peer.get_store_id() == 3 && self.region_id == 1 },
+            self.peer.get_store_id() == 3 && self.region_id == 1,
             |_| Ok(())
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
@@ -1082,7 +1088,7 @@ impl Peer {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
-    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksSnapshot>> {
         if self.apply_proposals.is_empty() {
             return None;
         }
@@ -1681,7 +1687,7 @@ impl Peer {
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
     ) -> bool {
@@ -1742,7 +1748,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -1942,7 +1948,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
@@ -2006,7 +2012,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2061,7 +2067,7 @@ impl Peer {
                     || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
                         >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL))
             {
-                self.bcast_wake_up_message(&mut poll_ctx.trans);
+                self.bcast_wake_up_message(poll_ctx);
                 self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
             }
             self.should_wake_up = true;
@@ -2371,7 +2377,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 
@@ -2456,7 +2462,7 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<RocksEngine> {
+    ) -> ReadResponse<RocksSnapshot> {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,
@@ -2617,9 +2623,8 @@ impl Peer {
         }
     }
 
-    pub fn bcast_wake_up_message<T: Transport>(&self, trans: &mut T) {
-        let region = self.raft_group.store().region();
-        for peer in region.get_peers() {
+    pub fn bcast_wake_up_message<T: Transport, C>(&self, ctx: &mut PollContext<T, C>) {
+        for peer in self.region().get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
             }
@@ -2630,7 +2635,7 @@ impl Peer {
             send_msg.set_to_peer(peer.clone());
             let extra_msg = send_msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-            if let Err(e) = trans.send(send_msg) {
+            if let Err(e) = ctx.trans.send(send_msg) {
                 error!(
                     "failed to send wake up message";
                     "region_id" => self.region_id,
@@ -2639,7 +2644,51 @@ impl Peer {
                     "target_store_id" => peer.get_store_id(),
                     "err" => ?e,
                 );
+            } else {
+                ctx.need_flush_trans = true;
             }
+        }
+    }
+
+    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+            self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
+            self.check_stale_peers = self.region().get_peers().to_vec();
+        }
+        for peer in &self.check_stale_peers {
+            if peer.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut send_msg = RaftMessage::default();
+            send_msg.set_region_id(self.region_id);
+            send_msg.set_from_peer(self.peer.clone());
+            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+            send_msg.set_to_peer(peer.clone());
+            let extra_msg = send_msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
+            if let Err(e) = ctx.trans.send(send_msg) {
+                error!(
+                    "failed to send check stale peer message";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => peer.get_id(),
+                    "target_store_id" => peer.get_store_id(),
+                    "err" => ?e,
+                );
+            } else {
+                ctx.need_flush_trans = true;
+            }
+        }
+    }
+
+    pub fn on_check_stale_peer_response(
+        &mut self,
+        check_conf_ver: u64,
+        check_peers: Vec<metapb::Peer>,
+    ) {
+        if self.check_stale_conf_ver < check_conf_ver {
+            self.check_stale_conf_ver = check_conf_ver;
+            self.check_stale_peers = check_peers;
         }
     }
 
@@ -2870,7 +2919,7 @@ where
         msg: &RaftCmdRequest,
         region: &metapb::Region,
         read_index: Option<u64>,
-    ) -> ReadResponse<E> {
+    ) -> ReadResponse<E::Snapshot> {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
