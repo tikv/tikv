@@ -532,6 +532,7 @@ key-path = "invalid path"
 cert-allowed-cn = [
     "example.tikv.com",
 ]
+redact-info-log = true
 
 [encryption]
 data-encryption-method = "aes128-ctr"
