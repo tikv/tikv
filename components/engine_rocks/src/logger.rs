@@ -2,7 +2,7 @@
 use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
 
 #[derive(Default)]
-pub struct RocksdbLogger();
+pub struct RocksdbLogger;
 
 impl Logger for RocksdbLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
@@ -19,7 +19,7 @@ impl Logger for RocksdbLogger {
 }
 
 #[derive(Default)]
-pub struct RaftDBLogger();
+pub struct RaftDBLogger;
 
 impl Logger for RaftDBLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {

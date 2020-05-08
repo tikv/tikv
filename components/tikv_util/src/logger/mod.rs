@@ -705,7 +705,7 @@ mod tests {
         static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
         static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
         static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-
+        static RAFTDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
     }
 
     struct NormalWriter;
@@ -738,12 +738,23 @@ mod tests {
         }
     }
 
+    struct RaftDBWriter;
+    impl Write for RaftDBWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
     #[test]
     fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
         let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
-        let drain = LogDispatcher::new(normal, Some(rocksdb), Some(slow)).fuse();
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
+        let drain = LogDispatcher::new(normal, rocksdb, Some(slow), raftdb).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
             inner: drain,
