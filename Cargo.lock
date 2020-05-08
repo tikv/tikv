@@ -2238,13 +2238,15 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+source = "git+https://github.com/zhongzc/minitrace.git#fad4cb1e11efad4fe30cfaa7bd729e5a1cd699a4"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
  "futures 0.3.4",
+ "libc",
  "minitrace-attribute 0.0.1 (git+https://github.com/zhongzc/minitrace.git)",
  "pin-project",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -2268,7 +2270,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git#19c83f14b7c4c0c2b6f76b20c8fd37103cfe8ae9"
+source = "git+https://github.com/zhongzc/minitrace.git#fad4cb1e11efad4fe30cfaa7bd729e5a1cd699a4"
 dependencies = [
  "quote 1.0.3",
  "syn 1.0.5",

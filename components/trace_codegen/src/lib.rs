@@ -54,11 +54,12 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
             }.inspect(move |_| {
                 let __spans = __span_rx.collect_all();
 
-                let __bytes = trace_pb::serialize(__spans.into_iter());
+                // let __spans = trace_pb::serialize(__spans.into_iter());
+
                 // avoid dead-code elimination
-                let __bytes = unsafe {
-                    let ret = std::ptr::read_volatile(&__bytes);
-                    std::mem::forget(__bytes);
+                let __spans = unsafe {
+                    let ret = std::ptr::read_volatile(&__spans);
+                    std::mem::forget(__spans);
                     ret
                 };
 
