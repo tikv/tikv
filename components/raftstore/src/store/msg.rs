@@ -249,9 +249,8 @@ pub enum CasualMessage<E: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
-    /// A test only message, it is useful when we want to access
-    /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+    /// A message to access peer's internal state.
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -289,7 +288,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::Test(_) => write!(fmt, "Test"),
+            CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
 }

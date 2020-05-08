@@ -459,7 +459,7 @@ impl StatusServer {
                 match CasualRouter::send(
                     router,
                     id,
-                    CasualMessage::Test(Box::new(move |peer| {
+                    CasualMessage::AccessPeer(Box::new(move |peer| {
                         if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
                             error!("receiver dropped, region meta: {:?}", meta)
                         }
