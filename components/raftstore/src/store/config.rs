@@ -242,8 +242,8 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             early_apply: true,
-            apply_yield_duration: ReadableDuration::secs(1),
-            reschedule_duration: ReadableDuration::secs(10),
+            apply_yield_duration: ReadableDuration::millis(500),
+            reschedule_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
