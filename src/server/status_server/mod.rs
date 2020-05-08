@@ -428,28 +428,23 @@ impl StatusServer {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
         }
 
-        let err_resp =
-            |status_code, body| Box::new(ok(StatusServer::err_response(status_code, body)));
+        type Resp = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
 
-        let not_found = || {
-            err_resp(
-                StatusCode::NOT_FOUND,
-                format!("{} not found", req.uri().path()),
-            )
-        };
+        fn err_resp(status_code: StatusCode, msg: impl Into<Body>) -> Resp {
+            Box::new(ok(StatusServer::err_response(status_code, msg)))
+        }
+
+        fn not_found(msg: impl Into<Body>) -> Resp {
+            err_resp(StatusCode::NOT_FOUND, msg)
+        }
 
         let router = match router {
-            None => {
-                return err_resp(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "router not set".to_string(),
-                )
-            }
+            None => return err_resp(StatusCode::INTERNAL_SERVER_ERROR, "router not set"),
             Some(r) => r,
         };
 
         match REGION.captures(req.uri().path()) {
-            None => not_found(),
+            None => not_found(format!("path {} not found", req.uri().path())),
             Some(cap) => {
                 let id: u64 = match cap["id"].parse() {
                     Ok(id) => id,
@@ -471,7 +466,9 @@ impl StatusServer {
                     })),
                 ) {
                     Ok(_) => (),
-                    Err(raftstore::Error::RegionNotFound(_)) => return not_found(),
+                    Err(raftstore::Error::RegionNotFound(_)) => {
+                        return not_found(format!("region({}) not found", id))
+                    }
                     Err(err) => {
                         return err_resp(
                             StatusCode::INTERNAL_SERVER_ERROR,
