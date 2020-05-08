@@ -276,7 +276,7 @@ impl BatchRaftCmdRequestBuilder {
         }
         for r in req.get_requests() {
             match r.get_cmd_type() {
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange => (),
+                CmdType::Delete | CmdType::Put => (),
                 _ => {
                     return false;
                 }
@@ -419,15 +419,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             .batch_req_builder
                             .add(cmd.request, req_size, cmd.callback);
                         if self.fsm.batch_req_builder.should_finish() {
-                            if let Some((req, cb)) = self
-                                .fsm
-                                .batch_req_builder
-                                .build(&mut self.ctx.raft_metrics.propose)
-                            {
-                                self.propose_raft_command(req, cb)
-                            }
+                            self.propose_batch_raft_command();
                         }
                     } else {
+                        self.propose_batch_raft_command();
                         self.propose_raft_command(cmd.request, cmd.callback)
                     }
                 }
@@ -447,6 +442,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         }
         // Propose batch request which may be still waiting for more raft-command
+        self.propose_batch_raft_command();
+    }
+
+    fn propose_batch_raft_command(&mut self) {
         if let Some((req, cb)) = self
             .fsm
             .batch_req_builder
