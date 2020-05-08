@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use std::sync::Arc;
 use tikv_util::config::VersionTrack;
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: i32 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
-const DEFAULT_QPS_THRESHOLD: usize = 1500;
+const DEFAULT_QPS_THRESHOLD: usize = 3000;
 
 // We get balance score by abs(sample.left-sample.right)/(sample.right+sample.left). It will be used to measure left and right balance
 const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
@@ -41,24 +41,14 @@ impl Default for SplitConfig {
 
 impl SplitConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<SplitConfig>>,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.split_balance_score > 1.0
             || self.split_balance_score < 0.0
             || self.split_contained_score > 1.0
             || self.split_contained_score < 0.0
         {
-            rollback_or!(rb_collector, split_balance_score, {
-                Err(
-                    ("split_balance_score or split_contained_score should be between 0 and 1.")
-                        .into(),
-                )
-            })
+            return Err(
+                ("split_balance_score or split_contained_score should be between 0 and 1.").into(),
+            );
         }
 
         Ok(())

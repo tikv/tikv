@@ -19,10 +19,9 @@ use engine_traits::Peekable;
 use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::SnapManager;
+use raftstore::store::{AutoSplitController, SnapManager};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigHandler;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
@@ -109,7 +108,8 @@ fn must_kv_prewrite(client: &TikvClient, ctx: Context, muts: Vec<Mutation>, pk: 
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
     prewrite_req.start_version = ts;
-    prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
     assert!(
         !prewrite_resp.has_region_error(),
@@ -520,7 +520,7 @@ fn test_physical_scan_lock() {
             lock_info.set_primary_lock(k.clone());
             lock_info.set_lock_version(ts);
             lock_info.set_key(k);
-            lock_info.set_lock_ttl(ts + 1);
+            lock_info.set_lock_ttl(3000);
             lock_info.set_lock_type(Op::Put);
             lock_info
         })
@@ -844,11 +844,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 1);
-    for e in entries {
-        assert_eq!(e.get_name(), fp);
-        assert_eq!(e.get_actions(), act);
-    }
+    assert!(entries
+        .iter()
+        .any(|e| e.get_name() == fp && e.get_actions() == act));
 
     let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
@@ -858,7 +856,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 0);
+    assert!(entries
+        .iter()
+        .all(|e| !(e.get_name() == fp && e.get_actions() == act)));
 }
 
 #[test]
@@ -924,9 +924,6 @@ fn test_double_run_node() {
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = Default::default();
-    let config_client =
-        ConfigHandler::start(String::new(), cfg_controller, pd_worker.scheduler()).unwrap();
     let e = node
         .start(
             engines,
@@ -937,7 +934,7 @@ fn test_double_run_node() {
             coprocessor_host,
             importer,
             Worker::new("split"),
-            Box::new(config_client),
+            AutoSplitController::default(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
@@ -1035,4 +1032,54 @@ fn test_pessimistic_lock() {
         }
         must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
     }
+}
+
+#[test]
+fn test_check_txn_status_with_max_ts() {
+    fn must_check_txn_status(
+        client: &TikvClient,
+        ctx: Context,
+        key: &[u8],
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+    ) -> CheckTxnStatusResponse {
+        let mut req = CheckTxnStatusRequest::default();
+        req.set_context(ctx);
+        req.set_primary_key(key.to_vec());
+        req.set_lock_ts(lock_ts);
+        req.set_caller_start_ts(caller_start_ts);
+        req.set_current_ts(current_ts);
+
+        let resp = client.kv_check_txn_status(&req).unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.error.is_none(), "{:?}", resp.get_error());
+        return resp;
+    }
+
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let lock_ts = 10;
+
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
+
+    // Should return MinCommitTsPushed even if caller_start_ts is max.
+    let status = must_check_txn_status(
+        &client,
+        ctx.clone(),
+        &k,
+        lock_ts,
+        std::u64::MAX,
+        lock_ts + 1,
+    );
+    assert_eq!(status.lock_ttl, 3000);
+    assert_eq!(status.action, Action::MinCommitTsPushed);
+
+    // The min_commit_ts of k shouldn't be pushed.
+    must_kv_commit(&client, ctx, vec![k], lock_ts, lock_ts + 1, lock_ts + 1);
 }

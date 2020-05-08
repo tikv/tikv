@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -23,7 +23,7 @@ use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::*;
 use raftstore::Result;
-use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
@@ -189,6 +189,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -224,7 +225,7 @@ impl Simulator for NodeCluster {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
+        let cfg_controller = ConfigController::new(cfg.clone());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
@@ -239,19 +240,13 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
         );
 
-        let mut raftstore_cfg = cfg.raft_store.clone();
+        let mut raftstore_cfg = cfg.raft_store;
         raftstore_cfg.validate().unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager(raft_store)),
         );
-        let config_client = ConfigHandler::start(
-            cfg.server.advertise_addr,
-            cfg_controller,
-            pd_worker.scheduler(),
-        )
-        .unwrap();
 
         node.start(
             engines.clone(),
@@ -262,7 +257,7 @@ impl Simulator for NodeCluster {
             coprocessor_host,
             importer,
             split_check_worker,
-            Box::new(config_client) as _,
+            AutoSplitController::default(),
         )?;
         assert!(engines
             .kv
@@ -332,7 +327,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         if !self
             .trans
