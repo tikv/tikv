@@ -232,12 +232,11 @@ docker-tag-with-git-tag:
 run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
-	# The special linux case below is testing the mem-profiling
+	# The special Linux case below is testing the mem-profiling
 	# features in tikv_alloc, which are marked #[ignore] since
 	# they require special compile-time and run-time setup
-	# Forturately rebuilding with the mem-profiling feature will only
+	# Fortunately rebuilding with the mem-profiling feature will only
 	# rebuild starting at jemalloc-sys.
-	# TODO: remove cd commands after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
