@@ -79,6 +79,13 @@ pub fn line_wrap(buf: &mut [u8], input_len: usize) {
     }
 }
 
+#[inline]
+pub fn strip_whitespace(input: &[u8]) -> Vec<u8> {
+    let mut input_copy = Vec::<u8>::with_capacity(input.len());
+    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
+    input_copy
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
