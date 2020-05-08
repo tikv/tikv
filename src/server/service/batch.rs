@@ -201,9 +201,17 @@ impl BatchLimiter {
     fn observe_submit(&mut self, now: Instant, size: usize) {
         self.last_submit_time = now;
         if self.enable_batch {
-            REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-                .with_label_values(&[self.cmd.as_str()])
-                .observe(self.batch_input as f64);
+            match self.cmd {
+                BatchableRequestKind::PointGet => REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                    .point_get
+                    .observe(self.batch_input as f64),
+                BatchableRequestKind::Prewrite => REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                    .prewrite
+                    .observe(self.batch_input as f64),
+                BatchableRequestKind::Commit => REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                    .commit
+                    .observe(self.batch_input as f64),
+            }
             if size > 0 {
                 REQUEST_BATCH_RATIO_HISTOGRAM_VEC
                     .with_label_values(&[self.cmd.as_str()])
