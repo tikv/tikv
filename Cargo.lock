@@ -2023,7 +2023,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2042,7 +2042,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2384,6 +2384,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f26e041cd983acbc087e30fcba770380cfa352d0e392e175b2344ebaf7ea0602"
+dependencies = [
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "num"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2477,6 +2486,12 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
 
 [[package]]
 name = "opaque-debug"
@@ -3400,7 +3415,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#6a01ac99d92501b8de9ad091cae458f5e47a4218"
+source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4078,17 +4093,16 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.9.6"
-source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#762badf918f1e0b36fce032f9f81274d79fdff7d"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d070254b7172eee9eb3990bea8f72aeabfe1226c40bf71a52e4fe75777812e9a"
 dependencies = [
- "cache-size",
  "cfg-if",
  "doc-comment",
  "libc",
- "num_cpus",
- "pnet_datalink",
+ "ntapi",
+ "once_cell",
  "rayon",
- "walkdir",
  "winapi 0.3.8",
 ]
 

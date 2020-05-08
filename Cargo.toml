@@ -125,7 +125,7 @@ slog_derive = "0.2"
 parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
-sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
+sysinfo = "0.14"
 tempfile = "3.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }
