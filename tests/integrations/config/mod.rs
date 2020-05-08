@@ -184,6 +184,8 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+        apply_yield_duration: ReadableDuration::secs(1),
+        reschedule_duration: ReadableDuration::secs(10),
         perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);

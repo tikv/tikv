@@ -3,10 +3,12 @@
 use batch_system::test_runner::*;
 use batch_system::*;
 use criterion::*;
+use std::time::Duration;
 
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
-    let (router, mut system) = batch_system::create_system(2, 2, 2, control_tx, control_fsm);
+    let (router, mut system) =
+        batch_system::create_system(2, 2, Duration::from_secs(10), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     let (normal_tx, normal_fsm) = Runner::new(100000);
     let normal_box = BasicMailbox::new(normal_tx, normal_fsm);

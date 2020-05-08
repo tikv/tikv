@@ -9,7 +9,8 @@ use tikv_util::mpsc;
 #[test]
 fn test_batch() {
     let (control_tx, control_fsm) = Runner::new(10);
-    let (router, mut system) = batch_system::create_system(2, 2, 2, control_tx, control_fsm);
+    let (router, mut system) =
+        batch_system::create_system(2, 2, Duration::from_secs(10), control_tx, control_fsm);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();
     system.spawn("test".to_owned(), builder);
