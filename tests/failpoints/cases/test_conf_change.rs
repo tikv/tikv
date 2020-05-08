@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use fail;
 use futures::Future;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;

@@ -1251,7 +1251,7 @@ mod tests {
     fn test_datatype_to_int_overflow() {
         fn test_overflow<T: Debug + Clone + ToInt>(raw: T, dst: i64, tp: FieldTypeTp) {
             let mut ctx = EvalContext::default();
-            let val = raw.clone().to_int(&mut ctx, tp);
+            let val = raw.to_int(&mut ctx, tp);
             match val {
                 Err(e) => assert_eq!(
                     e.code(),
@@ -1636,7 +1636,7 @@ mod tests {
     fn test_datatype_to_uint_overflow() {
         fn test_overflow<T: Debug + Clone + ToInt>(raw: T, dst: u64, tp: FieldTypeTp) {
             let mut ctx = EvalContext::default();
-            let val = raw.clone().to_uint(&mut ctx, tp);
+            let val = raw.to_uint(&mut ctx, tp);
             match val {
                 Err(e) => assert_eq!(
                     e.code(),
@@ -1651,7 +1651,7 @@ mod tests {
             // OVERFLOW_AS_WARNING
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-            let val = raw.clone().to_uint(&mut ctx, tp);
+            let val = raw.to_uint(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst, "{:?} => {}", raw, dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }

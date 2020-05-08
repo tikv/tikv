@@ -5,7 +5,6 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use libc;
 use procinfo::pid as pid_info;
 
 use prometheus::core::{Collector, Desc};

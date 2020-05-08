@@ -9,8 +9,6 @@ use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use num;
-
 use codec::prelude::*;
 use tikv_util::escape;
 
