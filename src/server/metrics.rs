@@ -143,6 +143,10 @@ make_static_metric! {
     pub struct RequestBatchSizeHistogramVec: Histogram {
         "type" => BatchableRequestKind,
     }
+
+    pub struct RequestBatchRatioHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
+    }
 }
 
 lazy_static! {
@@ -318,13 +322,15 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
         .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_ratio",
-        "Ratio of request batch output to input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
-    )
-    .unwrap();
+    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
+        register_static_histogram_vec!(
+            RequestBatchRatioHistogramVec,
+            "tikv_server_request_batch_ratio",
+            "Ratio of request batch output to input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
 }
 
 make_auto_flush_static_metric! {
