@@ -309,7 +309,8 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
-    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec = register_static_histogram_vec!(
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
+        register_static_histogram_vec!(
             RequestBatchSizeHistogramVec,
             "tikv_server_request_batch_size",
             "Size of request batch input",
@@ -317,7 +318,6 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
     .unwrap();
-
     pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_server_request_batch_ratio",
         "Ratio of request batch output to input",
