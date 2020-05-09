@@ -22,6 +22,7 @@ use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
     RegionLocalState,
 };
+use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -131,7 +132,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<E>> {
@@ -175,7 +176,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
@@ -362,7 +363,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_base_tick();
 
                 if self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
+                    // FIXME: should use `bcast_check_stale_peer_message` instead.
+                    // Sending a new enum type msg to a old tikv may cause panic during rolling update
+                    // we should change the protobuf behavior and check if properly handled in all place
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -502,7 +506,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let region_id = self.region_id();
         let msg =
@@ -561,6 +565,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
+            SignificantMsg::StoreResolved { store_id, group_id } => {
+                let state = self.ctx.global_replication_state.lock().unwrap();
+                if state.status.get_mode() != ReplicationMode::DrAutoSync {
+                    return;
+                }
+                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                    return;
+                }
+                drop(state);
+                self.fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .assign_commit_groups(&[(store_id, group_id)]);
+            }
             SignificantMsg::CaptureChange {
                 cmd,
                 region_epoch,
@@ -597,7 +616,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<RocksEngine>) {
+    fn on_leader_callback(&mut self, cb: Callback<RocksSnapshot>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -618,7 +637,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksEngine>>) {
+    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksSnapshot>>) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -900,7 +919,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(&msg);
+            self.on_extra_message(msg);
             return Ok(());
         }
 
@@ -943,16 +962,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         Ok(())
     }
 
-    fn on_extra_message(&mut self, msg: &RaftMessage) {
-        let extra_msg = msg.get_extra_msg();
-        match extra_msg.get_type() {
-            ExtraMessageType::MsgRegionWakeUp => {
-                self.reset_raft_tick(GroupState::Ordered);
+    fn on_extra_message(&mut self, mut msg: RaftMessage) {
+        match msg.get_extra_msg().get_type() {
+            ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
+                if self.fsm.group_state == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
+                }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
-                self.fsm
-                    .peer
-                    .maybe_add_want_rollback_merge_peer(msg.get_from_peer().get_id(), &extra_msg);
+                self.fsm.peer.maybe_add_want_rollback_merge_peer(
+                    msg.get_from_peer().get_id(),
+                    msg.get_extra_msg(),
+                );
+            }
+            ExtraMessageType::MsgCheckStalePeerResponse => {
+                self.fsm.peer.on_check_stale_peer_response(
+                    msg.get_region_epoch().get_conf_ver(),
+                    msg.mut_extra_msg().take_check_peers().into(),
+                );
             }
         }
     }
@@ -1022,9 +1049,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
@@ -1477,6 +1507,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
+                let group_id = self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .group
+                    .group_id(peer.store_id);
+                if let Some(group_id) = group_id {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer.id, group_id)]);
+                }
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
                 }
@@ -1649,6 +1693,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     panic!("create new split region {:?} err {:?}", new_region, e);
                 }
             };
+            let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+            new_peer.peer.init_commit_group(&mut *replication_state);
+            drop(replication_state);
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {
@@ -2221,6 +2268,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "region" => ?region,
         );
 
+        if prev_region.get_peers() != region.get_peers() {
+            let mut state = self.ctx.global_replication_state.lock().unwrap();
+            state.calculate_commit_group(region.get_peers());
+            self.fsm
+                .peer
+                .raft_group
+                .raft
+                .assign_commit_groups(&state.group_buffer);
+        }
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
             "check snapshot range";
@@ -2257,7 +2314,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksEngine>>,
+        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2283,7 +2340,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     region,
                     index,
                     snap,
-                    _phantom,
                 } => self.on_ready_compute_hash(region, index, snap),
                 ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
                 ExecResult::DeleteRange { .. } => {
@@ -2451,7 +2507,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksEngine>) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksSnapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2709,7 +2765,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -2950,11 +3006,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // for peer B in case 1 above
                 warn!(
                     "leader missing longer than max_leader_missing_duration. \
-                     To check with pd whether it's still valid";
+                     To check with pd and other peers whether it's still valid";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
+
+                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
                     region: self.fsm.peer.region().clone(),

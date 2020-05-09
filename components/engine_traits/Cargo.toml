@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 hex = "0.4"
 protobuf = "2"
-quick-error = "1.2.2"
+quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

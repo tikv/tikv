@@ -3,8 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
-
-use servo_arc::Arc;
+use std::sync::Arc;
 
 use tipb::{Expr, FieldType, TopN};
 
@@ -238,7 +237,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
     #[allow(clippy::clone_on_copy)]
     fn heap_take_all(&mut self) -> LazyBatchColumnVec {
-        let heap = std::mem::replace(&mut self.heap, BinaryHeap::default());
+        let heap = std::mem::take(&mut self.heap);
         let sorted_items = heap.into_sorted_vec();
         if sorted_items.is_empty() {
             return LazyBatchColumnVec::empty();

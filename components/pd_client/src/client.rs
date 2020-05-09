@@ -11,7 +11,7 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -73,6 +73,11 @@ impl RpcClient {
     /// Gets the leader of PD.
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
+    }
+
+    /// Re-establishes connection with PD leader in synchronized fashion.
+    pub fn reconnect(&self) -> Result<()> {
+        self.leader_client.reconnect()
     }
 
     /// Creates a new call option with default request timeout.
@@ -297,6 +302,7 @@ impl PdClient for RpcClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
@@ -313,6 +319,9 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
+        if let Some(s) = replication_status {
+            req.set_replication_status(s);
+        }
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
         interval.set_end_timestamp(UnixSecs::now().into_inner());

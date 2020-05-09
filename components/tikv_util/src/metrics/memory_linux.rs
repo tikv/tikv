@@ -5,7 +5,6 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use libc;
 use procinfo::pid as pid_info;
 
 use prometheus::core::{Collector, Desc};
@@ -72,5 +71,5 @@ impl Collector for MemoryCollector {
 }
 
 lazy_static! {
-    static ref PAGESIZE: f64 = { unsafe { libc::sysconf(libc::_SC_PAGESIZE) as f64 } };
+    static ref PAGESIZE: f64 = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as f64 };
 }

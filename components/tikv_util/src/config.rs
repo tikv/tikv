@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use url;
 
 use super::time::Instant;
 use crate::slow_log;
@@ -579,7 +578,6 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use libc;
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::path::Path;
@@ -764,11 +762,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
+            let tmp_dir = Builder::new()
+                .prefix("test-check-data-dir")
+                .tempdir()
+                .unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
+            ::std::fs::create_dir(&data_path).unwrap();
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
-            // data_path may not mountted on a normal device on container
+            // data_path may not mounted on a normal device on container
             if !fs_info.fsname.starts_with("/dev") {
                 return;
             }
@@ -1120,7 +1122,6 @@ mod tests {
 
     use super::*;
     use tempfile::Builder;
-    use toml;
 
     #[test]
     fn test_readable_size() {
