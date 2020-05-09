@@ -1144,7 +1144,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // All of the target peers must exist before merging which is guaranteed by PD.
         // Now the target peer is not in region map, so if everything is ok, the local target
-        // region should be fresher than merge_target
+        // region should be fresher than merge target
         if self.is_local_merge_target_region_fresher(merge_target)? {
             Ok(true)
         } else {

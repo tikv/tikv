@@ -276,35 +276,14 @@ fn test_node_check_merged_message() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    // test if orphan merging peer will be gc
-    let mut region = pd_client.get_region(b"k2").unwrap();
+    // test if stale peer before conf removal is destroyed automatically
+    let mut region = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
     cluster.must_split(&region, b"k2");
     let mut left = pd_client.get_region(b"k1").unwrap();
-    pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
     let mut right = pd_client.get_region(b"k2").unwrap();
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        right.get_id(),
-        3,
-    )));
-    pd_client.must_add_peer(right.get_id(), new_peer(3, 10));
-    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
-    cluster.must_transfer_leader(left.get_id(), left_on_store1);
-    pd_client.must_merge(left.get_id(), right.get_id());
-    region = pd_client.get_region(b"k2").unwrap();
-    must_get_none(&cluster.get_engine(3), b"k3");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    let region_on_store3 = find_peer(&region, 3).unwrap().to_owned();
-    pd_client.must_remove_peer(region.get_id(), region_on_store3);
-    must_get_none(&cluster.get_engine(3), b"k1");
-    cluster.clear_send_filters();
-    pd_client.must_add_peer(region.get_id(), new_peer(3, 11));
-
-    // test if stale peer before conf removal is destroyed automatically
-    region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    left = pd_client.get_region(b"k1").unwrap();
-    right = pd_client.get_region(b"k2").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
     cluster.add_send_filter(IsolationFilterFactory::new(4));
@@ -1089,108 +1068,61 @@ fn test_merge_isloated_stale_learner() {
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
 
-// In the previous implementation, the source peer will propose rollback merge
-// after the local target peer's epoch is larger than recorded previously.
-// But it's wrong. This test constructs a case that writing data to the source region
-// after merging. This operation can succeed in the previous implementation which
-// causes data loss.
-// In the current implementation, the rollback merge proposal can be proposed only when
-// the number of peers who want to rollback merge is greater than the majority of all
-// peers. If so, this merge is impossible to succeed.
-// PS: A peer who wants to rollback merge means its local target peer's epoch is larger
-// than recorded.
+/// Test if a peer can be removed if its target peer has been removed and doesn't apply the
+/// CommitMerge log.
 #[test]
-fn test_node_merge_write_data_to_source_region_after_merging() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
-    // For snapshot after merging
-    cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.apply_max_batch_size = 1;
-    cluster.cfg.raft_store.apply_pool_size = 2;
+fn test_merge_remove_target_peer_isolated() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k2", b"v2");
+    cluster.run_conf_change();
 
     let mut region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
     cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
 
-    let left = pd_client.get_region(b"k1").unwrap();
-    let right = pd_client.get_region(b"k2").unwrap();
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k2").unwrap();
+    let r3 = pd_client.get_region(b"k3").unwrap();
 
-    let right_peer_2 = find_peer(&right, 2).cloned().unwrap();
-    assert_eq!(right_peer_2.get_id(), 2);
-    let on_handle_apply_2_fp = "on_handle_apply_2";
-    fail::cfg(on_handle_apply_2_fp, "pause").unwrap();
+    let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
+    let r2_on_store2 = find_peer(&r2, 2).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store2);
 
-    let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
-    cluster.must_transfer_leader(right.get_id(), right_peer_1);
+    for i in 1..4 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
 
-    let left_peer_3 = find_peer(&left, 3).cloned().unwrap();
-    cluster.must_transfer_leader(left.get_id(), left_peer_3.clone());
-
-    let schedule_merge_fp = "on_schedule_merge";
-    fail::cfg(schedule_merge_fp, "return()").unwrap();
-
-    cluster.try_merge(left.get_id(), right.get_id());
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(3), format!("k{}", i).as_bytes(), b"v1");
+    }
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Make region r2's epoch > r2 peer on store 3.
+    // r2 peer on store 3 will be removed whose epoch is staler than the epoch when r1 merge to r2.
+    pd_client.must_add_peer(r2.get_id(), new_peer(4, 4));
+    pd_client.must_remove_peer(r2.get_id(), new_peer(4, 4));
 
-    fail::remove(schedule_merge_fp);
+    let r2_on_store3 = find_peer(&r2, 3).unwrap().to_owned();
+    let r3_on_store3 = find_peer(&r3, 3).unwrap().to_owned();
 
-    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
+    pd_client.must_merge(r1.get_id(), r2.get_id());
 
-    region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    let state1 = cluster.apply_state(region.get_id(), 1);
-    for i in 0..15 {
-        cluster.must_put(format!("k2{}", i).as_bytes(), b"v2");
-    }
-    // Wait for log compaction
-    for _ in 0..50 {
-        let state2 = cluster.apply_state(region.get_id(), 1);
-        if state2.get_truncated_state().get_index() >= state1.get_applied_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
-    // Ignore this msg to make left region exist.
-    let on_need_gc_merge_fp = "on_need_gc_merge";
-    fail::cfg(on_need_gc_merge_fp, "return").unwrap();
+    pd_client.must_remove_peer(r2.get_id(), r2_on_store3);
+    pd_client.must_remove_peer(r3.get_id(), r3_on_store3);
+
+    pd_client.must_merge(r2.get_id(), r3.get_id());
 
     cluster.clear_send_filters();
-    // On store 3, now the right region is updated by snapshot not applying logs
-    // so the left region still exist.
-    // Wait for left region to rollback merge (in previous wrong implementation)
-    sleep_ms(200);
-    // Write data to left region
-    let mut new_left = left.clone();
-    let mut epoch = new_left.take_region_epoch();
-    // prepareMerge => conf_ver + 1, version + 1
-    // rollbackMerge => version + 1
-    epoch.set_conf_ver(epoch.get_conf_ver() + 1);
-    epoch.set_version(epoch.get_version() + 2);
-    let mut req = new_request(
-        new_left.get_id(),
-        epoch,
-        vec![new_put_cf_cmd("default", b"k11", b"v11")],
-        false,
-    );
-    req.mut_header().set_peer(left_peer_3);
-    if let Ok(()) = cluster
-        .sim
-        .rl()
-        .async_command_on_node(3, req, Callback::None)
-    {
-        sleep_ms(200);
-        // The write must not succeed
-        must_get_none(&cluster.get_engine(2), b"k11");
-        must_get_none(&cluster.get_engine(3), b"k11");
-    }
 
-    fail::remove(on_handle_apply_2_fp);
+    for i in 1..4 {
+        must_get_none(&cluster.get_engine(3), format!("k{}", i).as_bytes());
+    }
 }
