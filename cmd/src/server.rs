@@ -769,8 +769,8 @@ impl TiKVServer {
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
+                self.router.clone(),
             ));
-            status_server.set_router(Some(self.router.clone()));
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
@@ -899,7 +899,11 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl Stop for StatusServer {
+impl<E, R> Stop for StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     fn stop(self: Box<Self>) {
         (*self).stop()
     }

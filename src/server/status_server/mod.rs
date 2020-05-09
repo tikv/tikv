@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use futures::future::{err, ok};
 use futures::stream::Stream;
 use futures::sync::oneshot;
@@ -11,7 +11,7 @@ use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
 use pprof::protos::Message;
-use raftstore::store::{transport::CasualRouter, CasualMessage, RaftRouter};
+use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use reqwest::{self, blocking::Client};
 use tempfile::TempDir;
@@ -22,6 +22,7 @@ use tokio_tcp::TcpListener;
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::error::Error as StdError;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -89,21 +90,27 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer {
+pub struct StatusServer<E, R> {
     thread_pool: ThreadPool,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    router: Option<RaftRouter<RocksEngine>>,
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
+    router: R,
+    _engine: PhantomData<E>,
 }
 
-impl StatusServer {
+impl<E, R> StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     pub fn new(
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
+        router: R,
     ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
@@ -121,14 +128,11 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            router: None,
             pd_client,
             cfg_controller,
+            router,
+            _engine: PhantomData,
         }
-    }
-
-    pub fn set_router(&mut self, router: Option<RaftRouter<RocksEngine>>) {
-        self.router = router
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
@@ -181,7 +185,7 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(StatusServer::err_response(
+                return Box::new(ok(err_response(
                     StatusCode::BAD_REQUEST,
                     "request should have the query part",
                 )));
@@ -192,7 +196,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    return Box::new(ok(StatusServer::err_response(
+                    return Box::new(ok(err_response(
                         StatusCode::BAD_REQUEST,
                         "request should have seconds argument",
                     )));
@@ -214,22 +218,12 @@ impl StatusServer {
                     ok(response)
                 })
                 .or_else(|err| {
-                    ok(StatusServer::err_response(
+                    ok(err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
                 }),
         )
-    }
-
-    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-    where
-        T: Into<Body>,
-    {
-        Response::builder()
-            .status(status_code)
-            .body(message.into())
-            .unwrap()
     }
 
     fn get_config(
@@ -240,10 +234,7 @@ impl StatusServer {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal Server Error",
-            ),
+            Err(_) => err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         };
         Box::new(ok(res))
     }
@@ -255,7 +246,7 @@ impl StatusServer {
         let res = req.into_body().concat2().and_then(move |body| {
             let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
                 Ok(change) => match cfg_controller.update(change) {
-                    Err(e) => StatusServer::err_response(
+                    Err(e) => err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("fail to update, error: {:?}", e),
                     ),
@@ -265,7 +256,7 @@ impl StatusServer {
                         resp
                     }
                 },
-                Err(_) => StatusServer::err_response(
+                Err(_) => err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "fail to decode".to_owned(),
                 ),
@@ -345,7 +336,7 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
+                return Box::new(ok(err_response(StatusCode::BAD_REQUEST, "")));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -353,10 +344,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(StatusServer::err_response(
-                        StatusCode::BAD_REQUEST,
-                        err.to_string(),
-                    )));
+                    return Box::new(ok(err_response(StatusCode::BAD_REQUEST, err.to_string())));
                 }
             },
             None => 10,
@@ -366,10 +354,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(StatusServer::err_response(
-                        StatusCode::BAD_REQUEST,
-                        err.to_string(),
-                    )));
+                    return Box::new(ok(err_response(StatusCode::BAD_REQUEST, err.to_string())));
                 }
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
@@ -386,14 +371,14 @@ impl StatusServer {
                             Ok(profile) => match profile.encode(&mut body) {
                                 Ok(()) => {
                                     info!("write report successfully");
-                                    Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                                    Box::new(ok(err_response(StatusCode::OK, body)))
                                 }
-                                Err(err) => Box::new(ok(StatusServer::err_response(
+                                Err(err) => Box::new(ok(err_response(
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     err.to_string(),
                                 ))),
                             },
-                            Err(err) => Box::new(ok(StatusServer::err_response(
+                            Err(err) => Box::new(ok(err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -402,9 +387,9 @@ impl StatusServer {
                         match report.flamegraph(&mut body) {
                             Ok(_) => {
                                 info!("write report successfully");
-                                Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                                Box::new(ok(err_response(StatusCode::OK, body)))
                             }
-                            Err(err) => Box::new(ok(StatusServer::err_response(
+                            Err(err) => Box::new(ok(err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -412,7 +397,7 @@ impl StatusServer {
                     }
                 })
                 .or_else(|err| {
-                    ok(StatusServer::err_response(
+                    ok(err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
@@ -420,9 +405,98 @@ impl StatusServer {
         )
     }
 
+    pub fn stop(self) {
+        // unregister the status address to pd
+        self.unregister_addr();
+        let _ = self.tx.send(());
+        self.thread_pool
+            .shutdown_now()
+            .wait()
+            .unwrap_or_else(|e| error!("failed to stop the status server, error: {:?}", e));
+    }
+
+    // Return listening address, this may only be used for outer test
+    // to get the real address because we may use "127.0.0.1:0"
+    // in test to avoid port conflict.
+    pub fn listening_addr(&self) -> SocketAddr {
+        self.addr.unwrap()
+    }
+
+    fn register_addr(&self, status_addr: String) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        let json = {
+            let mut body = std::collections::HashMap::new();
+            body.insert("component".to_owned(), COMPONENT.to_owned());
+            body.insert("addr".to_owned(), status_addr);
+            serde_json::to_string(&body).unwrap()
+        };
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path("pd/api/v1/component");
+                let res = client
+                    .post(url.as_str())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(json.clone())
+                    .send();
+                match res {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to register addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
+    }
+
+    fn unregister_addr(&self) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let status_addr = format!("{}", self.listening_addr());
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
+                match client.delete(url.as_str()).send() {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to unregister addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
+    }
+}
+
+impl<E, R> StatusServer<E, R>
+where
+    E: KvEngine,
+    R: 'static + Send + CasualRouter<E> + Clone,
+{
     pub fn dump_region_meta(
         req: Request<Body>,
-        router: Option<&RaftRouter<RocksEngine>>,
+        router: &R,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -431,17 +505,12 @@ impl StatusServer {
         type Resp = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
 
         fn err_resp(status_code: StatusCode, msg: impl Into<Body>) -> Resp {
-            Box::new(ok(StatusServer::err_response(status_code, msg)))
+            Box::new(ok(err_response(status_code, msg)))
         }
 
         fn not_found(msg: impl Into<Body>) -> Resp {
             err_resp(StatusCode::NOT_FOUND, msg)
         }
-
-        let router = match router {
-            None => return err_resp(StatusCode::INTERNAL_SERVER_ERROR, "router not set"),
-            Some(r) => r,
-        };
 
         match REGION.captures(req.uri().path()) {
             None => not_found(format!("path {} not found", req.uri().path())),
@@ -456,8 +525,7 @@ impl StatusServer {
                     }
                 };
                 let (tx, rx) = oneshot::channel();
-                match CasualRouter::send(
-                    router,
+                match router.send(
                     id,
                     CasualMessage::AccessPeer(Box::new(move |peer| {
                         if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
@@ -479,11 +547,11 @@ impl StatusServer {
 
                 Box::new(
                     rx.map_err(|_| {
-                        Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, "query cancelled")
+                        err_response(StatusCode::INTERNAL_SERVER_ERROR, "query cancelled")
                     })
                     .and_then(|meta| {
                         serde_json::to_vec(&meta).map_err(|err| {
-                            Self::err_response(
+                            err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("fails to json: {}", err),
                             )
@@ -494,7 +562,7 @@ impl StatusServer {
                             .header("content-type", "application/json")
                             .body(hyper::Body::from(body))
                             .map_err(|err| {
-                                Self::err_response(
+                                err_response(
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     format!("fails to build response: {}", err),
                                 )
@@ -545,9 +613,9 @@ impl StatusServer {
                         }
                         (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                         (Method::GET, path) if path.starts_with("/region") => {
-                            Self::dump_region_meta(req, router.as_ref())
+                            Self::dump_region_meta(req, &router)
                         }
-                        _ => Box::new(ok(StatusServer::err_response(
+                        _ => Box::new(ok(err_response(
                             StatusCode::NOT_FOUND,
                             "path not found",
                         ))),
@@ -635,89 +703,16 @@ impl StatusServer {
         self.register_addr(status_addr);
         Ok(())
     }
+}
 
-    pub fn stop(self) {
-        // unregister the status address to pd
-        self.unregister_addr();
-        let _ = self.tx.send(());
-        self.thread_pool
-            .shutdown_now()
-            .wait()
-            .unwrap_or_else(|e| error!("failed to stop the status server, error: {:?}", e));
-    }
-
-    // Return listening address, this may only be used for outer test
-    // to get the real address because we may use "127.0.0.1:0"
-    // in test to avoid port conflict.
-    pub fn listening_addr(&self) -> SocketAddr {
-        self.addr.unwrap()
-    }
-
-    fn register_addr(&self, status_addr: String) {
-        if self.pd_client.is_none() {
-            return;
-        }
-        let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::new();
-        let json = {
-            let mut body = std::collections::HashMap::new();
-            body.insert("component".to_owned(), COMPONENT.to_owned());
-            body.insert("addr".to_owned(), status_addr);
-            serde_json::to_string(&body).unwrap()
-        };
-        for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
-                let mut url = url::Url::parse(pd_addr).unwrap();
-                url.set_path("pd/api/v1/component");
-                let res = client
-                    .post(url.as_str())
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(json.clone())
-                    .send();
-                match res {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
-                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
-                }
-            }
-            // refresh the pd leader
-            if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
-            }
-        }
-        error!(
-            "failed to register addr to pd after {} tries",
-            COMPONENT_REQUEST_RETRY
-        );
-    }
-
-    fn unregister_addr(&self) {
-        if self.pd_client.is_none() {
-            return;
-        }
-        let status_addr = format!("{}", self.listening_addr());
-        let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::new();
-        for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
-                let mut url = url::Url::parse(pd_addr).unwrap();
-                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
-                match client.delete(url.as_str()).send() {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
-                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
-                }
-            }
-            // refresh the pd leader
-            if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
-            }
-        }
-        error!(
-            "failed to unregister addr to pd after {} tries",
-            COMPONENT_REQUEST_RETRY
-        );
-    }
+fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+where
+    T: Into<Body>,
+{
+    Response::builder()
+        .status(status_code)
+        .body(message.into())
+        .unwrap()
 }
 
 // For handling fail points related requests
@@ -811,13 +806,23 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use engine_rocks::RocksEngine;
+    use raftstore::store::transport::CasualRouter;
+    use raftstore::store::CasualMessage;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
 
+    struct MockRouter;
+    impl CasualRouter<RocksEngine> for MockRouter {
+        fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+            Err(raftstore::Error::RegionNotFound(region_id))
+        }
+    }
+
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -862,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -898,7 +903,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1030,7 +1035,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1071,7 +1076,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1132,7 +1137,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start(
             "127.0.0.1:0".to_string(),
             &new_security_cfg(Some(allowed_cn)),

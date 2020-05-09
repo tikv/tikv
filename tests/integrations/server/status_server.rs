@@ -42,10 +42,10 @@ fn test_region_meta_endpoint() {
     let peer = region.get_peers().get(0);
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
-    let mut status_server = StatusServer::new(1, None, ConfigController::default());
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
-    status_server.set_router(router);
+    let mut status_server =
+        StatusServer::new(1, None, ConfigController::default(), router.unwrap());
     assert!(status_server
         .start("127.0.0.1:0".to_string(), &SecurityConfig::default())
         .is_ok());
