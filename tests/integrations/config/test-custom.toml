@@ -148,7 +148,7 @@ store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
-perf-level = 5
+perf-level = 0
 
 [coprocessor]
 split-region-on-table = false

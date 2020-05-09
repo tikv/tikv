@@ -242,7 +242,7 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
-            perf_level: PerfLevel::Disable,
+            perf_level: PerfLevel::EnableTime,
         }
     }
 }
