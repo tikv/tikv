@@ -1342,23 +1342,23 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(true);
         }
         // A tombstone peer may not apply the conf change log which removes itself.
-        // In this case, the local epoch is stale.
-        // We can check the peer id size to verify whether it is correct to create a new peer.
-        let local_peer_id = util::find_peer(region, self.ctx.store_id())
-            .unwrap()
-            .get_id();
-        if to_peer_id <= local_peer_id {
-            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
-            info!(
-                "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
-                "region_id" => region_id,
-                "local_peer_id" => local_peer_id,
-                "to_peer_id" => to_peer_id,
-                "msg_type" => ?msg_type
-            );
-            return Ok(true);
+        // In this case, the local epoch is stale and the local peer can be found from region.
+        // We can compare the local peer id with to_peer_id to verify whether it is correct to create a new peer.
+        if let Some(local_peer_id) =
+            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
+        {
+            if to_peer_id <= local_peer_id {
+                self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
+                info!(
+                    "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
+                    "region_id" => region_id,
+                    "local_peer_id" => local_peer_id,
+                    "to_peer_id" => to_peer_id,
+                    "msg_type" => ?msg_type
+                );
+                return Ok(true);
+            }
         }
-
         Ok(false)
     }
 

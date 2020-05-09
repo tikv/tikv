@@ -161,6 +161,9 @@ pub struct Config {
     pub hibernate_regions: bool,
     #[config(hidden)]
     pub early_apply: bool,
+    // Only used for test
+    #[config(skip)]
+    pub ensure_all_target_peer_exist: bool,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -240,6 +243,7 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             early_apply: true,
+            ensure_all_target_peer_exist: true,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

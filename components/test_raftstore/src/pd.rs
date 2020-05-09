@@ -133,7 +133,22 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    new_pd_merge_region(region)
+                    if cluster.ensure_all_target_peer_exist {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::default()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::SplitRegion {
@@ -231,6 +246,8 @@ struct Cluster {
     gc_safe_point: u64,
 
     replication_status: Option<ReplicationStatus>,
+    // for merging
+    pub ensure_all_target_peer_exist: bool,
 }
 
 impl Cluster {
@@ -260,6 +277,7 @@ impl Cluster {
 
             gc_safe_point: 0,
             replication_status: None,
+            ensure_all_target_peer_exist: true,
         }
     }
 
@@ -1022,6 +1040,10 @@ impl TestPdClient {
                 }
             }
         }
+    }
+
+    pub fn do_not_ensure_all_target_peer_exist(&self) {
+        self.cluster.wl().ensure_all_target_peer_exist = false;
     }
 }
 
