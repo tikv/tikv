@@ -101,6 +101,44 @@ pub struct StatusServer<E, R> {
     _engine: PhantomData<E>,
 }
 
+impl StatusServer<(), ()> {
+    fn extract_thread_name(thread_name: &str) -> String {
+        lazy_static! {
+            static ref THREAD_NAME_RE: Regex =
+                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+        }
+
+        THREAD_NAME_RE
+            .captures(thread_name)
+            .and_then(|cap| {
+                cap.name("thread_name").map(|thread_name| {
+                    THREAD_NAME_REPLACE_SEPERATOR_RE
+                        .replace_all(thread_name.as_str(), "-")
+                        .into_owned()
+                })
+            })
+            .unwrap_or_else(|| thread_name.to_owned())
+    }
+
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
+        move |frames| {
+            let name = Self::extract_thread_name(&frames.thread_name);
+            frames.thread_name = name;
+        }
+    }
+
+    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+    where
+        T: Into<Body>,
+    {
+        Response::builder()
+            .status(status_code)
+            .body(message.into())
+            .unwrap()
+    }
+}
+
 impl<E, R> StatusServer<E, R>
 where
     E: 'static,
@@ -185,7 +223,7 @@ where
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(err_response(
+                return Box::new(ok(StatusServer::err_response(
                     StatusCode::BAD_REQUEST,
                     "request should have the query part",
                 )));
@@ -196,7 +234,7 @@ where
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    return Box::new(ok(err_response(
+                    return Box::new(ok(StatusServer::err_response(
                         StatusCode::BAD_REQUEST,
                         "request should have seconds argument",
                     )));
@@ -218,7 +256,7 @@ where
                     ok(response)
                 })
                 .or_else(|err| {
-                    ok(err_response(
+                    ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
@@ -234,7 +272,10 @@ where
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+            Err(_) => StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+            ),
         };
         Box::new(ok(res))
     }
@@ -246,7 +287,7 @@ where
         let res = req.into_body().concat2().and_then(move |body| {
             let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
                 Ok(change) => match cfg_controller.update(change) {
-                    Err(e) => err_response(
+                    Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("fail to update, error: {:?}", e),
                     ),
@@ -256,7 +297,7 @@ where
                         resp
                     }
                 },
-                Err(_) => err_response(
+                Err(_) => StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "fail to decode".to_owned(),
                 ),
@@ -264,32 +305,6 @@ where
             ok(res)
         });
         Box::new(res)
-    }
-
-    fn extract_thread_name(thread_name: &str) -> String {
-        lazy_static! {
-            static ref THREAD_NAME_RE: Regex =
-                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
-            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
-        }
-
-        THREAD_NAME_RE
-            .captures(thread_name)
-            .and_then(|cap| {
-                cap.name("thread_name").map(|thread_name| {
-                    THREAD_NAME_REPLACE_SEPERATOR_RE
-                        .replace_all(thread_name.as_str(), "-")
-                        .into_owned()
-                })
-            })
-            .unwrap_or_else(|| thread_name.to_owned())
-    }
-
-    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
-        move |frames| {
-            let name = Self::extract_thread_name(&frames.thread_name);
-            frames.thread_name = name;
-        }
     }
 
     pub fn dump_rsprof(
@@ -315,7 +330,7 @@ where
                                 Box::new(
                                     match guard
                                         .report()
-                                        .frames_post_processor(Self::frames_post_processor())
+                                        .frames_post_processor(StatusServer::frames_post_processor())
                                         .build()
                                     {
                                         Ok(report) => ok(report),
@@ -336,7 +351,7 @@ where
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(err_response(StatusCode::BAD_REQUEST, "")));
+                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -344,7 +359,10 @@ where
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(err_response(StatusCode::BAD_REQUEST, err.to_string())));
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
                 }
             },
             None => 10,
@@ -354,7 +372,10 @@ where
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(err_response(StatusCode::BAD_REQUEST, err.to_string())));
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
                 }
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
@@ -371,14 +392,14 @@ where
                             Ok(profile) => match profile.encode(&mut body) {
                                 Ok(()) => {
                                     info!("write report successfully");
-                                    Box::new(ok(err_response(StatusCode::OK, body)))
+                                    Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
                                 }
-                                Err(err) => Box::new(ok(err_response(
+                                Err(err) => Box::new(ok(StatusServer::err_response(
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     err.to_string(),
                                 ))),
                             },
-                            Err(err) => Box::new(ok(err_response(
+                            Err(err) => Box::new(ok(StatusServer::err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -387,9 +408,9 @@ where
                         match report.flamegraph(&mut body) {
                             Ok(_) => {
                                 info!("write report successfully");
-                                Box::new(ok(err_response(StatusCode::OK, body)))
+                                Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
                             }
-                            Err(err) => Box::new(ok(err_response(
+                            Err(err) => Box::new(ok(StatusServer::err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -397,7 +418,7 @@ where
                     }
                 })
                 .or_else(|err| {
-                    ok(err_response(
+                    ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
@@ -505,7 +526,7 @@ where
         type Resp = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
 
         fn err_resp(status_code: StatusCode, msg: impl Into<Body>) -> Resp {
-            Box::new(ok(err_response(status_code, msg)))
+            Box::new(ok(StatusServer::err_response(status_code, msg)))
         }
 
         fn not_found(msg: impl Into<Body>) -> Resp {
@@ -547,11 +568,14 @@ where
 
                 Box::new(
                     rx.map_err(|_| {
-                        err_response(StatusCode::INTERNAL_SERVER_ERROR, "query cancelled")
+                        StatusServer::err_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "query cancelled",
+                        )
                     })
                     .and_then(|meta| {
                         serde_json::to_vec(&meta).map_err(|err| {
-                            err_response(
+                            StatusServer::err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("fails to json: {}", err),
                             )
@@ -562,7 +586,7 @@ where
                             .header("content-type", "application/json")
                             .body(hyper::Body::from(body))
                             .map_err(|err| {
-                                err_response(
+                                StatusServer::err_response(
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     format!("fails to build response: {}", err),
                                 )
@@ -615,7 +639,7 @@ where
                         (Method::GET, path) if path.starts_with("/region") => {
                             Self::dump_region_meta(req, &router)
                         }
-                        _ => Box::new(ok(err_response(
+                        _ => Box::new(ok(StatusServer::err_response(
                             StatusCode::NOT_FOUND,
                             "path not found",
                         ))),
@@ -703,16 +727,6 @@ where
         self.register_addr(status_addr);
         Ok(())
     }
-}
-
-fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-where
-    T: Into<Body>,
-{
-    Response::builder()
-        .status(status_code)
-        .body(message.into())
-        .unwrap()
 }
 
 // For handling fail points related requests
@@ -813,7 +827,9 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::security::SecurityConfig;
 
+    #[derive(Clone)]
     struct MockRouter;
+
     impl CasualRouter<RocksEngine> for MockRouter {
         fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
