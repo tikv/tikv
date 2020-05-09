@@ -831,7 +831,7 @@ mod tests {
     struct MockRouter;
 
     impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
