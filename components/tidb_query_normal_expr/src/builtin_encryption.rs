@@ -407,11 +407,11 @@ mod tests {
     #[test]
     fn test_password() {
         let cases = vec![
-            ("TiKV", "07F90BAFF6BD6410E2E3033D822EFCA7EC9782FE"),
-            ("Pingcap", "CEFC57FBBF55D53D5340A9727475E3C97F51D976"),
-            ("rust", "28F1DE8C4229B1D4F62F752EA3812747CE4E5CA0"),
-            ("database", "A9D467528C52CF9DD63A2168DBE51A8241160241"),
-            ("raft", "F74FD741D3639CD7C88C9F6FAF00BCF3D91F01B2"),
+            ("TiKV", "*cca644408381f962dba8dfb9889db1371ee74208"),
+            ("Pingcap", "*f33bc75eac70ac317621fbbfa560d6251c43cf8a"),
+            ("rust", "*090c2b08e0c1776910e777b917c2185be6554c2e"),
+            ("database", "*02e86b4af5219d0ba6c974908aea62d42eb7da24"),
+            ("raft", "*b23a77787ed44e62ef2570f03ce8982d119fb699"),
         ];
         let mut ctx = EvalContext::default();
 
