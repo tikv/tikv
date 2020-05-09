@@ -12,6 +12,7 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 
 [dependencies]
+encryption = { path = "../encryption" }
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 prometheus = { version = "0.8", features = ["nightly", "push"] }
@@ -29,6 +30,6 @@ features = ["encryption"]
 branch = "tikv-4.x"
 
 [dev-dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 tempfile = "3.0"
 rand = "0.7"
