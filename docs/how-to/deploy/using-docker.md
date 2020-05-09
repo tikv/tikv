@@ -14,7 +14,7 @@ This guide describes how to deploy a multi-node TiKV cluster using Docker.
 
 Make sure that Docker is installed on each machine.
 
-For more details about prerequisites, see [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/hardware-recommendations.md).
+For more details about prerequisites, see [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/how-to/deploy/hardware-recommendations.md).
 
 ## Deploy the TiKV cluster on multiple nodes
 
