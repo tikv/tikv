@@ -40,7 +40,7 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -67,6 +67,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
         (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         (false, CF_WRITE) => (0.15, 0, usize::MAX),
+        (false, CF_VER_DEFAULT) => (0.25, 0, usize::MAX),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
@@ -683,6 +684,70 @@ impl RaftCfConfig {
     }
 }
 
+cf_config!(VersionCfConfig);
+
+impl Default for VersionCfConfig {
+    fn default() -> VersionCfConfig {
+        VersionCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_VER_DEFAULT) as u64),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: true,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+            ],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            titan: TitanCfConfig::default(),
+        }
+    }
+}
+
+impl VersionCfConfig {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -787,6 +852,8 @@ pub struct DbConfig {
     pub lockcf: LockCfConfig,
     #[config(submodule)]
     pub raftcf: RaftCfConfig,
+    #[config(submodule)]
+    pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
 }
@@ -829,6 +896,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
+            ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
             info_log_level: LogLevel::Info,
         }
@@ -892,6 +960,7 @@ impl DbConfig {
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -901,6 +970,7 @@ impl DbConfig {
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -909,6 +979,7 @@ impl DbConfig {
         self.lockcf.validate()?;
         self.writecf.validate()?;
         self.raftcf.validate()?;
+        self.ver_defaultcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
             if self.titan.enabled {
@@ -926,6 +997,7 @@ impl DbConfig {
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.ver_defaultcf, CF_VER_DEFAULT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
@@ -1219,6 +1291,7 @@ impl DBConfigManger {
             | (DBType::Kv, CF_WRITE)
             | (DBType::Kv, CF_LOCK)
             | (DBType::Kv, CF_RAFT)
+            | (DBType::Kv, CF_VER_DEFAULT)
             | (DBType::Raft, CF_DEFAULT) => Ok(()),
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
