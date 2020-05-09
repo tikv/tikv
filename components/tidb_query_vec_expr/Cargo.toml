@@ -7,6 +7,7 @@ description = "Vector expressions of query engine to run TiDB pushed down execut
 
 [dependencies]
 base64 = "0.10"
+bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec" }
 derive_more = "0.15.0"

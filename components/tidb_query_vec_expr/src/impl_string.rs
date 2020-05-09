@@ -34,6 +34,23 @@ pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn ord(arg: &Option<Bytes>) -> Result<Option<i64>> {
+    let mut result = 0;
+    if let Some(content) = arg {
+        let size = bstr::decode_utf8(content).1;
+        let bytes = &content[..size];
+        let mut factor = 1;
+
+        for b in bytes.iter().rev() {
+            result += i64::from(*b) * factor;
+            factor *= 256;
+        }
+    }
+    Ok(Some(result))
+}
+
 #[rpn_fn(varg, min_args = 1)]
 #[inline]
 pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
@@ -768,6 +785,30 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::BitLength)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_ord() {
+        let cases = vec![
+            (Some("2"), Some(50i64)),
+            (Some("23"), Some(50i64)),
+            (Some("2.3"), Some(50i64)),
+            (Some(""), Some(0i64)),
+            (Some("你好"), Some(14990752i64)),
+            (Some("にほん"), Some(14909867i64)),
+            (Some("한국"), Some(15570332i64)),
+            (Some("👍"), Some(4036989325i64)),
+            (Some("א"), Some(55184i64)),
+            (None, Some(0)),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Ord)
                 .unwrap();
             assert_eq!(output, expect_output);
         }

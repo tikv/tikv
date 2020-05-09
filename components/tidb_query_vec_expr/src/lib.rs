@@ -505,6 +505,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
