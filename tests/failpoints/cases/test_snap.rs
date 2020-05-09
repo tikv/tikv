@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::*;
 
-use fail;
 use raft::eraftpb::MessageType;
 
 use raftstore::store::*;
@@ -135,7 +134,9 @@ fn test_server_snapshot_on_resolve_failure() {
 #[test]
 fn test_generate_snapshot() {
     let mut cluster = new_server_cluster(1, 5);
-    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

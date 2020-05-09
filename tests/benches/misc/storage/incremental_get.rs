@@ -3,7 +3,7 @@ use test::{black_box, Bencher};
 use engine_rocks::RocksSyncSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use test_storage::SyncTestStorageBuilder;
-use tidb_query::codec::table;
+use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
 use txn_types::{Key, Mutation};
 
@@ -40,6 +40,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        false,
     );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup

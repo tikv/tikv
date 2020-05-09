@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
+use std::path::PathBuf;
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -22,11 +23,11 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
+use encryption::DataKeyManager;
 use engine::rocks;
-use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
+use engine_rocks::encryption::get_env;
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -36,7 +37,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
@@ -62,35 +63,32 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+                .unwrap()
+                .map(|key_manager| Arc::new(key_manager));
+            let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                kv_db_opts.set_env(encrypted_env);
-            }
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
+                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
+                    .canonicalize()
+                    .unwrap();
+                String::from(db_path.to_str().unwrap())
+            });
             let mut raft_db_opts = cfg.raftdb.build_opt();
+            raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                raft_db_opts.set_env(encrypted_env);
-            }
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
             Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
-                None,
+                ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
@@ -555,7 +553,7 @@ trait DebugExecutor {
 
     fn recover_all(&self, threads: usize, read_only: bool);
 
-    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
 
@@ -730,9 +728,8 @@ impl DebugExecutor for DebugClient {
         v1!("success!");
     }
 
-    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str) {
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
         let mut req = ModifyTikvConfigRequest::default();
-        req.set_module(module);
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
         self.modify_tikv_config(&req)
@@ -953,7 +950,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_tikv_config(&self, _: Module, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: &str, _: &str) {
         ve1!("only support remote mode");
         process::exit(-1);
     }
@@ -1045,10 +1042,6 @@ fn main() {
                 .long("key-path")
                 .takes_value(true)
                 .help("Set the private key path"),
-        )
-        .arg(
-            Arg::with_name("cipher_file")
-            .required(false).long("cipher-file").takes_value(true).help("set cipher file path")
         )
         .arg(
             Arg::with_name("hex-to-escaped")
@@ -1557,30 +1550,20 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
-                .arg(
-                    Arg::with_name("module")
-                        .required(true)
-                        .short("m")
-                        .takes_value(true)
-                        .help("Module of tikv, eg. kvdb or raftdb"),
-                )
+                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -n rocksdb.defaultcf.disable-auto-compactions -v true")
                 .arg(
                     Arg::with_name("config_name")
                         .required(true)
                         .short("n")
                         .takes_value(true)
-                        .help("Config name of the module, for kvdb or raftdb, you can choose \
-                            max_background_jobs to modify db options or default.disable_auto_compactions to modify column family(cf) options, \
-                            and so on, default stands for default cf, \
-                            for kvdb, default|write|lock|raft can be chosen, for raftdb, default can be chosen"),
+                        .help("The config name are same as the name used on config file, eg. raftstore.messages-per-tick, raftdb.max-background-jobs"),
                 )
                 .arg(
                     Arg::with_name("config_value")
                         .required(true)
                         .short("v")
                         .takes_value(true)
-                        .help("Config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
+                        .help("The config value, eg. 8, true, 1h, 8MB"),
                 ),
         )
         .subcommand(
@@ -1997,10 +1980,9 @@ fn main() {
     } else if matches.subcommand_matches("bad-regions").is_some() {
         debug_executor.print_bad_regions();
     } else if let Some(matches) = matches.subcommand_matches("modify-tikv-config") {
-        let module = matches.value_of("module").unwrap();
         let config_name = matches.value_of("config_name").unwrap();
         let config_value = matches.value_of("config_value").unwrap();
-        debug_executor.modify_tikv_config(get_module_type(module), config_name, config_value);
+        debug_executor.modify_tikv_config(config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
         let tags = Vec::from_iter(matches.values_of("tag").unwrap());
         debug_executor.dump_metrics(tags)
@@ -2072,22 +2054,6 @@ fn gen_random_bytes(len: usize) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
-fn get_module_type(module: &str) -> Module {
-    match module {
-        "kvdb" => Module::Kvdb,
-        "raftdb" => Module::Raftdb,
-        "readpool" => Module::Readpool,
-        "server" => Module::Server,
-        "storage" => Module::Storage,
-        "ps" => Module::Pd,
-        "metric" => Module::Metric,
-        "coprocessor" => Module::Coprocessor,
-        "security" => Module::Security,
-        "import" => Module::Import,
-        _ => Module::Unused,
-    }
-}
-
 fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
         return hex::decode(&key[2..]);
@@ -2119,10 +2085,9 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
-    let cipher_file = matches.value_of("cipher_file");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && cipher_file.is_none() {
+    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
         return Arc::new(SecurityManager::new(&cfg).unwrap());
     }
 
@@ -2133,10 +2098,6 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
         cfg.ca_path = ca_path.unwrap().to_owned();
         cfg.cert_path = cert_path.unwrap().to_owned();
         cfg.key_path = key_path.unwrap().to_owned();
-    }
-
-    if let Some(cipher_file) = cipher_file {
-        cfg.cipher_file = cipher_file.to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
@@ -2277,12 +2238,13 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
+    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
+    let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
-    if !cfg.security.cipher_file.is_empty() {
-        let encrypted_env =
-            encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
-        opts.set_env(encrypted_env);
-    }
+    opts.set_env(env);
+
     engine::rocks::run_ldb_tool(&args, &opts);
 }
 

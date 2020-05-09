@@ -32,7 +32,10 @@ macro_rules! fatal {
 // number while rotate by size.
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!("{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    new_path.push(format!(
+        ".{}",
+        Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
+    ));
     Ok(PathBuf::from(new_path))
 }
 
@@ -111,8 +114,10 @@ pub fn initial_logger(config: &TiKvConfig) {
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    tikv_util::metrics::monitor_memory()
+        .unwrap_or_else(|e| fatal!("failed to start memory monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
     tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
@@ -192,7 +197,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     config.compatible_adjust();
     if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
+        fatal!("invalid configuration: {}", e);
     }
 
     if let Err(e) = check_critical_config(config) {

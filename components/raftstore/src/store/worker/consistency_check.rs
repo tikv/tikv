@@ -7,30 +7,23 @@ use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
 use engine_rocks::RocksEngine;
+use engine_traits::Snapshot;
 use engine_traits::CF_RAFT;
-use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 use crate::store::metrics::*;
 
 /// Consistency checking task.
-pub enum Task<E>
-where
-    E: KvEngine,
-{
-    ComputeHash {
-        index: u64,
-        region: Region,
-        snap: E::Snapshot,
-    },
+pub enum Task<S> {
+    ComputeHash { index: u64, region: Region, snap: S },
 }
 
-impl<E> Task<E>
+impl<S> Task<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    pub fn compute_hash(region: Region, index: u64, snap: E::Snapshot) -> Task<E> {
+    pub fn compute_hash(region: Region, index: u64, snap: S) -> Task<S> {
         Task::ComputeHash {
             region,
             index,
@@ -39,9 +32,9 @@ where
     }
 }
 
-impl<E> Display for Task<E>
+impl<S> Display for Task<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
@@ -62,9 +55,9 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash<E>(&mut self, region: Region, index: u64, snap: E::Snapshot)
+    fn compute_hash<S>(&mut self, region: Region, index: u64, snap: S)
     where
-        E: KvEngine,
+        S: Snapshot,
     {
         let region_id = region.get_id();
         info!(
@@ -72,9 +65,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
             "region_id" => region_id,
             "index" => index,
         );
-        REGION_HASH_COUNTER_VEC
-            .with_label_values(&["compute", "all"])
-            .inc();
+        REGION_HASH_COUNTER.compute.all.inc();
 
         let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
         let mut digest = crc32fast::Hasher::new();
@@ -91,9 +82,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
                 Ok(true)
             });
             if let Err(e) = res {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to calculate hash";
                     "region_id" => region_id,
@@ -108,9 +97,7 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
         digest.update(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
-                REGION_HASH_COUNTER_VEC
-                    .with_label_values(&["compute", "failed"])
-                    .inc();
+                REGION_HASH_COUNTER.compute.failed.inc();
                 error!(
                     "failed to get region state";
                     "region_id" => region_id,
@@ -140,18 +127,18 @@ impl<C: CasualRouter<RocksEngine>> Runner<C> {
     }
 }
 
-impl<C, E> Runnable<Task<E>> for Runner<C>
+impl<C, S> Runnable<Task<S>> for Runner<C>
 where
     C: CasualRouter<RocksEngine>,
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn run(&mut self, task: Task<E>) {
+    fn run(&mut self, task: Task<S>) {
         match task {
             Task::ComputeHash {
                 region,
                 index,
                 snap,
-            } => self.compute_hash::<E>(region, index, snap),
+            } => self.compute_hash::<S>(region, index, snap),
         }
     }
 }
@@ -162,7 +149,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
@@ -200,7 +187,7 @@ mod tests {
         // hash should also contains region state key.
         digest.update(&keys::region_state_key(region.get_id()));
         let sum = digest.finalize();
-        runner.run(Task::<RocksEngine>::ComputeHash {
+        runner.run(Task::<RocksSnapshot>::ComputeHash {
             index: 10,
             region: region.clone(),
             snap: RocksSnapshot::new(Arc::clone(&db)),

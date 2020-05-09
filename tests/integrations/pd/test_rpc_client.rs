@@ -128,6 +128,7 @@ fn test_rpc_client() {
             region.clone(),
             peer.clone(),
             RegionStat::default(),
+            None,
         ))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -364,7 +365,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = test_util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg(None);
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }
@@ -423,6 +424,7 @@ fn test_region_heartbeat_on_leader_change() {
             region.clone(),
             peer.clone(),
             stat.clone(),
+            None,
         ))
         .forget();
     rx.recv_timeout(LeaderChange::get_leader_interval())
@@ -448,6 +450,7 @@ fn test_region_heartbeat_on_leader_change() {
                 region.clone(),
                 peer.clone(),
                 stat.clone(),
+                None,
             ))
             .forget();
         rx.recv_timeout(LeaderChange::get_leader_interval())

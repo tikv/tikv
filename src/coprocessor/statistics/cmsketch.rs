@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use murmur3::murmur3_x64_128;
-use tipb;
 
 /// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -68,9 +67,9 @@ mod tests {
     use rand::SeedableRng;
     use zipf::ZipfDistribution;
 
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
-    use tidb_query::expr::EvalContext;
+    use tidb_query_datatype::codec::datum;
+    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::expr::EvalContext;
     use tikv_util::collections::HashMap;
 
     impl CmSketch {

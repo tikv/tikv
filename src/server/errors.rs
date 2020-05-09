@@ -26,7 +26,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
         // Following is for From other errors.
@@ -34,91 +33,73 @@ quick_error! {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Grpc(err: GrpcError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Codec(err: CodecError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         AddrParse(err: AddrParseError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         RaftServer(err: RaftServerError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Engine(err: EngineError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         EngineTrait(err: EngineTraitError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Storage(err: StorageError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
-        }
-        RealEngine(err: engine::Error) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
         }
         Pd(err: PdError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         SnapWorkerStopped(err: ScheduleError<SnapTask>) {
             from()
             display("{:?}", err)
         }
         Sink {
-            description("failed to poll from mpsc receiver")
+            display("failed to poll from mpsc receiver")
         }
         RecvError(err: RecvError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         Http(err: HttpError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
         OpenSSL(err: OpenSSLError) {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
         }
     }
 }

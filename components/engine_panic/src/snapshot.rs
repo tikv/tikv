@@ -10,16 +10,13 @@ use std::ops::Deref;
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
 
-impl Snapshot<PanicEngine> for PanicSnapshot {
+impl Snapshot for PanicSnapshot {
     type SyncSnapshot = PanicSyncSnapshot;
 
     fn cf_names(&self) -> Vec<&str> {
         panic!()
     }
     fn into_sync(self) -> Self::SyncSnapshot {
-        panic!()
-    }
-    fn get_db(&self) -> &PanicEngine {
         panic!()
     }
 }

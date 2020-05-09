@@ -9,11 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine::rocks;
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
+use engine_traits::{KvEngine, KvEngines, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -48,12 +46,12 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task {
+pub enum Task<S> {
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: S,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -70,8 +68,8 @@ pub enum Task {
     },
 }
 
-impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+impl<S> Task<S> {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
         Task::Destroy {
             region_id,
             start_key,
@@ -80,7 +78,7 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<S> Display for Task<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -208,30 +206,40 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<R> {
-    engines: Engines,
+struct SnapContext<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
+    engines: KvEngines<EK, ER>,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<EK>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: CoprocessorHost<RocksEngine>,
     router: R,
 }
 
-impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
+impl<EK, ER, R> SnapContext<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK>,
+{
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot::<RocksEngine>(
+        let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
+            &self.engines.kv,
             kv_snap,
             region_id,
             last_applied_index_term,
@@ -260,14 +268,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: RocksSnapshot,
+        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "all"])
-            .inc();
-        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
-        let timer = gen_histogram.start_coarse_timer();
+        SNAP_COUNTER.generate.all.inc();
+        let start = tikv_util::time::Instant::now();
 
         if let Err(e) = self.generate_snap(
             region_id,
@@ -280,10 +285,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             return;
         }
 
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "success"])
-            .inc();
-        timer.observe_duration();
+        SNAP_COUNTER.generate.success.inc();
+        SNAP_HISTOGRAM.generate.observe(start.elapsed_secs());
     }
 
     /// Applies snapshot data of the Region.
@@ -293,7 +296,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -309,17 +312,16 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self.engines.kv.c().delete_all_in_range(
-            &start_key,
-            &end_key,
-            self.use_delete_range
-        ));
+        box_try!(self
+            .engines
+            .kv
+            .delete_all_in_range(&start_key, &end_key, self.use_delete_range));
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.c().get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -342,7 +344,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engines.kv.c().clone(),
+            db: self.engines.kv.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -350,11 +352,11 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         };
         s.apply(options)?;
 
-        let mut wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engines.kv.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.c().write(&wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -368,16 +370,15 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
-        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
-        let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        let timer = apply_histogram.start_coarse_timer();
+        SNAP_COUNTER.apply.all.inc();
+        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
+        // let timer = apply_histogram.start_coarse_timer();
+        let start = tikv_util::time::Instant::now();
 
         match self.apply_snap(region_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "success"])
-                    .inc();
+                SNAP_COUNTER.apply.success.inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
@@ -385,18 +386,16 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
                 );
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "abort"])
-                    .inc();
+                SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
                 error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
+                SNAP_COUNTER.apply.fail.inc();
             }
         }
 
-        timer.observe_duration();
+        SNAP_HISTOGRAM.apply.observe(start.elapsed_secs());
     }
 
     /// Cleans up the data within the range.
@@ -411,7 +410,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if let Err(e) = self
                 .engines
                 .kv
-                .c()
                 .delete_all_files_in_range(start_key, end_key)
             {
                 error!(
@@ -427,7 +425,6 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         if let Err(e) =
             self.engines
                 .kv
-                .c()
                 .delete_all_in_range(start_key, end_key, self.use_delete_range)
         {
             error!(
@@ -525,7 +522,12 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             if plain_file_used(cf) {
                 continue;
             }
-            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -533,24 +535,33 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
     }
 }
 
-pub struct Runner<R> {
+pub struct Runner<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<R>,
+    ctx: SnapContext<EK, ER, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task>,
+    pending_applies: VecDeque<Task<EK::Snapshot>>,
 }
 
-impl<R: CasualRouter<RocksEngine>> Runner<R> {
+impl<EK, ER, R> Runner<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK>,
+{
     pub fn new(
-        engines: Engines,
-        mgr: SnapManager,
+        engines: KvEngines<EK, ER>,
+        mgr: SnapManager<EK>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         router: R,
-    ) -> Runner<R> {
+    ) -> Runner<EK, ER, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
@@ -599,11 +610,13 @@ impl<R: CasualRouter<RocksEngine>> Runner<R> {
     }
 }
 
-impl<R> Runnable<Task> for Runner<R>
+impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
-    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
                 region_id,
@@ -632,9 +645,7 @@ where
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
-                    SNAP_COUNTER_VEC
-                        .with_label_values(&["apply", "delay"])
-                        .inc();
+                    SNAP_COUNTER.apply.delay.inc()
                 }
             }
             Task::Destroy {
@@ -667,9 +678,11 @@ pub enum Event {
     CheckApply,
 }
 
-impl<R> RunnableWithTimer<Task, Event> for Runner<R>
+impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
 where
-    R: CasualRouter<RocksEngine> + Send + Clone + 'static,
+    EK: KvEngine,
+    ER: KvEngine,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
@@ -707,8 +720,8 @@ mod tests {
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
-    use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, Peekable, WriteBatchExt};
+    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
+    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -847,12 +860,12 @@ mod tests {
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.clone(),
+            engines.c(),
             mgr,
             0,
             true,
             Duration::from_secs(0),
-            CoprocessorHost::default(),
+            CoprocessorHost::<RocksEngine>::default(),
             router,
         );
         let mut timer = Timer::new(1);
@@ -893,7 +906,7 @@ mod tests {
             }
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
@@ -948,7 +961,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -990,7 +1007,11 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
@@ -1007,7 +1028,11 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
+        engine
+            .kv
+            .c()
+            .compact_files_in_range(None, None, None)
+            .unwrap();
         assert_eq!(
             rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
