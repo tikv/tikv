@@ -178,6 +178,7 @@ fn test_update_group_id() {
     cluster.must_put(b"k4", b"v4");
 }
 
+/// Tests if replication mode is switched successfully.
 #[test]
 fn test_switching_replication_mode() {
     let mut cluster = prepare_cluster();
@@ -249,6 +250,7 @@ fn test_switching_replication_mode() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
+/// Ensures hibernate region still works properly when switching replication mode.
 #[test]
 fn test_switching_replication_mode_hibernate() {
     let mut cluster = new_server_cluster(0, 3);

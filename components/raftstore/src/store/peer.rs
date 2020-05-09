@@ -256,8 +256,12 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    /// Current replication mode version.
     pub replication_mode_version: u64,
+    /// The required replication state at current version.
     pub dr_auto_sync_state: DrAutoSyncState,
+    /// A flag that caches sync state. It's set to true when required replication
+    /// state is reached for current region.
     pub replication_sync: bool,
 
     /// The known newest conf version and its corresponding peer list
