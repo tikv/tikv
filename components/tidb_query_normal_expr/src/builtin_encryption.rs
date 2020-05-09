@@ -151,6 +151,25 @@ impl ScalarFunc {
         }
         Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))
     }
+
+    #[inline]
+    pub fn password<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let pass = try_opt!(self.children[0].eval_string(ctx, row));
+        if pass.len() == 0 {
+            return Ok(Some(Cow::Owned(vec![])));
+        }
+        ctx.warnings.append_warning(Error::Other(box_err!(
+            "Warning: Deprecated syntax PASSWORD"
+        )));
+        let hash1 = hex_digest(MessageDigest::sha1(), &pass)?;
+        let mut hash2 = hex_digest(MessageDigest::sha1(), &hash1)?;
+        hash2.insert(0, b'*');
+        Ok(Some(Cow::Owned(hash2)))
+    }
 }
 
 #[inline]
@@ -383,5 +402,26 @@ mod tests {
                 .unwrap(),
             Datum::Null
         );
+    }
+
+    #[test]
+    fn test_password() {
+        let cases = vec![
+            ("TiKV", "07F90BAFF6BD6410E2E3033D822EFCA7EC9782FE"),
+            ("Pingcap", "CEFC57FBBF55D53D5340A9727475E3C97F51D976"),
+            ("rust", "28F1DE8C4229B1D4F62F752EA3812747CE4E5CA0"),
+            ("database", "A9D467528C52CF9DD63A2168DBE51A8241160241"),
+            ("raft", "F74FD741D3639CD7C88C9F6FAF00BCF3D91F01B2"),
+        ];
+        let mut ctx = EvalContext::default();
+
+        for (input_str, exp_str) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::Password, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
+            assert_eq!(got, exp, "password('{:?}')", input_str);
+        }
     }
 }
