@@ -10,21 +10,30 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::io::{self, Read};
+use std::io;
+use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
 
-#[cfg(feature = "prost-codec")]
-use kvproto::backup::storage_backend::Backend;
+use futures_io::AsyncRead;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
-#[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend};
+#[cfg(feature = "prost-codec")]
+use kvproto::backup::{storage_backend::Backend, Local};
+use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
+mod s3;
+pub use s3::S3Storage;
+mod gcs;
+pub use gcs::GCSStorage;
+mod util;
+pub use util::block_on_external_io;
+
+pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -33,7 +42,9 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
             let p = Path::new(&local.path);
             LocalStorage::new(p).map(|s| Arc::new(s) as _)
         }
-        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::new()) as _),
+        Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::default()) as _),
+        Some(Backend::S3(config)) => S3Storage::new(config).map(|s| Arc::new(s) as _),
+        Some(Backend::Gcs(config)) => GCSStorage::new(config).map(|s| Arc::new(s) as _),
         _ => {
             let u = url_of_backend(backend);
             error!("unknown storage"; "scheme" => u.scheme());
@@ -63,7 +74,13 @@ pub fn url_of_backend(backend: &StorageBackend) -> url::Url {
             }
             u.set_path(s3.get_prefix());
         }
-        Some(Backend::Gcs(_)) => unimplemented!(),
+        Some(Backend::Gcs(gcs)) => {
+            u.set_scheme("gcs").unwrap();
+            if let Err(e) = u.set_host(Some(&gcs.bucket)) {
+                warn!("ignoring invalid GCS bucket name"; "bucket" => &gcs.bucket, "error" => %e);
+            }
+            u.set_path(gcs.get_prefix());
+        }
         None => {}
     }
     u
@@ -103,20 +120,62 @@ pub fn make_noop_backend() -> StorageBackend {
     }
 }
 
+// Creates a S3 `StorageBackend`
+pub fn make_s3_backend(config: S3) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::S3(config)),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.set_s3(config);
+        backend
+    }
+}
+
+// Creates a GCS `StorageBackend`
+pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
+    #[cfg(feature = "prost-codec")]
+    {
+        StorageBackend {
+            backend: Some(Backend::Gcs(config)),
+        }
+    }
+    #[cfg(feature = "protobuf-codec")]
+    {
+        let mut backend = StorageBackend::default();
+        backend.set_gcs(config);
+        backend
+    }
+}
+
 /// An abstraction of an external storage.
-pub trait ExternalStorage: Sync + Send + 'static {
+// TODO: these should all be returning a future (i.e. async fn).
+pub trait ExternalStorage: 'static {
     /// Write all contents of the read to the given path.
-    // TODO: should it return a writer?
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()>;
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()>;
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>>;
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {
-    fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()> {
-        (**self).write(name, reader)
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        (**self).write(name, reader, content_length)
     }
-    fn read(&self, name: &str) -> io::Result<Box<dyn Read>> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).read(name)
     }
 }
@@ -158,6 +217,18 @@ mod tests {
         assert_eq!(
             url_of_backend(&backend).to_string(),
             "s3://bucket/backup%2001/prefix/"
+        );
+
+        backend.backend = Some(Backend::Gcs(Gcs {
+            bucket: "bucket".to_owned(),
+            prefix: "/backup 02/prefix/".to_owned(),
+            endpoint: "http://endpoint.com".to_owned(),
+            // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
+            ..Gcs::default()
+        }));
+        assert_eq!(
+            url_of_backend(&backend).to_string(),
+            "gcs://bucket/backup%2002/prefix/"
         );
     }
 }

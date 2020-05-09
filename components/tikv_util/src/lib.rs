@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+#![feature(str_strip)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -16,12 +17,15 @@ extern crate serde_derive;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+#[macro_use]
+extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
+use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,8 +33,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
-use protobuf::Message;
-use rand;
+use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;
@@ -55,6 +58,7 @@ pub mod timer;
 pub mod worker;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
+const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -90,6 +94,24 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
     file::file_exists(path)
 }
 
+// create a file with hole, to reserve space for TiKV.
+pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
+    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
+    if file::file_exists(path.clone()) {
+        if file::get_file_size(path.clone())? == file_size {
+            return Ok(());
+        }
+        file::delete_file_if_exist(path.clone())?;
+    }
+    if file_size > 0 {
+        let f = File::create(path)?;
+        f.allocate(file_size)?;
+        f.sync_all()?;
+        file::sync_dir(data_dir)?;
+    }
+    Ok(())
+}
+
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait AssertClone: Clone {}
@@ -99,28 +121,6 @@ pub trait AssertCopy: Copy {}
 pub trait AssertSend: Send {}
 
 pub trait AssertSync: Sync {}
-
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if max == NO_LIMIT || entries.len() <= 1 {
-        return;
-    }
-
-    let mut size = 0;
-    let limit = entries
-        .iter()
-        .take_while(|&e| {
-            if size == 0 {
-                size += u64::from(Message::compute_size(e));
-                true
-            } else {
-                size += u64::from(Message::compute_size(e));
-                size <= max
-            }
-        })
-        .count();
-
-    entries.truncate(limit);
-}
 
 /// Take slices in the range.
 ///
@@ -499,6 +499,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
                 vec![],
+                0,
             );
         }
 
@@ -553,7 +554,6 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 mod tests {
     use super::*;
 
-    use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
@@ -631,31 +631,6 @@ mod tests {
 
         fn foo(a: &Option<usize>) -> Option<usize> {
             *a
-        }
-    }
-
-    #[test]
-    fn test_limit_size() {
-        let mut e = Entry::default();
-        e.set_data(b"0123456789".to_vec());
-        let size = u64::from(e.compute_size());
-
-        let tbls = vec![
-            (vec![], NO_LIMIT, 0),
-            (vec![], size, 0),
-            (vec![e.clone(); 10], 0, 1),
-            (vec![e.clone(); 10], NO_LIMIT, 10),
-            (vec![e.clone(); 10], size, 1),
-            (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size, 2),
-            (vec![e.clone(); 10], 10 * size - 1, 9),
-            (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e.clone(); 10], 10 * size + 1, 10),
-        ];
-
-        for (mut entries, max, len) in tbls {
-            limit_size(&mut entries, max);
-            assert_eq!(entries.len(), len);
         }
     }
 
@@ -743,5 +718,24 @@ mod tests {
             // the test would fail.
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_reserve_space_for_recover() {
+        let tmp_dir = Builder::new()
+            .prefix("test_reserve_space_for_recover")
+            .tempdir()
+            .unwrap();
+        let data_path = tmp_dir.path();
+        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
+        let file = file_path.as_path();
+        let reserve_size = 4096 * 4;
+        assert!(!file.exists());
+        reserve_space_for_recover(data_path, reserve_size).unwrap();
+        assert!(file.exists());
+        let meta = file.metadata().unwrap();
+        assert_eq!(meta.len(), reserve_size);
+        reserve_space_for_recover(data_path, 0).unwrap();
+        assert!(!file.exists());
     }
 }

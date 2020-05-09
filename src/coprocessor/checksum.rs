@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query::storage::Range;
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::Range;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use crate::coprocessor::dag::TiKVStorage;
@@ -31,9 +31,10 @@ impl<S: Snapshot> ChecksumContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
+            false,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
-            storage: store.into(),
+            storage: TiKVStorage::new(store, false),
             ranges: ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, false))

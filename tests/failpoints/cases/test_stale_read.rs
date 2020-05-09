@@ -5,19 +5,16 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{mem, thread};
 
-use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
 use pd_client::PdClient;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
 fn stale_read_during_splitting(right_derive: bool) {
-    let _guard = crate::setup();
-
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
@@ -217,8 +214,6 @@ fn test_node_stale_read_during_splitting_right_derive() {
 
 #[test]
 fn test_stale_read_during_merging() {
-    let _guard = crate::setup();
-
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     configure_for_merge(&mut cluster);
@@ -326,8 +321,6 @@ fn test_stale_read_during_merging() {
 
 #[test]
 fn test_read_index_when_transfer_leader_2() {
-    let _guard = crate::setup();
-
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -376,6 +369,7 @@ fn test_read_index_when_transfer_leader_2() {
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );

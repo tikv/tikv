@@ -45,6 +45,11 @@ pub struct Scheduler<T> {
     metrics_pending_task_count: IntGauge,
 }
 
+pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
+    let (tx, _) = unbounded();
+    Scheduler::new("dummy future scheduler".to_owned(), tx)
+}
+
 impl<T: Display> Scheduler<T> {
     fn new<S: Into<String>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         let name = name.into();

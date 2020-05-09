@@ -29,12 +29,12 @@ impl WaitTimeout {
     /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
     /// Negative means no wait.
     pub fn from_encoded(i: i64) -> Option<WaitTimeout> {
-        if i == 0 {
-            Some(WaitTimeout::Default)
-        } else if i < 0 {
-            None
-        } else {
-            Some(WaitTimeout::Millis(i as u64))
+        use std::cmp::Ordering::*;
+
+        match i.cmp(&0) {
+            Equal => Some(WaitTimeout::Default),
+            Less => None,
+            Greater => Some(WaitTimeout::Millis(i as u64)),
         }
     }
 }
@@ -68,7 +68,7 @@ pub trait LockManager: Clone + Send + 'static {
     fn wake_up(
         &self,
         lock_ts: TimeStamp,
-        hashes: Option<Vec<u64>>,
+        hashes: Vec<u64>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     );
@@ -100,7 +100,7 @@ impl LockManager for DummyLockManager {
     fn wake_up(
         &self,
         _lock_ts: TimeStamp,
-        _hashes: Option<Vec<u64>>,
+        _hashes: Vec<u64>,
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {

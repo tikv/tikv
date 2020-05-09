@@ -1,17 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use clap::ArgMatches;
-
-use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
-use tikv_util::collections::HashMap;
-use tikv_util::{self, logger};
-
-use chrono::Local;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chrono::Local;
+use clap::ArgMatches;
+use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
+use tikv_util::collections::HashMap;
+use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -34,7 +32,10 @@ macro_rules! fatal {
 // number while rotate by size.
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!("{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    new_path.push(format!(
+        ".{}",
+        Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
+    ));
     Ok(PathBuf::from(new_path))
 }
 
@@ -43,7 +44,15 @@ pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        logger::init_log(
+            drainer,
+            config.log_level,
+            true,
+            true,
+            vec![],
+            config.slow_log_threshold.as_millis(),
+        )
+        .unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -60,19 +69,55 @@ pub fn initial_logger(config: &TiKvConfig) {
                 e
             );
         });
-
-        // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {}", e);
-        });
+        if config.slow_log_file.is_empty() {
+            logger::init_log(
+                drainer,
+                config.log_level,
+                true,
+                true,
+                vec![],
+                config.slow_log_threshold.as_millis(),
+            )
+            .unwrap_or_else(|e| {
+                fatal!("failed to initialize log: {}", e);
+            });
+        } else {
+            let slow_log_drainer = logger::file_drainer(
+                &config.slow_log_file,
+                config.log_rotation_timespan,
+                config.log_rotation_size,
+                rename_by_timestamp,
+            )
+            .unwrap_or_else(|e| {
+                fatal!(
+                    "failed to initialize log with file {}: {}",
+                    config.slow_log_file,
+                    e
+                );
+            });
+            let drainer = logger::LogDispatcher::new(drainer, slow_log_drainer);
+            logger::init_log(
+                drainer,
+                config.log_level,
+                true,
+                true,
+                vec![],
+                config.slow_log_threshold.as_millis(),
+            )
+            .unwrap_or_else(|e| {
+                fatal!("failed to initialize log: {}", e);
+            });
+        };
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    tikv_util::metrics::monitor_memory()
+        .unwrap_or_else(|e| fatal!("failed to start memory monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
     tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
@@ -150,18 +195,18 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
 #[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e);
+    }
+
     if let Err(e) = check_critical_config(config) {
         fatal!("critical config check failed: {}", e);
     }
 
     if persist {
-        if let Err(e) = persist_critical_config(&config) {
+        if let Err(e) = persist_config(&config) {
             fatal!("persist critical config failed: {}", e);
         }
-    }
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
     }
 }

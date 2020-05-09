@@ -13,6 +13,15 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## File to store slow logs.
+## If "log-file" is set, but this is not set, the slow logs will be appeneded
+## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
+## will be appended to stderr.
+# slow-log-file = ""
+
+## The minimum operation cost to output relative logs.
+# slow-log-threshold = "1s"
+
 ## Timespan between rotating the log files.
 ## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
 ## timestamp appended to its name and a new file will be created.
@@ -23,11 +32,27 @@
 ## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
 # log-rotation-size = "300MB"
 
-## The interval at which to refresh the local config
-## Set it small are good to debug and tuning.
-# refresh-config-interval = "30s"
+# Configurations for the single thread pool serving read requests.
+[readpool.unified]
+## The minimal working thread count of the thread pool.
+# min-thread-count = 1
+
+## The maximum working thread count of the thread pool.
+## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
+# max-thread-count = 8
+
+## Size of the stack for each thread in the thread pool.
+# stack-size = "10MB"
+
+## Max running tasks of each worker, reject if exceeded.
+# max-tasks-per-worker = 2000
 
 [readpool.storage]
+## Whether to use the unified read pool to handle storage requests.
+# use-unified-pool = false
+
+## The following configurations only take effect when `use-unified-pool` is false.
+
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
 
@@ -50,6 +75,11 @@
 # stack-size = "10MB"
 
 [readpool.coprocessor]
+## Whether to use the unified read pool to handle coprocessor requests.
+# use-unified-pool = true
+
+## The following configurations only take effect when `use-unified-pool` is false.
+
 ## Most read requests from TiDB are sent to the coprocessor of TiKV. high/normal/low-concurrency is
 ## used to set the number of threads of the coprocessor.
 ## If there are many read requests, you can increase these config values (but keep it within the
@@ -63,7 +93,6 @@
 # max-tasks-per-worker-high = 2000
 # max-tasks-per-worker-normal = 2000
 # max-tasks-per-worker-low = 2000
-# stack-size = "10MB"
 
 [server]
 ## Listening address.
@@ -74,7 +103,9 @@
 # advertise-addr = ""
 
 ## Status address.
-## This is used for reporting the status of TiKV directly through the HTTP address.
+## This is used for reporting the status of TiKV directly through 
+## the HTTP address. Notice that there is a risk of leaking status
+## information if this port is exposed to the public.
 ## Empty string means disabling it.
 # status-addr = "127.0.0.1:20180"
 
@@ -96,7 +127,7 @@
 # grpc-memory-pool-quota = "32G"
 
 ## The number of connections with each TiKV server to send Raft messages.
-# grpc-raft-conn-num = 10
+# grpc-raft-conn-num = 1
 
 ## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
@@ -462,8 +493,8 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 1
-# max-background-gc = 1
+# default: 4
+# max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -634,6 +665,22 @@
 # default: normal
 # blob-run-mode = "normal"
 
+## If set true, values in blob file will be merged to a new blob file while
+## their corresponding keys are compacted to last two level in LSM-Tree.
+##
+## With this feature enabled, Titan could get better scan performance, and
+## better write performance during GC, but will suffer around 1.1 space
+## amplification and 3 more write amplification if no GC needed (eg. uniformly
+## distributed keys) under default rocksdb setting.
+##
+## Requirement: level_compaction_dynamic_level_base = true
+## default: false
+# level_merge = false
+
+## Use merge operator to rewrite GC blob index.
+## default: false
+# gc-merge-rewrite = false
+
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -662,7 +709,7 @@
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
-# write-buffer-size = "128MB"
+# write-buffer-size = "32MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
@@ -730,6 +777,7 @@
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
+# cert-allowed-cn = []
 
 [import]
 ## Number of threads to handle RPC requests.
@@ -742,15 +790,19 @@
 ## Enable pessimistic transaction
 # enabled = true
 
-## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
+## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
-# wait-for-lock-timeout = 3000
+# wait-for-lock-timeout = "1s"
 
 ## If more than one transaction is waiting for the same lock, only the one with smallest
 ## start timestamp will be waked up immediately when the lock is released. Others will
-## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
+## be waked up after `wake_up_delay_duration` to reduce contention and make the oldest
 ## one more likely acquires the lock.
-# wake-up-delay-duration = 100
+# wake-up-delay-duration = "20ms"
+
+## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
+## Enabled this will improve performance, but slightly increase the transcation failure rate
+# pipelined = false
 
 [gc]
 ## The number of keys to GC in one batch.

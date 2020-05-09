@@ -3,7 +3,7 @@
 use crate::lock::LockType;
 use crate::timestamp::TimeStamp;
 use crate::types::{Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use codec::prelude::NumberDecoder;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 
@@ -107,8 +107,8 @@ impl Write {
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         let write_type_bytes = b
             .read_u8()
-            .map_err(|_| Error::from(Error::BadFormatWrite))?;
-        WriteType::from_u8(write_type_bytes).ok_or_else(|| Error::from(Error::BadFormatWrite))
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        WriteType::from_u8(write_type_bytes).ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))
     }
 
     #[inline]
@@ -116,7 +116,7 @@ impl Write {
         WriteRef {
             write_type: self.write_type,
             start_ts: self.start_ts,
-            short_value: self.short_value.as_ref().map(|v| v.as_slice()),
+            short_value: self.short_value.as_deref(),
         }
     }
 }
@@ -132,12 +132,12 @@ impl WriteRef<'_> {
     pub fn parse(mut b: &[u8]) -> Result<WriteRef<'_>> {
         let write_type_bytes = b
             .read_u8()
-            .map_err(|_| Error::from(Error::BadFormatWrite))?;
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         let write_type = WriteType::from_u8(write_type_bytes)
-            .ok_or_else(|| Error::from(Error::BadFormatWrite))?;
+            .ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))?;
         let start_ts = b
             .read_var_u64()
-            .map_err(|_| Error::from(Error::BadFormatWrite))?
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
             .into();
         if b.is_empty() {
             return Ok(WriteRef {
@@ -149,12 +149,12 @@ impl WriteRef<'_> {
 
         let flag = b
             .read_u8()
-            .map_err(|_| Error::from(Error::BadFormatWrite))?;
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
 
         let len = b
             .read_u8()
-            .map_err(|_| Error::from(Error::BadFormatWrite))?;
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",

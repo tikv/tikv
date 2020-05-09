@@ -10,7 +10,7 @@ use crate::server::service::kv::{
     batch_commands_request, batch_commands_response, future_batch_get_command,
     future_raw_batch_get_command, poll_future_notify,
 };
-use crate::storage::{kv::Engine, lock_manager::LockManager, txn::PointGetCommand, Storage};
+use crate::storage::{kv::Engine, lock_manager::LockManager, PointGetCommand, Storage};
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::HistogramReader;
@@ -334,7 +334,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 BatchLimiter::new(
                     BatchableRequestKind::PointGet,
                     timeout,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.clone()),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),

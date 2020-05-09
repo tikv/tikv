@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
@@ -15,6 +15,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     isolation_level: IsolationLevel,
     ts: TimeStamp,
     bypass_locks: TsSet,
+    check_has_newer_ts_data: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -28,6 +29,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             isolation_level: IsolationLevel::Si,
             ts,
             bypass_locks: Default::default(),
+            check_has_newer_ts_data: false,
         }
     }
 
@@ -79,6 +81,16 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
+    /// if this option is not set.
+    ///
+    /// Default is false.
+    #[inline]
+    pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
+        self.check_has_newer_ts_data = enabled;
+        self
+    }
+
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
@@ -99,6 +111,11 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             isolation_level: self.isolation_level,
             ts: self.ts,
             bypass_locks: self.bypass_locks,
+            met_newer_ts_data: if self.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
 
             statistics: Statistics::default(),
 
@@ -120,6 +137,7 @@ pub struct PointGetter<S: Snapshot> {
     isolation_level: IsolationLevel,
     ts: TimeStamp,
     bypass_locks: TsSet,
+    met_newer_ts_data: NewerTsCheckState,
 
     statistics: Statistics,
 
@@ -135,7 +153,14 @@ impl<S: Snapshot> PointGetter<S> {
     /// Take out and reset the statistics collected so far.
     #[inline]
     pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
+    }
+
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
     }
 
     /// Get the value of a user key.
@@ -175,6 +200,9 @@ impl<S: Snapshot> PointGetter<S> {
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
+            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
+            }
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
                 .map_err(Into::into)
         } else {
@@ -187,10 +215,38 @@ impl<S: Snapshot> PointGetter<S> {
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        if !self.write_cursor.seek(
-            &user_key.clone().append_ts(self.ts),
-            &mut self.statistics.write,
-        )? {
+        let mut use_near_seek = false;
+        let mut seek_key = user_key.clone();
+
+        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+            seek_key = seek_key.append_ts(TimeStamp::max());
+            if !self
+                .write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
+            {
+                return Ok(None);
+            }
+            seek_key = seek_key.truncate_ts()?;
+            use_near_seek = true;
+
+            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
+                return Ok(None);
+            }
+            if Key::decode_ts_from(cursor_key)? > self.ts {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
+            }
+        }
+
+        seek_key = seek_key.append_ts(self.ts);
+        let data_found = if use_near_seek {
+            self.write_cursor
+                .near_seek(&seek_key, &mut self.statistics.write)?
+        } else {
+            self.write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
+        };
+        if !data_found {
             return Ok(None);
         }
 
@@ -300,6 +356,39 @@ mod tests {
     fn must_get_value<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8], prefix: &[u8]) {
         let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
         assert!(val.starts_with(prefix));
+    }
+
+    fn must_met_newer_ts_data<E: Engine>(
+        engine: &E,
+        getter_ts: impl Into<TimeStamp>,
+        key: &[u8],
+        value: &[u8],
+        expected_met_newer_ts_data: bool,
+    ) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let ts = getter_ts.into();
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts)
+            .isolation_level(IsolationLevel::Si)
+            .check_has_newer_ts_data(true)
+            .build()
+            .unwrap();
+        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(val, value);
+        let expected = if expected_met_newer_ts_data {
+            NewerTsCheckState::Met
+        } else {
+            NewerTsCheckState::NotMetYet
+        };
+        assert_eq!(expected, point_getter.met_newer_ts_data());
+
+        let mut point_getter = PointGetterBuilder::new(snapshot, ts)
+            .isolation_level(IsolationLevel::Si)
+            .check_has_newer_ts_data(false)
+            .build()
+            .unwrap();
+        let val = point_getter.get(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(val, value);
+        assert_eq!(NewerTsCheckState::Unknown, point_getter.met_newer_ts_data());
     }
 
     fn must_get_none<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
@@ -640,7 +729,7 @@ mod tests {
         must_get_key(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
+        let mut getter = new_omit_value_single_point_getter(snapshot, 4.into());
         must_get_none(&mut getter, b"foo3");
         must_get_none(&mut getter, b"foo3");
     }
@@ -703,5 +792,28 @@ mod tests {
             .build()
             .unwrap();
         must_get_err(&mut getter, key);
+    }
+
+    #[test]
+    fn test_met_newer_ts_data() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, val1) = (b"foo", b"bar1");
+        must_prewrite_put(&engine, key, val1, key, 10);
+        must_commit(&engine, key, 10, 20);
+
+        let (key, val2) = (b"foo", b"bar2");
+        must_prewrite_put(&engine, key, val2, key, 30);
+        must_commit(&engine, key, 30, 40);
+
+        must_met_newer_ts_data(&engine, 20, key, val1, true);
+        must_met_newer_ts_data(&engine, 30, key, val1, true);
+        must_met_newer_ts_data(&engine, 40, key, val2, false);
+        must_met_newer_ts_data(&engine, 50, key, val2, false);
+
+        must_prewrite_lock(&engine, key, key, 60);
+
+        must_met_newer_ts_data(&engine, 50, key, val2, true);
+        must_met_newer_ts_data(&engine, 60, key, val2, true);
     }
 }

@@ -109,7 +109,7 @@
 //!
 //!   Example:
 //!
-//!   ```
+//!   ```ignore
 //!   // in engine_traits
 //!
 //!   trait IOLimiterExt {
@@ -119,8 +119,8 @@
 //!   trait IOLimiter { }
 //!   ```
 //!
-//!   ```
-//!   // in engine_rust
+//!   ```ignore
+//!   // in engine_rocks
 //!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;
@@ -146,6 +146,13 @@
 //!
 //!   - https://github.com/rust-lang/rfcs/pull/1598
 //!   - https://github.com/rust-lang/rust/issues/44265
+//!
+//! - Traits can't have mutually-recursive associated types. That is, if
+//!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
+//!   `KvEngine` associated type - the compiler will not be able to resolve both
+//!   `KvEngine`s to the same type. In these cases, e.g. `Snapshot` needs to be
+//!   parameterized over its engine type and `impl Snapshot<RocksEngine> for
+//!   RocksSnapshot`.
 //!
 //!
 //! # Refactoring tips
@@ -193,6 +200,8 @@
 extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -202,8 +211,12 @@ extern crate tikv_alloc;
 
 mod cf_handle;
 pub use crate::cf_handle::*;
+mod cf_names;
+pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod compact;
+pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
 mod db_vector;
@@ -212,8 +225,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
-mod io_limiter;
-pub use io_limiter::*;
+mod misc;
+pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
@@ -222,6 +235,10 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+mod encryption;
+pub use crate::encryption::*;
+mod properties;
+pub use crate::properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -233,11 +250,11 @@ pub use crate::mutable::*;
 mod peekable;
 pub use crate::peekable::*;
 
-// These modules contain support code that does not need to be implemented by
-// engines.
+// These modules contain concrete types and support code that do not need to
+// be implemented by engines.
 
-mod cfdefs;
-pub use crate::cfdefs::*;
+mod cf_defs;
+pub use crate::cf_defs::*;
 mod engines;
 pub use engines::*;
 mod errors;
@@ -246,6 +263,14 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
-pub mod util;
 
+// These modules need further scrutiny
+
+pub mod metrics_flusher;
+pub use crate::metrics_flusher::*;
+pub mod compaction_job;
+pub mod util;
+pub use compaction_job::*;
+
+// FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

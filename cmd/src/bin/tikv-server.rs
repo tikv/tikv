@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
 use std::process;
@@ -154,8 +153,6 @@ fn main() {
         validate_and_persist_config(&mut config, false);
         println!("config check successful");
         process::exit(0)
-    } else {
-        validate_and_persist_config(&mut config, true);
     }
 
     cmd::server::run_tikv(config);

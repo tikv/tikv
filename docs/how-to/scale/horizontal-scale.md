@@ -94,7 +94,7 @@ Then you can check the state of this TiKV node:
 {
   "store": {
     "id": 1,
-    "address": "127.0.0.1:21060",
+    "address": "127.0.0.1:20160",
     "state": 1,
     "state_name": "Offline"
   },

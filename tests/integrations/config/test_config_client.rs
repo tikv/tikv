@@ -1,256 +1,192 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use configuration::{ConfigChange, Configuration};
+use raftstore::store::Config as RaftstoreConfig;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-
-use kvproto::configpb::*;
-
-use pd_client::errors::Result;
-use pd_client::PdClient;
 use tikv::config::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::worker::FutureWorker;
 
-struct MockPdClient {
-    configs: Mutex<HashMap<String, Config>>,
-}
-
-#[derive(Clone)]
-struct Config {
-    version: Version,
-    content: String,
-    update: Vec<ConfigEntry>,
-}
-
-impl Config {
-    fn new(version: Version, content: String, update: Vec<ConfigEntry>) -> Self {
-        Config {
-            version,
-            content,
-            update,
-        }
-    }
-}
-
-impl MockPdClient {
-    fn new() -> Self {
-        MockPdClient {
-            configs: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn register(self: Arc<Self>, id: &str, cfg: TiKvConfig) -> ConfigHandler {
-        let (version, cfg) = ConfigHandler::create(id.to_owned(), self, cfg).unwrap();
-        ConfigHandler::start(
-            id.to_owned(),
-            ConfigController::new(cfg),
-            version,
-            FutureWorker::new("test-pd-worker").scheduler(),
-        )
-        .unwrap()
-    }
-
-    fn update_cfg<F>(&self, id: &str, f: F)
-    where
-        F: Fn(&mut TiKvConfig),
-    {
-        let mut configs = self.configs.lock().unwrap();
-        let cfg = configs.get_mut(id).unwrap();
-        let mut config: TiKvConfig = toml::from_str(&cfg.content).unwrap();
-        f(&mut config);
-        cfg.content = toml::to_string(&config).unwrap();
-        cfg.version.local += 1;
-    }
-
-    fn update_raw<F>(&self, id: &str, f: F)
-    where
-        F: Fn(&mut String),
-    {
-        let mut configs = self.configs.lock().unwrap();
-        let cfg = configs.get_mut(id).unwrap();
-        f(&mut cfg.content);
-        cfg.version.local += 1;
-    }
-
-    fn get(&self, id: &str) -> Config {
-        self.configs.lock().unwrap().get(id).unwrap().clone()
-    }
-}
-
-impl PdClient for MockPdClient {
-    fn register_config(&self, id: String, v: Version, cfg: String) -> Result<CreateResponse> {
-        let old = self
-            .configs
-            .lock()
-            .unwrap()
-            .insert(id.clone(), Config::new(v.clone(), cfg.clone(), Vec::new()));
-        assert!(old.is_none(), format!("id {} already be registered", id));
-
-        let mut status = Status::default();
-        status.set_code(StatusCode::Ok);
-        let mut resp = CreateResponse::default();
-        resp.set_status(status);
-        resp.set_config(cfg);
-        resp.set_version(v);
-        Ok(resp)
-    }
-
-    fn get_config(&self, id: String, version: Version) -> Result<GetResponse> {
-        let mut resp = GetResponse::default();
-        let mut status = Status::default();
-        let configs = self.configs.lock().unwrap();
-        if let Some(cfg) = configs.get(&id) {
-            match cmp_version(&cfg.version, &version) {
-                Ordering::Equal => status.set_code(StatusCode::NotChange),
-                _ => {
-                    resp.set_config(cfg.content.clone());
-                    status.set_code(StatusCode::WrongVersion);
-                }
-            }
-            resp.set_version(cfg.version.clone());
-        } else {
-            status.set_code(StatusCode::Unknown);
-        }
-        resp.set_status(status);
-        Ok(resp)
-    }
-
-    fn update_config(
-        &self,
-        id: String,
-        version: Version,
-        mut entries: Vec<ConfigEntry>,
-    ) -> Result<UpdateResponse> {
-        let mut resp = UpdateResponse::default();
-        let mut status = Status::default();
-        if let Some(cfg) = self.configs.lock().unwrap().get_mut(&id) {
-            match cmp_version(&cfg.version, &version) {
-                Ordering::Equal => {
-                    cfg.update.append(&mut entries);
-                    cfg.version.local += 1;
-                    status.set_code(StatusCode::Ok);
-                }
-                _ => status.set_code(StatusCode::WrongVersion),
-            }
-            resp.set_version(cfg.version.clone());
-        } else {
-            status.set_code(StatusCode::Unknown);
-        }
-        resp.set_status(status);
-        Ok(resp)
-    }
-}
-
-fn validated_cfg() -> TiKvConfig {
-    let mut cfg = TiKvConfig::default();
-    cfg.validate().unwrap();
-    cfg
+fn change(name: &str, value: &str) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert(name.to_owned(), value.to_owned());
+    m
 }
 
 #[test]
 fn test_update_config() {
-    let pd_client = Arc::new(MockPdClient::new());
-    let id = "localhost:1080";
+    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let cfg_controller = ConfigController::new(cfg);
+    let mut cfg = cfg_controller.get_current().clone();
 
-    // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    // normal update
+    cfg_controller
+        .update(change("raftstore.raft-log-gc-threshold", "2000"))
+        .unwrap();
+    cfg.raft_store.raft_log_gc_threshold = 2000;
+    assert_eq!(cfg_controller.get_current(), cfg);
 
-    // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    // update not support config
+    let res = cfg_controller.update(change("server.addr", "localhost:3000"));
+    assert!(res.is_err());
+    assert_eq!(cfg_controller.get_current(), cfg);
 
-    // nothing change if there are no update on pd side
-    assert_eq!(cfg_handler.get_config(), &validated_cfg());
+    // update to invalid config
+    let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "0"));
+    assert!(res.is_err());
+    assert_eq!(cfg_controller.get_current(), cfg);
 
-    // update config on pd side
-    pd_client.update_cfg(id, |cfg| {
-        cfg.refresh_config_interval = ReadableDuration::hours(12);
-    });
+    // bad update request
+    let res = cfg_controller.update(change("xxx.yyy", "0"));
+    assert!(res.is_err());
+    let res = cfg_controller.update(change("raftstore.xxx", "0"));
+    assert!(res.is_err());
+    let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "10MB"));
+    assert!(res.is_err());
+    let res = cfg_controller.update(change("raft-log-gc-threshold", "10MB"));
+    assert!(res.is_err());
+    assert_eq!(cfg_controller.get_current(), cfg);
+}
 
-    // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+#[test]
+fn test_dispatch_change() {
+    use configuration::ConfigManager;
+    use std::error::Error;
+    use std::result::Result;
+
+    #[derive(Clone)]
+    struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
+
+    impl ConfigManager for CfgManager {
+        fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
+            self.0.lock().unwrap().update(c);
+            Ok(())
+        }
+    }
+
+    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let cfg_controller = ConfigController::new(cfg);
+    let mut cfg = cfg_controller.get_current().clone();
+    let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
+    cfg_controller.register(Module::Raftstore, Box::new(mgr.clone()));
+
+    cfg_controller
+        .update(change("raftstore.raft-log-gc-threshold", "2000"))
+        .unwrap();
 
     // config update
-    let mut cfg = validated_cfg();
-    cfg.refresh_config_interval = ReadableDuration::hours(12);
-    assert_eq!(cfg_handler.get_config(), &cfg);
+    cfg.raft_store.raft_log_gc_threshold = 2000;
+    assert_eq!(cfg_controller.get_current(), cfg);
+
+    // config change should also dispatch to raftstore config manager
+    assert_eq!(mgr.0.lock().unwrap().raft_log_gc_threshold, 2000);
 }
 
 #[test]
-fn test_update_not_support_config() {
-    let pd_client = Arc::new(MockPdClient::new());
-    let id = "localhost:1080";
+fn test_write_update_to_file() {
+    let (mut cfg, tmp_dir) = TiKvConfig::with_tmp().unwrap();
+    cfg.cfg_path = tmp_dir.path().join("cfg_file").to_str().unwrap().to_owned();
+    {
+        let c = r#"
+## comment should be reserve
+[raftstore]
 
-    // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+## comment should be reserve
+# comment with one `#` should also be reserve
+sync-log = true
 
-    // update not support config on pd side
-    pd_client.update_cfg(id, |cfg| {
-        cfg.server.addr = "localhost:3000".to_owned();
-    });
+# config that comment out by one `#` should be update in place
+## pd-heartbeat-tick-interval = "30s"
+# pd-heartbeat-tick-interval = "30s"
 
-    // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+[rocksdb.defaultcf]
+## config should be update in place
+block-cache-size = "10GB"
 
-    // nothing change
-    assert_eq!(cfg_handler.get_config(), &validated_cfg());
-}
+[rocksdb.lockcf]
+## this config will not update even it has the same last 
+## name as `rocksdb.defaultcf.block-cache-size`
+block-cache-size = "512MB"
 
-#[test]
-fn test_update_to_invalid() {
-    let pd_client = Arc::new(MockPdClient::new());
-    let id = "localhost:1080";
+[coprocessor]
+## the update to `coprocessor.region-split-keys`, which do not show up 
+## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
-    let mut cfg = validated_cfg();
-    cfg.raft_store.store_max_batch_size = 2000;
+[gc]
+## config should be update in place
+max-write-bytes-per-sec = "1KB"
 
-    // register config
-    let mut cfg_handler = pd_client.clone().register(id, cfg);
+[rocksdb.defaultcf.titan]
+blob-run-mode = "normal"
+"#;
+        let mut f = File::create(&cfg.cfg_path).unwrap();
+        f.write_all(c.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+    }
+    let cfg_controller = ConfigController::new(cfg);
+    let change = {
+        let mut change = HashMap::new();
+        change.insert(
+            "raftstore.pd-heartbeat-tick-interval".to_owned(),
+            "1h".to_owned(),
+        );
+        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
+        change.insert(
+            "coprocessor.region-split-keys".to_owned(),
+            "10000".to_owned(),
+        );
+        change.insert("gc.max-write-bytes-per-sec".to_owned(), "100MB".to_owned());
+        change.insert(
+            "rocksdb.defaultcf.block-cache-size".to_owned(),
+            "1GB".to_owned(),
+        );
+        change.insert(
+            "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
+            "read-only".to_owned(),
+        );
+        change
+    };
+    cfg_controller.update(change).unwrap();
+    let res = {
+        let mut buf = Vec::new();
+        let mut f = File::open(&cfg_controller.get_current().cfg_path).unwrap();
+        f.read_to_end(&mut buf).unwrap();
+        buf
+    };
 
-    // update invalid config on pd side
-    pd_client.update_cfg(id, |cfg| {
-        cfg.raft_store.store_max_batch_size = 0;
-    });
+    let expect = r#"
+## comment should be reserve
+[raftstore]
 
-    // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+## comment should be reserve
+# comment with one `#` should also be reserve
+sync-log = false
 
-    // local config should not change
-    assert_eq!(
-        cfg_handler.get_config().raft_store.store_max_batch_size,
-        2000
-    );
+# config that comment out by one `#` should be update in place
+## pd-heartbeat-tick-interval = "30s"
+pd-heartbeat-tick-interval = "1h"
 
-    // config on pd side should be rollbacked to valid config
-    let cfg = pd_client.get(id);
-    assert_eq!(cfg.update.len(), 1);
-    assert_eq!(cfg.update[0].name, "raftstore.store-max-batch-size");
-    assert_eq!(cfg.update[0].value, toml::to_string(&2000).unwrap());
-}
+[rocksdb.defaultcf]
+## config should be update in place
+block-cache-size = "1GB"
 
-#[test]
-fn test_compatible_config() {
-    let pd_client = Arc::new(MockPdClient::new());
-    let id = "localhost:1080";
+[rocksdb.lockcf]
+## this config will not update even it has the same last 
+## name as `rocksdb.defaultcf.block-cache-size`
+block-cache-size = "512MB"
 
-    // register config
-    let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+[coprocessor]
+## the update to `coprocessor.region-split-keys`, which do not show up 
+## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
-    // update config on pd side with misssing config, new config and exist config
-    pd_client.update_raw(id, |cfg| {
-        *cfg = "
-            [new.config]
-            xyz = 1
-            [raftstore]
-            store-max-batch-size = 2048
-        "
-        .to_owned();
-    });
+region-split-keys = 10000
+[gc]
+## config should be update in place
+max-write-bytes-per-sec = "100MB"
 
-    // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
-
-    let mut new_cfg = validated_cfg();
-    new_cfg.raft_store.store_max_batch_size = 2048;
-    assert_eq!(cfg_handler.get_config(), &new_cfg);
+[rocksdb.defaultcf.titan]
+blob-run-mode = "read-only"
+"#;
+    assert_eq!(expect.as_bytes(), res.as_slice());
 }

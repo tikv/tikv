@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ColumnInfo};
 
-use tidb_query::codec::table;
+use tidb_query_datatype::codec::table;
 use tikv_util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
@@ -63,7 +63,7 @@ impl Table {
         for col_id in &self.idxs[&index] {
             let col = self.column_by_id(*col_id).unwrap();
             let mut c_info = ColumnInfo::default();
-            c_info.set_tp(col.col_type);
+            c_info.set_tp(col.col_field_type());
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
                 c_info.set_pk_handle(true);
@@ -93,7 +93,7 @@ impl Table {
     pub fn get_record_range_one(&self, handle_id: i64) -> KeyRange {
         let start_key = table::encode_row_key(self.id, handle_id);
         let mut end_key = start_key.clone();
-        tidb_query::util::convert_to_prefix_next(&mut end_key);
+        tidb_query_common::util::convert_to_prefix_next(&mut end_key);
         let mut range = KeyRange::default();
         range.set_start(start_key);
         range.set_end(end_key);
@@ -135,12 +135,18 @@ impl TableBuilder {
     }
 
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
+        use std::cmp::Ordering::*;
+
         if col.index == 0 {
-            if self.handle_id > 0 {
-                self.handle_id = 0;
-            } else if self.handle_id < 0 {
-                // maybe need to check type.
-                self.handle_id = col.id;
+            match self.handle_id.cmp(&0) {
+                Greater => {
+                    self.handle_id = 0;
+                }
+                Less => {
+                    // maybe need to check type.
+                    self.handle_id = col.id;
+                }
+                Equal => {}
             }
         }
         self.columns.push((normalize_column_name(name), col));

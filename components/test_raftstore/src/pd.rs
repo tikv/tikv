@@ -2,28 +2,30 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use std::{cmp, thread};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationMode, ReplicationStatus};
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use tikv::raftstore::store::util::check_key_in_region;
-use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use raftstore::store::util::check_key_in_region;
+use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::*;
 
@@ -130,11 +132,7 @@ impl Operator {
                 if target_region_id == region_id {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
-                    let region = cluster
-                        .get_region_by_id(target_region_id)
-                        .unwrap()
-                        .unwrap()
-                        .clone();
+                    let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
                     new_pd_merge_region(region)
                 }
             }
@@ -231,6 +229,9 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+
+    replication_status: Option<ReplicationStatus>,
+    region_replication_status: HashMap<u64, RegionReplicationStatus>,
 }
 
 impl Cluster {
@@ -259,6 +260,8 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            replication_status: None,
+            region_replication_status: HashMap::default(),
         }
     }
 
@@ -289,18 +292,43 @@ impl Cluster {
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = Store::default();
         let store_id = store.get_id();
-        s.store = store;
-        self.stores.insert(store_id, s);
+        // There is a race between put_store and handle_region_heartbeat_response. If store id is
+        // 0, it means it's a placeholder created by latter, we just need to update the meta.
+        // Otherwise we should overwrite it.
+        if self
+            .stores
+            .get(&store_id)
+            .map_or(true, |s| s.store.get_id() != 0)
+        {
+            let mut s = Store::default();
+            s.store = store;
+            self.stores.insert(store_id, s);
+        } else {
+            self.stores.get_mut(&store_id).unwrap().store = store;
+        }
         Ok(())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
-            None => Err(box_err!("store {} not found", store_id)),
-            Some(s) => Ok(s.store.clone()),
+            Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
+            _ => Err(box_err!("store {} not found", store_id)),
         }
+    }
+
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        Ok(self
+            .stores
+            .values()
+            .filter_map(|s| {
+                if s.store.get_id() != 0 {
+                    Some(s.store.clone())
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -334,7 +362,11 @@ impl Cluster {
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
-        self.stores.values().map(|s| s.store.clone()).collect()
+        self.stores
+            .values()
+            .filter(|s| s.store.get_id() != 0)
+            .map(|s| s.store.clone())
+            .collect()
     }
 
     fn get_regions_number(&self) -> usize {
@@ -349,7 +381,7 @@ impl Cluster {
             .is_none());
         assert!(self
             .region_id_keys
-            .insert(region.get_id(), end_key.clone())
+            .insert(region.get_id(), end_key)
             .is_none());
     }
 
@@ -432,40 +464,37 @@ impl Cluster {
         let cur_region_peer_len = cur_region.get_peers().len();
 
         if conf_ver > cur_conf_ver {
-            if region_peer_len == cur_region_peer_len {
-                // For promote learner to voter.
-                let get_learners =
-                    |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
-                let region_learner_len = get_learners(&region);
-                let cur_region_learner_len = get_learners(&cur_region);
-                assert_eq!(cur_region_learner_len, region_learner_len + 1);
-            } else if cur_region_peer_len > region_peer_len {
-                // If ConfVer changed, TiKV has added/removed one peer already.
-                // So pd and TiKV can't have same peer count and can only have
-                // only one different peer.
-                // E.g, we can't meet following cases:
-                // 1) pd is (1, 2, 3), TiKV is (1)
-                // 2) pd is (1), TiKV is (1, 2, 3)
-                // 3) pd is (1, 2), TiKV is (3)
-                // 4) pd id (1), TiKV is (2, 3)
-                // must pd is (1, 2), TiKV is (1)
-                assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                let peers = setdiff_peers(&cur_region, &region);
-                assert_eq!(peers.len(), 1);
-                assert!(setdiff_peers(&region, &cur_region).is_empty());
-            } else if cur_region_peer_len < region_peer_len {
-                // must pd is (1), TiKV is (1, 2)
-                assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                let peers = setdiff_peers(&region, &cur_region);
-                assert_eq!(peers.len(), 1);
-                assert!(setdiff_peers(&cur_region, &region).is_empty());
-            } else {
-                must_same_peers(&cur_region, &region);
-                assert_eq!(cur_conf_ver + 1, conf_ver);
-                assert_eq!(
-                    cur_region.get_region_epoch().get_version() + 1,
-                    region.get_region_epoch().get_version()
-                );
+            match cur_region_peer_len.cmp(&region_peer_len) {
+                cmp::Ordering::Equal => {
+                    // For promote learner to voter.
+                    let get_learners =
+                        |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                    let region_learner_len = get_learners(&region);
+                    let cur_region_learner_len = get_learners(&cur_region);
+                    assert_eq!(cur_region_learner_len, region_learner_len + 1);
+                }
+                cmp::Ordering::Greater => {
+                    // If ConfVer changed, TiKV has added/removed one peer already.
+                    // So pd and TiKV can't have same peer count and can only have
+                    // only one different peer.
+                    // E.g, we can't meet following cases:
+                    // 1) pd is (1, 2, 3), TiKV is (1)
+                    // 2) pd is (1), TiKV is (1, 2, 3)
+                    // 3) pd is (1, 2), TiKV is (3)
+                    // 4) pd id (1), TiKV is (2, 3)
+                    // must pd is (1, 2), TiKV is (1)
+                    assert_eq!(cur_region_peer_len - region_peer_len, 1);
+                    let peers = setdiff_peers(&cur_region, &region);
+                    assert_eq!(peers.len(), 1);
+                    assert!(setdiff_peers(&region, &cur_region).is_empty());
+                }
+                cmp::Ordering::Less => {
+                    // must pd is (1), TiKV is (1, 2)
+                    assert_eq!(region_peer_len - cur_region_peer_len, 1);
+                    let peers = setdiff_peers(&region, &cur_region);
+                    assert_eq!(peers.len(), 1);
+                    assert!(setdiff_peers(&cur_region, &region).is_empty());
+                }
             }
 
             // update the region.
@@ -494,29 +523,33 @@ impl Cluster {
     ) -> Option<Operator> {
         let max_peer_count = self.meta.get_max_peer_count() as usize;
         let peer_count = region.get_peers().len();
-        if peer_count < max_peer_count {
-            // find the first store which the region has not covered.
-            for store_id in self.stores.keys() {
-                if region
-                    .get_peers()
-                    .iter()
-                    .all(|x| x.get_store_id() != *store_id)
-                {
-                    let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
-                    let policy = SchedulePolicy::Repeat(1);
-                    return Some(Operator::AddPeer { peer, policy });
+        match peer_count.cmp(&max_peer_count) {
+            cmp::Ordering::Less => {
+                // find the first store which the region has not covered.
+                for store_id in self.stores.keys() {
+                    if region
+                        .get_peers()
+                        .iter()
+                        .all(|x| x.get_store_id() != *store_id)
+                    {
+                        let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
+                        let policy = SchedulePolicy::Repeat(1);
+                        return Some(Operator::AddPeer { peer, policy });
+                    }
                 }
             }
-        } else if peer_count > max_peer_count {
-            // find the first peer which not leader.
-            let pos = region
-                .get_peers()
-                .iter()
-                .position(|x| x.get_store_id() != leader.get_store_id())
-                .unwrap();
-            let peer = region.get_peers()[pos].clone();
-            let policy = SchedulePolicy::Repeat(1);
-            return Some(Operator::RemovePeer { peer, policy });
+            cmp::Ordering::Greater => {
+                // find the first peer which not leader.
+                let pos = region
+                    .get_peers()
+                    .iter()
+                    .position(|x| x.get_store_id() != leader.get_store_id())
+                    .unwrap();
+                let peer = region.get_peers()[pos].clone();
+                let policy = SchedulePolicy::Repeat(1);
+                return Some(Operator::RemovePeer { peer, policy });
+            }
+            _ => {}
         }
 
         None
@@ -577,6 +610,7 @@ impl Cluster {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -597,6 +631,10 @@ impl Cluster {
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
+
+        if let Some(status) = replication_status {
+            self.region_replication_status.insert(region.id, status);
+        }
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -659,7 +697,7 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
     let peer = new_peer(1, 1);
-    region.mut_peers().push(peer.clone());
+    region.mut_peers().push(peer);
     pd_client.add_region(&region);
     pd_client.set_bootstrap(true);
     Ok(())
@@ -670,6 +708,8 @@ pub struct TestPdClient {
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
     is_incompatible: bool,
+    tso: AtomicUsize,
+    trigger_tso_failure: AtomicBool,
 }
 
 impl TestPdClient {
@@ -679,6 +719,8 @@ impl TestPdClient {
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
+            tso: AtomicUsize::new(1),
+            trigger_tso_failure: AtomicBool::new(false),
         }
     }
 
@@ -849,7 +891,7 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
-        self.must_have_peer(region_id, peer.clone());
+        self.must_have_peer(region_id, peer);
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -870,23 +912,26 @@ impl TestPdClient {
     pub fn must_merge(&self, from: u64, target: u64) {
         self.merge_region(from, target);
 
-        for _ in 1..500 {
-            sleep_ms(10);
-
-            if self.get_region_by_id(from).wait().unwrap().is_none() {
-                return;
-            }
-        }
-
-        let region = self.get_region_by_id(from).wait().unwrap();
-        if region.is_none() {
-            return;
-        }
-        panic!("region {:?} is still not merged.", region.unwrap());
+        self.check_merged_timeout(from, Duration::from_secs(5));
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
         self.get_region_by_id(from).wait().unwrap().is_none()
+    }
+
+    pub fn check_merged_timeout(&self, from: u64, duration: Duration) {
+        let timer = Instant::now();
+        loop {
+            let region = self.get_region_by_id(from).wait().unwrap();
+            if let Some(r) = region {
+                if timer.elapsed() > duration {
+                    panic!("region {:?} is still not merged.", r);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
@@ -949,6 +994,23 @@ impl TestPdClient {
         self.cluster.wl().set_bootstrap(is_bootstraped);
     }
 
+    pub fn configure_dr_auto_sync(&self, label_key: &str) {
+        let mut status = ReplicationStatus::default();
+        status.set_mode(ReplicationMode::DrAutoSync);
+        status.mut_dr_auto_sync().label_key = label_key.to_owned();
+        status.mut_dr_auto_sync().state_id = 1;
+        self.cluster.wl().replication_status = Some(status);
+    }
+
+    pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
+        self.cluster
+            .rl()
+            .region_replication_status
+            .get(&region_id)
+            .unwrap()
+            .to_owned()
+    }
+
     pub fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_size(region_id)
     }
@@ -968,6 +1030,23 @@ impl TestPdClient {
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
+
+    pub fn trigger_tso_failure(&self) {
+        self.trigger_tso_failure.store(true, Ordering::SeqCst);
+    }
+
+    pub fn shutdown_store(&self, store_id: u64) {
+        match self.cluster.write() {
+            Ok(mut c) => {
+                c.stores.remove(&store_id);
+            }
+            Err(e) => {
+                if !thread::panicking() {
+                    panic!("failed to acquire write lock: {:?}", e)
+                }
+            }
+        }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -975,15 +1054,19 @@ impl PdClient for TestPdClient {
         Ok(self.cluster_id)
     }
 
-    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        store: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.cluster.wl().bootstrap(store, region);
-
-        Ok(())
+        let mut cluster = self.cluster.wl();
+        cluster.bootstrap(store, region);
+        Ok(cluster.replication_status.clone())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -994,9 +1077,16 @@ impl PdClient for TestPdClient {
         self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         self.check_bootstrap()?;
-        self.cluster.wl().put_store(store)
+        let mut cluster = self.cluster.wl();
+        cluster.put_store(store)?;
+        Ok(cluster.replication_status.clone())
+    }
+
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        self.check_bootstrap()?;
+        self.cluster.rl().get_all_stores()
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -1045,14 +1135,18 @@ impl PdClient for TestPdClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
-        let resp = self
-            .cluster
-            .wl()
-            .region_heartbeat(term, region, leader.clone(), region_stat);
+        let resp = self.cluster.wl().region_heartbeat(
+            term,
+            region,
+            leader.clone(),
+            region_stat,
+            replication_status,
+        );
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
@@ -1067,13 +1161,17 @@ impl PdClient for TestPdClient {
 
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         use futures::stream;
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
         let mut cluster = self.cluster.wl();
-        let store = cluster.stores.get_mut(&store_id).unwrap();
+        let store = cluster
+            .stores
+            .entry(store_id)
+            .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
         Box::new(
             rx.map(|resp| vec![resp])
@@ -1209,41 +1307,16 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn register_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        cfg: String,
-    ) -> Result<configpb::CreateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::CreateResponse::default();
-        resp.set_status(status);
-        resp.set_config(cfg);
-        resp.set_version(version);
-        Ok(resp)
-    }
-
-    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::NotChange);
-        let mut resp = configpb::GetResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
-    }
-
-    fn update_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        _entries: Vec<configpb::ConfigEntry>,
-    ) -> Result<configpb::UpdateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::UpdateResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
+            return Box::new(futures::future::result(Err(
+                pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+                    grpcio::RpcStatusCode::UNKNOWN,
+                    Some("tso error".to_owned()),
+                ))),
+            )));
+        }
+        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
+        Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
     }
 }

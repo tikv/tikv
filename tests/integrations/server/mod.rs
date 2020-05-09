@@ -3,6 +3,7 @@
 mod kv_service;
 mod lock_manager;
 mod raft_client;
+mod security;
 
 use std::sync::Arc;
 
@@ -23,34 +24,49 @@ macro_rules! unary_call {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
-    }
+    };
 }
 
 macro_rules! sstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            _: $req_name,
+            sink: ServerStreamingSink<$resp_name>,
+        ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
-    }
+    };
 }
 
 macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            _: RequestStream<$req_name>,
+            sink: ClientStreamingSink<$resp_name>,
+        ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
-    }
+    };
 }
 
 macro_rules! bstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            _: RequestStream<$req_name>,
+            sink: DuplexSink<$resp_name>,
+        ) {
             let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
-    }
+    };
 }
 
 macro_rules! unary_call_dispatch {
@@ -58,31 +74,46 @@ macro_rules! unary_call_dispatch {
         fn $name(&mut self, ctx: RpcContext<'_>, req: $req_name, sink: UnarySink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
-    }
+    };
 }
 
 macro_rules! sstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, req: $req_name, sink: ServerStreamingSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            req: $req_name,
+            sink: ServerStreamingSink<$resp_name>,
+        ) {
             (self.0).$name(ctx, req, sink)
         }
-    }
+    };
 }
 
 macro_rules! cstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, req: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            req: RequestStream<$req_name>,
+            sink: ClientStreamingSink<$resp_name>,
+        ) {
             (self.0).$name(ctx, req, sink)
         }
-    }
+    };
 }
 
 macro_rules! bstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext<'_>, req: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
+        fn $name(
+            &mut self,
+            ctx: RpcContext<'_>,
+            req: RequestStream<$req_name>,
+            sink: DuplexSink<$resp_name>,
+        ) {
             (self.0).$name(ctx, req, sink)
         }
-    }
+    };
 }
 
 #[derive(Clone)]
@@ -138,12 +169,43 @@ trait MockKvService {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call!(ver_get, VerGetRequest, VerGetResponse);
+    unary_call!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
+    unary_call!(ver_mut, VerMutRequest, VerMutResponse);
+    unary_call!(ver_batch_mut, VerBatchMutRequest, VerBatchMutResponse);
+    unary_call!(ver_scan, VerScanRequest, VerScanResponse);
+    unary_call!(
+        ver_delete_range,
+        VerDeleteRangeRequest,
+        VerDeleteRangeResponse
+    );
     unary_call!(
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
     );
+    unary_call!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
+    );
     unary_call!(coprocessor, Request, Response);
+    sstream_call!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call!(coprocessor_stream, Request, Response);
     cstream_call!(raft, RaftMessage, Done);
     cstream_call!(batch_raft, BatchRaftMessage, Done);
@@ -209,12 +271,43 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call_dispatch!(ver_get, VerGetRequest, VerGetResponse);
+    unary_call_dispatch!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
+    unary_call_dispatch!(ver_mut, VerMutRequest, VerMutResponse);
+    unary_call_dispatch!(ver_batch_mut, VerBatchMutRequest, VerBatchMutResponse);
+    unary_call_dispatch!(ver_scan, VerScanRequest, VerScanResponse);
+    unary_call_dispatch!(
+        ver_delete_range,
+        VerDeleteRangeRequest,
+        VerDeleteRangeResponse
+    );
     unary_call_dispatch!(
         unsafe_destroy_range,
         UnsafeDestroyRangeRequest,
         UnsafeDestroyRangeResponse
     );
+    unary_call_dispatch!(
+        register_lock_observer,
+        RegisterLockObserverRequest,
+        RegisterLockObserverResponse
+    );
+    unary_call_dispatch!(
+        check_lock_observer,
+        CheckLockObserverRequest,
+        CheckLockObserverResponse
+    );
+    unary_call_dispatch!(
+        remove_lock_observer,
+        RemoveLockObserverRequest,
+        RemoveLockObserverResponse
+    );
+    unary_call_dispatch!(
+        physical_scan_lock,
+        PhysicalScanLockRequest,
+        PhysicalScanLockResponse
+    );
     unary_call_dispatch!(coprocessor, Request, Response);
+    sstream_call_dispatch!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
     cstream_call_dispatch!(raft, RaftMessage, Done);
     cstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);
