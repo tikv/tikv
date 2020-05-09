@@ -226,29 +226,18 @@ where
     }
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
-        let status = match status {
-            Some(s) => s,
-            None => {
-                info!("no status is returned, using majority mode");
-                return;
-            }
-        };
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
-        let label_key = &status.get_dr_auto_sync().label_key;
         let mut state = self.state.lock().unwrap();
-        for store in stores {
-            for l in store.get_labels() {
-                if l.key == *label_key {
-                    state.group.register_store(store.id, l.value.clone());
-                    break;
-                }
-            }
+        if let Some(s) = status {
+            state.set_status(s);
         }
-        state.status = status;
+        for mut store in stores {
+            state.group.register_store(store.id, store.take_labels().into_vec());
+        }
     }
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {

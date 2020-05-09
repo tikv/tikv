@@ -7,7 +7,7 @@ use std::{result, thread};
 
 use futures::Future;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, RegionEpoch};
+use kvproto::metapb::{self, Peer, StoreLabel, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
@@ -99,6 +99,7 @@ pub struct Cluster<T: Simulator> {
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
     pub engines: HashMap<u64, Engines>,
+    pub labels: HashMap<u64, HashMap<String, String>>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -120,6 +121,7 @@ impl<T: Simulator> Cluster<T> {
             dbs: vec![],
             count,
             engines: HashMap::default(),
+            labels: HashMap::default(),
             sim,
             pd_client,
         }
@@ -214,11 +216,15 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        let mut cfg = self.cfg.clone();
+        if let Some(labels) = self.labels.get(&node_id) {
+            cfg.server.labels = labels.to_owned();
+        }
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, self.cfg.clone(), engines, router, system)?;
+            .run_node(node_id, cfg, engines, router, system)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -492,12 +498,27 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .bootstrap_cluster(new_store(1, "".to_owned()), region)
             .unwrap();
-
-        for &id in self.engines.keys() {
+        if self.labels.is_empty() {
+            panic!();
+        }
+        for id in self.engines.keys() {
+            let mut store = new_store(*id, "".to_owned());
+            if let Some(labels) = self.labels.get(id) {
+                for (key, value) in labels.iter() {
+                    let mut l = StoreLabel::new();
+                    l.key = key.clone();
+                    l.value = value.clone();
+                    store.labels.push(l);
+                }
+            }
             self.pd_client
-                .put_store(new_store(id, "".to_owned()))
+                .put_store(store)
                 .unwrap();
         }
+    }
+
+    pub fn add_label(&mut self, node_id: u64, key: &str, value: &str) {
+        self.labels.entry(node_id).or_default().insert(key.to_owned(), value.to_owned());
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {

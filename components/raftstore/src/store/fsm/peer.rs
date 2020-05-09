@@ -579,10 +579,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             SignificantMsg::StoreResolved { store_id, group_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
-                if state.status.get_mode() != ReplicationMode::DrAutoSync {
+                if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
                 }
-                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                if state.status().get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
                     return;
                 }
                 drop(state);
@@ -1567,13 +1567,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .lock()
                     .unwrap()
                     .group
-                    .group_id(peer.store_id);
-                if let Some(group_id) = group_id {
+                    .group_id(self.fsm.peer.replication_mode_version, peer.store_id);
+                if None != group_id && group_id != Some(0) {
+                    info!("updating group"; "peer_id" => peer.id, "group_id" => group_id.unwrap());
                     self.fsm
                         .peer
                         .raft_group
                         .raft
-                        .assign_commit_groups(&[(peer.id, group_id)]);
+                        .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
                 }
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
@@ -2266,7 +2267,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if prev_region.get_peers() != region.get_peers() {
             let mut state = self.ctx.global_replication_state.lock().unwrap();
-            state.calculate_commit_group(region.get_peers());
+            state.calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+            self.fsm.peer.raft_group.raft.clear_commit_group();
             self.fsm
                 .peer
                 .raft_group

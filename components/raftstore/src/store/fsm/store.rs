@@ -2111,18 +2111,18 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
         let mut state = self.ctx.global_replication_state.lock().unwrap();
-        if state.status.mode == status.mode {
+        if state.status().mode == status.mode {
             if status.get_mode() == ReplicationMode::Majority {
                 return;
             }
-            let exist_dr = state.status.get_dr_auto_sync();
+            let exist_dr = state.status().get_dr_auto_sync();
             let dr = status.get_dr_auto_sync();
             if exist_dr.state_id == dr.state_id && exist_dr.state == dr.state {
                 return;
             }
         }
         info!("updating replication mode"; "status" => ?status);
-        state.status = status;
+        state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
     }
