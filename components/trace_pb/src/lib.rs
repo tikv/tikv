@@ -9,52 +9,47 @@ mod protos {
 
 pub use crate::protos::trace_pb::*;
 
-#[cfg(feature = "protobuf-codec")]
 pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
-    use protobuf::{Message, RepeatedField};
-
-    let spans: Vec<_> = spans
-        .map(|span| {
-            let mut s = self::Span::default();
-            s.set_id(span.id.into());
-            if let Some(p) = span.parent {
-                s.set_parent_value(p.into());
-            }
-            s.set_start(span.elapsed_start);
-            s.set_end(span.elapsed_end);
-            s
-        })
-        .collect();
-
-    let mut resp = self::TracerResp::default();
-    resp.set_spans(RepeatedField::from_slice(&spans));
-
-    resp.write_to_bytes().unwrap()
-}
-
-#[cfg(feature = "prost-codec")]
-pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
+    #[cfg(feature = "protobuf-codec")]
+    use protobuf::Message;
+    #[cfg(feature = "prost-codec")]
     use prost::Message;
 
-    let spans: Vec<_> = spans
-        .map(|span| {
-            let mut s = self::Span::default();
-            s.id = span.id.into();
-            s.parent = if let Some(p) = span.parent {
-                Some(self::span::Parent::ParentValue(p.into()))
-            } else {
-                Some(self::span::Parent::ParentNone(true))
-            };
-            s.start = span.elapsed_start;
-            s.end = span.elapsed_end;
-            s
-        })
-        .collect();
-
     let mut resp = self::TracerResp::default();
-    resp.spans = spans;
+    resp.set_spans(
+        spans
+            .map(|span| {
+                let mut s = self::Span::default();
 
-    let mut res = vec![];
-    let _ = resp.encode(&mut res);
-    res
+                s.set_id(span.id.into());
+                s.set_start(span.elapsed_start);
+                s.set_end(span.elapsed_end);
+                s.set_event_id(span.tag);
+
+                #[cfg(feature = "prost-codec")]
+                if let Some(p) = span.parent {
+                    s.parent = Some(self::span::Parent::ParentValue(p.into()));
+                } else {
+                    s.parent = Some(self::span::Parent::ParentNone(true));
+                };
+                #[cfg(feature = "protobuf-codec")]
+                if let Some(p) = span.parent {
+                    s.set_parent_value(p.into());
+                }
+                
+                s
+            })
+            .collect()
+    );
+
+    #[cfg(feature = "protobuf-codec")]
+    {
+        resp.write_to_bytes().unwrap()
+    }
+    #[cfg(feature = "prost-codec")]
+    {
+        let mut res = vec![];
+        let _ = resp.encode(&mut res);
+        res
+    }
 }
