@@ -8,7 +8,7 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -21,12 +21,16 @@ use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
     RaftSnapshotData,
 };
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
+};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -37,7 +41,9 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
+};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -178,7 +184,7 @@ pub struct Peer {
     pub peer_heartbeats: HashMap<u64, Instant>,
 
     proposals: ProposalQueue,
-    apply_proposals: Vec<Proposal<RocksEngine>>,
+    apply_proposals: Vec<Proposal<RocksSnapshot>>,
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
@@ -250,6 +256,8 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    pub replication_mode_version: u64,
+
     /// The known newest conf version and its corresponding peer list
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
@@ -260,7 +268,7 @@ impl Peer {
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -333,6 +341,7 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            replication_mode_version: 0,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
         };
@@ -343,6 +352,28 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    /// Sets commit group to the peer.
+    pub fn init_commit_group(&mut self, state: &mut GlobalReplicationState) {
+        debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        if state.status.get_mode() == ReplicationMode::Majority {
+            self.raft_group.raft.enable_group_commit(false);
+            self.replication_mode_version = 0;
+            return;
+        }
+        self.raft_group.raft.enable_group_commit(true);
+        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
+        if self.get_store().region().get_peers().is_empty() {
+            return;
+        }
+        if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+            return;
+        }
+        state.calculate_commit_group(self.get_store().region().get_peers());
+        self.raft_group
+            .raft
+            .assign_commit_groups(&state.group_buffer);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -731,7 +762,7 @@ impl Peer {
     ) -> Result<()> {
         fail_point!(
             "step_message_3_1",
-            { self.peer.get_store_id() == 3 && self.region_id == 1 },
+            self.peer.get_store_id() == 3 && self.region_id == 1,
             |_| Ok(())
         );
         if self.is_leader() && m.get_from() != INVALID_ID {
@@ -1088,7 +1119,7 @@ impl Peer {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
-    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksEngine>> {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal<RocksSnapshot>> {
         if self.apply_proposals.is_empty() {
             return None;
         }
@@ -1687,7 +1718,7 @@ impl Peer {
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
     ) -> bool {
@@ -1748,7 +1779,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -1835,8 +1866,7 @@ impl Peer {
                 return Ok(());
             }
         }
-        let promoted_commit_index =
-            progress.maximal_committed_index(self.raft_group.raft.quorum_fn());
+        let promoted_commit_index = progress.maximal_committed_index().0;
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
@@ -1948,7 +1978,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
@@ -2012,7 +2042,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2377,7 +2407,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 
@@ -2462,7 +2492,7 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<RocksEngine> {
+    ) -> ReadResponse<RocksSnapshot> {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,
@@ -2529,6 +2559,31 @@ impl Peer {
         None
     }
 
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+        if self.replication_mode_version == 0 {
+            return None;
+        }
+        let mut status = RegionReplicationStatus::default();
+        status.state_id = self.replication_mode_version;
+        let res = self.raft_group.raft.check_group_commit_consistent();
+        if Some(true) != res {
+            let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+            if self.get_store().applied_index_term() >= self.term() {
+                for (id, p) in self.raft_group.raft.prs().voters() {
+                    buffer.push((*id, p.commit_group_id, p.matched));
+                }
+            };
+            info!("still not reach integrity over label"; "region_id" => self.region_id, "peer_id" => self.peer.id, "progress" => ?buffer);
+        }
+        let state = match res {
+            Some(true) => RegionReplicationState::IntegrityOverLabel,
+            Some(false) => RegionReplicationState::SimpleMajority,
+            None => RegionReplicationState::Unknown,
+        };
+        status.set_state(state);
+        Some(status)
+    }
+
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
@@ -2540,6 +2595,7 @@ impl Peer {
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
+            replication_status: self.region_replication_status(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
@@ -2919,7 +2975,7 @@ where
         msg: &RaftCmdRequest,
         region: &metapb::Region,
         read_index: Option<u64>,
-    ) -> ReadResponse<E> {
+    ) -> ReadResponse<E::Snapshot> {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
