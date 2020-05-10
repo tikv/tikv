@@ -331,7 +331,7 @@ where
     notifier: Notifier<E>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
-    apply_res: Vec<ApplyRes<E>>,
+    apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -2564,14 +2564,14 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<E>
+pub struct ApplyRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E::Snapshot>>,
+    pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
 }
 
@@ -2580,7 +2580,7 @@ pub enum TaskRes<E>
 where
     E: KvEngine,
 {
-    Apply(ApplyRes<E>),
+    Apply(ApplyRes<E::Snapshot>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -3481,7 +3481,7 @@ mod tests {
 
     fn fetch_apply_res(
         receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksEngine> {
+    ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
