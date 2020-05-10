@@ -11,7 +11,7 @@ use futures03::prelude::*;
 use rand::prelude::*;
 use tokio::sync::Semaphore;
 
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, span as spanpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
@@ -430,7 +430,28 @@ impl<E: Engine> Endpoint<E> {
             .or_else(|e| Ok(make_error_response(e)))
             .map(|mut resp: coppb::Response| {
                 let finished_spans = rx.collect();
-                resp.set_spans(unimplemented!());
+                let spans = finished_spans.into_iter().map(|span| {
+                    let mut s = spanpb::Span::default();
+
+                    s.set_id(span.id.into());
+                    s.set_start(span.elapsed_start);
+                    s.set_end(span.elapsed_end);
+                    s.set_event_id(span.tag);
+
+                    #[cfg(feature = "prost-codec")]
+                    if let Some(p) = span.parent {
+                        s.parent = Some(spanpb::Parent::ParentValue(p.into()));
+                    } else {
+                        s.parent = Some(spanpb::Parent::ParentNone(true));
+                    };
+                    #[cfg(feature = "protobuf-codec")]
+                    if let Some(p) = span.parent {
+                        s.set_parent_value(p.into());
+                    }
+
+                    s
+                });
+                resp.set_spans(spans.collect());
                 resp
             })
     }
