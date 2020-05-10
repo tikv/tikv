@@ -489,8 +489,6 @@ mod tests {
     use std::time::Duration;
     use std::{fs, sync, thread};
 
-    use libc;
-
     use super::*;
 
     #[test]
