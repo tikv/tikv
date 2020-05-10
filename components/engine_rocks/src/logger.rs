@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
 
+// TODO(yiwu): abstract the Logger interface.
 #[derive(Default)]
 pub struct RocksdbLogger;
 
