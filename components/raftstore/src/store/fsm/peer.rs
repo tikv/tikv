@@ -107,8 +107,6 @@ pub struct PeerFsm<E: KvEngine> {
     batch_req_builder: BatchRaftCmdRequestBuilder,
 }
 
-const MAX_BATCH_KEY_NUM: usize = 128;
-
 pub struct BatchRaftCmdRequestBuilder {
     raft_entry_max_size: f64,
     batch_req_size: u32,
