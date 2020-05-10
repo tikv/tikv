@@ -428,6 +428,11 @@ impl<E: Engine> Endpoint<E> {
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
+            .map(|mut resp: coppb::Response| {
+                let finished_spans = rx.collect();
+                resp.set_spans(unimplemented!());
+                resp
+            })
     }
 
     /// The real implementation of handling a stream request.

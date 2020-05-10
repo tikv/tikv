@@ -1966,7 +1966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c3b73d03dde2f54154d396f44dc9a25c3e8bdb79"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#95ab8b19c0b8edb4d8e20c2122ceaf5235ac30b4"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4747,6 +4747,7 @@ dependencies = [
  "fxhash",
  "grpcio",
  "hex 0.4.2",
+ "kvproto",
  "lazy_static",
  "libc",
  "log",
@@ -5597,8 +5598,3 @@ dependencies = [
  "glob",
  "libc",
 ]
-
-[[patch.unused]]
-name = "kvproto"
-version = "0.0.2"
-source = "git+https://github.com/renkai/kvproto?branch=minitrace#95ab8b19c0b8edb4d8e20c2122ceaf5235ac30b4"

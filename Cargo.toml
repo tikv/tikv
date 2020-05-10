@@ -179,6 +179,8 @@ protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 fail = { git = "https://github.com/tikv/fail-rs.git", rev = "2cf1175a1a5cc2c70bd20ebd45313afd69b558fc" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
+
+[patch.'https://github.com/pingcap/kvproto.git']
 kvproto = {git = "https://github.com/renkai/kvproto",branch = "minitrace"}
 
 [target.'cfg(target_os = "linux")'.dependencies]
