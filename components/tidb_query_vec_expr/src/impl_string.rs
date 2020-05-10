@@ -492,6 +492,18 @@ pub fn to_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn from_base64(base64_bytes: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match base64_bytes.as_ref() {
+        Some(bytes) => match base64::decode(bytes) {
+            Ok(data) => Ok(Some(data)),
+            Err(_) => Ok(Some(Vec::new())),
+        },
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,6 +547,7 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
@@ -1915,6 +1928,26 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(param)
                 .evaluate::<Bytes>(ScalarFuncSig::ToBase64)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+    }
+
+    #[test]
+    fn test_from_base64() {
+        let cases = vec![
+            ("", ""),
+            (
+                "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX4=",
+                " !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+            )
+        ];
+        for (arg, expected) in cases {
+            let param = Some(arg.to_string().into_bytes());
+            let expected_output = Some(expected.to_string().into_bytes());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(param)
+                .evaluate::<Bytes>(ScalarFuncSig::FromBase64)
                 .unwrap();
             assert_eq!(output, expected_output);
         }
