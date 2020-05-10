@@ -89,13 +89,21 @@ where
 }
 
 /// A router that routes messages to the raftstore
-#[derive(Clone)]
 pub struct ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
-    router: RaftRouter<E>,
-    local_reader: LocalReader<RaftRouter<E>, E>,
+    router: RaftRouter<E::Snapshot>,
+    local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+}
+
+impl<E> Clone for ServerRaftStoreRouter<E> where E: KvEngine {
+    fn clone(&self) -> Self {
+        ServerRaftStoreRouter {
+            router: self.router.clone(),
+            local_reader: self.local_reader.clone(),
+        }
+    }
 }
 
 impl<E> ServerRaftStoreRouter<E>
@@ -104,8 +112,8 @@ where
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<E>,
-        local_reader: LocalReader<RaftRouter<E>, E>,
+        router: RaftRouter<E::Snapshot>,
+        local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
     ) -> ServerRaftStoreRouter<E> {
         ServerRaftStoreRouter {
             router,
@@ -144,7 +152,7 @@ where
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if LocalReader::<RaftRouter<E>, E>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {

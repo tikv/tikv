@@ -10,7 +10,7 @@ use std::{cmp, io};
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -413,7 +413,7 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
+    router: RaftRouter<E::Snapshot>,
     db: E,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -438,7 +438,7 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<E>,
+        router: RaftRouter<E::Snapshot>,
         db: E,
         scheduler: Scheduler<Task<E>>,
         store_heartbeat_interval: Duration,
@@ -495,7 +495,7 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(&router, region_id, epoch, peer, req, callback)
+                    send_admin_request::<E>(&router, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
                     warn!("failed to ask split";
@@ -542,7 +542,7 @@ where
                         );
                         let region_id = region.get_id();
                         let epoch = region.take_region_epoch();
-                        send_admin_request(&router, region_id, epoch, peer, req, callback)
+                        send_admin_request::<E>(&router, region_id, epoch, peer, req, callback)
                     }
                     // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
                     // In this situation, PD version check would refuse `ask_batch_split`.
@@ -819,7 +819,7 @@ where
                         change_peer.get_change_type(),
                         change_peer.take_peer(),
                     );
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                    send_admin_request::<E>(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
@@ -833,7 +833,7 @@ where
                         "to_peer" => ?transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                    send_admin_request::<E>(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_split_region() {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["split region"])
@@ -862,7 +862,7 @@ where
                     let merge = resp.take_merge();
                     info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
                     let req = new_merge_request(merge);
-                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
+                    send_admin_request::<E>(&router, region_id, epoch, peer, req, Callback::None)
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -1129,7 +1129,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request<E>(
-    router: &RaftRouter<E>,
+    router: &RaftRouter<E::Snapshot>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1157,7 +1157,7 @@ fn send_admin_request<E>(
 
 /// Sends merge fail message to gc merge source.
 fn send_merge_fail(
-    router: &RaftRouter<impl KvEngine>,
+    router: &RaftRouter<impl Snapshot>,
     source_region_id: u64,
     target: metapb::Peer,
 ) {
@@ -1178,7 +1178,7 @@ fn send_merge_fail(
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter<impl KvEngine>,
+    router: &RaftRouter<impl Snapshot>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

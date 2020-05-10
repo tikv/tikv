@@ -3,7 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -37,7 +37,7 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<E: KvEngine> CasualRouter<E> for RaftRouter<E> {
+impl<E: KvEngine> CasualRouter<E> for RaftRouter<E::Snapshot> {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<E::Snapshot>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
@@ -48,17 +48,17 @@ impl<E: KvEngine> CasualRouter<E> for RaftRouter<E> {
     }
 }
 
-impl<E: KvEngine> ProposalRouter<E::Snapshot> for RaftRouter<E> {
+impl<S: Snapshot> ProposalRouter<S> for RaftRouter<S> {
     #[inline]
     fn send(
         &self,
-        cmd: RaftCommand<E::Snapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<E::Snapshot>>> {
+        cmd: RaftCommand<S>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl StoreRouter for RaftRouter<RocksEngine> {
+impl StoreRouter for RaftRouter<RocksSnapshot> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {

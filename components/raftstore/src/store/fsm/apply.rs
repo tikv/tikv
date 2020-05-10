@@ -296,7 +296,7 @@ pub enum Notifier<E>
 where
     E: KvEngine,
 {
-    Router(RaftRouter<E>),
+    Router(RaftRouter<E::Snapshot>),
     #[cfg(test)]
     Sender(Sender<PeerMsg<E::Snapshot>>),
 }
