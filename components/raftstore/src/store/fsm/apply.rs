@@ -2576,11 +2576,11 @@ where
 }
 
 #[derive(Debug)]
-pub enum TaskRes<E>
+pub enum TaskRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Apply(ApplyRes<E::Snapshot>),
+    Apply(ApplyRes<S>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
