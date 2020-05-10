@@ -6,14 +6,14 @@ use std::time::{Duration, Instant};
 use futures::{Future, Sink, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
-use kvproto::diagnosticspb::{
-    Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
-    ServerInfoType,
-};
 #[cfg(feature = "prost-codec")]
 use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
+use kvproto::diagnosticspb::{
+    Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
+    ServerInfoType,
+};
 
 use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -30,13 +30,19 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new(pool: CpuPool, log_file: String, slow_log_file: String, security_mgr: Arc<SecurityManager>) -> Self {
+    pub fn new(
+        pool: CpuPool,
+        log_file: String,
+        slow_log_file: String,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Self {
         Service {
             pool,
             log_file,
             slow_log_file,
             security_mgr,
         }
+    }
 }
 
 impl Diagnostics for Service {
@@ -805,16 +811,17 @@ mod log {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
-    use chrono::{DateTime, NaiveDateTime};
+    use chrono::DateTime;
     use futures::stream::{iter_ok, Stream};
     use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
+    use lazy_static::lazy_static;
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
+    use regex::Regex;
     use rev_lines;
-    use tikv_util::logger::DATETIME_ROTATE_SUFFIX;
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -1003,6 +1010,10 @@ mod log {
         }
     }
 
+    lazy_static! {
+        static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
+    }
+
     // Returns true if target 'filename' is part of given 'log_file'
     fn is_log_file(filename: &str, log_file: &str) -> bool {
         // for not rotated nomral file
@@ -1012,7 +1023,7 @@ mod log {
 
         // for rotated *.<rotated-datetime> file
         if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-            if NaiveDateTime::parse_from_str(res, DATETIME_ROTATE_SUFFIX).is_ok() {
+            if NUM_REGEX.is_match(res) {
                 return true;
             }
         }
