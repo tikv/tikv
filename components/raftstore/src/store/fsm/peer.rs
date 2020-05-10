@@ -112,7 +112,7 @@ pub struct BatchRaftCmdRequestBuilder {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<RocksEngine>, usize)>,
+    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -290,7 +290,7 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
+    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksSnapshot>) {
         let req_num = req.get_requests().len();
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = req.take_requests().into();
@@ -321,7 +321,7 @@ impl BatchRaftCmdRequestBuilder {
     fn build(
         &mut self,
         metric: &mut RaftProposeMetrics,
-    ) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
+    ) -> Option<(RaftCmdRequest, Callback<RocksSnapshot>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
