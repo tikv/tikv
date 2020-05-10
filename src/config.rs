@@ -1182,15 +1182,6 @@ impl RaftDbConfig {
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         opts.set_info_log(RaftDBLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
         opts.set_use_direct_io_for_flush_and_compaction(
@@ -2089,10 +2080,11 @@ impl TiKvConfig {
             .into());
         }
         if self.rocksdb.info_log_dir.is_empty() {
-            self.rocksdb.info_log_dir = self.storage.data_dir.clone();
+            self.rocksdb.info_log_dir =
+                config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
         }
         if self.raftdb.info_log_dir.is_empty() {
-            self.raftdb.info_log_dir = self.storage.data_dir.clone();
+            self.raftdb.info_log_dir = self.raft_store.raftdb_path.clone();
         }
 
         self.rocksdb.validate()?;

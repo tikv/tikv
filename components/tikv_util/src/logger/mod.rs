@@ -328,12 +328,12 @@ impl slog::Value for LogCost {
 pub struct LogDispatcher<N: Drain, R: Drain, S: Drain, T: Drain> {
     normal: N,
     rocksdb: R,
-    slow: Option<S>,
     raftdb: T,
+    slow: Option<S>,
 }
 
 impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
-    pub fn new(normal: N, rocksdb: R, slow: Option<S>, raftdb: T) -> Self {
+    pub fn new(normal: N, rocksdb: R, raftdb: T, slow: Option<S>) -> Self {
         Self {
             normal,
             rocksdb,
@@ -754,7 +754,7 @@ mod tests {
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
         let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
         let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
-        let drain = LogDispatcher::new(normal, rocksdb, Some(slow), raftdb).fuse();
+        let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
             inner: drain,

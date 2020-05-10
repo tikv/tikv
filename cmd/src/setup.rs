@@ -41,8 +41,6 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    assert!(config.rocksdb.info_log_dir.is_empty());
-    assert!(config.raftdb.info_log_dir.is_empty());
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
@@ -121,8 +119,8 @@ pub fn initial_logger(config: &TiKvConfig) {
         let drainer = logger::LogDispatcher::new(
             drainer,
             rocksdb_log_drainer,
-            slow_log_drainer,
             raftdb_log_drainer,
+            slow_log_drainer,
         );
         logger::init_log(
             drainer,
