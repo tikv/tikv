@@ -106,7 +106,7 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot>, E> SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -120,7 +120,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {

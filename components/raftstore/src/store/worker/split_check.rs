@@ -169,7 +169,7 @@ pub struct Runner<S> {
     cfg: Config,
 }
 
-impl<S: CasualRouter<RocksEngine>> Runner<S> {
+impl<S: CasualRouter<RocksSnapshot>> Runner<S> {
     pub fn new(
         engine: RocksEngine,
         router: S,
@@ -318,7 +318,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     }
 }
 
-impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
+impl<S: CasualRouter<RocksSnapshot>> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
