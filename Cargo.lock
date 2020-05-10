@@ -2203,6 +2203,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "minitrace"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#18f6272c05cdf2107fa7299ed55e547fc1e0e6ca"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "libc",
+ "minitrace-attribute",
+ "pin-project",
+ "time 0.1.42",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#18f6272c05cdf2107fa7299ed55e547fc1e0e6ca"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4623,6 +4646,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "mime",
+ "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -5573,3 +5597,8 @@ dependencies = [
  "glob",
  "libc",
 ]
+
+[[patch.unused]]
+name = "kvproto"
+version = "0.0.2"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#95ab8b19c0b8edb4d8e20c2122ceaf5235ac30b4"

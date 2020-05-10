@@ -31,6 +31,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use minitrace::future::Instrument;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -415,9 +416,14 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let result_of_future = self
-            .parse_request(req, peer, false)
-            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
+        let (tx, rx) = minitrace::Collector::new_default();
+        let span_root = minitrace::new_span_root(tx, tikv_util::trace::Trace::Copr);
+        let result_of_future =
+            self.parse_request(req, peer, false)
+                .map(|(handler_builder, req_ctx)| {
+                    self.handle_unary_request(req_ctx, handler_builder)
+                        .instrument(span_root)
+                });
 
         future::result(result_of_future)
             .flatten()
