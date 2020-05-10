@@ -139,15 +139,22 @@ impl StoreMeta {
     }
 }
 
-#[derive(Clone)]
 pub struct RaftRouter<E: KvEngine> {
-    pub router: BatchRouter<PeerFsm<E>, StoreFsm>,
+    pub router: BatchRouter<PeerFsm<E::Snapshot>, StoreFsm>,
+}
+
+impl<E> Clone for RaftRouter<E> where E: KvEngine {
+    fn clone(&self) -> Self {
+        RaftRouter {
+            router: self.router.clone(),
+        }
+    }
 }
 
 impl<E: KvEngine> Deref for RaftRouter<E> {
-    type Target = BatchRouter<PeerFsm<E>, StoreFsm>;
+    type Target = BatchRouter<PeerFsm<E::Snapshot>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<E>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<E::Snapshot>, StoreFsm> {
         &self.router
     }
 }
@@ -477,7 +484,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 pub struct RaftPoller<T: 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
+    peer_msg_buf: Vec<PeerMsg<RocksSnapshot>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
@@ -487,7 +494,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -614,7 +621,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
+impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
@@ -671,7 +678,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine>) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksSnapshot>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -714,7 +721,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -769,7 +776,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksSnapshot>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -933,7 +940,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksEngine>, StoreFsm> for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -1005,7 +1012,7 @@ struct Workers {
 }
 
 pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm<RocksEngine>, StoreFsm>,
+    system: BatchSystem<PeerFsm<RocksSnapshot>, StoreFsm>,
     apply_router: ApplyRouter,
     apply_system: ApplyBatchSystem,
     router: RaftRouter<RocksEngine>,
@@ -1109,7 +1116,7 @@ impl RaftBatchSystem {
     >(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<SenderFsmPair<RocksEngine>>,
+        region_peers: Vec<SenderFsmPair<RocksSnapshot>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {

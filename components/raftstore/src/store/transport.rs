@@ -19,7 +19,7 @@ pub trait Transport: Send + Clone {
 ///
 /// Messages are not guaranteed to be delivered by this trait.
 pub trait CasualRouter<E: KvEngine> {
-    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage<E::Snapshot>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -39,7 +39,7 @@ pub trait StoreRouter {
 
 impl<E: KvEngine> CasualRouter<E> for RaftRouter<E> {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E::Snapshot>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -71,8 +71,8 @@ impl StoreRouter for RaftRouter<RocksEngine> {
     }
 }
 
-impl<E: KvEngine> CasualRouter<E> for mpsc::SyncSender<(u64, CasualMessage<E>)> {
-    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
+impl<E: KvEngine> CasualRouter<E> for mpsc::SyncSender<(u64, CasualMessage<E::Snapshot>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E::Snapshot>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

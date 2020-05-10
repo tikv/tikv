@@ -292,21 +292,30 @@ where
     }
 }
 
-#[derive(Clone)]
 pub enum Notifier<E>
 where
     E: KvEngine,
 {
     Router(RaftRouter<E>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<E>>),
+    Sender(Sender<PeerMsg<E::Snapshot>>),
+}
+
+impl<E> Clone for Notifier<E> where E: KvEngine {
+    fn clone(&self) -> Self {
+        match self {
+            Notifier::Router(v) => Notifier::Router(v.clone()),
+            #[cfg(test)]
+            Notifier::Sender(v) => Notifier::Sender(v.clone()),
+        }
+    }
 }
 
 impl<E> Notifier<E>
 where
     E: KvEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<E::Snapshot>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -3480,7 +3489,7 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {

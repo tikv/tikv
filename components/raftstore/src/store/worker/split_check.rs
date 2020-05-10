@@ -5,7 +5,7 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -336,7 +336,7 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
 fn new_split_region(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksEngine> {
+) -> CasualMessage<RocksSnapshot> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
