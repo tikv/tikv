@@ -57,8 +57,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
-    StoreTick,
+    util, Callback, CasualMessage, GlobalReplicationState, PeerMsg, RaftCommand, SignificantMsg,
+    SnapManager, StoreMsg, StoreTick,
 };
 
 use crate::Result;
@@ -200,6 +200,13 @@ impl<E: KvEngine> RaftRouter<E> {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
         });
     }
+
+    /// Broadcasts resolved result to all regions.
+    pub fn report_resolved(&self, store_id: u64, group_id: u64) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+        })
+    }
 }
 
 pub struct PollContext<T, C: 'static> {
@@ -224,6 +231,7 @@ pub struct PollContext<T, C: 'static> {
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
+    pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub engines: KvEngines<RocksEngine, RocksEngine>,
@@ -563,7 +571,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for (ready, invoke_ctx) in ready_res.drain(..) {
                 let region_id = invoke_ctx.region_id;
                 if peers[batch_pos].region_id() == region_id {
@@ -754,6 +762,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
+    global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -777,6 +786,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
+        let mut replication_state = self.global_replication_state.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -815,6 +825,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 region,
             ));
+            peer.peer.init_commit_group(&mut *replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -852,6 +863,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 &region,
             )?;
+            peer.peer.init_commit_group(&mut *replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -950,6 +962,7 @@ where
             timer: SteadyTimer::default(),
             trans: self.trans.clone(),
             pd_client: self.pd_client.clone(),
+            global_replication_state: self.global_replication_state.clone(),
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
@@ -1023,6 +1036,7 @@ impl RaftBatchSystem {
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1062,6 +1076,7 @@ impl RaftBatchSystem {
             coprocessor_host: workers.coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
+            global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
@@ -1516,7 +1531,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         // New created peers should know it's learner or not.
-        let (tx, peer) = PeerFsm::replicate(
+        let (tx, mut peer) = PeerFsm::replicate(
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
@@ -1524,6 +1539,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             region_id,
             target.clone(),
         )?;
+        let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+        peer.peer.init_commit_group(&mut *replication_state);
+        drop(replication_state);
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         meta.regions

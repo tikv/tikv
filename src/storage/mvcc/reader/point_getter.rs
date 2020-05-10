@@ -153,7 +153,7 @@ impl<S: Snapshot> PointGetter<S> {
     /// Take out and reset the statistics collected so far.
     #[inline]
     pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
     }
 
     /// Whether we met newer ts data.
