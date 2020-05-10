@@ -560,7 +560,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let mut year = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
         let mut days = try_opt!(self.children[1].eval_int(ctx, row)) as u32;
-        if days <= 0 || year > 9999 {
+        if year > 9999 {
             year = 10000 // for returning error
         }
         if year < 70 {
