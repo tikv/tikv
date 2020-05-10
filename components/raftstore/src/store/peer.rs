@@ -58,7 +58,7 @@ use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
