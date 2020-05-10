@@ -492,6 +492,12 @@ pub fn to_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn lower(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|b| b.to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1917,6 +1923,39 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::ToBase64)
                 .unwrap();
             assert_eq!(output, expected_output);
+        }
+    }
+
+    #[test]
+    fn test_lower() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("café".as_bytes().to_vec()),
+                Some("café".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 }
