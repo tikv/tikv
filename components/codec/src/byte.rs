@@ -338,6 +338,16 @@ impl MemComparableByteCodec {
     /// descending decoding, which performs better than inlining a flag.
     ///
     /// Please refer to `try_decode_first` for the meaning of return values, panics and errors.
+    ///
+    /// # Safety
+    ///
+    /// `src_ptr` and `src_len`, and `dest_ptr` and dest_len`, must correspond to
+    /// the pointers and lengths of allocated slices.
+    ///
+    /// The regions of these pointers may overlap, but be careful not to
+    /// construct them by unsafely constructing aliasing mutable Rust slices,
+    /// which is undefined behavior. The `try_decode_first_in_place` functions
+    /// exist to correctly call this function with overlapping slices.
     #[inline]
     unsafe fn try_decode_first_internal<T: MemComparableCodecHelper>(
         mut src_ptr: *const u8,
