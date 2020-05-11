@@ -295,7 +295,7 @@ pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<()> {
 }
 
 pub fn fuzz_coprocessor_codec_row_v2_binary_search(data: &[u8]) -> Result<()> {
-    use tidb_query_datatype::codec::row::v2::RowSlice;
+    use tidb_query::codec::row::v2::RowSlice;
 
     let mut cursor = Cursor::new(data);
     let id = cursor.read_as_i64()?;
