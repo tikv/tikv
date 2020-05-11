@@ -656,6 +656,7 @@ impl TiKVServer {
         let diag_service = DiagnosticsService::new(
             pool,
             self.config.log_file.clone(),
+            self.config.slow_log_file.clone(),
             self.security_mgr.clone(),
         );
         if servers
