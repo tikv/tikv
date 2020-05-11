@@ -41,7 +41,7 @@ num-traits = "0.2"
 num-derive = "0.3"
 openssl = "0.10"
 ordered-float = "1.0"
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 protobuf = "2"
 quick-error = "1.2.2"
 rand = "0.7.3"
