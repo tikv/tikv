@@ -1960,18 +1960,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
 
 [[package]]
-name = "libflate"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9135df43b1f5d0e333385cb6e7897ecd1a43d7d11b91ac003f4d2c2d2401fdd"
-dependencies = [
- "adler32",
- "crc32fast",
- "rle-decode-fast",
- "take_mut",
-]
-
-[[package]]
 name = "libfuzzer-sys"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2772,20 +2760,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "procfs"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e767ab205e4b292ea2c8e9fa454efe7e66e35026432eef34fed7daa763136d09"
-dependencies = [
- "bitflags",
- "byteorder",
- "hex 0.4.2",
- "lazy_static",
- "libc",
- "libflate",
-]
-
-[[package]]
 name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6e8afc3c665a56e#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
@@ -2817,7 +2791,6 @@ dependencies = [
  "fnv",
  "lazy_static",
  "libc",
- "procfs",
  "protobuf",
  "reqwest",
  "spin",
@@ -3361,12 +3334,6 @@ name = "rgb"
 version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
-
-[[package]]
-name = "rle-decode-fast"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 
 [[package]]
 name = "rocksdb"
@@ -4424,6 +4391,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "rev_lines",
  "serde",
  "serde_derive",

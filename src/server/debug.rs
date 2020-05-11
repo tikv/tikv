@@ -3,7 +3,6 @@
 use std::cmp::Ordering;
 use std::iter::FromIterator;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
@@ -21,7 +20,7 @@ use engine_traits::{
     WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType, Module};
+use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
@@ -29,7 +28,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
+use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::Iterator as EngineIterator;
 use engine_rocks::RangeProperties;
@@ -45,8 +44,6 @@ use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
-
-const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -136,14 +133,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger {
     engines: Engines,
-    gc_worker_cfg: Option<GcWorkerConfigManager>,
+    cfg_controller: ConfigController,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+    pub fn new(engines: Engines, cfg_controller: ConfigController) -> Debugger {
         Debugger {
             engines,
-            gc_worker_cfg,
+            cfg_controller,
         }
     }
 
@@ -719,115 +716,13 @@ impl Debugger {
             })
     }
 
-    fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-        let rocksdb = self.get_db_from_type(db)?;
-        let handle = box_try!(get_cf_handle(rocksdb, cf_name));
-        let opt = rocksdb.get_options_cf(handle);
-        let capacity = ReadableSize::from_str(config_value);
-        if let Err(e) = capacity {
-            return Err(Error::InvalidArgument(format!(
-                "bad block cache size: {:?}",
-                e
-            )));
+    pub fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
+        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
+            return Err(Error::Other(
+                format!("failed to update config, err: {:?}", e).into(),
+            ));
         }
-        let cache_size = capacity.unwrap().0;
-        box_try!(opt.set_block_cache_capacity(cache_size));
-        CONFIG_ROCKSDB_GAUGE
-            .with_label_values(&[cf_name, "block_cache_size"])
-            .set(cache_size as f64);
         Ok(())
-    }
-
-    pub fn modify_tikv_config(
-        &self,
-        module: Module,
-        config_name: &str,
-        config_value: &str,
-    ) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-
-        match module {
-            Module::Storage => {
-                if config_name != "block_cache.capacity" {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                if !self.engines.shared_block_cache {
-                    return Err(Error::InvalidArgument(
-                        "shared block cache is disabled".to_string(),
-                    ));
-                }
-                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
-                // the size through any of them. Here we change it through default CF in kvdb.
-                // A better way to do it is to hold the cache reference somewhere, and use it to
-                // change cache size.
-                self.modify_block_cache_size(DBType::Kv, CF_DEFAULT, config_value)
-            }
-            Module::Kvdb | Module::Raftdb => {
-                let db = if module == Module::Kvdb {
-                    DBType::Kv
-                } else {
-                    DBType::Raft
-                };
-                let rocksdb = self.get_db_from_type(db)?;
-                let vec: Vec<&str> = config_name.split('.').collect();
-                if vec.len() == 1 {
-                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-                } else if vec.len() == 2 {
-                    let cf = vec[0];
-                    let config_name = vec[1];
-                    validate_db_and_cf(db, cf)?;
-
-                    // currently we can't modify block_cache_size via set_options_cf
-                    if config_name == "block_cache_size" {
-                        if self.engines.shared_block_cache {
-                            return Err(Error::InvalidArgument(
-                                "shared block cache is enabled, change cache size through \
-                                 block_cache.capacity in storage module instead"
-                                    .to_string(),
-                            ));
-                        }
-                        self.modify_block_cache_size(db, cf, config_value)?
-                    } else {
-                        let handle = box_try!(get_cf_handle(rocksdb, cf));
-                        let mut opt = Vec::new();
-                        opt.push((config_name, config_value));
-                        box_try!(rocksdb.set_options_cf(handle, &opt));
-                        if let Ok(v) = config_value.parse::<f64>() {
-                            CONFIG_ROCKSDB_GAUGE
-                                .with_label_values(&[cf, config_name])
-                                .set(v);
-                        }
-                    }
-                } else {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                Ok(())
-            }
-            Module::Server => {
-                if config_name == GC_IO_LIMITER_CONFIG_NAME {
-                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        self.gc_worker_cfg.as_ref().expect("must be some").update(
-                            move |cfg: &mut GcConfig| {
-                                cfg.max_write_bytes_per_sec = bytes_per_sec;
-                            },
-                        );
-                        return Ok(());
-                    }
-                }
-                Err(Error::InvalidArgument(format!(
-                    "bad argument: {} {}",
-                    config_name, config_value
-                )))
-            }
-            _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        }
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -1660,7 +1555,7 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines, Some(Default::default()))
+        Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger {
@@ -2095,29 +1990,6 @@ mod tests {
     }
 
     #[test]
-    fn test_modify_tikv_config() {
-        let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "max_background_jobs", "8")
-            .unwrap();
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 8);
-
-        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "default.disable_auto_compactions", "true")
-            .unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
-    }
-
-    #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
         let engine = RocksEngine::from_ref(&debugger.engines.kv);
@@ -2395,19 +2267,5 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
-    }
-
-    #[test]
-    fn test_modify_gc_io_limit() {
-        let debugger = new_debugger();
-        debugger
-            .modify_tikv_config(Module::Server, "gc", "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap();
     }
 }

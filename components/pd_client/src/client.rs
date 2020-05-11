@@ -74,6 +74,11 @@ impl RpcClient {
         self.leader_client.get_leader()
     }
 
+    /// Re-establishes connection with PD leader in synchronized fashion.
+    pub fn reconnect(&self) -> Result<()> {
+        self.leader_client.reconnect()
+    }
+
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option() -> CallOption {

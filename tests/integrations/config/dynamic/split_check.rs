@@ -37,7 +37,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),
@@ -65,7 +65,7 @@ fn test_update_split_check_config() {
     let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let engine = tmp_engine(&cfg.storage.data_dir);
-    let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
+    let (cfg_controller, mut worker) = setup(cfg.clone(), engine);
     let scheduler = worker.scheduler();
 
     let cop_config = cfg.coprocessor.clone();
