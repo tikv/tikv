@@ -385,6 +385,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::Elt
+            | ScalarFuncSig::MakeSet
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -865,6 +866,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         MonthName => month_name,
+        MakeSet => make_set,
         DayName => day_name,
         Bin => bin,
         Concat => concat,
