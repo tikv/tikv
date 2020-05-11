@@ -1335,9 +1335,11 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
+            let mut log_size = 0;
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
+                log_size += entry.get_data().len() as i64;
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
@@ -1402,6 +1404,7 @@ impl Peer {
                 }
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
+                APPLY_PENDING_BYTES_GAUGE.add(log_size);
                 let apply = Apply::new(
                     self.region_id,
                     self.term(),

@@ -2975,6 +2975,11 @@ where
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
+                    let mut log_size = 0;
+                    for entry in apply.entries.iter() {
+                        log_size += entry.get_data().len() as i64;
+                    }
+                    APPLY_PENDING_BYTES_GAUGE.sub(log_size);
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3339,6 +3344,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
         tx,
         Box::new(ControlFsm),
     );
+    APPLY_PENDING_BYTES_GAUGE.set(0);
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
