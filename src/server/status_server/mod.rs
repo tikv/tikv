@@ -823,9 +823,9 @@ mod tests {
     use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
-    use tikv_util::security::SecurityConfig;
 
     #[derive(Clone)]
     struct MockRouter;

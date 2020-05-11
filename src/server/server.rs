@@ -292,7 +292,7 @@ mod tests {
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
-    use tikv_util::security::SecurityConfig;
+    use security::SecurityConfig;
 
     #[derive(Clone)]
     struct MockResolver {

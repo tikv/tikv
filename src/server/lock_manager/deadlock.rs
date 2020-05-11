@@ -929,7 +929,7 @@ impl Deadlock for Service {
 pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
-    use tikv_util::security::SecurityConfig;
+    use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
     #[test]

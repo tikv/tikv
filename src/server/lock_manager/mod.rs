@@ -278,8 +278,8 @@ mod tests {
     use self::waiter_manager::tests::*;
     use super::*;
     use raftstore::coprocessor::RegionChangeEvent;
+    use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::security::SecurityConfig;
 
     use std::thread;
     use std::time::Duration;
