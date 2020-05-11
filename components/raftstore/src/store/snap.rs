@@ -1124,7 +1124,7 @@ where
         SnapManager {
             core: self.core.clone(),
             router: self.router.clone(),
-            max_total_size: self.max_total_size.clone(),
+            max_total_size: self.max_total_size,
         }
     }
 }
