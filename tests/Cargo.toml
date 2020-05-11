@@ -125,6 +125,7 @@ rand_xorshift = "0.2"
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 external_storage = { path = "../components/external_storage" }
+hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys" }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
