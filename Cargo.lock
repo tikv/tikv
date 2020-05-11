@@ -4342,6 +4342,7 @@ dependencies = [
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
+ "hyper 0.12.35",
  "keys",
  "kvproto",
  "panic_hook",
