@@ -2334,8 +2334,17 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub fn write_config<P: AsRef<Path>>(tem_dir: P, path: P, content: &[u8]) -> CfgResult<()> {
-    let tmp_cfg_path = tem_dir.as_ref().join(TMP_CONFIG_FILE);
+pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
+    let tmp_cfg_path = match path.as_ref().parent() {
+        Some(p) => p.join(TMP_CONFIG_FILE),
+        None => {
+            return Err(format!(
+                "failed to get parent path of config file: {}",
+                path.as_ref().display()
+            )
+            .into())
+        }
+    };
     {
         let mut f = fs::File::create(&tmp_cfg_path)?;
         f.write_all(content)?;
@@ -2568,11 +2577,7 @@ impl ConfigController {
             t.write_change(src, change);
             t.finish()
         };
-        write_config(
-            &inner.current.storage.data_dir,
-            &inner.current.cfg_path,
-            &content,
-        )?;
+        write_config(&inner.current.cfg_path, &content)?;
         Ok(())
     }
 
