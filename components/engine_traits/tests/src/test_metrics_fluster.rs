@@ -10,7 +10,7 @@ use tempfile::Builder;
 use engine_rocks::util::{self as rocks_util, RocksCFOptions};
 use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
 use engine_traits::{
-    ColumnFamilyOptions, KvEngines, MetricsFlusher, CF_DEFAULT, CF_LOCK, CF_WRITE, MiscExt,
+    ColumnFamilyOptions, KvEngines, MetricsFlusher, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 
 #[test]
