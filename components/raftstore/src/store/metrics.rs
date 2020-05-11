@@ -20,6 +20,7 @@ make_auto_flush_static_metric! {
         normal,
         transfer_leader,
         conf_change,
+        batch,
     }
 
     pub label_enum AdminCmdType {
