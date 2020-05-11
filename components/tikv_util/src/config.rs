@@ -1481,6 +1481,7 @@ normal-concurrency = 1
 
 [rocksdb.defaultcf]
 compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
+
 "#;
         let mut m = HashMap::new();
         m.insert("log-file".to_owned(), "log-file-name".to_owned());
@@ -1524,5 +1525,45 @@ yyy = 100
 
 "#;
         assert_eq!(expect.as_bytes(), t.finish().as_slice());
+    }
+
+    #[test]
+    fn test_update_empty_content() {
+        // empty content
+        let mut src = "".to_owned();
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.high-concurrency".to_owned(),
+                "1".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["high-concurrency"].as_integer(),
+            Some(1)
+        );
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.normal-concurrency".to_owned(),
+                "2".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
+            Some(2)
+        );
     }
 }
