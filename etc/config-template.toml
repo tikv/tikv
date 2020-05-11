@@ -820,8 +820,8 @@
 ##
 ##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
 ##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
-##     The file must contain a 256-bits (32 bytes)  key encoded as hex string and end with newline
-##     ("\n"). Example:
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
 ##
 ##     [security.encryption.master-key]
 ##     type = "file"
