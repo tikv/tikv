@@ -2266,12 +2266,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if prev_region.get_peers() != region.get_peers() {
             let mut state = self.ctx.global_replication_state.lock().unwrap();
-            state.calculate_commit_group(region.get_peers());
-            self.fsm
-                .peer
-                .raft_group
-                .raft
-                .assign_commit_groups(&state.group_buffer);
+            let gb = state.calculate_commit_group(region.get_peers());
+            self.fsm.peer.raft_group.raft.assign_commit_groups(&gb);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();

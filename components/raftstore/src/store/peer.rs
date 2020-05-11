@@ -366,10 +366,8 @@ impl Peer {
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
         if !self.get_store().region().get_peers().is_empty() {
-            state.calculate_commit_group(self.get_store().region().get_peers());
-            self.raft_group
-                .raft
-                .assign_commit_groups(&state.group_buffer);
+            let gb = state.calculate_commit_group(self.get_store().region().get_peers());
+            self.raft_group.raft.assign_commit_groups(gb);
         }
         self.replication_sync = false;
         if state.status.get_mode() == ReplicationMode::Majority {
@@ -398,9 +396,8 @@ impl Peer {
             guard.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async
         };
         if enable_group_commit {
-            guard.calculate_commit_group(self.region().get_peers());
             let ids = mem::replace(
-                &mut guard.group_buffer,
+                guard.calculate_commit_group(self.region().get_peers()),
                 Vec::with_capacity(self.region().get_peers().len()),
             );
             drop(guard);
