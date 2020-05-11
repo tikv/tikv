@@ -1953,7 +1953,7 @@ mod tests {
         for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
-                .evaluate(ScalarFuncSig::Upper)
+                .evaluate(ScalarFuncSig::Lower)
                 .unwrap();
             assert_eq!(output, exp);
         }
