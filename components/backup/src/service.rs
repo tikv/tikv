@@ -7,7 +7,7 @@ use futures::StreamExt;
 use futures_01::{future::Future, sink::Sink, stream::Stream};
 use grpcio::{self, *};
 use kvproto::backup::*;
-use tikv_util::security::{check_common_name, SecurityManager};
+use security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
 use super::Task;
