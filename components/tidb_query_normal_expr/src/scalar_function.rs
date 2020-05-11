@@ -333,6 +333,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::Replace => (3, 3),
 
+            ScalarFuncSig::Insert => (4, 4),
+
             ScalarFuncSig::JsonArraySig
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::RealAnyValue
@@ -881,6 +883,7 @@ dispatch_call! {
         InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
+        Insert => insert,
         Md5 => md5,
         Uuid => uuid,
         Sha1 => sha1,

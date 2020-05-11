@@ -1027,6 +1027,32 @@ impl ScalarFunc {
             .map(|p| p as i64 + 1)
             .or(Some(0)))
     }
+
+    // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_insert
+    #[inline]
+    pub fn insert<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let upos: usize = pos as usize;
+        let len = try_opt!(self.children[2].eval_int(ctx, row));
+        let mut ulen: usize = len as usize;
+        let newstr = try_opt!(self.children[3].eval_string(ctx, row));
+        let mut ret: Vec<u8> = Vec::new();
+        if pos < 1 || upos > s.len() {
+            return Ok(Some(s));
+        }
+        if ulen > s.len() - upos + 1 || len < 0 {
+            ulen = s.len() - upos + 1;
+        }
+        ret.extend_from_slice(&s[0..upos - 1]);
+        ret.extend_from_slice(&newstr);
+        ret.extend_from_slice(&s[upos + ulen - 1..]);
+        Ok(Some(Cow::Owned(ret)))
+    }
 }
 
 #[inline]
@@ -1580,6 +1606,33 @@ mod tests {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let expected = Datum::Null;
         assert_eq!(got, expected, "repeat(NULL, NULL)");
+    }
+
+    #[test]
+    fn test_insert() {
+        let cases = vec![
+            ("hello, world!", 1, 1, "asd", "asdello, world!"),
+            ("hello, world!", 1, 3, "asd", "asdlo, world!"),
+            ("hello, world!", 2, 2, "asd", "hasdlo, world!"),
+            ("hello", 5, 2, "asd", "hellasd"),
+            ("hello", 5, 200, "asd", "hellasd"),
+            ("hello", 2, 200, "asd", "hasd"),
+            ("hello", -1, 200, "asd", "hello"),
+            ("hello", 0, 200, "asd", "hello"),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, input_pos, input_len, newstr, expected) in cases {
+            let s = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let pos = datum_expr(Datum::I64(input_pos));
+            let len = datum_expr(Datum::I64(input_len));
+            let ns = datum_expr(Datum::Bytes(newstr.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::Insert, &[s, pos, len, ns]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let expected = Datum::Bytes(expected.as_bytes().to_vec());
+            assert_eq!(got, expected, "insert({:?}, {:?}, {:?}, {:?})", input_str, input_pos, input_len, newstr);
+        }
     }
 
     #[test]
