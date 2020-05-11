@@ -511,7 +511,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::Test(cb) => cb(self.fsm),
+            CasualMessage::AccessPeer(cb) => cb(self.fsm),
         }
     }
 
