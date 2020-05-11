@@ -56,7 +56,7 @@ fn setup(
         mgr.waiter_mgr_scheduler.clone(),
         mgr.detector_scheduler.clone(),
     );
-    let mut cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::PessimisticTxn, Box::new(mgr));
 
     (cfg_controller, w, d, lock_mgr)
@@ -94,7 +94,7 @@ fn test_lock_manager_cfg_update() {
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.validate().unwrap();
-    let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
+    let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
     // update of other module's config should not effect lock manager config
     cfg_controller
