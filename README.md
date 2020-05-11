@@ -118,6 +118,7 @@ Quick links:
 
 *   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+*   [Recorded videos](https://www.youtube.com/playlist?list=PLj6h78yzYM2PveKciToM4JeQlvenS538V)
 
 ## Security
 
