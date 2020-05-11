@@ -131,11 +131,8 @@ where
                 end_key,
             } => {
                 let cf = &cf_name;
-                if let Err(e) = self.compact_range_cf(
-                    cf,
-                    start_key.as_ref().map(Vec::as_slice),
-                    end_key.as_ref().map(Vec::as_slice),
-                ) {
+                if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
+                {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }

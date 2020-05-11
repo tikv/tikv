@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::conv::i64_to_usize;
-use safemem;
 
 const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 
@@ -105,6 +104,13 @@ pub fn trim(s: &str, pat: &str, direction: TrimDirection) -> Vec<u8> {
         _ => s.trim_start_matches(pat).trim_end_matches(pat),
     };
     r.to_string().into_bytes()
+}
+
+#[inline]
+pub fn strip_whitespace(input: &[u8]) -> Vec<u8> {
+    let mut input_copy = Vec::<u8>::with_capacity(input.len());
+    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
+    input_copy
 }
 
 #[cfg(test)]
