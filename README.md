@@ -122,10 +122,14 @@ Quick links:
 
 ## Security
 
-
 ### Security Audit
 
 A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to tikv-security@lists.cncf.io.
+See [Security](./SECURITY.md) for the process and policy followed by the TiKV project. 
 
 ## Communication
 
