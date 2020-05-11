@@ -163,7 +163,7 @@ impl TiKVServer {
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
         let (resolve_worker, resolver, state) =
-            resolve::new_resolver::<_, RocksEngine>(Arc::clone(&pd_client), router.clone())
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
