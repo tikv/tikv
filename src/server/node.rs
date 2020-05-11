@@ -239,18 +239,16 @@ where
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
         let label_key = &status.get_dr_auto_sync().label_key;
-        let mut control = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         for store in stores {
             for l in store.get_labels() {
                 if l.key == *label_key {
-                    control
-                        .group
-                        .register_store(store.id, l.value.to_lowercase());
+                    state.group.register_store(store.id, l.value.clone());
                     break;
                 }
             }
         }
-        control.status = status;
+        state.status = status;
     }
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
@@ -402,6 +400,7 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
+            self.state.clone(),
         )?;
         Ok(())
     }
