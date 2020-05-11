@@ -705,8 +705,9 @@ where
                 error!("store heartbeat failed"; "err" => ?e);
             })
             .map(move |status| {
-                let status = status.unwrap_or_default();
-                let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                if let Some(status) = status {
+                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                }
             });
         handle.spawn(f);
     }
