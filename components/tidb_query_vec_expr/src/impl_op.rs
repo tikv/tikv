@@ -140,40 +140,78 @@ pub fn bit_neg(arg: &Option<Int>) -> Result<Option<Int>> {
     Ok(arg.map(|arg| !arg))
 }
 
-#[rpn_fn]
-#[inline]
-pub fn int_is_true(arg: &Option<Int>) -> Result<Option<i64>> {
-    Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
+pub trait KeepNull {
+    const VALUE: bool;
+}
+
+pub struct KeepNullOn;
+impl KeepNull for KeepNullOn {
+    const VALUE: bool = true;
+}
+
+pub struct KeepNullOff;
+impl KeepNull for KeepNullOff {
+    const VALUE: bool = false;
 }
 
 #[rpn_fn]
 #[inline]
-pub fn real_is_true(arg: &Option<Real>) -> Result<Option<i64>> {
-    Ok(Some(arg.map_or(0, |v| (v.into_inner() != 0f64) as i64)))
+pub fn int_is_true<K: KeepNull>(arg: &Option<Int>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| (v != 0) as i64)
+    } else {
+        Some(arg.map_or(0, |v| (v != 0) as i64))
+    })
 }
 
 #[rpn_fn]
 #[inline]
-pub fn decimal_is_true(arg: &Option<Decimal>) -> Result<Option<i64>> {
-    Ok(Some(arg.as_ref().map_or(0, |v| !v.is_zero() as i64)))
+pub fn real_is_true<K: KeepNull>(arg: &Option<Real>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| (v.into_inner() != 0f64) as i64)
+    } else {
+        Some(arg.map_or(0, |v| (v.into_inner() != 0f64) as i64))
+    })
 }
 
 #[rpn_fn]
 #[inline]
-pub fn int_is_false(arg: &Option<Int>) -> Result<Option<i64>> {
-    Ok(Some(arg.map_or(0, |v| (v == 0) as i64)))
+pub fn decimal_is_true<K: KeepNull>(arg: &Option<Decimal>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| !v.is_zero() as i64)
+    } else {
+        Some(arg.map_or(0, |v| !v.is_zero() as i64))
+    })
 }
 
 #[rpn_fn]
 #[inline]
-pub fn real_is_false(arg: &Option<Real>) -> Result<Option<i64>> {
-    Ok(Some(arg.map_or(0, |v| (v.into_inner() == 0f64) as i64)))
+pub fn int_is_false<K: KeepNull>(arg: &Option<Int>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| (v == 0) as i64)
+    } else {
+        Some(arg.map_or(0, |v| (v == 0) as i64))
+    })
 }
 
 #[rpn_fn]
 #[inline]
-fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
-    Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
+pub fn real_is_false<K: KeepNull>(arg: &Option<Real>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| (v.into_inner() == 0f64) as i64)
+    } else {
+        Some(arg.map_or(0, |v| (v.into_inner() == 0f64) as i64))
+    })
+}
+
+#[rpn_fn]
+#[inline]
+fn decimal_is_false<K: KeepNull>(arg: &Option<Decimal>) -> Result<Option<i64>> {
+    Ok(if K::VALUE {
+        arg.map(|v| v.is_zero() as i64)
+    } else {
+        Some(arg.map_or(0, |v| v.is_zero() as i64))
+    })
 }
 
 #[rpn_fn]
@@ -321,7 +359,7 @@ mod tests {
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
@@ -415,7 +453,7 @@ mod tests {
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate::<Decimal>(ScalarFuncSig::UnaryMinusDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
@@ -561,15 +599,34 @@ mod tests {
     fn test_is_true() {
         let test_cases = vec![
             (ScalarValue::Int(None), ScalarFuncSig::IntIsTrue, Some(0)),
+            (
+                ScalarValue::Int(None),
+                ScalarFuncSig::IntIsTrueWithNull,
+                None,
+            ),
             (0.into(), ScalarFuncSig::IntIsTrue, Some(0)),
+            (0.into(), ScalarFuncSig::IntIsTrueWithNull, Some(0)),
             (1.into(), ScalarFuncSig::IntIsTrue, Some(1)),
+            (1.into(), ScalarFuncSig::IntIsTrueWithNull, Some(1)),
             (ScalarValue::Real(None), ScalarFuncSig::RealIsTrue, Some(0)),
+            (
+                ScalarValue::Real(None),
+                ScalarFuncSig::RealIsTrueWithNull,
+                None,
+            ),
             (0.0.into(), ScalarFuncSig::RealIsTrue, Some(0)),
+            (0.0.into(), ScalarFuncSig::RealIsTrueWithNull, Some(0)),
             (1.0.into(), ScalarFuncSig::RealIsTrue, Some(1)),
+            (1.0.into(), ScalarFuncSig::RealIsTrueWithNull, Some(1)),
             (
                 ScalarValue::Decimal(None),
                 ScalarFuncSig::DecimalIsTrue,
                 Some(0),
+            ),
+            (
+                ScalarValue::Decimal(None),
+                ScalarFuncSig::DecimalIsTrueWithNull,
+                None,
             ),
             (
                 Decimal::zero().into(),
@@ -577,8 +634,18 @@ mod tests {
                 Some(0),
             ),
             (
+                Decimal::zero().into(),
+                ScalarFuncSig::DecimalIsTrueWithNull,
+                Some(0),
+            ),
+            (
                 Decimal::from(1).into(),
                 ScalarFuncSig::DecimalIsTrue,
+                Some(1),
+            ),
+            (
+                Decimal::from(1).into(),
+                ScalarFuncSig::DecimalIsTrueWithNull,
                 Some(1),
             ),
         ];

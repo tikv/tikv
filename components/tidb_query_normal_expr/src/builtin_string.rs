@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -9,27 +8,19 @@ use std::iter;
 
 use hex::{self, FromHex};
 
-use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
-use tidb_query_shared_expr::string::validate_target_len_for_pad;
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, validate_target_len_for_pad, BASE64_ENCODED_CHUNK_LENGTH,
+    BASE64_INPUT_CHUNK_LENGTH,
+};
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
 const SPACE: u8 = 0o40u8;
-
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
 
 enum TrimDirection {
     Both = 1,
@@ -1059,45 +1050,6 @@ fn strip_whitespace(input: &[u8]) -> Vec<u8> {
     let mut input_copy = Vec::<u8>::with_capacity(input.len());
     input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
     input_copy
-}
-
-#[inline]
-fn encoded_size(len: usize) -> Option<usize> {
-    if len == 0 {
-        return Some(0);
-    }
-    // size_without_wrap = (len + (3 - 1)) / 3 * 4
-    // size = size_without_wrap + (size_withou_wrap - 1) / 76
-    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
-        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
-        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
-        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
-}
-
-// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
-// there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
-fn line_wrap(buf: &mut [u8], input_len: usize) {
-    let line_len = BASE64_LINE_WRAP_LENGTH;
-    if input_len <= line_len {
-        return;
-    }
-    let last_line_len = if input_len % line_len == 0 {
-        line_len
-    } else {
-        input_len % line_len
-    };
-    let lines_with_ending = (input_len - 1) / line_len;
-    let line_with_ending_len = line_len + 1;
-    let mut old_start = input_len - last_line_len;
-    let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
-    for _ in 0..lines_with_ending {
-        old_start -= line_len;
-        new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
-        buf[new_start + line_len] = BASE64_LINE_WRAP;
-    }
 }
 
 #[inline]

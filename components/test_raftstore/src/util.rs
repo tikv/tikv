@@ -17,11 +17,11 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::DB;
 use engine::*;
+use engine_rocks::config::BlobRunMode;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
@@ -324,7 +324,7 @@ pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResp
     resp
 }
 
-pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<RaftCmdResponse>) {
+pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
     let mut is_read;
     let mut is_write;
     is_read = cmd.has_status_request();
@@ -342,7 +342,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<R
 
     let (tx, rx) = mpsc::channel();
     let cb = if is_read {
-        Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+        Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))

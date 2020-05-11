@@ -32,6 +32,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -48,8 +49,10 @@ use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -148,18 +151,6 @@ macro_rules! check_key_size {
 }
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
-    /// Get concurrency of normal readpool.
-    pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPoolHandle::FuturePools {
-            read_pool_normal, ..
-        } = &self.read_pool
-        {
-            read_pool_normal.get_pool_size()
-        } else {
-            0
-        }
-    }
-
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -228,21 +219,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                if let Ok(key) = key.to_owned().into_raw() {
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -257,17 +256,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            metrics::tls_collect_key_reads(CMD, 1);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                             r
                         });
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
 
                     result
-                });
-                tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             start_ts.into_inner(),
@@ -284,18 +287,35 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_get_command";
+        const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        tls_collect_qps(
+                            get.ctx.get_region_id(),
+                            get.ctx.get_peer(),
+                            &key,
+                            &key,
+                            false,
+                        );
+                    }
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
                         snapshot,
@@ -320,10 +340,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .map_err(Error::from),
                         );
                     }
-                    results
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                Ok(result)
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(results)
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -341,18 +366,32 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "batch_get";
+        const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                let mut key_ranges = vec![];
+                for key in &keys {
+                    if let Ok(key) = key.to_owned().into_raw() {
+                        key_ranges.push(build_key_range(&key, &key, false));
+                    }
+                }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -378,17 +417,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     _ => unreachable!(),
                                 })
                                 .collect();
-                            metrics::tls_collect_key_reads(CMD, kv_pairs.len());
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                .get(CMD)
+                                .observe(kv_pairs.len() as f64);
                             kv_pairs
                         });
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     result
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             start_ts.into_inner(),
@@ -413,18 +457,40 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "scan";
+        const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                if let Ok(start_key) = start_key.to_owned().into_raw() {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                            key = end_key;
+                        }
+                    }
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        &start_key,
+                        &key,
+                        reverse_scan,
+                    );
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -447,17 +513,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
 
                     res.map_err(Error::from).map(|results| {
-                        metrics::tls_collect_key_reads(CMD, results.len());
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(results.len() as f64);
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
                             .collect()
                     })
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             start_ts.into_inner(),
@@ -556,16 +628,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
@@ -576,12 +655,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stats.data.flow_stats.read_keys = 1;
                         stats.data.flow_stats.read_bytes = key_len + value.len();
                         tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        tls_collect_key_reads(CMD, 1);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     }
+
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     Ok(r)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -597,27 +682,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "raw_batch_get_command";
+        const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        // todo no raw?
+                        tls_collect_qps(
+                            get.ctx.get_region_id(),
+                            get.ctx.get_peer(),
+                            &key,
+                            &key,
+                            false,
+                        );
+                    }
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
                     // TODO: optimize using seek.
                     for get in gets {
                         results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
                     }
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     Ok(results)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -633,16 +742,27 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_get";
+        const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                let mut key_ranges = vec![];
+                for key in &keys {
+                    key_ranges.push(build_key_range(key, key, false));
+                }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -665,12 +785,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         })
                         .collect();
 
-                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(stats.data.flow_stats.read_keys as f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     Ok(result)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -824,6 +950,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if let Some(end) = end_key {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
+        if key_only {
+            option.set_key_only(key_only);
+        }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -862,6 +991,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if let Some(end) = end_key {
             option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
+        if key_only {
+            option.set_key_only(key_only);
+        }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
@@ -884,8 +1016,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     /// Scan raw keys in a range.
     ///
-    /// If `reverse` is false, the range is [`key`, `end_key`); otherwise, the range is
-    /// [`end_key`, `key`) and it scans from `key` and goes backwards. If `end_key` is `None`, it
+    /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
+    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is `None`, it
     /// means unbounded.
     ///
     /// This function scans at most `limit` keys.
@@ -896,31 +1028,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         ctx: Context,
         cf: String,
-        key: Vec<u8>,
+        start_key: Vec<u8>,
         end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_scan";
+        const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                {
+                    let end_key = match &end_key {
+                        Some(end_key) => end_key.to_vec(),
+                        None => vec![],
+                    };
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        &start_key,
+                        &end_key,
+                        reverse_scan,
+                    );
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
-                    let result = if reverse {
+                    let result = if reverse_scan {
                         Self::reverse_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -931,7 +1083,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Self::forward_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -941,15 +1093,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     };
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    metrics::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     result
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -1003,21 +1159,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_scan";
+        const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse) {
+                    if !Self::check_key_ranges(&ranges, reverse_scan) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
@@ -1034,7 +1194,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = if reverse {
+                        let pairs = if reverse_scan {
                             Self::reverse_raw_scan(
                                 &snapshot,
                                 &cf,
@@ -1057,17 +1217,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         };
                         result.extend(pairs.into_iter());
                     }
-
+                    let mut key_ranges = vec![];
+                    for range in ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
+                    }
+                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    metrics::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     Ok(result)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -1199,7 +1370,11 @@ impl<E: Engine> TestStorageBuilder<E> {
 mod tests {
     use super::*;
 
+    use crate::config::TitanDBConfig;
+    use crate::storage::config::BlockCacheConfig;
     use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
+    use engine::rocks::util::CFOptions;
+    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
@@ -1658,6 +1833,251 @@ mod tests {
                     2,
                     5.into(),
                     false,
+                    true,
+                )
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_scan_with_key_only() {
+        let mut titan_db_config = TitanDBConfig::default();
+        titan_db_config.enabled = true;
+        let mut db_config = crate::config::DbConfig::default();
+        db_config.titan = titan_db_config;
+        let engine = {
+            let path = "".to_owned();
+            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfg_rocksdb = db_config;
+            let cache = BlockCacheConfig::default().build_shared_cache();
+            let cfs_opts = vec![
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+            ];
+            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        }
+        .unwrap();
+        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    ],
+                    b"a".to_vec(),
+                    1.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![
+                        Key::from_raw(b"a"),
+                        Key::from_raw(b"b"),
+                        Key::from_raw(b"c"),
+                    ],
+                    1.into(),
+                    2.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"c".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"a".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        // Forward with limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
                     true,
                 )
                 .wait(),
