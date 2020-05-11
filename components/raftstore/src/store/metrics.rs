@@ -1,6 +1,183 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+<<<<<<< HEAD
+=======
+use prometheus_static_metric::*;
+
+make_auto_flush_static_metric! {
+    pub label_enum PerfContextType {
+        write_wal_time,
+        write_memtable_time,
+        pre_and_post_process,
+        write_thread_wait,
+        db_mutex_lock_nanos,
+        report_time,
+    }
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+        batch,
+    }
+
+    pub label_enum AdminCmdType {
+        conf_change,
+        add_peer,
+        remove_peer,
+        add_learner,
+        batch_split : "batch-split",
+        prepare_merge,
+        commit_merge,
+        rollback_merge,
+        compact,
+    }
+
+    pub label_enum AdminCmdStatus {
+        reject_unsafe,
+        all,
+        success,
+    }
+
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
+    pub label_enum MessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        request_snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+    }
+
+    pub label_enum SnapValidationType {
+        stale,
+        decode,
+        epoch,
+    }
+
+    pub label_enum RegionHashType {
+        verify,
+        compute,
+    }
+
+    pub label_enum RegionHashResult {
+        miss,
+        matched,
+        all,
+        failed,
+    }
+
+    pub label_enum CfNames {
+        default,
+        lock,
+        write,
+        raft,
+    }
+
+    pub label_enum RaftEntryType {
+        hit,
+        miss
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+    }
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+    }
+
+    pub struct RaftEventDuration : LocalHistogram {
+        "type" => RaftEventDurationType
+    }
+    pub struct RaftInvalidProposalCount : LocalIntCounter {
+        "type" => RaftInvalidProposal
+    }
+    pub struct RaftEntryFetches : LocalIntCounter {
+        "type" => RaftEntryType
+    }
+    pub struct SnapCf : LocalHistogram {
+        "type" => CfNames,
+    }
+    pub struct SnapCfSize : LocalHistogram {
+        "type" => CfNames,
+    }
+    pub struct RegionHashCounter: LocalIntCounter {
+        "type" => RegionHashType,
+        "result" => RegionHashResult,
+    }
+    pub struct ProposalVec: LocalIntCounter {
+        "type" => ProposalType,
+    }
+
+    pub struct AdminCmdVec : LocalIntCounter {
+        "type" => AdminCmdType,
+        "status" => AdminCmdStatus,
+    }
+
+    pub struct RaftReadyVec : LocalIntCounter {
+        "type" => RaftReadyType,
+    }
+
+    pub struct MessageCounterVec : LocalIntCounter {
+        "type" => MessageCounterType,
+    }
+
+    pub struct RaftDropedVec : LocalIntCounter {
+        "type" => RaftDroppedMessage,
+    }
+
+    pub struct SnapValidVec : LocalIntCounter {
+        "type" => SnapValidationType
+    }
+    pub struct PerfContextTimeDuration : LocalHistogram {
+        "type" => PerfContextType
+    }
+}
+>>>>>>> a935b3b... batch multiple write request into an entry (#6600) (#6683)
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =

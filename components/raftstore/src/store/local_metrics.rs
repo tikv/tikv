@@ -244,6 +244,7 @@ pub struct RaftProposeMetrics {
     pub read_index: u64,
     pub unsafe_read_index: u64,
     pub normal: u64,
+    pub batch: usize,
     pub transfer_leader: u64,
     pub conf_change: u64,
     pub request_wait_time: LocalHistogram,
@@ -259,6 +260,7 @@ impl Default for RaftProposeMetrics {
             normal: 0,
             transfer_leader: 0,
             conf_change: 0,
+            batch: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
         }
     }
@@ -309,6 +311,10 @@ impl RaftProposeMetrics {
                 .with_label_values(&["conf_change"])
                 .inc_by(self.conf_change as i64);
             self.conf_change = 0;
+        }
+        if self.batch > 0 {
+            PEER_PROPOSAL_COUNTER.batch.inc_by(self.batch as i64);
+            self.batch = 0;
         }
         self.request_wait_time.flush();
     }
