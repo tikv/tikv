@@ -3,8 +3,8 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::{RocksSnapshot};
-use engine_traits::{Snapshot};
+use engine_rocks::RocksSnapshot;
+use engine_traits::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
@@ -50,10 +50,7 @@ impl<S: Snapshot> CasualRouter<S> for RaftRouter<S> {
 
 impl<S: Snapshot> ProposalRouter<S> for RaftRouter<S> {
     #[inline]
-    fn send(
-        &self,
-        cmd: RaftCommand<S>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+    fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
         self.send_raft_command(cmd)
     }
 }

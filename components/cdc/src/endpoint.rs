@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::future::Future;
 use kvproto::cdcpb::*;
 use kvproto::metapb::Region;

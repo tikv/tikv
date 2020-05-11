@@ -97,7 +97,10 @@ where
     local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
 }
 
-impl<E> Clone for ServerRaftStoreRouter<E> where E: KvEngine {
+impl<E> Clone for ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),

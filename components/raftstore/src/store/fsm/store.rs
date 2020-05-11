@@ -7,8 +7,8 @@ use engine_rocks::{
     RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
 };
 use engine_traits::{
-    CompactExt, CompactionJobInfo, Iterable, KvEngines, MiscExt, Mutable, Peekable,
-    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions, Snapshot,
+    CompactExt, CompactionJobInfo, Iterable, KvEngines, MiscExt, Mutable, Peekable, Snapshot,
+    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -143,7 +143,10 @@ pub struct RaftRouter<S: Snapshot> {
     pub router: BatchRouter<PeerFsm<S>, StoreFsm>,
 }
 
-impl<S> Clone for RaftRouter<S> where S: Snapshot {
+impl<S> Clone for RaftRouter<S>
+where
+    S: Snapshot,
+{
     fn clone(&self) -> Self {
         RaftRouter {
             router: self.router.clone(),

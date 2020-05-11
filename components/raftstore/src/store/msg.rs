@@ -3,8 +3,8 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::{RocksSnapshot};
-use engine_traits::{Snapshot};
+use engine_rocks::RocksSnapshot;
+use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;

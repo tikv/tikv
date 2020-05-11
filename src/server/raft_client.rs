@@ -10,7 +10,7 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crossbeam::channel::SendError;
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,

@@ -301,7 +301,10 @@ where
     Sender(Sender<PeerMsg<S>>),
 }
 
-impl<S> Clone for Notifier<S> where S: Snapshot {
+impl<S> Clone for Notifier<S>
+where
+    S: Snapshot,
+{
     fn clone(&self) -> Self {
         match self {
             Notifier::Router(v) => Notifier::Router(v.clone()),

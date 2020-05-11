@@ -9,7 +9,7 @@ use crate::server::raft_client::RaftClient;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Result;
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use raft::SnapshotStatus;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Transport;

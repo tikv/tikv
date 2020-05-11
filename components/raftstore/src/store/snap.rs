@@ -1116,7 +1116,10 @@ pub struct SnapManager<E: KvEngine> {
     max_total_size: u64,
 }
 
-impl<E> Clone for SnapManager<E> where E: KvEngine {
+impl<E> Clone for SnapManager<E>
+where
+    E: KvEngine,
+{
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),

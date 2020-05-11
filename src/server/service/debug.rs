@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};

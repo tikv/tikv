@@ -6,7 +6,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use engine_traits::Snapshot;
 use engine_traits::CF_RAFT;
 use tikv_util::worker::Runnable;
