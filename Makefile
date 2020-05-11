@@ -81,12 +81,15 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
-export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
+export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
+export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+
+export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
+export DOCKER_IMAGE_TAG ?= "latest"
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -221,12 +224,11 @@ docker-tag-with-git-tag:
 run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
-	# The special linux case below is testing the mem-profiling
+	# The special Linux case below is testing the mem-profiling
 	# features in tikv_alloc, which are marked #[ignore] since
 	# they require special compile-time and run-time setup
-	# Forturately rebuilding with the mem-profiling feature will only
+	# Fortunately rebuilding with the mem-profiling feature will only
 	# rebuild starting at jemalloc-sys.
-	# TODO: remove cd commands after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
@@ -327,16 +329,20 @@ ctl:
 # A special target for building TiKV docker image.
 .PHONY: docker
 docker:
-	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
+	bash ./scripts/gen-dockerfile.sh | docker build \
+		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		-f - . \
+		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
+		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
 
 # Cargo only has two non-test profiles, dev and release, and we have
 # more than two use cases for which a cargo profile is required. This
-# is a hack to manage more cargo profiles, written in
-# `etc/cargo.config.*`. These make use of the unstable
-# `-Zconfig-profile` cargo option to specify profiles in
+# is a hack to manage more cargo profiles, written in `etc/cargo.config.*`.
+# So we use cargo `config-profile` feature to specify profiles in
 # `.cargo/config`, which `scripts/run-cargo.sh copies into place.
 #
 # Presently the only thing this is used for is the `dist_release`
