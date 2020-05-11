@@ -1631,7 +1631,11 @@ mod tests {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let expected = Datum::Bytes(expected.as_bytes().to_vec());
-            assert_eq!(got, expected, "insert({:?}, {:?}, {:?}, {:?})", input_str, input_pos, input_len, newstr);
+            assert_eq!(
+                got, expected,
+                "insert({:?}, {:?}, {:?}, {:?})",
+                input_str, input_pos, input_len, newstr
+            );
         }
     }
 
