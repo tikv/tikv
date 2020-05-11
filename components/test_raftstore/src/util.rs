@@ -472,7 +472,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    router: RaftRouter<RocksEngine>,
+    router: RaftRouter<RocksSnapshot>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine

@@ -47,7 +47,7 @@ struct Runner<T: PdClient, E: KvEngine> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<E>>,
+    router: Option<RaftRouter<E::Snapshot>>,
 }
 
 impl<T: PdClient, E: KvEngine> Runner<T, E> {
@@ -129,7 +129,7 @@ impl PdStoreAddrResolver {
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, E>(
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
+    router: RaftRouter<E::Snapshot>,
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,
@@ -141,7 +141,7 @@ where
 {
     let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
-    let runner = Runner {
+    let runner = Runner::<_, E> {
         pd_client,
         store_addrs: HashMap::default(),
         state: state.clone(),
