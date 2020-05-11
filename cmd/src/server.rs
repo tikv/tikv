@@ -11,7 +11,7 @@
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
 use engine::rocks;
-use engine_rocks::{encryption::get_env, Compat, RocksEngine};
+use engine_rocks::{encryption::get_env, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -130,13 +130,13 @@ struct TiKVServer {
 struct Engines {
     engines: engine::Engines,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksSnapshot>>,
-    raft_router: ServerRaftStoreRouter<RocksSnapshot>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
+    raft_router: ServerRaftStoreRouter<RocksEngine>,
 }
 
 struct Servers {
     lock_mgr: Option<LockManager>,
-    server: Server<ServerRaftStoreRouter<RocksSnapshot>, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -163,7 +163,7 @@ impl TiKVServer {
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
         let (resolve_worker, resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+            resolve::new_resolver::<_, RocksEngine>(Arc::clone(&pd_client), router.clone())
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
@@ -391,7 +391,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksSnapshot>>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -412,7 +412,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksSnapshot>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(

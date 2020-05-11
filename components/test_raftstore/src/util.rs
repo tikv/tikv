@@ -21,7 +21,7 @@ use engine::rocks::DB;
 use engine::*;
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{Compat, RocksSnapshot};
 use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;

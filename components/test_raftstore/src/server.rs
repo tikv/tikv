@@ -42,7 +42,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksSnapshot>>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
@@ -221,7 +221,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver, state) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
+            resolve::new_resolver::<_, RocksEngine>(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(

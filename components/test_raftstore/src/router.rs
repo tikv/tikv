@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -13,7 +13,7 @@ use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 
 #[derive(Clone)]
 pub struct MockRaftStoreRouter {
-    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine>>>>>,
+    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksSnapshot>>>>>,
 }
 
 impl MockRaftStoreRouter {
@@ -22,7 +22,7 @@ impl MockRaftStoreRouter {
             senders: Arc::default(),
         }
     }
-    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksEngine>> {
+    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksSnapshot>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx

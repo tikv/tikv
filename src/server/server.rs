@@ -18,7 +18,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::{RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use tikv_util::security::SecurityManager;
@@ -289,7 +289,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::{RocksSnapshot};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
