@@ -245,7 +245,7 @@ impl StatusServer {
                 Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("fail to update, error: {:?}", e),
+                        format!("failed to update, error: {:?}", e),
                     ),
                     Ok(_) => {
                         let mut resp = Response::default();
@@ -253,9 +253,9 @@ impl StatusServer {
                         resp
                     }
                 },
-                Err(_) => StatusServer::err_response(
+                Err(e) => StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "fail to decode".to_owned(),
+                    format!("failed to decode, error: {:?}", e),
                 ),
             };
             ok(res)

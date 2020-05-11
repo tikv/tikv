@@ -1079,9 +1079,9 @@ impl TomlWriter {
         if change.is_empty() {
             return;
         }
+        self.write_current_table(&mut change);
         while !change.is_empty() {
             self.current_table = TomlLine::get_prefix(change.keys().last().unwrap());
-            self.new_line();
             self.write(format!("[{}]", self.current_table).as_bytes());
             self.write_current_table(&mut change);
         }
@@ -1105,6 +1105,7 @@ impl TomlWriter {
         self.dst.extend_from_slice(s);
         self.new_line();
     }
+
     fn new_line(&mut self) {
         self.dst.push(b'\n');
     }
