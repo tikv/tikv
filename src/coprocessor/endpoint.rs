@@ -11,7 +11,7 @@ use futures03::prelude::*;
 use rand::prelude::*;
 use tokio::sync::Semaphore;
 
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, span as spanpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
@@ -32,6 +32,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::future::Instrument;
+use minitrace::OSpanGuard;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -417,7 +418,15 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (tx, rx) = minitrace::Collector::new_default();
-        let span_root = minitrace::new_span_root(tx, tikv_util::trace::Trace::Copr);
+        let enable_trace = req.enable_trace;
+        //TODO remove before merge
+        let enable_trace = true;
+
+        let span_root = if enable_trace {
+            minitrace::new_span_root(tx, tikv_util::trace::Trace::Copr)
+        } else {
+            OSpanGuard(None)
+        };
         let result_of_future =
             self.parse_request(req, peer, false)
                 .map(|(handler_builder, req_ctx)| {
@@ -429,29 +438,7 @@ impl<E: Engine> Endpoint<E> {
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
             .map(|mut resp: coppb::Response| {
-                let finished_spans = rx.collect();
-                let spans = finished_spans.into_iter().map(|span| {
-                    let mut s = spanpb::Span::default();
-
-                    s.set_id(span.id.into());
-                    s.set_start(span.elapsed_start);
-                    s.set_end(span.elapsed_end);
-                    s.set_event_id(span.tag);
-
-                    #[cfg(feature = "prost-codec")]
-                    if let Some(p) = span.parent {
-                        s.parent = Some(spanpb::Parent::ParentValue(p.into()));
-                    } else {
-                        s.parent = Some(spanpb::Parent::ParentNone(true));
-                    };
-                    #[cfg(feature = "protobuf-codec")]
-                    if let Some(p) = span.parent {
-                        s.set_parent_value(p.into());
-                    }
-
-                    s
-                });
-                resp.set_spans(spans.collect());
+                resp.set_spans(tikv_util::trace::encode_spans(rx));
                 resp
             })
     }

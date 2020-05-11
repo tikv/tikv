@@ -1966,7 +1966,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/renkai/kvproto?branch=minitrace#95ab8b19c0b8edb4d8e20c2122ceaf5235ac30b4"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#c4a1475ee2b25a68ec975ed91c5c6dcca20cdac9"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4752,6 +4752,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "minitrace",
  "num_cpus",
  "openssl",
  "panic_hook",
