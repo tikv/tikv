@@ -510,10 +510,7 @@ pub fn from_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
             if will_overflow || invalid_padding {
                 Ok(Some(Vec::new()))
             } else {
-                match base64::decode_config(&input_copy, base64::STANDARD) {
-                    Ok(r) => Ok(Some(r)),
-                    _ => Ok(None),
-                }
+                Ok(base64::decode_config(&input_copy, base64::STANDARD).ok())
             }
         }
         _ => Ok(None),
