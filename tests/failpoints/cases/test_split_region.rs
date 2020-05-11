@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine_traits::CF_WRITE;
-use fail;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
