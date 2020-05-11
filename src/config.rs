@@ -2365,15 +2365,17 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         typed: &ConfigChange,
         value: String,
     ) -> CfgResult<()> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             return match typed.get(&f) {
-                None => Err(format!("unexpect fields: {}", f).into()),
-                Some(ConfigValue::Skip) => Err(format!("config {:?} can not be change", f).into()),
+                None => Err(format!("unexpect fields: {}", field).into()),
+                Some(ConfigValue::Skip) => {
+                    Err(format!("config {} can not be change", field).into())
+                }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
                         .entry(f)
@@ -2393,7 +2395,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                             }
                         };
                     }
-                    Err(format!("unexpect fields: {:?}", fields).into())
+                    let c: Vec<_> = fields.into_iter().rev().collect();
+                    Err(format!("unexpect fields: {}", c[..].join(".")).into())
                 }
             };
         }
@@ -2428,15 +2431,15 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             match typed.get(&f) {
                 None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get fields: {}", f).into())
+                    Err(format!("failed to get field: {}", field).into())
                 }
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
