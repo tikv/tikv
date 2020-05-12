@@ -749,6 +749,7 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# info-log-level = "info"
 # optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
