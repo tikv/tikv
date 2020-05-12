@@ -3,7 +3,8 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
+use engine::rocks::util::compact_files_in_range;
+use engine_rocks::util::ingest_maybe_slowdown_writes;
 use engine::rocks::DB;
 use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;

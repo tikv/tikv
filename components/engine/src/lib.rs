@@ -5,10 +5,6 @@
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;

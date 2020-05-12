@@ -9,7 +9,7 @@ use engine::rocks::util::new_engine_opt as new_engine_opt_raw;
 use engine::rocks::util::CFOptions;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{Error, Result};
+use engine_traits::{Error, ALL_CFS, Result};
 use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, DB};
 use std::str::FromStr;
@@ -28,6 +28,21 @@ pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
     let engine = Arc::new(engine);
     let engine = RocksEngine::from_db(engine);
     Ok(engine)
+}
+
+
+/// Gets total used size of rocksdb engine, including:
+/// *  total size (bytes) of all SST files.
+/// *  total size (bytes) of active and unflushed immutable memtables.
+/// *  total size (bytes) of all blob files.
+///
+pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
+    let mut used_size: u64 = 0;
+    for cf in ALL_CFS {
+        let handle = get_cf_handle(&engine, cf).unwrap();
+        used_size += get_engine_cf_used_size(&engine, handle);
+    }
+    used_size
 }
 
 pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
@@ -76,9 +91,40 @@ pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -
     engine.get_property_int_cf(handle, &prop)
 }
 
+/// Gets the number of blob files at given level of given column family.
+pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
+}
+
 /// Gets the number of immutable mem-table of given column family.
 pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
+}
+
+pub fn ingest_maybe_slowdown_writes(db: &DB, cf: &str) -> bool {
+    let handle = get_cf_handle(db, cf).unwrap();
+    if let Some(n) = get_cf_num_files_at_level(db, handle, 0) {
+        let options = db.get_options_cf(handle);
+        let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+        // Leave enough buffer to tolerate heavy write workload,
+        // which may flush some memtables in a short time.
+        if n > u64::from(slowdown_trigger) / 2 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
+pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
+    for cf_name in engine.cf_names() {
+        let cf = engine.cf_handle(cf_name).unwrap();
+        if engine.get_options_cf(cf).get_disable_auto_compactions() {
+            return true;
+        }
+    }
+    false
 }
 
 pub struct RocksCFOptions<'a> {
