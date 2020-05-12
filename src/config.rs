@@ -881,6 +881,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
@@ -898,7 +899,6 @@ impl Default for DbConfig {
             raftcf: RaftCfConfig::default(),
             ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
-            info_log_level: LogLevel::Info,
         }
     }
 }
