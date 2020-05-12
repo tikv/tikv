@@ -504,7 +504,7 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FileCofnig, Mock};
+    use crate::config::{FileConfig, Mock};
     use crate::master_key::tests::MockBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
@@ -702,8 +702,8 @@ mod tests {
         let get_file = manager.get_file("foo").unwrap();
         assert_eq!(new_file, get_file);
         manager.delete_file("foo").unwrap();
-        manager.delete_file("foo").unwrap_err();
-        manager.delete_file("foo1").unwrap_err();
+        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo1").unwrap();
 
         // Must be plaintext if file not found.
         let file = manager.get_file("foo").unwrap();
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(file1, file);
 
         // Source file not exists.
-        manager.link_file("not exists", "not exists1").unwrap_err();
+        manager.link_file("not exists", "not exists1").unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
         manager.link_file("foo2", "foo1").unwrap_err();
@@ -760,10 +760,13 @@ mod tests {
         assert_eq!(file1, file);
 
         // foo must not exist (should be plaintext)
-        manager.rename_file("foo", "foo2").unwrap_err();
-        let file2 = manager.get_file("foo").unwrap();
-        assert_ne!(file2, file);
-        assert_eq!(file2.method, DBEncryptionMethod::Plaintext);
+        manager.rename_file("foo", "foo2").unwrap();
+        let file_foo = manager.get_file("foo").unwrap();
+        assert_ne!(file_foo, file);
+        assert_eq!(file_foo.method, DBEncryptionMethod::Plaintext);
+        let file_foo2 = manager.get_file("foo2").unwrap();
+        assert_ne!(file_foo2, file);
+        assert_eq!(file_foo2.method, DBEncryptionMethod::Plaintext);
     }
 
     #[test]
@@ -865,7 +868,7 @@ mod tests {
     fn test_key_manager_rotate_on_key_expose() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            config: FileCofnig {
+            config: FileConfig {
                 path: key_path.to_str().unwrap().to_owned(),
             },
         };
@@ -911,7 +914,7 @@ mod tests {
     fn test_expose_keys_on_insecure_backend() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            config: FileCofnig {
+            config: FileConfig {
                 path: key_path.to_str().unwrap().to_owned(),
             },
         };

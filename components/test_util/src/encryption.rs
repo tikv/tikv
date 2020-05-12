@@ -6,7 +6,7 @@ use encryption::{DataKeyManager, FileConfig, MasterKeyConfig, Result};
 use kvproto::encryptionpb::EncryptionMethod;
 
 pub fn create_test_key_file(path: &str) {
-    let mut file = File::create(path.clone()).unwrap();
+    let mut file = File::create(path).unwrap();
     file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
         .unwrap();
 }
