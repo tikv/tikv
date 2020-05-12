@@ -58,7 +58,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1589252686963,
+  "iteration": 1589260003867,
   "links": [],
   "panels": [
     {
@@ -23715,8 +23715,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 52
+        "x": 12,
+        "y": 44
       },
       "id": 4559,
       "legend": {
@@ -23898,7 +23898,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "Test-Cluster-TiKV-Details",
-  "uid": "RDVQiEzZz",
-  "version": 23
+  "title": "Test-Cluster-TiKV-Detailssdf",
+  "uid": "RDVQiEzZzasdf",
+  "version": 1
 }
