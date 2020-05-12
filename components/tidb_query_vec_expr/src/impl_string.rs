@@ -3,6 +3,7 @@
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
+use crate::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
@@ -492,10 +493,21 @@ pub fn to_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(capture = [extra])]
 #[inline]
-pub fn lower(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|b| b.to_vec()))
+pub fn lower(extra: &RpnFnCallExtra, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match arg.as_ref() {
+        Some(data) => {
+            if extra.ret_field_type.as_accessor().is_binary_string_like() {
+                return Ok(Some(data.to_vec()));
+            }
+            match str::from_utf8(data) {
+                Ok(str_data) => Ok(Some(str_data.to_lowercase().into_bytes())),
+                Err(e) => Err(box_err!("invalid input value: {:?}", e)),
+            }
+        }
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -541,6 +553,7 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
@@ -1928,6 +1941,7 @@ mod tests {
 
     #[test]
     fn test_lower() {
+        // Test binary string case
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
             (Some(b"123".to_vec()), Some(b"123".to_vec())),
@@ -1941,6 +1955,37 @@ mod tests {
             ),
             (
                 Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::Lower)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+
+        // Test non-binary string case
+        let cases = vec![
+            (Some(b"HELLO".to_vec()), Some(b"hello".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("CAFÉ".as_bytes().to_vec()),
+                Some("café".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 Some("ночь на окраине москвы".as_bytes().to_vec()),
             ),
             (
