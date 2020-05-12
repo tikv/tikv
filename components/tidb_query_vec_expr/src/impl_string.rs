@@ -6,7 +6,10 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
-use tidb_query_shared_expr::string::{encoded_size, line_wrap, validate_target_len_for_pad};
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, strip_whitespace, validate_target_len_for_pad,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
+};
 
 const SPACE: u8 = 0o40u8;
 
@@ -506,6 +509,28 @@ pub fn to_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
             }
         }
         None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn from_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match bs.as_ref() {
+        Some(bytes) => {
+            let input_copy = strip_whitespace(bytes);
+            let will_overflow = input_copy
+                .len()
+                .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+                .is_none();
+            // mysql will return "" when the input is incorrectly padded
+            let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+            if will_overflow || invalid_padding {
+                Ok(Some(Vec::new()))
+            } else {
+                Ok(base64::decode_config(&input_copy, base64::STANDARD).ok())
+            }
+        }
+        _ => Ok(None),
     }
 }
 
@@ -1959,5 +1984,48 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expected_output);
         }
+    }
+
+    #[test]
+    fn test_from_base64() {
+        let tests = vec![
+            ("", ""),
+            ("YWJj", "abc"),
+            ("YWIgYw==", "ab c"),
+            ("YWIKYw==", "ab\nc"),
+            ("YWIJYw==", "ab\tc"),
+            ("cXdlcnR5MTIzNDU2", "qwerty123456"),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSkt\tMTU5PUFFSU1RVVld\nYWVphYmNkZ\rWZnaGlqa2xt   bm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+        ];
+        for (arg, expected) in tests {
+            let param = Some(arg.to_string().into_bytes());
+            let expected_output = Some(expected.to_string().into_bytes());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(param)
+                .evaluate::<Bytes>(ScalarFuncSig::FromBase64)
+                .unwrap();
+            assert_eq!(output, expected_output);
+        }
+
+        let invalid_base64_output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"src".to_vec()))
+            .evaluate(ScalarFuncSig::FromBase64)
+            .unwrap();
+        assert_eq!(invalid_base64_output, Some(b"".to_vec()));
     }
 }
