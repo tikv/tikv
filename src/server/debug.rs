@@ -484,7 +484,7 @@ impl Debugger {
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
-        let check_value = |value: Vec<u8>| -> Result<()> {
+        let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
             box_try!(local_state.merge_from_bytes(&value));
 
@@ -530,7 +530,8 @@ impl Debugger {
             Ok(())
         };
 
-        for (key, value) in &mut iter {
+        while box_try!(iter.next()) {
+            let (key, value) = (iter.key(), iter.value());
             if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
                     continue;
@@ -1145,8 +1146,9 @@ impl MvccInfoIterator {
     }
 
     fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
-        let mut iter = &mut self.lock_iter;
-        if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
+        let iter = &mut self.lock_iter;
+        if box_try!(iter.next()) {
+            let (key, value) = (iter.key(), iter.value());
             let lock = box_try!(Lock::parse(&value));
             let mut lock_info = MvccLock::default();
             match lock.lock_type {
@@ -1158,7 +1160,7 @@ impl MvccInfoIterator {
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            return Ok(Some((key, lock_info)));
+            return Ok(Some((key.to_owned(), lock_info)));
         };
         Ok(None)
     }
