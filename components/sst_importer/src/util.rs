@@ -167,13 +167,13 @@ mod tests {
 
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
-        prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager.clone()).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
             .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
-        prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager.clone()).unwrap();
+        prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
             .unwrap();
         check_hard_link(&sst_path, 2);
