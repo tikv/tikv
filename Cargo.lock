@@ -1048,6 +1048,7 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
@@ -3910,6 +3911,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_sst_importer",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio-sync",
@@ -4285,12 +4287,15 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "fail",
  "grpcio",
+ "kvproto",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time 0.1.42",
 ]

@@ -177,12 +177,13 @@ impl Dicts {
     }
 
     fn delete_file(&mut self, fname: &str) -> Result<()> {
-        let file = self.file_dict.files.remove(fname).ok_or_else(|| {
-            Error::Io(IoError::new(
-                ErrorKind::NotFound,
-                format!("file not found, {}", fname),
-            ))
-        })?;
+        let file = match self.file_dict.files.remove(fname) {
+            Some(file_info) => file_info,
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                return Ok(());
+            }
+        };
 
         // TOOD GC unused data keys.
         self.save_file_dict()?;
@@ -193,17 +194,13 @@ impl Dicts {
     }
 
     fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = self
-            .file_dict
-            .files
-            .get(src_fname)
-            .cloned()
-            .ok_or_else(|| {
-                Error::Io(IoError::new(
-                    ErrorKind::NotFound,
-                    format!("file not found, {}", src_fname),
-                ))
-            })?;
+        let file = match self.file_dict.files.get(src_fname) {
+            Some(file_info) => file_info.clone(),
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                return Ok(());
+            }
+        };
         if self.file_dict.files.get(dst_fname).is_some() {
             return Err(Error::Io(IoError::new(
                 ErrorKind::AlreadyExists,
@@ -220,12 +217,13 @@ impl Dicts {
     }
 
     fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = self.file_dict.files.remove(src_fname).ok_or_else(|| {
-            Error::Io(IoError::new(
-                ErrorKind::NotFound,
-                format!("file not found, {}", src_fname),
-            ))
-        })?;
+        let file = match self.file_dict.files.remove(src_fname) {
+            Some(file_info) => file_info,
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                return Ok(());
+            }
+        };
         let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
         self.save_file_dict()?;
@@ -519,6 +517,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    // TODO(yiwu): use the similar method in test_util crate instead.
     fn new_tmp_key_manager(
         temp: Option<tempfile::TempDir>,
         method: Option<EncryptionMethod>,
@@ -539,6 +538,7 @@ mod tests {
         (tmp, manager)
     }
 
+    // TODO(yiwu): use the similar method in test_util crate instead.
     fn create_key_file(name: &str) -> (PathBuf, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
