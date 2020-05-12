@@ -610,7 +610,7 @@ fn test_serde_custom_tikv_config() {
         data_encryption_method: EncryptionMethod::Aes128Ctr,
         data_key_rotation_period: ReadableDuration::days(14),
         master_key: MasterKeyConfig::File {
-            config: FileCofnig {
+            config: FileConfig {
                 path: "/master/key/path".to_owned(),
             },
         },
