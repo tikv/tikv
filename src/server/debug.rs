@@ -9,15 +9,14 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, SeekKey,
+    CompactOptions, DBBottommostLevelCompaction,
     DB,
 };
-use engine::IterOptionsExt;
 use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch, RocksEngineIterator};
 use engine_traits::{
     IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, WriteBatch, WriteOptions, Iterator as EngineIterator,
+    TablePropertiesExt, WriteBatch, WriteOptions, Iterator as EngineIterator, SeekKey,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -45,7 +44,6 @@ use tikv_util::worker::Worker;
 use txn_types::Key;
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = RocksIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -478,10 +476,8 @@ impl Debugger {
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
-        )
-        .build_read_opts();
-        let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
-        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
+        );
+        let mut iter = box_try!(self.engines.kv.c().iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
@@ -841,9 +837,9 @@ fn recover_mvcc_for_range(
 }
 
 pub struct MvccChecker {
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
+    lock_iter: RocksEngineIterator,
+    default_iter: RocksEngineIterator,
+    write_iter: RocksEngineIterator,
     scan_count: usize,
     lock_fix_count: usize,
     default_fix_count: usize,
@@ -862,10 +858,8 @@ impl MvccChecker {
                 Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
-            )
-            .build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            );
+            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
             iter.seek(SeekKey::Start).unwrap();
             Ok(iter)
         };
@@ -882,7 +876,7 @@ impl MvccChecker {
         })
     }
 
-    fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
+    fn min_key(key: Option<Vec<u8>>, iter: &RocksEngineIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
         let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
@@ -1110,9 +1104,9 @@ fn region_overlap(r1: &Region, r2: &Region) -> bool {
 pub struct MvccInfoIterator {
     limit: u64,
     count: u64,
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
+    lock_iter: RocksEngineIterator,
+    default_iter: RocksEngineIterator,
+    write_iter: RocksEngineIterator,
 }
 
 pub type Kv = (Vec<u8>, Vec<u8>);
@@ -1132,9 +1126,8 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOptions::new(None, to, false).build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
+            let readopts = IterOptions::new(None, to, false);
+            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
             iter.seek(SeekKey::from(from)).unwrap();
             Ok(iter)
         };
@@ -1205,7 +1198,7 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
+    fn next_grouped(iter: &mut RocksEngineIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
         if iter.valid().unwrap() {
             let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
