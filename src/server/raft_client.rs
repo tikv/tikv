@@ -24,12 +24,12 @@ use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
-const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: i32 = 128 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: i32 = 128 * 1024 * 1024;
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
 
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
+const RAFT_MSG_MAX_BATCH_SIZE: usize = 15;
 const RAFT_MSG_NOTIFY_SIZE: usize = 8;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
