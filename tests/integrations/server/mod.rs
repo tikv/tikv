@@ -8,6 +8,7 @@ mod status_server;
 
 use std::sync::Arc;
 
+use ::security::{SecurityConfig, SecurityManager};
 use futures::Future;
 use grpcio::RpcStatusCode;
 use grpcio::*;
@@ -17,7 +18,6 @@ use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::tikvpb::{
     create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
 };
-use ::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
