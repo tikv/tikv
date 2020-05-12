@@ -58,7 +58,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1588857246639,
+  "iteration": 1589252686963,
   "links": [],
   "panels": [
     {
@@ -23259,7 +23259,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Total number of ecryption data keys in use",
+      "description": "Total number of encryption data keys in use",
       "fill": 1,
       "gridPos": {
         "h": 8,
@@ -23293,9 +23293,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(tikv_encryption_data_key_storage_total{instance=~\"$instance\"}) by (instance)",
+          "expr": "tikv_encryption_data_key_storage_total",
           "format": "time_series",
           "intervalFactor": 1,
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ],
@@ -23303,7 +23304,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Ecryption data keys",
+      "title": "Encryption data keys",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -23319,6 +23320,7 @@
       },
       "yaxes": [
         {
+          "decimals": 0,
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -23327,6 +23329,7 @@
           "show": true
         },
         {
+          "decimals": 0,
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -23380,9 +23383,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(tikv_encryption_file_num{instance=~\"$instance\"}) by (instance)",
+          "expr": "tikv_encryption_file_num",
           "format": "time_series",
           "intervalFactor": 1,
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ],
@@ -23433,7 +23437,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Flag to indicate if KeyDictionary encryption is initialized",
+      "description": "Flag to indicate if encryption is initialized",
       "fill": 1,
       "gridPos": {
         "h": 8,
@@ -23467,9 +23471,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(tikv_encryption_is_initialized{instance=~\"$instance\"}) by (instance)",
+          "expr": "tikv_encryption_is_initialized",
           "format": "time_series",
           "intervalFactor": 1,
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ],
@@ -23477,7 +23482,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Ecryption initialized",
+      "title": "Encryption initialized",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -23493,6 +23498,7 @@
       },
       "yaxes": [
         {
+          "decimals": 0,
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -23501,6 +23507,7 @@
           "show": true
         },
         {
+          "decimals": 0,
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -23520,7 +23527,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Total size of ecryption meta files",
+      "description": "Total size of encryption meta files",
       "fill": 1,
       "gridPos": {
         "h": 8,
@@ -23554,10 +23561,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_encryption_meta_file_size_bytes{instance=~\"$instance\"}[1m])) by (name)",
+          "expr": "tikv_encryption_meta_file_size_bytes",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "{{name}}",
+          "legendFormat": "{{name}}-{{instance}}",
           "refId": "A"
         }
       ],
@@ -23565,7 +23572,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Ecryption meta files size",
+      "title": "Encryption meta files size",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -23581,7 +23588,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "decbytes",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -23818,11 +23825,11 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds{instance=~\"$instance\" ,operation=\"write\"}[1m])) by (type)",
+          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds{instance=~\"$instance\"}[1m])) by (type, operation)",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
-          "legendFormat": "",
+          "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ],
@@ -23830,96 +23837,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Writing file duration",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Histogram of writing or reading file duration",
-      "fill": 1,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 52
-      },
-      "id": 4647,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": true,
-        "rightSide": true,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds{instance=~\"$instance\" ,operation=\"read\"}[1m])) by (type)",
-          "format": "time_series",
-          "instant": false,
-          "intervalFactor": 1,
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Reading file duration",
+      "title": "Read/write encryption meta duration",
       "tooltip": {
         "shared": true,
         "sort": 0,
