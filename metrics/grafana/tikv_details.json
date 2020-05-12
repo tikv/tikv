@@ -23744,7 +23744,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(tikv_encryption_write_read_file_duration_micros{instance=~\"$instance\"}) by (type, operation)",
+          "expr": "avg(tikv_encryption_write_read_file_duration_micros) by (type, operation)",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
@@ -23752,7 +23752,7 @@
           "refId": "A"
         },
         {
-          "expr": "max(tikv_encryption_write_read_file_duration_micros{instance=~\"$instance\"}) by (type, operation)",
+          "expr": "max(tikv_encryption_write_read_file_duration_micros) by (type, operation)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "max-{{type}}-{{operation}}",
