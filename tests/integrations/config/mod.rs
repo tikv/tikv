@@ -210,7 +210,7 @@ fn test_serde_custom_tikv_config() {
         purge_obsolete_files_period: ReadableDuration::secs(1),
     };
     value.rocksdb = DbConfig {
-        info_log_level: LogLevel::Info,
+        
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
@@ -227,6 +227,7 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
+        info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
