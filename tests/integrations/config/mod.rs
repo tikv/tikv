@@ -210,7 +210,6 @@ fn test_serde_custom_tikv_config() {
         purge_obsolete_files_period: ReadableDuration::secs(1),
     };
     value.rocksdb = DbConfig {
-        
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
