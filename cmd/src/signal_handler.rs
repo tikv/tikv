@@ -4,8 +4,9 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
-    use engine::rocks::util::stats as rocksdb_stats;
     use engine::Engines;
+    use engine_traits::MiscExt;
+    use engine_rocks::Compat;
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
     use signal::trap::Trap;
@@ -24,8 +25,8 @@ mod imp {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
-                        info!("{:?}", rocksdb_stats::dump(&engines.kv));
-                        info!("{:?}", rocksdb_stats::dump(&engines.raft));
+                        info!("{:?}", engines.kv.c().dump_stats());
+                        info!("{:?}", engines.raft.c().dump_stats());
                     }
                 }
                 // TODO: handle more signal
