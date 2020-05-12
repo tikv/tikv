@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result, ALL_CFS};
+use engine_traits::{MiscExt, Range, Result, ALL_CFS, CFNamesExt};
 use rocksdb::Range as RocksRange;
 
 impl MiscExt for RocksEngine {
@@ -91,6 +91,31 @@ impl MiscExt for RocksEngine {
 
     fn sync_wal(&self) -> Result<()> {
         Ok(self.as_inner().sync_wal()?)
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
+        const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
+
+        let mut s = Vec::with_capacity(1024);
+        // common rocksdb stats.
+        for name in self.cf_names() {
+            let handler = util::get_cf_handle(self.as_inner(), name)?;
+            if let Some(v) = self.as_inner().get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                s.extend_from_slice(v.as_bytes());
+            }
+        }
+
+        if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        // more stats if enable_statistics is true.
+        if let Some(v) = self.as_inner().get_statistics() {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        Ok(box_try!(String::from_utf8(s)))
     }
 }
 
