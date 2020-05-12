@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use rocksdb::{ReadOptions as RawReadOptions, WriteOptions as RawWriteOptions, TableFilter, TableProperties};
+use rocksdb::{
+    ReadOptions as RawReadOptions, TableFilter, TableProperties, WriteOptions as RawWriteOptions,
+};
 use tikv_util::codec::number;
 
 pub struct RocksReadOptions(RawReadOptions);

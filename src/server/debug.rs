@@ -8,15 +8,12 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction,
-    DB,
-};
+use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch, RocksEngineIterator};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, WriteBatch, WriteOptions, Iterator as EngineIterator, SeekKey,
+    IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, SeekKey, TableProperties,
+    TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -288,11 +285,8 @@ impl Debugger {
         } else {
             None
         };
-        let iter_opt = IterOptions::new(
-            Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)),
-            end,
-            false
-        );
+        let iter_opt =
+            IterOptions::new(Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)), end, false);
         let mut iter = box_try!(db.c().iterator_cf_opt(cf, iter_opt));
         if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
@@ -876,7 +870,11 @@ impl MvccChecker {
         })
     }
 
-    fn min_key(key: Option<Vec<u8>>, iter: &RocksEngineIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
+    fn min_key(
+        key: Option<Vec<u8>>,
+        iter: &RocksEngineIterator,
+        f: fn(&[u8]) -> &[u8],
+    ) -> Option<Vec<u8>> {
         let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
