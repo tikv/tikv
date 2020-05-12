@@ -11,15 +11,19 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
+<<<<<<< HEAD
+=======
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use security::SecurityManager;
+use tikv_util::time::duration_to_sec;
+use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
+>>>>>>> e26bc91... encryption: move encryption config to under security config (#7800)
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::time::duration_to_sec;
-use tikv_util::{Either, HandyRwLock};
-use txn_types::TimeStamp;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";

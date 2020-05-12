@@ -17,9 +17,9 @@ use grpcio::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raftstore::router::RaftStoreRouter;
+use security::SecurityManager;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
-use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
