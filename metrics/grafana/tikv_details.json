@@ -23652,15 +23652,22 @@
           "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"encrypt_data_nanos\"}[1m])) by (req)",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "{{req}}",
+          "legendFormat": "encrypt-{{req}}",
           "refId": "A"
+        },
+        {
+          "expr": "sum(rate(tikv_coprocessor_rocksdb_perf{instance=~\"$instance\" ,metric=\"decrypt_data_nanos\"}[1m])) by (req)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "decrypt-{{req}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Encrypt data nanos",
+      "title": "Encrypt/decrypt data nanos",
       "tooltip": {
         "shared": true,
         "sort": 0,
