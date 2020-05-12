@@ -12,7 +12,6 @@ byteorder = "1.2"
 
 codec = { path = "../codec" }
 failure = "0.1"
-flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 hex = "0.3"
 match_template = { path = "../match_template" }
 num = { version = "0.2", default-features = false }

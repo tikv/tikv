@@ -10,4 +10,6 @@ rand = "0.6.5"
 safemem = { version = "0.3", default-features = false }
 time = "0.1"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
+byteorder = "1.2"
 

@@ -383,6 +383,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
         // impl_encryption
+        ScalarFuncSig::Compress => compress_fn_meta(),
+        ScalarFuncSig::Uncompress => uncompress_fn_meta(),
         ScalarFuncSig::UncompressedLength => uncompressed_length_fn_meta(),
         ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),

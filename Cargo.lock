@@ -4505,7 +4505,6 @@ dependencies = [
  "chrono",
  "codec",
  "failure",
- "flate2",
  "hex 0.3.2",
  "match_template",
  "num",
@@ -4527,6 +4526,8 @@ dependencies = [
 name = "tidb_query_shared_expr"
 version = "0.0.1"
 dependencies = [
+ "byteorder",
+ "flate2",
  "rand 0.6.5",
  "safemem",
  "tidb_query_datatype",

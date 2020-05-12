@@ -1,11 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::io::Read;
 
 use crate::ScalarFunc;
-use flate2::read::{ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
 use openssl::hash::{self, MessageDigest};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::{Error, EvalContext, Result};
@@ -64,28 +61,12 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        use byteorder::{ByteOrder, LittleEndian};
+        use tidb_query_shared_expr::encryption;
         let input = try_opt!(self.children[0].eval_string(ctx, row));
 
-        // according to MySQL doc: Empty strings are stored as empty strings.
-        if input.is_empty() {
-            return Ok(Some(Cow::Borrowed(b"")));
-        }
-        let mut e = ZlibEncoder::new(input.as_ref(), Compression::default());
-        // preferred capacity is input length plus four bytes length header and one extra end "."
-        // max capacity is isize::max_value(), or will panic with "capacity overflow"
-        let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
-        vec.resize(4, 0);
-        LittleEndian::write_u32(&mut vec, input.len() as u32);
-        match e.read_to_end(&mut vec) {
-            Ok(_) => {
-                // according to MySQL doc: append "." if ends with space
-                if vec[vec.len() - 1] == 32 {
-                    vec.push(b'.');
-                }
-                Ok(Some(Cow::Owned(vec)))
-            }
-            _ => Ok(None),
+        match encryption::compress(input.as_ref()) {
+            Some(vec) => Ok(Some(Cow::Owned(vec))),
+            None => Ok(None),
         }
     }
 
@@ -95,30 +76,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        use byteorder::{ByteOrder, LittleEndian};
+        use tidb_query_shared_expr::encryption;
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        if input.is_empty() {
-            return Ok(Some(Cow::Borrowed(b"")));
-        }
-        if input.len() <= 4 {
-            ctx.warnings.append_warning(Error::zlib_data_corrupted());
-            return Ok(None);
-        }
-
-        let len = LittleEndian::read_u32(&input[0..4]) as usize;
-        let mut decoder = ZlibDecoder::new(&input[4..]);
-        let mut vec = Vec::with_capacity(len);
-        // if the length of uncompressed string is greater than the length we read from the first
-        //     four bytes, return null and generate a length corrupted warning.
-        // if the length of uncompressed string is zero or uncompress fail, return null and generate
-        //     a data corrupted warning
-        match decoder.read_to_end(&mut vec) {
-            Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(Some(Cow::Owned(vec))),
-            Ok(decoded_len) if len < decoded_len => {
-                ctx.warnings.append_warning(Error::zlib_length_corrupted());
-                Ok(None)
-            }
-            _ => {
+        match encryption::uncompress(input.as_ref()) {
+            Some(vec) => Ok(Some(Cow::Owned(vec))),
+            None => {
                 ctx.warnings.append_warning(Error::zlib_data_corrupted());
                 Ok(None)
             }

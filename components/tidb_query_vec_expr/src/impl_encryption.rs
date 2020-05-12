@@ -17,6 +17,20 @@ const SHA512: i64 = 512;
 
 #[rpn_fn]
 #[inline]
+pub fn compress(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    use tidb_query_shared_expr::encryption;
+    Ok(arg.as_ref().and_then(|s| encryption::compress(s)))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn uncompress(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    use tidb_query_shared_expr::encryption;
+    Ok(arg.as_ref().and_then(|s| encryption::uncompress(s)))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn md5(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => hex_digest(MessageDigest::md5(), arg).map(Some),
@@ -116,6 +130,65 @@ mod tests {
                 .evaluate::<O>(sig)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_compress() {
+        let test_cases = vec![
+            (
+                b"hello world".to_vec(),
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+            ),
+            (b"".to_vec(), ""),
+            (
+                b"hello wor012".to_vec(),
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let expect_output = Some(hex::decode(expect_output.as_bytes().to_vec()).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Bytes>(ScalarFuncSig::Compress)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Compress);
+    }
+
+    #[test]
+    fn test_uncompress() {
+        let test_cases = vec![
+            ("", Some("")),
+            (
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Some("hello world"),
+            ),
+            (
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+                Some("hello wor012"),
+            ),
+            (
+                "12000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Some("hello world"),
+            ),
+            ("010203", None),
+            ("01020304", None),
+            ("020000000000", None),
+            ("0000000001", None),
+            ("02000000789CCB48CDC9C95728CF2FCA4901001A0B045D", None),
+        ];
+        for (arg, expect_output) in test_cases {
+            let arg = hex::decode(arg.as_bytes()).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Bytes>(ScalarFuncSig::Uncompress)
+                .unwrap();
+            let expect_output = expect_output.map(|s| Bytes::from(s));
+            assert_eq!(output, expect_output);
+        }
+        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Uncompress);
     }
 
     #[test]
