@@ -9,7 +9,7 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, SeekKey,
     DB,
 };
 use engine::IterOptionsExt;
@@ -17,7 +17,7 @@ use engine::{self, Engines};
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, WriteBatch, WriteOptions,
+    TablePropertiesExt, WriteBatch, WriteOptions, Iterator as EngineIterator,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -30,7 +30,6 @@ use raft::{self, RawNode};
 
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::Iterator as EngineIterator;
 use engine_rocks::properties::MvccProperties;
 use engine_rocks::RangeProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
@@ -286,14 +285,17 @@ impl Debugger {
         cf: &str,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let db = &self.engines.kv;
-        let cf_handle = get_cf_handle(db, cf).unwrap();
-        let mut read_opt = ReadOptions::new();
-        read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start.to_vec());
-        if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end.to_vec());
-        }
-        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        let end = if !end.is_empty() {
+            Some(KeyBuilder::from_vec(end.to_vec(), 0, 0))
+        } else {
+            None
+        };
+        let iter_opt = IterOptions::new(
+            Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)),
+            end,
+            false
+        );
+        let mut iter = box_try!(db.c().iterator_cf_opt(cf, iter_opt));
         if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
