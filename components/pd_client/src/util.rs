@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use tikv_util::collections::HashSet;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -19,12 +18,13 @@ use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
+use security::SecurityManager;
+use tikv_util::collections::HashSet;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,
