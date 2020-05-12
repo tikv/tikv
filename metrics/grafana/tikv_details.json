@@ -23710,7 +23710,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "${DS_TEST-CLUSTER}",
-      "description": "Histogram of writing or reading file duration",
+      "description": "Writing or reading file duration (microsecond)",
       "fill": 1,
       "gridPos": {
         "h": 8,
@@ -23744,12 +23744,19 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds{instance=~\"$instance\"}[1m])) by (type, operation)",
+          "expr": "avg(tikv_encryption_write_read_file_duration_micros{instance=~\"$instance\"}) by (type, operation)",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
-          "legendFormat": "{{instance}}",
+          "legendFormat": "avg-{{type}}-{{operation}}",
           "refId": "A"
+        },
+        {
+          "expr": "max(tikv_encryption_write_read_file_duration_micros{instance=~\"$instance\"}) by (type, operation)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "max-{{type}}-{{operation}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
