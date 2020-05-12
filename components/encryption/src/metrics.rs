@@ -15,7 +15,7 @@ lazy_static::lazy_static! {
         "tikv_encryption_is_initialized",
         "Flag to indicate if KeyDictionary encryption is initialized"
     ).unwrap();
-    pub static ref ENCRYPT_DECRPTION_FILE_HISTOGRAM: GaugeVec = register_gauge_vec!(
+    pub static ref ENCRYPT_DECRPTION_FILE_GAUGE: GaugeVec = register_gauge_vec!(
         "tikv_encryption_write_read_file_duration_seconds",
         "Histogram of writing or reading file duration",
         &["type", "operation"]

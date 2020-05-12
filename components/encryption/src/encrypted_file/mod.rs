@@ -49,7 +49,7 @@ impl<'a> EncryptedFile<'a> {
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
-                ENCRYPT_DECRPTION_FILE_HISTOGRAM
+                ENCRYPT_DECRPTION_FILE_GAUGE
                     .with_label_values(&[self.name, "read"])
                     .set(start.elapsed().as_micros() as f64);
 
@@ -87,7 +87,7 @@ impl<'a> EncryptedFile<'a> {
         let base_dir = File::open(&self.base)?;
         base_dir.sync_all()?;
 
-        ENCRYPT_DECRPTION_FILE_HISTOGRAM
+        ENCRYPT_DECRPTION_FILE_GAUGE
             .with_label_values(&[self.name, "write"])
             .set(start.elapsed().as_micros() as f64);
 
