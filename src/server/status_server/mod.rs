@@ -14,6 +14,7 @@ use pprof::protos::Message;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use reqwest::{self, blocking::Client};
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -285,7 +286,7 @@ where
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
-            let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
+            let res = match decode_json(body.into_bytes().as_ref()) {
                 Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -802,6 +803,29 @@ fn handle_fail_points_request(
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::empty())
             .unwrap())),
+    }
+}
+
+// Decode different type of json value to string value
+fn decode_json(
+    data: &[u8],
+) -> std::result::Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+    let json: Value = serde_json::from_slice(data)?;
+    if let Value::Object(map) = json {
+        let mut dst = std::collections::HashMap::new();
+        for (k, v) in map.into_iter() {
+            let v = match v {
+                Value::Bool(v) => format!("{}", v),
+                Value::Number(v) => format!("{}", v),
+                Value::String(v) => v,
+                Value::Array(_) => return Err("array type are not supported".to_owned().into()),
+                _ => return Err("wrong format".to_owned().into()),
+            };
+            dst.insert(k, v);
+        }
+        Ok(dst)
+    } else {
+        Err("wrong format".to_owned().into())
     }
 }
 
