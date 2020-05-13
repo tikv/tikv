@@ -29,7 +29,6 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use encryption::EncryptionConfig;
 use engine::rocks::util::{
     db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
@@ -46,9 +45,9 @@ use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
+use security::SecurityConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
-use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
@@ -1983,9 +1982,6 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
 
     #[config(skip)]
-    pub encryption: EncryptionConfig,
-
-    #[config(skip)]
     pub import: ImportConfig,
 
     #[config(submodule)]
@@ -2019,7 +2015,6 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
-            encryption: EncryptionConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
@@ -2499,7 +2494,6 @@ impl From<&str> for Module {
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
             "security" => Module::Security,
-            "encryption" => Module::Encryption,
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
