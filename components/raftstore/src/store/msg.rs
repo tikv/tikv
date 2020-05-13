@@ -11,6 +11,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -343,6 +344,8 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Asks region to change replication mode.
+    UpdateReplicationMode,
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -361,6 +364,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }
@@ -394,6 +398,8 @@ pub enum StoreMsg {
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -418,6 +424,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
+            StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }

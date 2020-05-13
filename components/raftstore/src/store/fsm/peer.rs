@@ -438,6 +438,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -451,6 +452,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .build(&mut self.ctx.raft_metrics.propose)
         {
             self.propose_raft_command(req, cb)
+        }
+    }
+
+    fn on_update_replication_mode(&mut self) {
+        self.fsm
+            .peer
+            .switch_replication_mode(&self.ctx.global_replication_state);
+        if self.fsm.peer.is_leader() {
+            self.reset_raft_tick(GroupState::Ordered);
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -986,6 +997,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
             self.register_raft_base_tick();
+        } else {
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -1871,7 +1884,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             };
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            new_peer.peer.init_commit_group(&mut *replication_state);
+            new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
             let meta_peer = new_peer.peer.peer.clone();
 
@@ -2389,12 +2402,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if prev_region.get_peers() != region.get_peers() {
             let mut state = self.ctx.global_replication_state.lock().unwrap();
-            state.calculate_commit_group(region.get_peers());
-            self.fsm
-                .peer
-                .raft_group
-                .raft
-                .assign_commit_groups(&state.group_buffer);
+            let gb = state.calculate_commit_group(region.get_peers());
+            self.fsm.peer.raft_group.raft.assign_commit_groups(&gb);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3046,6 +3055,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
         self.fsm.peer.heartbeat_pd(self.ctx);
+        if self.ctx.cfg.hibernate_regions && self.fsm.peer.replication_mode_need_catch_up() {
+            self.register_pd_heartbeat_tick();
+        }
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
