@@ -510,25 +510,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compression_ratio() {
-        let path = Builder::new()
-            .prefix("_util_rocksdb_test_compression_ratio")
-            .tempdir()
-            .unwrap();
-        let path_str = path.path().to_str().unwrap();
-
-        let opts = DBOptions::new();
-        let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
-        let db = new_engine_opt(path_str, opts, vec![cf_opts]).unwrap();
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
-
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_none());
-        db.put_cf(cf, b"a", b"a").unwrap();
-        db.flush_cf(cf, true).unwrap();
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
-    }
-
-    #[test]
     fn test_compact_files_in_range() {
         let temp_dir = Builder::new()
             .prefix("test_compact_files_in_range")
