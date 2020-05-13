@@ -11,7 +11,6 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use security::SecurityManager;
 use tikv_util::time::duration_to_sec;
 use tikv_util::{Either, HandyRwLock};
