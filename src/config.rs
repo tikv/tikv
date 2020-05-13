@@ -29,7 +29,6 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use encryption::EncryptionConfig;
 use engine::rocks::util::{
     db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
@@ -46,9 +45,9 @@ use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
+use security::SecurityConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
-use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
@@ -619,6 +618,11 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -1978,9 +1982,6 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
 
     #[config(skip)]
-    pub encryption: EncryptionConfig,
-
-    #[config(skip)]
     pub import: ImportConfig,
 
     #[config(submodule)]
@@ -2014,7 +2015,6 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
-            encryption: EncryptionConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
@@ -2506,7 +2506,6 @@ impl From<&str> for Module {
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
             "security" => Module::Security,
-            "encryption" => Module::Encryption,
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
