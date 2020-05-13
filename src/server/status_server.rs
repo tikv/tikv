@@ -27,10 +27,10 @@ use std::sync::Arc;
 use super::Result;
 use crate::config::ConfigController;
 use pd_client::RpcClient;
+use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
-use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod profiler_guard {
@@ -708,9 +708,9 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
-    use tikv_util::security::SecurityConfig;
 
     #[test]
     fn test_status_service() {

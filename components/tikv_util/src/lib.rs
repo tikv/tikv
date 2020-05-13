@@ -11,8 +11,6 @@ extern crate futures;
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
@@ -51,7 +49,6 @@ pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod security;
 pub mod sys;
 pub mod threadpool;
 pub mod time;

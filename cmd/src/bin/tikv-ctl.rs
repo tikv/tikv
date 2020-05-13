@@ -38,9 +38,9 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
+use security::{SecurityConfig, SecurityManager};
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
 use txn_types::Key;
 
@@ -64,9 +64,10 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+            let key_manager =
+                DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .unwrap()
+                    .map(|key_manager| Arc::new(key_manager));
             let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
@@ -2239,7 +2240,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+    let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(|key_manager| Arc::new(key_manager));
     let env = get_env(key_manager, None).unwrap();
