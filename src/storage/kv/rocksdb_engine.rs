@@ -212,6 +212,8 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
     let mut wb = engine.kv.c().write_batch();
     for rev in modifies {
         let res = match rev {
