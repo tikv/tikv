@@ -37,7 +37,6 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-use metrics::ReqTag;
 use rand::prelude::*;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
