@@ -219,6 +219,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -483,6 +484,7 @@ dependencies = [
  "raft",
  "raftstore",
  "resolved_ts",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -603,6 +605,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde_json",
  "signal",
  "slog",
@@ -2023,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
+source = "git+https://github.com/tikv/rust-rocksdb.git#002ff06baabb30e6b5db5a45e217e096f793e20a"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2042,7 +2045,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
+source = "git+https://github.com/tikv/rust-rocksdb.git#002ff06baabb30e6b5db5a45e217e096f793e20a"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2626,6 +2629,7 @@ dependencies = [
  "log",
  "prometheus",
  "quick-error",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -3416,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#7b091190a0f81379ae3635e838e2be5558a6294c"
+source = "git+https://github.com/tikv/rust-rocksdb.git#002ff06baabb30e6b5db5a45e217e096f793e20a"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3662,6 +3666,19 @@ name = "scopeguard"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42e15e59b18a828bbf5c58ea01debb36b9b096346de35d941dcb89009f24a0d"
+
+[[package]]
+name = "security"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "grpcio",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tempfile",
+ "tikv_util",
+]
 
 [[package]]
 name = "security-framework"
@@ -4244,6 +4261,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -4285,10 +4303,12 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "fail",
  "grpcio",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
+ "security",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4319,6 +4339,7 @@ dependencies = [
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
+ "hyper 0.12.35",
  "keys",
  "kvproto",
  "panic_hook",
@@ -4329,6 +4350,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift 0.2.0",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
@@ -4646,6 +4668,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rev_lines",
+ "security",
  "serde",
  "serde_derive",
  "serde_json",
