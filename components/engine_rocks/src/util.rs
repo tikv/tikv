@@ -9,7 +9,7 @@ use engine::rocks::util::new_engine_opt as new_engine_opt_raw;
 use engine::rocks::util::CFOptions;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{Error, ALL_CFS, Result};
+use engine_traits::{Error, Result, ALL_CFS};
 use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, DB};
 use std::str::FromStr;
@@ -29,7 +29,6 @@ pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
     let engine = RocksEngine::from_db(engine);
     Ok(engine)
 }
-
 
 /// Gets total used size of rocksdb engine, including:
 /// *  total size (bytes) of all SST files.

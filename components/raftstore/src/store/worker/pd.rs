@@ -10,8 +10,8 @@ use std::time::Duration;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_rocks::util::*;
 use engine::rocks::DB;
+use engine_rocks::util::*;
 use engine_rocks::{Compat, RocksEngine};
 use fs2;
 use kvproto::metapb;

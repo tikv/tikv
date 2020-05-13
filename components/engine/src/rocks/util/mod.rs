@@ -17,7 +17,7 @@ use rocksdb::{
 };
 
 pub use crate::rocks::CFHandle;
-use engine_traits::{CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use tikv_util::sys::sys_quota::SysQuota;
 
 // Zlib and bzip2 are too slow.
