@@ -69,7 +69,7 @@ impl Conn {
             rx,
             RAFT_MSG_MAX_BATCH_SIZE,
             Vec::new,
-            RaftMsgCollector::default(),
+            RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
         );
 
         // Use a mutex to make compiler happy.
@@ -240,10 +240,15 @@ impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
 }
 
 // Collect raft messages into a vector so that we can merge them into one message later.
-#[derive(Default)]
 struct RaftMsgCollector {
     size: usize,
     limit: usize,
+}
+
+impl RaftMsgCollector {
+    fn new(limit: usize) -> Self {
+        Self { size: 0, limit }
+    }
 }
 
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
