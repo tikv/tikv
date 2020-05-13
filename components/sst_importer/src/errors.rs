@@ -43,21 +43,22 @@ quick_error! {
         Io(err: IoError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Grpc(err: GrpcError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Uuid(err: UuidError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Future(err: RecvError) {
             from()
             cause(err)
+            display("{}", err)
         }
         // FIXME: Remove concrete 'rocks' type
         RocksDB(msg: String) {
@@ -66,13 +67,12 @@ quick_error! {
         }
         EngineTraits(err: engine_traits::Error) {
             from()
-            description("Engine error")
             display("Engine {:?}", err)
         }
         ParseIntError(err: ParseIntError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
@@ -83,13 +83,15 @@ quick_error! {
         InvalidSSTPath(path: PathBuf) {
             display("Invalid SST path {:?}", path)
         }
-        InvalidChunk {}
+        InvalidChunk {
+            display("invalid chunk")
+        }
         Engine(err: Box<dyn StdError + Send + Sync + 'static>) {
             display("{}", err)
         }
         CannotReadExternalStorage(url: String, name: String, err: IoError) {
             cause(err)
-            display("Cannot read {}/{}", url, name)
+            display("Cannot read {}/{}: {}", url, name, err)
         }
         WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
             display("\
@@ -104,13 +106,12 @@ quick_error! {
         }
         Encryption(err: EncryptionError) {
             from()
-            description("encryption error")
             display("Encryption {:?}", err)
         }
         CodecError(err: CodecError) {
             from()
             cause(err)
-            description(err.description())
+            display("Codec {}", err)
         }
     }
 }

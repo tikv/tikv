@@ -19,47 +19,45 @@ quick_error! {
         Engine(err: kv::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Txn(err: txn::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Mvcc(err: mvcc::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Closed {
-            description("storage is closed.")
+            display("storage is closed.")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
+            display("{}", err)
         }
         Io(err: IoError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         SchedTooBusy {
-            description("scheduler is too busy")
+            display("scheduler is too busy")
         }
         GcWorkerTooBusy {
-            description("gc worker is too busy")
+            display("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
-            description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
         InvalidCf (cf_name: String) {
-            description("invalid cf name")
             display("invalid cf name: {}", cf_name)
         }
         PessimisticTxnNotEnabled {
-            description("pessimistic transaction is not enabled")
+            display("pessimistic transaction is not enabled")
         }
     }
 }
@@ -79,10 +77,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }

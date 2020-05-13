@@ -4180,7 +4180,7 @@ mod tests {
 
         // TODO: add test case that make Decimal::from_f64 return err
         let cs = vec![
-            /// (input, in_union, is_res_unsigned, base_result)
+            // (input, in_union, is_res_unsigned, base_result)
             // neg and in_union
             (-10.0, true, false, Decimal::zero()),
             (i64::MIN as f64, true, false, Decimal::zero()),

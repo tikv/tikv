@@ -46,15 +46,12 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<E>
-where
-    E: KvEngine,
-{
+pub enum Task<S> {
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: E::Snapshot,
+        kv_snap: S,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -71,11 +68,8 @@ where
     },
 }
 
-impl<E> Task<E>
-where
-    E: KvEngine,
-{
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<E> {
+impl<S> Task<S> {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
         Task::Destroy {
             region_id,
             start_key,
@@ -84,10 +78,7 @@ where
     }
 }
 
-impl<E> Display for Task<E>
-where
-    E: KvEngine,
-{
+impl<S> Display for Task<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -553,7 +544,7 @@ where
     ctx: SnapContext<EK, ER, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK>>,
+    pending_applies: VecDeque<Task<EK::Snapshot>>,
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
@@ -619,13 +610,13 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable<Task<EK>> for Runner<EK, ER, R>
+impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    fn run(&mut self, task: Task<EK>) {
+    fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
                 region_id,
@@ -687,7 +678,7 @@ pub enum Event {
     CheckApply,
 }
 
-impl<EK, ER, R> RunnableWithTimer<Task<EK>, Event> for Runner<EK, ER, R>
+impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
@@ -851,7 +842,7 @@ mod tests {
                 engine.kv.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+                    engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
                     u64::from(i) + 1
                 );
             }
@@ -965,7 +956,7 @@ mod tests {
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             6
         );
 
@@ -976,7 +967,7 @@ mod tests {
             .compact_files_in_range(None, None, None)
             .unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
 
@@ -986,7 +977,7 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
 
@@ -994,24 +985,24 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
@@ -1022,7 +1013,7 @@ mod tests {
             .compact_files_in_range(None, None, None)
             .unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
 
@@ -1032,7 +1023,7 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
@@ -1043,14 +1034,14 @@ mod tests {
             .compact_files_in_range(None, None, None)
             .unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
     }
