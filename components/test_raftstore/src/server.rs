@@ -22,6 +22,7 @@ use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{AutoSplitController, Callback, LocalReader, SnapManager, SplitCheckRunner};
 use raftstore::Result;
+use security::SecurityManager;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -39,7 +40,6 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
-use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
@@ -220,7 +220,8 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver, state) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
+        let (worker, resolver, state) =
+            resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
