@@ -51,7 +51,7 @@ impl<'a> EncryptedFile<'a> {
 
                 ENCRYPT_DECRPTION_FILE_GAUGE
                     .with_label_values(&[self.name, "read"])
-                    .observe(start.elapsed().as_secs_f64());
+                    .set(start.elapsed().as_secs_f64());
 
                 Ok(plaintext)
             }
@@ -89,7 +89,7 @@ impl<'a> EncryptedFile<'a> {
 
         ENCRYPT_DECRPTION_FILE_GAUGE
             .with_label_values(&[self.name, "write"])
-            .observe(start.elapsed().as_secs_f64());
+            .set(start.elapsed().as_secs_f64());
 
         // TODO GC broken temp files if necessary.
         Ok(())
