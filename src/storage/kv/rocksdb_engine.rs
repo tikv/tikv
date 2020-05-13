@@ -211,6 +211,8 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
     let mut wb = engine.kv.c().write_batch();
     for rev in modifies {
         let res = match rev {
@@ -260,6 +262,8 @@ impl Engine for RocksEngine {
     type Snap = RocksSnapshot;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+
         if modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
