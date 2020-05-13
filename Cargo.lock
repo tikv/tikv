@@ -1935,7 +1935,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#8c0ffd3e32593623230fb9c32b78b776cc4b67d1"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#0f5ffe4596777255953000469d6e2a1b9b84d991"
+>>>>>>> cc9ac0d... *: use given task id or random number as task id (#7521)
 dependencies = [
  "futures 0.1.29",
  "grpcio",
