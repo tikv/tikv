@@ -708,13 +708,7 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
-<<<<<<< HEAD:src/server/status_server.rs
-=======
-    use engine_rocks::RocksEngine;
-    use raftstore::store::transport::CasualRouter;
-    use raftstore::store::CasualMessage;
     use security::SecurityConfig;
->>>>>>> e26bc91... encryption: move encryption config to under security config (#7800):src/server/status_server/mod.rs
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
 
