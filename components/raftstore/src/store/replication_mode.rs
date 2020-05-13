@@ -21,7 +21,7 @@ impl StoreGroup {
     ///
     /// Panics if the store is registered twice with different store ID.
     pub fn register_store(&mut self, store_id: u64, label: String) -> u64 {
-        debug!("associated {} {}", store_id, label);
+        info!("associated {} {}", store_id, label);
         match self.stores.entry(store_id) {
             HashMapEntry::Occupied(o) => {
                 assert_eq!(

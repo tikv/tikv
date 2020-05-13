@@ -950,6 +950,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if let Some(end) = end_key {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
+        if key_only {
+            option.set_key_only(key_only);
+        }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
@@ -987,6 +990,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1360,11 +1366,15 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 mod tests {
     use super::*;
 
+    use crate::config::TitanDBConfig;
     use crate::storage::{
+        config::BlockCacheConfig,
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use engine::rocks::util::CFOptions;
+    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
@@ -1830,6 +1840,253 @@ mod tests {
                     2,
                     5.into(),
                     false,
+                    true,
+                )
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_scan_with_key_only() {
+        let mut titan_db_config = TitanDBConfig::default();
+        titan_db_config.enabled = true;
+        let mut db_config = crate::config::DbConfig::default();
+        db_config.titan = titan_db_config;
+        let engine = {
+            let path = "".to_owned();
+            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfg_rocksdb = db_config;
+            let cache = BlockCacheConfig::default().build_shared_cache();
+            let cfs_opts = vec![
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+            ];
+            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        }
+        .unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    ],
+                    b"a".to_vec(),
+                    1.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![
+                        Key::from_raw(b"a"),
+                        Key::from_raw(b"b"),
+                        Key::from_raw(b"c"),
+                    ],
+                    1.into(),
+                    2.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"c".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"a".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        // Forward with limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
                     true,
                 )
                 .wait(),

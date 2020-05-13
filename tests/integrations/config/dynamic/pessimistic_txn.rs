@@ -2,12 +2,12 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use pd_client::PdClient;
+use security::SecurityManager;
 use tikv::config::*;
 use tikv::server::lock_manager::*;
 use tikv::server::resolve::{Callback, StoreAddrResolver};
 use tikv::server::{Error, Result};
 use tikv_util::config::ReadableDuration;
-use tikv_util::security::SecurityManager;
 
 #[test]
 fn test_config_validate() {

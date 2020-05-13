@@ -11,16 +11,16 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use security::SecurityManager;
+use tikv_util::time::duration_to_sec;
+use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::time::duration_to_sec;
-use tikv_util::{Either, HandyRwLock};
-use txn_types::TimeStamp;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -302,6 +302,7 @@ impl PdClient for RpcClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
@@ -318,6 +319,9 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
+        if let Some(s) = replication_status {
+            req.set_replication_status(s);
+        }
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
         interval.set_end_timestamp(UnixSecs::now().into_inner());
