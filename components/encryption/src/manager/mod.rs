@@ -172,6 +172,8 @@ impl Dicts {
                   "fname" => fname, 
                   "method" => format!("{:?}", method), 
                   "iv" => hex::encode(iv.as_slice()));
+        } else {
+            info!("new plaintext file"; "fname" => fname);
         }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
