@@ -3,7 +3,9 @@
 As a widely adopted distributed storage service, TiKV attaches great importance to code security. We are very grateful to users, security vulnerability researchers, etc. for reporting security vulnerabilities to us. All reported security vulnerabilities will be carefully assessed, addressed, and answered by us.
 
 This document describes the security process and policy followed by the TiKV project.
-## TiKV Security Team 
+
+## TiKV Security Team
+
 Security vulnerabilities should be handled quickly and sometimes privately. The primary goal of this process is to reduce the total time users are vulnerable to publicly known exploits.
 
 The TiKV Security Team is responsible for organizing the entire response including internal communication and external disclosure but will need help from relevant developers to successfully run this process.
@@ -25,16 +27,16 @@ The following are the versions that we support for security updates
 
 For all TiKV security-related defects, please send an email to tikv-security@lists.cncf.io. This mailing list is specially maintained by the TiKV security team. You will receive an acknowledgement mail within 24 hours. After that, we will give a detailed response about the subsequent process within 48 hours. Please do not submit security vulnerabilities directly as Github Issues.
 
-If you want to, you can choose to use the PGP public key provided by us to encrypt the content of the mail. The public key is on MIT ’s keyserver, and is provided at the end of this document.
+If you want to, you can choose to use the PGP public key provided by us to encrypt the content of the mail. The public key is provided at the end of this document.
 
 ## Disclosure policy
 
 For known public security vulnerabilities, we will disclose the disclosure as soon as possible after receiving the report. Vulnerabilities discovered for the first time will be disclosed in accordance with the following process:
-The received security vulnerability report shall be handed over to the security team for follow-up coordination and repair work.
-After the vulnerability is confirmed, we will create a draft Security Advisory on Github that lists the details of the vulnerability.
-Invite related personnel to discuss about the fix
-Fork the temporary private repository on Github, and collaborate to fix the vulnerability
-After the fix code is merged into all supported versions, the vulnerability will be publicly posted in the GitHub Advisory Database
+1. The received security vulnerability report shall be handed over to the security team for follow-up coordination and repair work.
+2. After the vulnerability is confirmed, we will create a draft Security Advisory on Github that lists the details of the vulnerability.
+3. Invite related personnel to discuss about the fix
+4. Fork the temporary private repository on Github, and collaborate to fix the vulnerability
+5. After the fix code is merged into all supported versions, the vulnerability will be publicly posted in the GitHub Advisory Database
 	
 ## PGP Public Key
 
