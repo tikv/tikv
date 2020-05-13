@@ -2374,7 +2374,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
             return match typed.get(&f) {
                 None => Err(format!("unexpect fields: {}", field).into()),
                 Some(ConfigValue::Skip) => {
-                    Err(format!("config {} can not be change", field).into())
+                    Err(format!("config {} can not be changed", field).into())
                 }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
