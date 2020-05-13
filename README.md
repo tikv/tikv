@@ -94,7 +94,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md)
 - [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
 
 ## Client drivers
@@ -118,13 +118,19 @@ Quick links:
 
 *   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
 *   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+*   [Recorded videos](https://www.youtube.com/playlist?list=PLj6h78yzYM2PveKciToM4JeQlvenS538V)
 
 ## Security
-
 
 ### Security Audit
 
 A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to [TiKV-security](tikv-security@lists.cncf.io) group.
+
+See [Security](./SECURITY.md) for the process and policy followed by the TiKV project. 
 
 ## Communication
 

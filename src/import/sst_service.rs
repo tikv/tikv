@@ -23,9 +23,9 @@ use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
+use security::{check_common_name, SecurityManager};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;
