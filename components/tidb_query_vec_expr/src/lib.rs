@@ -523,6 +523,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
+        ScalarFuncSig::RpadUtf8 => rpad_utf8_fn_meta(),
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
         ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
