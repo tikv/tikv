@@ -184,7 +184,7 @@ impl ReqContext {
         if task_id > 0 {
             // It is assumed that the lower bits of task IDs in a single transaction
             // tend to be different. So if task_id is provided, we concatenate the
-            // low 16 bits of the task_id and the high 48 bits of the start_ts to build
+            // low 16 bits of the task_id and the low 48 bits of the start_ts to build
             // the final task id.
             (task_id << (64 - ID_SHIFT)) | (base & MASK)
         } else {
