@@ -33,11 +33,8 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-<<<<<<< HEAD
 use encryption::EncryptionConfig;
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
-=======
->>>>>>> e26bc91... encryption: move encryption config to under security config (#7800)
 use engine::rocks::util::{
     db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
