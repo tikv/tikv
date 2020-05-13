@@ -5,9 +5,9 @@ use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
+use security::SecurityManager;
 use std::sync::Arc;
 use std::time::Duration;
-use tikv_util::security::SecurityManager;
 
 type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
 

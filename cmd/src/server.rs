@@ -31,6 +31,7 @@ use raftstore::{
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
+use security::SecurityManager;
 use std::{
     convert::TryFrom,
     env, fmt,
@@ -61,7 +62,6 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    security::SecurityManager,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -97,8 +97,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services();
     tikv.init_metrics_flusher();
-
     tikv.run_server(server_config);
+    tikv.run_status_server();
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -162,8 +162,9 @@ impl TiKVServer {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+        let (resolve_worker, resolver, state) =
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
@@ -321,10 +322,12 @@ impl TiKVServer {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager =
-            DataKeyManager::from_config(&self.config.encryption, &self.config.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+        self.encryption_key_manager = DataKeyManager::from_config(
+            &self.config.security.encryption,
+            &self.config.storage.data_dir,
+        )
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
     }
 
     fn init_engines(&mut self) {
@@ -758,7 +761,9 @@ impl TiKVServer {
             .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
+    }
 
+    fn run_status_server(&mut self) {
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
@@ -767,6 +772,7 @@ impl TiKVServer {
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
+                self.router.clone(),
             ));
             // Start the status server.
             if let Err(e) = status_server.start(
@@ -896,7 +902,11 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl Stop for StatusServer {
+impl<E, R> Stop for StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     fn stop(self: Box<Self>) {
         (*self).stop()
     }
