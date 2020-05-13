@@ -4,12 +4,12 @@ use futures::{Future, Stream};
 use futures03::compat::{Compat, Compat01As03};
 use hyper::rt;
 use hyper::{Client, StatusCode, Uri};
+use security::SecurityConfig;
 use std::error::Error;
 use std::net::SocketAddr;
 use test_raftstore::{new_server_cluster, Simulator};
 use tikv::config::ConfigController;
 use tikv::server::status_server::{region_meta::RegionMeta, StatusServer};
-use tikv_util::security::SecurityConfig;
 use tikv_util::HandyRwLock;
 
 async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
