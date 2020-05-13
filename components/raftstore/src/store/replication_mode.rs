@@ -111,7 +111,7 @@ impl StoreGroup {
 pub struct GlobalReplicationState {
     status: ReplicationStatus,
     pub group: StoreGroup,
-    pub group_buffer: Vec<(u64, u64)>,
+    group_buffer: Vec<(u64, u64)>,
 }
 
 impl GlobalReplicationState {
@@ -124,13 +124,14 @@ impl GlobalReplicationState {
         self.group.recalculate(&self.status);
     }
 
-    pub fn calculate_commit_group(&mut self, version: u64, peers: &[metapb::Peer]) {
+    pub fn calculate_commit_group(&mut self, version: u64, peers: &[metapb::Peer]) -> &mut Vec<(u64, u64)> {
         self.group_buffer.clear();
         for p in peers {
             if let Some(group_id) = self.group.group_id(version, p.store_id) {
                 self.group_buffer.push((p.id, group_id));
             }
         }
+        &mut self.group_buffer
     }
 }
 
@@ -182,23 +183,23 @@ mod tests {
         assert_eq!(Some(2), state.group.register_store(5, vec![label1.clone(), label4.clone()]));
         assert_eq!(Some(3), state.group.register_store(6, vec![new_label("zone", "label 5")]));
 
-        state.calculate_commit_group(1, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
-        assert_eq!(state.group_buffer, vec![(1, 2), (2, 1), (3, 2)]);
+        let gb = state.calculate_commit_group(1, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
+        assert_eq!(*gb, vec![(1, 2), (2, 1), (3, 2)]);
 
         // Switches back to majority will not clear group id.
         status = ReplicationStatus::new();
         state.set_status(status);
-        state.calculate_commit_group(1, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
-        assert_eq!(state.group_buffer, vec![(1, 2), (2, 1), (3, 2)]);
+        let gb = state.calculate_commit_group(1, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
+        assert_eq!(*gb, vec![(1, 2), (2, 1), (3, 2)]);
 
         status = new_status(3, "zone");
         state.set_status(status);
-        state.calculate_commit_group(3, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
-        assert_eq!(state.group_buffer, vec![(1, 2), (2, 1), (3, 2)]);
+        let gb = state.calculate_commit_group(3, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
+        assert_eq!(*gb, vec![(1, 2), (2, 1), (3, 2)]);
 
         status = new_status(4, "host");
         state.set_status(status);
-        state.calculate_commit_group(4, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
-        assert_eq!(state.group_buffer, vec![(3, 2)]);
+        let gb = state.calculate_commit_group(4, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
+        assert_eq!(*gb, vec![(3, 2)]);
     }
 }
