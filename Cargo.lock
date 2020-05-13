@@ -1970,7 +1970,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0f5ffe4596777255953000469d6e2a1b9b84d991"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#c4a1475ee2b25a68ec975ed91c5c6dcca20cdac9"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2204,6 +2204,29 @@ checksum = "1a0ed03949aef72dbdf3116a383d7b38b4768e6f960528cd6a6044aa9ed68599"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "minitrace"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#fe577bc271516a11869c34d84c76f0e72ecdf556"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "libc",
+ "minitrace-attribute",
+ "pin-project",
+ "time 0.1.42",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.0.1"
+source = "git+https://github.com/zhongzc/minitrace.git#fe577bc271516a11869c34d84c76f0e72ecdf556"
+dependencies = [
+ "quote 1.0.3",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -4649,6 +4672,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "mime",
+ "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -4750,9 +4774,11 @@ dependencies = [
  "fxhash",
  "grpcio",
  "hex 0.4.2",
+ "kvproto",
  "lazy_static",
  "libc",
  "log",
+ "minitrace",
  "num_cpus",
  "openssl",
  "panic_hook",

@@ -31,7 +31,6 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::future::Instrument;
-use minitrace::OSpanGuard;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -415,14 +414,14 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (tx, rx) = minitrace::Collector::new_default();
-        let enable_trace = req.enable_trace;
+        let _enable_trace = req.enable_trace;
         //TODO remove before merge
         let enable_trace = true;
 
         let span_root = if enable_trace {
             minitrace::new_span_root(tx, tikv_util::trace::Trace::Copr)
         } else {
-            OSpanGuard(None)
+            minitrace::none()
         };
         let result_of_future =
             self.parse_request(req, peer, false)
