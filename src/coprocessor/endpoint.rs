@@ -364,7 +364,6 @@ impl<E: Engine> Endpoint<E> {
                 .in_current_span(TraceEvent::HandleRequest),
             &mut tracker,
         );
-
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
