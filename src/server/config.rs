@@ -32,6 +32,13 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+<<<<<<< HEAD
+=======
+const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
+
+const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
+
+>>>>>>> 4d39c5e... raft client: make grpc message size limit configurable (#7816)
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -59,6 +66,8 @@ pub struct Config {
     // These are related to TiKV status.
     pub status_addr: String,
     pub status_thread_pool_size: usize,
+
+    pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -113,6 +122,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             status_thread_pool_size: 1,
+            max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
