@@ -13,8 +13,7 @@ use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
-use test_util;
-use tikv_util::security::{SecurityConfig, SecurityManager};
+use security::{SecurityConfig, SecurityManager};
 use txn_types::TimeStamp;
 
 use super::mock::mocker::*;

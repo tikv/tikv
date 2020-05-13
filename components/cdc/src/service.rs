@@ -7,9 +7,9 @@ use std::sync::Arc;
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
