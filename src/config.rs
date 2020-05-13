@@ -623,6 +623,11 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
