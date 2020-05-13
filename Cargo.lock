@@ -219,6 +219,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -474,6 +475,7 @@ dependencies = [
  "raft",
  "raftstore",
  "resolved_ts",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -595,6 +597,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde_json",
  "signal",
  "slog",
@@ -1026,6 +1029,7 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
@@ -1498,9 +1502,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
+checksum = "7a60cc544face71ebbc053d821fdf880b809340b67d19f5d07d6b829e9e36e63"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1527,9 +1531,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
+checksum = "8ae317d29eb55297b760ca3641662f140e17b9dc36e3f23a3e7e7327e3c33c7e"
 dependencies = [
  "bindgen",
  "cc",
@@ -2580,6 +2584,7 @@ dependencies = [
  "log",
  "prometheus",
  "quick-error",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -3586,6 +3591,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42e15e59b18a828bbf5c58ea01debb36b9b096346de35d941dcb89009f24a0d"
 
 [[package]]
+name = "security"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "grpcio",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tempfile",
+ "tikv_util",
+]
+
+[[package]]
 name = "security-framework"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3842,6 +3860,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_sst_importer",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio-sync",
@@ -4109,6 +4128,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -4150,12 +4170,16 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "fail",
  "grpcio",
+ "kvproto",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
+ "security",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time 0.1.42",
 ]
@@ -4194,6 +4218,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift 0.2.0",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
@@ -4393,6 +4418,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rev_lines",
+ "security",
  "serde",
  "serde_derive",
  "serde_json",
