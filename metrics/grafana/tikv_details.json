@@ -24626,7 +24626,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(tikv_encryption_write_read_file_duration_seconds) by (type, operation)",
+          "expr": "stop merge",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
