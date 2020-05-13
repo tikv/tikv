@@ -1188,9 +1188,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),
