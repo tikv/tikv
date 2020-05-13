@@ -40,7 +40,7 @@ For known public security vulnerabilities, we will disclose the disclosure as so
 	
 ## PGP Public Key
 
-...
+```
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBF65AgsBEADGYwoBKPUhCZgz24AGnJtOB/LgCRuqZupJHY/RmYdchKWIGHIv
@@ -93,4 +93,4 @@ IvCICV7zG1cyuM/Z2Y7/TJ+upvahP46nM3s3G15b8FYuTSmRN1Kp9+mBt2BHqOy1
 ulx+VF4Lf9n3ydf593Nha9bMJ/rnSp01
 =XbYK
 -----END PGP PUBLIC KEY BLOCK-----
-...
+```
