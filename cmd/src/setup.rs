@@ -81,7 +81,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             )
             .unwrap_or_else(|e| {
                 fatal!(
-                    "failed to initialize log with file {}: {}",
+                    "failed to initialize slow-log with file {}: {}",
                     config.slow_log_file,
                     e
                 );
@@ -97,21 +97,21 @@ pub fn initial_logger(config: &TiKvConfig) {
         )
         .unwrap_or_else(|e| {
             fatal!(
-                "failed to initialize log with file {}: {}",
+                "failed to initialize rocksdb log with file {}: {}",
                 config.rocksdb.info_log_dir,
                 e
             );
         });
 
         let raftdb_log_drainer = logger::file_drainer(
-            &config.rocksdb.info_log_dir,
+            &config.raftdb.info_log_dir,
             config.log_rotation_timespan,
             config.log_rotation_size,
             rename_by_timestamp,
         )
         .unwrap_or_else(|e| {
             fatal!(
-                "failed to initialize log with file {}: {}",
+                "failed to initialize raftdb log with file {}: {}",
                 config.rocksdb.info_log_dir,
                 e
             );

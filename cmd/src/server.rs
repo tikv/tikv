@@ -69,10 +69,13 @@ use tikv_util::{
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TiKvConfig) {
+pub fn run_tikv(mut config: TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
+    config.validate().unwrap_or_else(|e| {
+        fatal!("failed to validate tikv config: {}", e);
+    });
     initial_logger(&config);
 
     // Print version information.
