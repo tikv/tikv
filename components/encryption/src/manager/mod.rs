@@ -181,6 +181,7 @@ impl Dicts {
             Some(file_info) => file_info,
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
+                info!("delete untracked plaintext file"; "fname" => fname);
                 return Ok(());
             }
         };
@@ -189,6 +190,8 @@ impl Dicts {
         self.save_file_dict()?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
+        } else {
+            info!("delete plaintext file"; "fname" => fname);
         }
         Ok(())
     }
@@ -198,6 +201,7 @@ impl Dicts {
             Some(file_info) => file_info.clone(),
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
+                info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
                 return Ok(());
             }
         };
@@ -212,6 +216,8 @@ impl Dicts {
         self.save_file_dict()?;
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        } else {
+            info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
     }
@@ -221,6 +227,7 @@ impl Dicts {
             Some(file_info) => file_info,
             None => {
                 // Could be a plaintext file not tracked by file dictionary.
+                info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
                 return Ok(());
             }
         };
@@ -229,6 +236,8 @@ impl Dicts {
         self.save_file_dict()?;
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        } else {
+            info!("rename plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
     }
