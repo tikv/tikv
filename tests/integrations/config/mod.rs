@@ -6,12 +6,8 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-<<<<<<< HEAD
-use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
-=======
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
->>>>>>> 3adc3da... encryption: Fix errors related to file ingestion (#7806)
+use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -563,15 +559,6 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-<<<<<<< HEAD
-    };
-    value.encryption = EncryptionConfig {
-        data_encryption_method: EncryptionMethod::Aes128Ctr,
-        data_key_rotation_period: ReadableDuration::days(14),
-        master_key: MasterKeyConfig::File {
-            config: FileCofnig {
-                path: "/master/key/path".to_owned(),
-=======
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
@@ -579,7 +566,6 @@ fn test_serde_custom_tikv_config() {
                 config: FileConfig {
                     path: "/master/key/path".to_owned(),
                 },
->>>>>>> 3adc3da... encryption: Fix errors related to file ingestion (#7806)
             },
         },
         previous_master_key: MasterKeyConfig::Plaintext,
