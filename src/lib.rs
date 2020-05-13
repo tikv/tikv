@@ -76,7 +76,7 @@ pub fn tikv_version_info() -> String {
          \nEnable Features:   {}\
          \nProfile:           {}",
         env!("CARGO_PKG_VERSION"),
-        optino_env!("TIKV_EDITION").unwrap_or("Community"),
+        option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
