@@ -53,6 +53,7 @@ fn test_serde_custom_tikv_config() {
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
+        max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
