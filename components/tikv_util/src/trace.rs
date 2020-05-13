@@ -6,6 +6,9 @@ pub enum TraceEvent {
     #[allow(dead_code)]
     Unknown = 0u32,
     CoprRequest,
+    Scheduled,
+    Snapshot,
+    HandleRequest,
 }
 
 impl Into<u32> for TraceEvent {
@@ -19,6 +22,9 @@ impl From<u32> for TraceEvent {
         match x {
             _ if x == TraceEvent::Unknown as u32 => TraceEvent::Unknown,
             _ if x == TraceEvent::CoprRequest as u32 => TraceEvent::CoprRequest,
+            _ if x == TraceEvent::Scheduled as u32 => TraceEvent::Scheduled,
+            _ if x == TraceEvent::Snapshot as u32 => TraceEvent::Snapshot,
+            _ if x == TraceEvent::HandleRequest as u32 => TraceEvent::HandleRequest,
             _ => unimplemented!("enumeration not exhausted"),
         }
     }
@@ -29,6 +35,9 @@ impl Into<spanpb::Event> for TraceEvent {
         match self {
             TraceEvent::Unknown => spanpb::Event::Unknown,
             TraceEvent::CoprRequest => spanpb::Event::CoprRequest,
+            TraceEvent::Scheduled => spanpb::Event::Scheduled,
+            TraceEvent::Snapshot => spanpb::Event::Snapshot,
+            TraceEvent::HandleRequest => spanpb::Event::HandleRequest,
         }
     }
 }

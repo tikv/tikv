@@ -1970,7 +1970,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/renkai/kvproto?branch=minitrace#749ffcf7dcec1ed70ac04032a855b3850f2c09d8"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#afa578b39fca6262858a53759b52d17dc8cebb12"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
