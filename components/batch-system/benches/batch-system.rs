@@ -9,7 +9,6 @@ use batch_system::*;
 use criterion::*;
 use std::sync::atomic::*;
 use std::sync::Arc;
-use std::time::Duration;
 
 fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
     let tx = tx.clone();
@@ -24,7 +23,7 @@ fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
 fn bench_spawn_many(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(2, 2, Duration::from_secs(5), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     const ID_LIMIT: u64 = 32;
     const MESSAGE_LIMIT: usize = 256;
@@ -58,7 +57,7 @@ fn bench_spawn_many(c: &mut Criterion) {
 fn bench_imbalance(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(2, 2, Duration::from_secs(10), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     const ID_LIMIT: u64 = 10;
     const MESSAGE_LIMIT: usize = 512;
@@ -94,7 +93,7 @@ fn bench_imbalance(c: &mut Criterion) {
 fn bench_fairness(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(2, 2, Duration::from_secs(10), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     for id in 0..10 {
         let (normal_tx, normal_fsm) = Runner::new(100000);

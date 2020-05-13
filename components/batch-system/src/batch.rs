@@ -5,6 +5,7 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
+use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
@@ -430,9 +431,7 @@ pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlSchedule
 ///
 /// `sender` and `controller` should be paired.
 pub fn create_system<N: Fsm, C: Fsm>(
-    pool_size: usize,
-    max_batch_size: usize,
-    reschedule_duration: Duration,
+    cfg: &Config,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
@@ -445,9 +444,9 @@ pub fn create_system<N: Fsm, C: Fsm>(
         name_prefix: None,
         router: router.clone(),
         receiver: rx,
-        pool_size,
-        max_batch_size,
-        reschedule_duration,
+        pool_size: cfg.pool_size,
+        max_batch_size: cfg.max_batch_size,
+        reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
     };
     (router, system)

@@ -29,7 +29,7 @@ fn test_basic() {
     let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
     control_fsm.sender = Some(control_drop_tx);
     let (router, mut system) =
-        batch_system::create_system(2, 2, Duration::from_secs(10), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm);
     let builder = Builder::new();
     system.spawn("test".to_owned(), builder);
 

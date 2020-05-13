@@ -6,6 +6,7 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
+use batch_system::Config as BatchSystemConfig;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
 use engine_rocks::config as rocks_config;
 use engine_rocks::PerfLevel;
@@ -20,6 +21,8 @@ lazy_static! {
     .unwrap();
 }
 
+with_prefix!(prefix_apply "apply_");
+with_prefix!(prefix_store "store_");
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -145,14 +148,13 @@ pub struct Config {
     pub local_read_batch_size: u64,
 
     #[config(skip)]
-    pub apply_max_batch_size: usize,
-    #[config(skip)]
-    pub apply_pool_size: usize,
+    #[serde(flatten, with = "prefix_apply")]
+    pub apply_batch_system: BatchSystemConfig,
 
     #[config(skip)]
-    pub store_max_batch_size: usize,
-    #[config(skip)]
-    pub store_pool_size: usize,
+    #[serde(flatten, with = "prefix_store")]
+    pub store_batch_system: BatchSystemConfig,
+
     #[config(skip)]
     pub future_poll_size: usize,
     #[config(hidden)]
@@ -161,8 +163,6 @@ pub struct Config {
     pub early_apply: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
-    #[config(hidden)]
-    pub reschedule_duration: ReadableDuration,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -235,15 +235,12 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            apply_max_batch_size: 256,
-            apply_pool_size: 2,
-            store_max_batch_size: 256,
-            store_pool_size: 2,
+            apply_batch_system: BatchSystemConfig::default(),
+            store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: true,
             early_apply: true,
             apply_yield_duration: ReadableDuration::millis(500),
-            reschedule_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -383,16 +380,16 @@ impl Config {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
 
-        if self.apply_pool_size == 0 {
+        if self.apply_batch_system.pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
-        if self.apply_max_batch_size == 0 {
+        if self.apply_batch_system.max_batch_size == 0 {
             return Err(box_err!("apply-max-batch-size should be greater than 0"));
         }
-        if self.store_pool_size == 0 {
+        if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
         }
-        if self.store_max_batch_size == 0 {
+        if self.store_batch_system.max_batch_size == 0 {
             return Err(box_err!("store-max-batch-size should be greater than 0"));
         }
         if self.future_poll_size == 0 {
@@ -557,16 +554,16 @@ impl Config {
             .set(self.local_read_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
-            .set(self.apply_max_batch_size as f64);
+            .set(self.apply_batch_system.max_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_pool_size"])
-            .set(self.apply_pool_size as f64);
+            .set(self.apply_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
-            .set(self.store_max_batch_size as f64);
+            .set(self.store_batch_system.max_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
-            .set(self.store_pool_size as f64);
+            .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
@@ -699,11 +696,11 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_max_batch_size = 0;
+        cfg.apply_batch_system.max_batch_size = 0;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_pool_size = 0;
+        cfg.apply_batch_system.pool_size = 0;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
