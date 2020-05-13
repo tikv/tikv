@@ -419,7 +419,7 @@ impl<E: Engine> Endpoint<E> {
         let enable_trace = true;
 
         let span_root = if enable_trace {
-            minitrace::new_span_root(tx, tikv_util::trace::Trace::Copr)
+            minitrace::new_span_root(tx, tikv_util::trace::TraceEvent::CoprRequest)
         } else {
             minitrace::none()
         };

@@ -2,15 +2,34 @@ use kvproto::span as spanpb;
 use minitrace::CollectorRx;
 
 #[repr(u32)]
-pub enum Trace {
+pub enum TraceEvent {
     #[allow(dead_code)]
     Unknown = 0u32,
-    Copr,
+    CoprRequest,
 }
 
-impl Into<u32> for Trace {
+impl Into<u32> for TraceEvent {
     fn into(self) -> u32 {
         self as u32
+    }
+}
+
+impl From<u32> for TraceEvent {
+    fn from(x: u32) -> Self {
+        match x {
+            _ if x == TraceEvent::Unknown as u32 => TraceEvent::Unknown,
+            _ if x == TraceEvent::CoprRequest as u32 => TraceEvent::CoprRequest,
+            _ => unimplemented!("enumeration not exhausted"),
+        }
+    }
+}
+
+impl Into<spanpb::Event> for TraceEvent {
+    fn into(self) -> spanpb::Event {
+        match self {
+            TraceEvent::Unknown => spanpb::Event::Unknown,
+            TraceEvent::CoprRequest => spanpb::Event::CoprRequest,
+        }
     }
 }
 
@@ -22,7 +41,7 @@ pub fn encode_spans(rx: CollectorRx) -> protobuf::RepeatedField<spanpb::Span> {
         s.set_id(span.id.into());
         s.set_start(span.elapsed_start);
         s.set_end(span.elapsed_end);
-        s.set_event_id(span.tag);
+        s.set_event(TraceEvent::from(span.tag).into());
 
         #[cfg(feature = "prost-codec")]
         if let Some(p) = span.parent {
