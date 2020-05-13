@@ -34,7 +34,6 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
-const DEFAULT_MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
@@ -65,7 +64,6 @@ pub struct Config {
     pub status_addr: String,
     pub status_thread_pool_size: usize,
 
-    pub max_grpc_recv_msg_len: i32,
     pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -128,7 +126,6 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             status_thread_pool_size: 1,
-            max_grpc_recv_msg_len: DEFAULT_MAX_GRPC_RECV_MSG_LEN,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,

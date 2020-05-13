@@ -36,7 +36,6 @@ addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
 status-thread-pool-size = 1
-max-grpc-recv-msg-len = 5242880
 max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
 grpc-concurrency = 123

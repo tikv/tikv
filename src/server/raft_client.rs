@@ -50,7 +50,6 @@ impl Conn {
 
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_receive_message_len(cfg.max_grpc_recv_msg_len)
             .max_send_message_len(cfg.max_grpc_send_msg_len)
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
