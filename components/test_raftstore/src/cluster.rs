@@ -7,7 +7,7 @@ use std::{result, thread};
 
 use futures::Future;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, StoreLabel, RegionEpoch};
+use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
@@ -139,25 +139,28 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
+    fn create_engine(&mut self) {
+        let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
+        let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
+        let cache = self.cfg.storage.block_cache.build_shared_cache();
+        let kv_db_opt = self.cfg.rocksdb.build_opt();
+        let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
+        let engine = Arc::new(
+            rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt).unwrap(),
+        );
+        let raft_path = dir.path().join("raft");
+        let raft_engine = Arc::new(
+            rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap(),
+        );
+        let engines = Engines::new(engine, raft_engine, cache.is_some());
+        self.dbs.push(engines);
+        self.paths.push(dir);
+    }
+
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-            let cache = self.cfg.storage.block_cache.build_shared_cache();
-            let kv_db_opt = self.cfg.rocksdb.build_opt();
-            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
-            let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
-                    .unwrap(),
-            );
-            let raft_path = dir.path().join("raft");
-            let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
-            let engines = Engines::new(engine, raft_engine, cache.is_some());
-            self.dbs.push(engines);
-            self.paths.push(dir);
+            self.create_engine();
         }
     }
 
@@ -498,9 +501,6 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .bootstrap_cluster(new_store(1, "".to_owned()), region)
             .unwrap();
-        if self.labels.is_empty() {
-            panic!();
-        }
         for id in self.engines.keys() {
             let mut store = new_store(*id, "".to_owned());
             if let Some(labels) = self.labels.get(id) {
@@ -511,14 +511,26 @@ impl<T: Simulator> Cluster<T> {
                     store.labels.push(l);
                 }
             }
-            self.pd_client
-                .put_store(store)
-                .unwrap();
+            self.pd_client.put_store(store).unwrap();
         }
     }
 
     pub fn add_label(&mut self, node_id: u64, key: &str, value: &str) {
-        self.labels.entry(node_id).or_default().insert(key.to_owned(), value.to_owned());
+        self.labels
+            .entry(node_id)
+            .or_default()
+            .insert(key.to_owned(), value.to_owned());
+    }
+
+    pub fn add_new_engine(&mut self) -> u64 {
+        self.create_engine();
+        let engines = self.dbs.last().unwrap().clone();
+        self.count += 1;
+        let node_id = self.count as u64;
+        bootstrap_store(&engines.c(), self.id(), node_id).unwrap();
+        self.engines.insert(node_id, engines);
+        self.run_node(node_id).unwrap();
+        node_id
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {

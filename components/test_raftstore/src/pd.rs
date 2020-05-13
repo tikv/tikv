@@ -1001,16 +1001,12 @@ impl TestPdClient {
         status.set_mode(ReplicationMode::DrAutoSync);
         status.mut_dr_auto_sync().label_key = label_key.to_owned();
         let mut cluster = self.cluster.wl();
-        status.mut_dr_auto_sync().state_id = cluster.replication_status.as_ref().map(|s| s.get_dr_auto_sync().state_id + 1).unwrap_or(1);
+        status.mut_dr_auto_sync().state_id = cluster
+            .replication_status
+            .as_ref()
+            .map(|s| s.get_dr_auto_sync().state_id + 1)
+            .unwrap_or(1);
         cluster.replication_status = Some(status);
-    }
-
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
-        let mut cluster = self.cluster.wl();
-        let status = cluster.replication_status.as_mut().unwrap();
-        let mut dr = status.mut_dr_auto_sync();
-        dr.state_id += 1;
-        dr.set_state(state);
     }
 
     pub fn switch_replication_mode(&self, state: DrAutoSyncState) {

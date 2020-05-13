@@ -123,11 +123,10 @@ fn test_check_conf_change() {
 // Tests if group id is updated when adding new node and applying snapshot.
 #[test]
 fn test_update_group_id() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 2);
     let pd_client = cluster.pd_client.clone();
     cluster.add_label(1, "zone", "ES");
-    cluster.add_label(2, "zone", "ES");
-    cluster.add_label(3, "zone", "WS");
+    cluster.add_label(2, "zone", "WS");
     pd_client.disable_default_operator();
     pd_client.configure_dr_auto_sync("zone");
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
@@ -138,15 +137,23 @@ fn test_update_group_id() {
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k0").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
+    // When a node is started, all store information are loaded at once, so we need an extra node
+    // to verify resolve will assign group id.
+    cluster.add_label(3, "zone", "WS");
+    cluster.add_new_engine();
     pd_client.must_add_peer(left.id, new_peer(2, 2));
     pd_client.must_add_peer(left.id, new_learner_peer(3, 3));
     pd_client.must_add_peer(left.id, new_peer(3, 3));
-    cluster.must_transfer_leader(left.id, new_peer(3, 3));
+    // If node 3's group id is not assigned, leader will make commit index as the smallest last
+    // index of all followers.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
     cluster.must_put(b"k11", b"v11");
-    must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     must_get_equal(&cluster.get_engine(1), b"k11", b"v11");
+
     // So both node 1 and node 3 have fully resolved all stores. Further updates to group ID have
     // to be done when applying conf change and snapshot.
+    cluster.clear_send_filters();
     pd_client.must_add_peer(right.id, new_peer(2, 4));
     pd_client.must_add_peer(right.id, new_learner_peer(3, 5));
     pd_client.must_add_peer(right.id, new_peer(3, 5));
@@ -271,7 +278,7 @@ fn test_switching_replication_mode_hibernate() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
-/// Tests if replication mode is switched successfully.
+/// Tests if replication mode is switched successfully at runtime.
 #[test]
 fn test_migrate_replication_mode() {
     let mut cluster = new_server_cluster(0, 3);

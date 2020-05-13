@@ -465,16 +465,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_update_replication_mode(&mut self) {
-        self.fsm
-            .peer
-            .switch_replication_mode(&self.ctx.global_replication_state);
-        if self.fsm.peer.is_leader() {
-            self.reset_raft_tick(GroupState::Ordered);
-            self.register_pd_heartbeat_tick();
-        }
-    }
-
     fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -2413,13 +2403,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if prev_region.get_peers() != region.get_peers() {
             let mut state = self.ctx.global_replication_state.lock().unwrap();
-            let gb = state.calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+            let gb = state
+                .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
             self.fsm.peer.raft_group.raft.clear_commit_group();
-            self.fsm
-                .peer
-                .raft_group
-                .raft
-                .assign_commit_groups(gb);
+            self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();

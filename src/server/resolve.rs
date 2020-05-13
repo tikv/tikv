@@ -79,7 +79,9 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
         if state.status().get_mode() == ReplicationMode::DrAutoSync {
             let state_id = state.status().get_dr_auto_sync().state_id;
             if state.group.group_id(state_id, store_id).is_none() {
-                group_id = state.group.register_store(store_id, s.take_labels().into_vec());
+                group_id = state
+                    .group
+                    .register_store(store_id, s.take_labels().into_vec());
             }
         }
         drop(state);

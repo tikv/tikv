@@ -236,7 +236,9 @@ where
             state.set_status(s);
         }
         for mut store in stores {
-            state.group.register_store(store.id, store.take_labels().into_vec());
+            state
+                .group
+                .register_store(store.id, store.take_labels().into_vec());
         }
     }
 
