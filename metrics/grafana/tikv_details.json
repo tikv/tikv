@@ -24606,7 +24606,7 @@
         "avg": false,
         "current": true,
         "max": true,
-        "min": true,
+        "min": false,
         "rightSide": true,
         "show": true,
         "total": false,
@@ -24615,7 +24615,7 @@
       "lines": true,
       "linewidth": 1,
       "links": [],
-      "nullPointMode": "null",
+      "nullPointMode": "null as zero",
       "percentage": false,
       "pointradius": 2,
       "points": false,
@@ -24626,19 +24626,29 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "stop merge",
+          "expr": "histogram_quantile(1, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
           "format": "time_series",
           "instant": false,
-          "intervalFactor": 1,
-          "legendFormat": "avg-{{type}}-{{operation}}",
+          "interval": "",
+          "intervalFactor": 2,
+          "legendFormat": "max-{{type}}-{{operation}}",
           "refId": "A"
         },
         {
-          "expr": "max(tikv_encryption_write_read_file_duration_seconds) by (type, operation)",
+          "expr": "histogram_quantile(0.95, sum(rate(tikv_encryption_write_read_file_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, type, operation))",
           "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "max-{{type}}-{{operation}}",
+          "interval": "",
+          "intervalFactor": 2,
+          "legendFormat": "95%-{{type}}-{{operation}}",
           "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_encryption_write_read_file_duration_seconds_sum{instance=~\"$instance\"}[1m])) by (le, type, operation) / sum(rate(tikv_encryption_write_read_file_duration_seconds_count{instance=~\"$instance\"}[1m])) by (le, type, operation)",
+          "format": "time_series",
+          "interval": "",
+          "intervalFactor": 2,
+          "legendFormat": "avg-{{type}}-{{operation}}",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -24661,7 +24671,8 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "decimals": null,
+          "format": "s",
           "label": null,
           "logBase": 1,
           "max": null,
