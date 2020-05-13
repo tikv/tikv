@@ -423,5 +423,13 @@ mod tests {
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "password('{:?}')", input_str);
         }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::Password, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "password(NULL)");
     }
 }
