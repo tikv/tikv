@@ -559,13 +559,13 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-        encryption: EncryptionConfig {
-            data_encryption_method: EncryptionMethod::Aes128Ctr,
-            data_key_rotation_period: ReadableDuration::days(14),
-            master_key: MasterKeyConfig::File {
-                config: FileConfig {
-                    path: "/master/key/path".to_owned(),
-                },
+    };
+    value.encryption = EncryptionConfig {
+        data_encryption_method: EncryptionMethod::Aes128Ctr,
+        data_key_rotation_period: ReadableDuration::days(14),
+        master_key: MasterKeyConfig::File {
+            config: FileConfig {
+                path: "/master/key/path".to_owned(),
             },
         },
         previous_master_key: MasterKeyConfig::Plaintext,
