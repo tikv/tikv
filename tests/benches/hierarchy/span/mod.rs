@@ -21,17 +21,19 @@ fn span_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchSpanC
         },
         |(data, store, spanned)| {
             for (context, key) in data {
-                let (tx, rx) = black_box(minitrace::Collector::new(minitrace::CollectorType::Channel));
-                let span = if spanned {
-                    black_box(minitrace::new_span_root(black_box(tx), black_box(0u32)))
-                } else {
-                    black_box(minitrace::none())
-                };
+                let (tx, rx) =
+                    black_box(minitrace::Collector::new(minitrace::CollectorType::Channel));
+                {
+                    let span = if spanned {
+                        black_box(minitrace::new_span_root(black_box(tx), black_box(0u32)))
+                    } else {
+                        black_box(minitrace::none())
+                    };
 
-                let _g = black_box(span.enter());
+                    let _g = black_box(span.enter());
 
-                black_box(store.get(context, &key, TimeStamp::from(0)).unwrap());
-
+                    black_box(store.get(context, &key, TimeStamp::from(0)).unwrap());
+                }
                 black_box(rx.try_collect());
             }
         },

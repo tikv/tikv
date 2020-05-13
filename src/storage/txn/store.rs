@@ -203,7 +203,7 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
-    #[minitrace::trace_heavy(0u32)]
+    // #[minitrace::trace_heavy(0u32)]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
@@ -216,7 +216,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         Ok(v)
     }
 
-    #[minitrace::trace_heavy(0u32)]
+    // #[minitrace::trace_heavy(0u32)]
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
@@ -253,7 +253,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
     }
 
-    #[minitrace::trace_heavy(0u32)]
+    // #[minitrace::trace_heavy(0u32)]
     fn batch_get(
         &self,
         keys: &[Key],
