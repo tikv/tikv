@@ -199,7 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .await?;
             // map storage::kv::Error -> storage::txn::Error -> storage::Error
             result.map_err(txn::Error::from).map_err(Error::from)
-        }.in_current_span_heavy(0u32)
+        }
     }
 
     #[inline]
