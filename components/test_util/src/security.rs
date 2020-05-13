@@ -1,12 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::PathBuf;
-
-use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
+
+use encryption::EncryptionConfig;
+use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
+use security::SecurityConfig;
 use tikv_util::collections::HashSet;
-use tikv_util::security::SecurityConfig;
 
 pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -16,6 +17,7 @@ pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
         key_path: format!("{}", p.join("data/key.pem").display()),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn: cn.unwrap_or_default(),
+        encryption: EncryptionConfig::default(),
     }
 }
 

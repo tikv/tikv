@@ -473,15 +473,15 @@ cert-allowed-cn = [
     "example.tikv.com",
 ]
 
-[encryption]
+[security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
-[encryption.master-key]
+[security.encryption.master-key]
 type = "file"
 path = "/master/key/path"
 
-[encryption.previous-master-key]
+[security.encryption.previous-master-key]
 type = "plaintext"
 
 [import]

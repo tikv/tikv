@@ -219,6 +219,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -474,6 +475,7 @@ dependencies = [
  "raft",
  "raftstore",
  "resolved_ts",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -595,6 +597,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde_json",
  "signal",
  "slog",
@@ -2581,6 +2584,7 @@ dependencies = [
  "log",
  "prometheus",
  "quick-error",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -3587,6 +3591,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42e15e59b18a828bbf5c58ea01debb36b9b096346de35d941dcb89009f24a0d"
 
 [[package]]
+name = "security"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "grpcio",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tempfile",
+ "tikv_util",
+]
+
+[[package]]
 name = "security-framework"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4111,6 +4128,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -4158,6 +4176,7 @@ dependencies = [
  "kvproto",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -4199,6 +4218,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift 0.2.0",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
@@ -4398,6 +4418,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rev_lines",
+ "security",
  "serde",
  "serde_derive",
  "serde_json",

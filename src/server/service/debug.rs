@@ -20,8 +20,8 @@ use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
+use security::{check_common_name, SecurityManager};
 use tikv_util::metrics;
-use tikv_util::security::{check_common_name, SecurityManager};
 
 use tikv_alloc;
 
