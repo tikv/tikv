@@ -3,12 +3,14 @@ mod engine_factory;
 mod mvcc;
 mod storage;
 mod txn;
+mod span;
 
 use std::fmt;
 
 use self::engine::bench_engine;
 use self::engine_factory::{BTreeEngineFactory, EngineFactory, RocksEngineFactory};
 use self::mvcc::bench_mvcc;
+use self::span::bench_span;
 use self::storage::bench_storage;
 use self::txn::bench_txn;
 use criterion::Criterion;
@@ -53,6 +55,49 @@ pub fn load_configs<E: Engine, F: EngineFactory<E>>(engine_factory: F) -> Vec<Be
     configs
 }
 
+#[derive(Clone)]
+pub struct BenchSpanConfig<F> {
+    pub key_length: usize,
+    pub value_length: usize,
+    pub engine_factory: F,
+    pub spanned: bool,
+}
+
+impl<F: fmt::Debug> fmt::Debug for BenchSpanConfig<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?}_KL{:?}_VL{:?}_{}spanned",
+            self.engine_factory,
+            self.key_length,
+            self.value_length,
+            if self.spanned { "" } else { "non" }
+        )
+    }
+}
+
+pub fn load_span_configs<E: Engine, F: EngineFactory<E>>(
+    engine_factory: F,
+) -> Vec<BenchSpanConfig<F>> {
+    let key_lengths = DEFAULT_KEY_LENGTHS;
+    let value_lengths = DEFAULT_VALUE_LENGTHS;
+    let mut configs = vec![];
+
+    for &kl in &key_lengths {
+        for &vl in &value_lengths {
+            for b in &[true, false] {
+                configs.push(BenchSpanConfig {
+                    key_length: kl,
+                    value_length: vl,
+                    engine_factory,
+                    spanned: *b,
+                })
+            }
+        }
+    }
+    configs
+}
+
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     let btree_engine_configs = load_configs(BTreeEngineFactory {});
@@ -69,6 +114,12 @@ fn main() {
 
     bench_storage(&mut c, &btree_engine_configs);
     bench_storage(&mut c, &rocks_engine_configs);
+
+    let btree_engine_configs = load_span_configs(BTreeEngineFactory {});
+    let rocks_engine_configs = load_span_configs(RocksEngineFactory {});
+
+    bench_span(&mut c, &btree_engine_configs);
+    bench_span(&mut c, &rocks_engine_configs);
 
     c.final_summary();
 }

@@ -137,6 +137,7 @@ test_sst_importer = { path = "../components/test_sst_importer" }
 test_raftstore = { path = "../components/test_raftstore" }
 byteorder = "1.2"
 serde_json = "1.0"
+minitrace = { git = "https://github.com/zhongzc/minitrace.git", branch = "busy" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 criterion-papi = "0.1"

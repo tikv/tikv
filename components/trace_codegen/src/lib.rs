@@ -40,14 +40,14 @@ pub fn future01_fn_root(args: TokenStream, item: TokenStream) -> TokenStream {
         #vis #constness #unsafety #asyncness #abi fn #ident<#gen_params>(#params) #return_type
         #where_clause
         {
-            let (__span_tx, __span_rx) = minitrace::Collector::new(minitrace::DEFAULT_COLLECTOR);
+            let (__span_tx, __span_rx) = minitrace::Collector::new(minitrace::CollectorType::Void);
             let __span = minitrace::new_span_root(__span_tx, #tag);
             let __g = __span.enter();
 
             {
                 #block
             }.inspect(move |_| {
-                let __spans = __span_rx.collect_all();
+                let __spans = __span_rx.collect();
 
                 // let __spans = trace_pb::serialize(__spans.into_iter());
 

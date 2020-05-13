@@ -10,10 +10,10 @@ mod protos {
 pub use crate::protos::trace_pb::*;
 
 pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
-    #[cfg(feature = "protobuf-codec")]
-    use protobuf::Message;
     #[cfg(feature = "prost-codec")]
     use prost::Message;
+    #[cfg(feature = "protobuf-codec")]
+    use protobuf::Message;
 
     let mut resp = self::TracerResp::default();
     resp.set_spans(
@@ -27,19 +27,23 @@ pub fn serialize(spans: impl Iterator<Item = minitrace::Span>) -> Vec<u8> {
                 s.set_event_id(span.tag);
 
                 #[cfg(feature = "prost-codec")]
-                if let Some(p) = span.parent {
-                    s.parent = Some(self::span::Parent::ParentValue(p.into()));
-                } else {
-                    s.parent = Some(self::span::Parent::ParentNone(true));
-                };
-                #[cfg(feature = "protobuf-codec")]
-                if let Some(p) = span.parent {
-                    s.set_parent_value(p.into());
+                {
+                    if let Some(p) = span.parent_id {
+                        s.parent = Some(self::span::Parent::ParentValue(p.into()));
+                    } else {
+                        s.parent = Some(self::span::Parent::ParentNone(true));
+                    }
                 }
-                
+                #[cfg(feature = "protobuf-codec")]
+                {
+                    if let Some(p) = span.parent_id {
+                        s.set_parent_value(p.into());
+                    }
+                }
+
                 s
             })
-            .collect()
+            .collect(),
     );
 
     #[cfg(feature = "protobuf-codec")]

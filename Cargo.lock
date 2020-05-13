@@ -2205,7 +2205,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#6a10214ff55b05b596c211b4d83649350309ce63"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#9a417e0e21db5417af465fd6d422f450b97ba362"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2219,7 +2219,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#6a10214ff55b05b596c211b4d83649350309ce63"
+source = "git+https://github.com/zhongzc/minitrace.git?branch=busy#9a417e0e21db5417af465fd6d422f450b97ba362"
 dependencies = [
  "quote 1.0.3",
  "syn 1.0.5",
@@ -4329,6 +4329,7 @@ dependencies = [
  "hex 0.4.2",
  "keys",
  "kvproto",
+ "minitrace",
  "panic_hook",
  "pd_client",
  "profiler",
