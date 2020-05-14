@@ -37,6 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use rand::prelude::*;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -168,5 +169,43 @@ impl ReqContext {
             None,
             None,
         )
+    }
+
+    pub fn build_task_id(&self) -> u64 {
+        const ID_SHIFT: u32 = 16;
+        const MASK: u64 = u64::max_value() >> ID_SHIFT;
+        const MAX_TS: u64 = u64::max_value();
+        let base = match self.txn_start_ts {
+            Some(0) | Some(MAX_TS) | None => thread_rng().next_u64(),
+            Some(start_ts) => start_ts,
+        };
+        let task_id: u64 = self.context.get_task_id();
+        if task_id > 0 {
+            // It is assumed that the lower bits of task IDs in a single transaction
+            // tend to be different. So if task_id is provided, we concatenate the
+            // low 16 bits of the task_id and the low 48 bits of the start_ts to build
+            // the final task id.
+            (task_id << (64 - ID_SHIFT)) | (base & MASK)
+        } else {
+            // Otherwise we use the start_ts as the task_id.
+            base
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_task_id() {
+        let mut ctx = ReqContext::default_for_test();
+        let start_ts: u64 = 0x05C6_1BFA_2648_324A;
+        ctx.txn_start_ts = Some(start_ts);
+        ctx.context.set_task_id(1);
+        assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
+
+        ctx.context.set_task_id(0);
+        assert_eq!(ctx.build_task_id(), start_ts);
     }
 }
