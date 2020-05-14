@@ -21,8 +21,8 @@ lazy_static! {
     .unwrap();
 }
 
-with_prefix!(prefix_apply "apply_");
-with_prefix!(prefix_store "store_");
+with_prefix!(prefix_apply "apply-");
+with_prefix!(prefix_store "store-");
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
