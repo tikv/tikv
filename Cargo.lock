@@ -259,7 +259,13 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "crossbeam",
+<<<<<<< HEAD
  "derive_more",
+=======
+ "derive_more 0.99.3",
+ "serde",
+ "serde_derive",
+>>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
  "slog",
  "slog-global",
  "tikv_util",
@@ -2984,6 +2990,7 @@ dependencies = [
  "rand 0.6.5",
  "serde",
  "serde_derive",
+ "serde_with",
  "slog",
  "slog-global",
  "sst_importer",
@@ -3684,6 +3691,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "servo_arc"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3691,6 +3699,26 @@ checksum = "d98238b800e0d1576d8b6e3de32827c2d74bee68bb97748dcf5071fb53965432"
 dependencies = [
  "nodrop",
  "stable_deref_trait",
+=======
+name = "serde_with"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89d3d595d64120bbbc70b7f6d5ae63298b62a3d9f373ec2f56acf5365ca8a444"
+dependencies = [
+ "serde",
+ "serde_with_macros",
+]
+
+[[package]]
+name = "serde_with_macros"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4070d2c9b9d258465ad1d82aabb985b84cd9a3afa94da25ece5a9938ba5f1606"
+dependencies = [
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+>>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
 ]
 
 [[package]]
@@ -4189,6 +4217,7 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "arrow",
+ "batch-system",
  "byteorder",
  "cdc",
  "configuration",

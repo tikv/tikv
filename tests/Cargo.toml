@@ -81,6 +81,7 @@ portable = ["tikv/portable"]
 
 [dependencies]
 fail = { version = "0.3", optional = true }
+batch-system = { path = "../components/batch-system" }
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
