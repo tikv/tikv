@@ -77,13 +77,32 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
+We provide multiple deployment methods, but it is recommended to use our [TiUP](https://tiup.io) deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
 
 ### Testing deployment
 
 - [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
+    - Quick start via [TiUP](https://tiup.io)
+        - Install TiUP
+            
+            ```shell script
+            curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh 
+            ```
+            
+        - Run a TiDB cluster (the latest stable version)
+        
+            ```shell script
+            tiup playground
+            ```
+            
+        - Run a nightly TiDB cluster (the nightly built version)
+        
+            ```shell script
+            tiup playground nightly
+            ```
 
-    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
+    - You can also use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine.
+    - For other ways, see [TiDB documentation](https://pingcap.com/docs/).
 
 - Try TiKV separately
     - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
