@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use encryption::{EncryptionConfig, FileCofnig, MasterKeyConfig};
+use batch_system::Config as BatchSystemConfig;
+use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -15,6 +16,7 @@ use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
+use security::SecurityConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -24,7 +26,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::security::SecurityConfig;
 
 mod dynamic;
 mod test_config_client;
@@ -63,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
+        max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -125,6 +127,14 @@ fn test_serde_custom_tikv_config() {
         address: "example.com:443".to_owned(),
         job: "tikv_1".to_owned(),
     };
+    let mut apply_batch_system = BatchSystemConfig::default();
+    apply_batch_system.max_batch_size = 22;
+    apply_batch_system.pool_size = 4;
+    apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
+    let mut store_batch_system = BatchSystemConfig::default();
+    store_batch_system.max_batch_size = 21;
+    store_batch_system.pool_size = 3;
+    store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
         sync_log: false,
         prevote: false,
@@ -177,13 +187,12 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
-        apply_max_batch_size: 22,
-        apply_pool_size: 4,
-        store_max_batch_size: 21,
-        store_pool_size: 3,
+        apply_batch_system,
+        store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+        apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
@@ -605,16 +614,16 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-    };
-    value.encryption = EncryptionConfig {
-        data_encryption_method: EncryptionMethod::Aes128Ctr,
-        data_key_rotation_period: ReadableDuration::days(14),
-        master_key: MasterKeyConfig::File {
-            config: FileCofnig {
-                path: "/master/key/path".to_owned(),
+        encryption: EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            data_key_rotation_period: ReadableDuration::days(14),
+            master_key: MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "/master/key/path".to_owned(),
+                },
             },
+            previous_master_key: MasterKeyConfig::Plaintext,
         },
-        previous_master_key: MasterKeyConfig::Plaintext,
     };
     value.import = ImportConfig {
         num_threads: 123,
