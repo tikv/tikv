@@ -3,8 +3,9 @@
 use std::f64::INFINITY;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
+use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
+use engine_rocks::util::ingest_maybe_slowdown_writes;
 use engine_traits::{name_to_cf, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
@@ -25,9 +26,9 @@ use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
+use security::{check_common_name, SecurityManager};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;

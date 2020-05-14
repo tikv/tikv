@@ -14,8 +14,7 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
-
-use tikv_util::security::{check_common_name, SecurityManager};
+use security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
