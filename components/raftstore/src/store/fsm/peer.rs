@@ -1422,6 +1422,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
 
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
         // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.pending_merge_targets.remove(&region_id);
