@@ -81,40 +81,31 @@ We provide multiple deployment methods, but it is recommended to use our [TiUP](
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
-    - Quick start via [TiUP](https://tiup.io)
-        - Install TiUP
-            
-            ```shell script
-            curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh 
-            ```
-            
-        - Run a TiDB cluster (the latest stable version)
-        
-            ```shell script
-            tiup playground
-            ```
-            
-        - Run a nightly TiDB cluster (the nightly built version)
-        
-            ```shell script
-            tiup playground nightly
-            ```
+### Quick start
 
-    - You can also use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine.
-    - For other ways, see [TiDB documentation](https://pingcap.com/docs/).
+- Install [TiUP](https://tiup.io)
 
-- Try TiKV separately
-    - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](https://tikv.org/docs/3.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/3.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    ```shell script
+    curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh 
+    ```
+  
+- Run a TiDB cluster (the latest stable version)
+
+    ```shell script
+    tiup playground
+    ```
+
+- Run a nightly TiDB cluster (the nightly built version)
+    
+    ```shell script
+    tiup playground nightly
+    ```
+
+See [TiDB Quick Start Guide](https://pingcap.com/docs/stable/quick-start-with-tidb/) for other quick start methods.
 
 ### Production deployment
 
-For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
-
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md)
-- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
+For the production environment, use [TiUP](https://pingcap.com/docs/stable/how-to/deploy/orchestrated/tiup/) to deploy the cluster.
 
 ## Client drivers
 
