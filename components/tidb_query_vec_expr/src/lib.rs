@@ -189,6 +189,14 @@ where
     Ok(mapper(rhs_is_unsigned))
 }
 
+fn truncate_int_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_int_with_uint_fn_meta()
+    } else {
+        truncate_int_with_int_fn_meta()
+    }
+}
+
 fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     if rhs_is_unsigned {
         truncate_real_with_uint_fn_meta()
@@ -446,6 +454,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
