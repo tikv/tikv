@@ -733,6 +733,7 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
+    /// The start time of the current round to execute commands.
     handle_start: Option<Instant>,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
