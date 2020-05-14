@@ -17,8 +17,8 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
+use security::{check_common_name, SecurityManager};
 use sysinfo::SystemExt;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod ioload;
