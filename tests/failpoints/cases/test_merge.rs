@@ -971,8 +971,8 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.apply_max_batch_size = 1;
-    cluster.cfg.raft_store.apply_pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
