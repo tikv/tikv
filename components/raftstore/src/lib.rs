@@ -18,6 +18,8 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
+extern crate serde_with;
+#[macro_use]
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
