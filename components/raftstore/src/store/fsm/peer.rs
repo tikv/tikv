@@ -3489,19 +3489,20 @@ mod tests {
             put.set_value(vec![8 as u8; 20]);
             q.set_cmd_type(CmdType::Put);
             q.set_put(put);
+            req.mut_requests().push(q);
             let mut cbs_flags = vec![];
             let mut response = RaftCmdResponse::default();
-            for i in 0..10 {
+            for _ in 0..10 {
                 let flag = Arc::new(AtomicBool::new(false));
                 cbs_flags.push(flag.clone());
-                let cb = Callback::Write(Box::new(move |resp| {
+                let cb = Callback::Write(Box::new(move |_resp| {
                     flag.store(true, Ordering::Release);
                 }));
                 response.mut_responses().push(Response::default());
                 builder.add(req.clone(), 100, cb);
             }
             let (req, cb) = builder.build(&mut metric).unwrap();
-            assert!(10, req.get_requests().len());
+            assert_eq!(10, req.get_requests().len());
             cb.invoke_with_response(response);
             for flag in cbs_flags {
                 assert!(flag.load(Ordering::Acquire));
