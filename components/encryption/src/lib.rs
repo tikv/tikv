@@ -15,11 +15,10 @@ mod config;
 mod crypter;
 mod encrypted_file;
 mod errors;
+mod io;
 mod manager;
 mod master_key;
 mod metrics;
-mod read;
-mod write;
 
 pub use self::config::*;
 pub use self::crypter::{
@@ -27,7 +26,6 @@ pub use self::crypter::{
 };
 pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
+pub use self::io::{create_aes_ctr_crypter, DecrypterReader, EncrypterReader, EncrypterWriter};
 pub use self::manager::DataKeyManager;
 pub use self::master_key::{Backend, FileBackend, KmsBackend};
-pub use self::read::{create_aes_ctr_crypter, DecrypterReader, EncrypterReader};
-pub use self::write::EncrypterWriter;

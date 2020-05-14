@@ -4,12 +4,6 @@
 
 #[macro_use]
 extern crate slog_global;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

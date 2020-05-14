@@ -10,24 +10,22 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crossbeam::channel::SendError;
+use engine_rocks::RocksEngine;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
-use protobuf::Message;
 use raftstore::router::RaftStoreRouter;
+use security::SecurityManager;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, BatchCollector, Sender as BatchSender};
-use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
-const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 // When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 4096;
+const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 const RAFT_MSG_NOTIFY_SIZE: usize = 8;
@@ -40,7 +38,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter + 'static>(
+    fn new<T: RaftStoreRouter<RocksEngine> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -52,8 +50,7 @@ impl Conn {
 
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .max_send_message_len(cfg.max_grpc_send_msg_len)
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
@@ -67,8 +64,12 @@ impl Conn {
         let client2 = client1.clone();
 
         let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
-        let rx =
-            batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, RaftMsgCollector(0));
+        let rx = batch::BatchReceiver::new(
+            rx,
+            RAFT_MSG_MAX_BATCH_SIZE,
+            Vec::new,
+            RaftMsgCollector::new(cfg.max_grpc_send_msg_len as usize),
+        );
 
         // Use a mutex to make compiler happy.
         let rx1 = Arc::new(Mutex::new(rx));
@@ -150,7 +151,7 @@ pub struct RaftClient<T: 'static> {
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter> RaftClient<T> {
+impl<T: RaftStoreRouter<RocksEngine>> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -238,19 +239,28 @@ impl<T: RaftStoreRouter> RaftClient<T> {
 }
 
 // Collect raft messages into a vector so that we can merge them into one message later.
-// `MAX_GRPC_SEND_MSG_LEN` will be considered when collecting.
-struct RaftMsgCollector(usize);
+struct RaftMsgCollector {
+    size: usize,
+    limit: usize,
+}
+
+impl RaftMsgCollector {
+    fn new(limit: usize) -> Self {
+        Self { size: 0, limit }
+    }
+}
+
 impl BatchCollector<Vec<RaftMessage>, RaftMessage> for RaftMsgCollector {
     fn collect(&mut self, v: &mut Vec<RaftMessage>, e: RaftMessage) -> Option<RaftMessage> {
-        let mut msg_size = 0;
+        let mut msg_size = e.start_key.len() + e.end_key.len();
         for entry in e.get_message().get_entries() {
-            msg_size += entry.compute_size() as usize;
+            msg_size += entry.data.len();
         }
-        if self.0 > 0 && self.0 + msg_size + GRPC_SEND_MSG_BUF >= MAX_GRPC_SEND_MSG_LEN as usize {
-            self.0 = 0;
+        if self.size > 0 && self.size + msg_size + GRPC_SEND_MSG_BUF >= self.limit as usize {
+            self.size = 0;
             return Some(e);
         }
-        self.0 += msg_size;
+        self.size += msg_size;
         v.push(e);
         None
     }

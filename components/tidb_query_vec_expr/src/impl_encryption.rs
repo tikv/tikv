@@ -118,8 +118,6 @@ mod tests {
         );
     }
 
-    use hex;
-
     #[test]
     fn test_md5() {
         let test_cases = vec![

@@ -4,6 +4,14 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 make_auto_flush_static_metric! {
+    pub label_enum PerfContextType {
+        write_wal_time,
+        write_memtable_time,
+        pre_and_post_process,
+        write_thread_wait,
+        db_mutex_lock_nanos,
+        report_time,
+    }
     pub label_enum ProposalType {
         all,
         local_read,
@@ -12,6 +20,7 @@ make_auto_flush_static_metric! {
         normal,
         transfer_leader,
         conf_change,
+        batch,
     }
 
     pub label_enum AdminCmdType {
@@ -161,6 +170,9 @@ make_auto_flush_static_metric! {
 
     pub struct SnapValidVec : LocalIntCounter {
         "type" => SnapValidationType
+    }
+    pub struct PerfContextTimeDuration : LocalHistogram {
+        "type" => PerfContextType
     }
 }
 
@@ -413,6 +425,39 @@ lazy_static! {
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_read_index_pending",
-            "pending read index count"
+            "Pending read index count"
+        ).unwrap();
+
+    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_apply_perf_context_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_store_perf_context_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
+        auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
+
+    pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
+        auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
+
+    pub static ref READ_QPS_TOPN: GaugeVec =
+        register_gauge_vec!(
+            "tikv_read_qps_topn",
+            "collect topN of read qps",
+        &["order"]
+        ).unwrap();
+    pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_entries_caches",
+        "Total memory size of raft entries caches"
         ).unwrap();
 }

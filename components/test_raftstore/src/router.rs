@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -29,7 +29,7 @@ impl MockRaftStoreRouter {
     }
 }
 
-impl RaftStoreRouter for MockRaftStoreRouter {
+impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
@@ -54,7 +54,7 @@ impl RaftStoreRouter for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
         unimplemented!()
     }
     fn broadcast_unreachable(&self, _: u64) {

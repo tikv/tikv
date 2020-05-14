@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{mem, thread};
 
-use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 

@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -151,7 +150,7 @@ impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 #[derive(Clone)]
 pub struct Registry<E>
 where
-    E: KvEngine,
+    E: 'static,
 {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
@@ -163,10 +162,7 @@ where
     // TODO: add endpoint
 }
 
-impl<E> Default for Registry<E>
-where
-    E: KvEngine,
-{
+impl<E> Default for Registry<E> {
     fn default() -> Registry<E> {
         Registry {
             admin_observers: Default::default(),
@@ -193,10 +189,7 @@ macro_rules! push {
     };
 }
 
-impl<E> Registry<E>
-where
-    E: KvEngine,
-{
+impl<E> Registry<E> {
     pub fn register_admin_observer(&mut self, priority: u32, ao: BoxAdminObserver) {
         push!(priority, ao, self.admin_observers);
     }
@@ -275,13 +268,30 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Default, Clone)]
-pub struct CoprocessorHost {
-    pub registry: Registry<RocksEngine>,
+#[derive(Clone)]
+pub struct CoprocessorHost<E>
+where
+    E: 'static,
+{
+    pub registry: Registry<E>,
 }
 
-impl CoprocessorHost {
-    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
+impl<E> Default for CoprocessorHost<E>
+where
+    E: 'static,
+{
+    fn default() -> Self {
+        CoprocessorHost {
+            registry: Default::default(),
+        }
+    }
+}
+
+impl<E> CoprocessorHost<E>
+where
+    E: KvEngine,
+{
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -300,7 +310,7 @@ impl CoprocessorHost {
         CoprocessorHost { registry }
     }
 
-    /// Call all prepose hooks until bypass is set to true.
+    /// Call all propose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
             let query = req.mut_requests();
@@ -396,10 +406,10 @@ impl CoprocessorHost {
         &self,
         cfg: &'a Config,
         region: &Region,
-        engine: &RocksEngine,
+        engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost<'a, RocksEngine> {
+    ) -> SplitCheckerHost<'a, E> {
         let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,
@@ -486,6 +496,7 @@ mod tests {
     use std::sync::atomic::*;
     use std::sync::Arc;
 
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -616,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_trigger_right_hook() {
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
         let ob = TestCoprocessor::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
@@ -678,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_order() {
-        let mut host = CoprocessorHost::default();
+        let mut host = CoprocessorHost::<RocksEngine>::default();
 
         let ob1 = TestCoprocessor::default();
         host.registry

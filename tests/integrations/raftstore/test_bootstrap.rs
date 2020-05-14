@@ -13,10 +13,8 @@ use engine_rocks::{CloneCompat, Compat};
 use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{bootstrap_store, fsm, SnapManager};
+use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
 use test_raftstore::*;
-use tikv::config::ConfigController;
-use tikv::config::ConfigHandler;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
@@ -65,6 +63,7 @@ fn test_node_bootstrap_with_prepared_data() {
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
+        Arc::default(),
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
@@ -93,16 +92,9 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
+        Arc::new(SSTImporter::new(dir, None).unwrap())
     };
 
-    let cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
-    let config_client = ConfigHandler::start(
-        cfg.server.advertise_addr,
-        cfg_controller,
-        pd_worker.scheduler(),
-    )
-    .unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
@@ -113,7 +105,7 @@ fn test_node_bootstrap_with_prepared_data() {
         coprocessor_host,
         importer,
         Worker::new("split"),
-        Box::new(config_client),
+        AutoSplitController::default(),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

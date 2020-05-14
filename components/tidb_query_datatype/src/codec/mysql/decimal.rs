@@ -9,8 +9,6 @@ use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use num;
-
 use codec::prelude::*;
 use tikv_util::escape;
 
@@ -1589,7 +1587,7 @@ impl Decimal {
         let mut end_idx = int_idx;
         let mut frac_cnt = if int_idx < bs.len() && bs[int_idx] == b'.' {
             end_idx = first_non_digit(bs, int_idx + 1);
-            (end_idx - int_idx - 1)
+            end_idx - int_idx - 1
         } else {
             0
         };
@@ -1926,8 +1924,8 @@ impl Display for Decimal {
 
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
-        Ok(ConvertTo::<f64>::convert(self, ctx)?.round() != 0f64)
+    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
+        Ok(!self.is_zero())
     }
 }
 

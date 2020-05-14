@@ -7,9 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
-use rand;
-
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -188,12 +186,12 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
+impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateTransport<C> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.ch.send_command(req, cb)
     }
 
@@ -357,7 +355,7 @@ impl Filter for RegionPacketFilter {
             }
             true
         };
-        let origin_msgs = mem::replace(msgs, Vec::default());
+        let origin_msgs = mem::take(msgs);
         let (retained, dropped) = origin_msgs.into_iter().partition(retain);
         *msgs = retained;
         if let Some(dropped_messages) = self.dropped_messages.as_ref() {
