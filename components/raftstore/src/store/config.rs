@@ -6,16 +6,10 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
-<<<<<<< HEAD
+use batch_system::Config as BatchSystemConfig;
 use configuration::{
     rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
 };
-=======
-use batch_system::Config as BatchSystemConfig;
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
-use engine_rocks::config as rocks_config;
-use engine_rocks::PerfLevel;
->>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -450,27 +444,6 @@ impl Config {
             })
         }
 
-<<<<<<< HEAD
-        if self.apply_pool_size == 0 {
-            rollback_or!(rb_collector, apply_pool_size, {
-                Err(box_err!("apply-pool-size should be greater than 0"))
-            })
-        }
-        if self.apply_max_batch_size == 0 {
-            rollback_or!(rb_collector, apply_max_batch_size, {
-                Err(box_err!("apply-max-batch-size should be greater than 0"))
-            })
-        }
-        if self.store_pool_size == 0 {
-            rollback_or!(rb_collector, store_pool_size, {
-                Err(box_err!("store-pool-size should be greater than 0"))
-            })
-        }
-        if self.store_max_batch_size == 0 {
-            rollback_or!(rb_collector, store_max_batch_size, {
-                Err(box_err!("store-max-batch-size should be greater than 0"))
-            })
-=======
         if self.apply_batch_system.pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
@@ -482,7 +455,6 @@ impl Config {
         }
         if self.store_batch_system.max_batch_size == 0 {
             return Err(box_err!("store-max-batch-size should be greater than 0"));
->>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
         }
         if self.future_poll_size == 0 {
             rollback_or!(rb_collector, future_poll_size, {

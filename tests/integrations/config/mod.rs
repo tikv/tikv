@@ -192,11 +192,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-<<<<<<< HEAD
-=======
         apply_yield_duration: ReadableDuration::millis(333),
-        perf_level: PerfLevel::EnableTime,
->>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

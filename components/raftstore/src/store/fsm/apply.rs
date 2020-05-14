@@ -303,13 +303,8 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
-<<<<<<< HEAD
-=======
-
-    perf_context_statistics: PerfContextStatistics,
 
     yield_duration: Duration,
->>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -343,11 +338,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-<<<<<<< HEAD
-=======
-            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             yield_duration: cfg.apply_yield_duration.0,
->>>>>>> 015d7ac... raftstore: change yield condition into duration (#7763)
         }
     }
 
@@ -3613,7 +3604,7 @@ mod tests {
             router: &ApplyRouter,
             id: u64,
             region_id: u64,
-            cb: Callback<RocksSnapshot>,
+            cb: Callback<RocksEngine>,
         ) -> EntryBuilder {
             // TODO: may need to support conf change.
             let prop = Proposal::new(false, self.entry.get_index(), self.entry.get_term(), cb);
