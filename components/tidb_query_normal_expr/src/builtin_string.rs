@@ -1031,7 +1031,7 @@ impl ScalarFunc {
         let s = b",";
         let mut q = false;
         for expr in self.children.iter().skip(1) {
-            if pow2 & mask > 0 {
+            if pow2 & mask != 0 {
                 let input = try_opt!(expr.eval_string(ctx, row));
                 if q {
                     output.extend_from_slice(s);
