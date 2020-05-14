@@ -3414,3 +3414,98 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         Ok(resp)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BatchRaftCmdRequestBuilder;
+    use crate::store::local_metrics::RaftProposeMetrics;
+    use crate::store::msg::Callback;
+
+    use kvproto::raft_cmdpb::{
+        AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
+        StatusRequest,
+    };
+    use protobuf::Message;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder() {
+        let max_batch_size = 1000.0;
+        let mut builder = BatchRaftCmdRequestBuilder::new(max_batch_size);
+        let mut q = Request::default();
+        let mut metric = RaftProposeMetrics::default();
+        {
+            let mut req = RaftCmdRequest::default();
+            req.set_admin_request(AdminRequest::default());
+            assert!(!builder.can_batch(&req, 0));
+        }
+        {
+            let mut req = RaftCmdRequest::default();
+            req.set_status_request(StatusRequest::default());
+            assert!(!builder.can_batch(&req, 0));
+        }
+        {
+            let mut req = RaftCmdRequest::default();
+            let mut put = PutRequest::default();
+            put.set_key(b"aaaa".to_vec());
+            put.set_value(b"bbbb".to_vec());
+            q.set_cmd_type(CmdType::Put);
+            q.set_put(put);
+            req.mut_requests().push(q.clone());
+            let _ = q.take_put();
+            let req_size = req.compute_size();
+            assert!(builder.can_batch(&req, req_size));
+        }
+        {
+            let mut req = RaftCmdRequest::default();
+            q.set_cmd_type(CmdType::Snap);
+            req.mut_requests().push(q.clone());
+            let mut put = PutRequest::default();
+            put.set_key(b"aaaa".to_vec());
+            put.set_value(b"bbbb".to_vec());
+            q.set_cmd_type(CmdType::Put);
+            q.set_put(put);
+            req.mut_requests().push(q.clone());
+            let req_size = req.compute_size();
+            assert!(!builder.can_batch(&req, req_size));
+        }
+        {
+            let mut req = RaftCmdRequest::default();
+            let mut put = PutRequest::default();
+            put.set_key(b"aaaa".to_vec());
+            put.set_value(vec![8 as u8; 2000]);
+            q.set_cmd_type(CmdType::Put);
+            q.set_put(put);
+            req.mut_requests().push(q.clone());
+            let req_size = req.compute_size();
+            assert!(!builder.can_batch(&req, req_size));
+        }
+        {
+            // Check batch callback
+            let mut req = RaftCmdRequest::default();
+            let mut put = PutRequest::default();
+            put.set_key(b"aaaa".to_vec());
+            put.set_value(vec![8 as u8; 20]);
+            q.set_cmd_type(CmdType::Put);
+            q.set_put(put);
+            let mut cbs_flags = vec![];
+            let mut response = RaftCmdResponse::default();
+            for i in 0..10 {
+                let flag = Arc::new(AtomicBool::new(false));
+                cbs_flags.push(flag.clone());
+                let cb = Callback::Write(Box::new(move |resp| {
+                    flag.store(true, Ordering::Release);
+                }));
+                response.mut_responses().push(Response::default());
+                builder.add(req.clone(), 100, cb);
+            }
+            let (req, cb) = builder.build(&mut metric).unwrap();
+            assert!(10, req.get_requests().len());
+            cb.invoke_with_response(response);
+            for flag in cbs_flags {
+                assert!(flag.load(Ordering::Acquire));
+            }
+        }
+    }
+}
