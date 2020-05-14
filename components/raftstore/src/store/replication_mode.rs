@@ -160,14 +160,14 @@ mod tests {
     use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
-        let mut label = metapb::StoreLabel::new();
+        let mut label = metapb::StoreLabel::default();
         label.key = key.to_owned();
         label.value = value.to_owned();
         label
     }
 
     fn new_status(state_id: u64, key: &str) -> ReplicationStatus {
-        let mut status = ReplicationStatus::new();
+        let mut status = ReplicationStatus::default();
         status.set_mode(ReplicationMode::DrAutoSync);
         status.mut_dr_auto_sync().state_id = state_id;
         status.mut_dr_auto_sync().label_key = key.to_owned();
@@ -184,12 +184,8 @@ mod tests {
         assert_eq!(state.group.group_id(0, 2), None);
         let label3 = new_label("host", "label 3");
         let label4 = new_label("host", "label 4");
-        state
-            .group
-            .register_store(3, vec![label1.clone(), label3.clone()]);
-        state
-            .group
-            .register_store(4, vec![label2.clone(), label4.clone()]);
+        state.group.register_store(3, vec![label1.clone(), label3]);
+        state.group.register_store(4, vec![label2, label4.clone()]);
         for i in 1..=4 {
             assert_eq!(None, state.group.group_id(0, i));
         }
@@ -201,12 +197,7 @@ mod tests {
         assert_eq!(Some(2), state.group.group_id(1, 3));
         assert_eq!(Some(1), state.group.group_id(1, 4));
         assert_eq!(None, state.group.group_id(0, 1));
-        assert_eq!(
-            Some(2),
-            state
-                .group
-                .register_store(5, vec![label1.clone(), label4.clone()])
-        );
+        assert_eq!(Some(2), state.group.register_store(5, vec![label1, label4]));
         assert_eq!(
             Some(3),
             state
@@ -218,7 +209,7 @@ mod tests {
         assert_eq!(*gb, vec![(1, 2), (2, 1), (3, 2)]);
 
         // Switches back to majority will not clear group id.
-        status = ReplicationStatus::new();
+        status = ReplicationStatus::default();
         state.set_status(status);
         let gb = state.calculate_commit_group(1, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
         assert_eq!(*gb, vec![(1, 2), (2, 1), (3, 2)]);

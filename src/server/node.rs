@@ -238,7 +238,7 @@ where
         for mut store in stores {
             state
                 .group
-                .register_store(store.id, store.take_labels().into_vec());
+                .register_store(store.id, store.take_labels().into());
         }
     }
 

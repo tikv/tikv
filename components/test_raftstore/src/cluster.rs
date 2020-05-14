@@ -505,7 +505,7 @@ impl<T: Simulator> Cluster<T> {
             let mut store = new_store(*id, "".to_owned());
             if let Some(labels) = self.labels.get(id) {
                 for (key, value) in labels.iter() {
-                    let mut l = StoreLabel::new();
+                    let mut l = StoreLabel::default();
                     l.key = key.clone();
                     l.value = value.clone();
                     store.labels.push(l);
