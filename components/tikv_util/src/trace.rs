@@ -42,7 +42,7 @@ impl Into<spanpb::Event> for TraceEvent {
     }
 }
 
-pub fn encode_spans(rx: CollectorRx) -> protobuf::RepeatedField<spanpb::Span> {
+pub fn encode_spans(rx: CollectorRx) -> impl Iterator<Item = spanpb::Span> {
     let finished_spans = rx.collect();
     let spans = finished_spans.into_iter().map(|span| {
         let mut s = spanpb::Span::default();
@@ -64,5 +64,5 @@ pub fn encode_spans(rx: CollectorRx) -> protobuf::RepeatedField<spanpb::Span> {
         }
         s
     });
-    spans.collect()
+    spans.into_iter()
 }

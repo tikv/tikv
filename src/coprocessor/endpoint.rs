@@ -443,7 +443,7 @@ impl<E: Engine> Endpoint<E> {
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
             .map(|mut resp: coppb::Response| {
-                resp.set_spans(tikv_util::trace::encode_spans(rx));
+                resp.set_spans(tikv_util::trace::encode_spans(rx).collect());
                 resp
             })
     }
