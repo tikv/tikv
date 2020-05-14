@@ -1033,7 +1033,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     // Wait for left region to rollback merge (in previous wrong implementation)
     sleep_ms(200);
     // Write data to left region
-    let mut new_left = left.clone();
+    let mut new_left = left;
     let mut epoch = new_left.take_region_epoch();
     // prepareMerge => conf_ver + 1, version + 1
     // rollbackMerge => version + 1

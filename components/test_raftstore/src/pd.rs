@@ -970,8 +970,8 @@ impl TestPdClient {
         if right.get_start_key() != split_key {
             return false;
         }
-        return left.get_region_epoch().get_version() > region.get_region_epoch().get_version()
-            && right.get_region_epoch().get_version() > region.get_region_epoch().get_version();
+        left.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+            && right.get_region_epoch().get_version() > region.get_region_epoch().get_version()
     }
 
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
