@@ -928,7 +928,6 @@ where
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    println!("handle start: {:?}", start.elapsed());
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
