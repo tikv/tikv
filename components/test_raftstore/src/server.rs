@@ -22,7 +22,8 @@ use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{AutoSplitController, Callback, LocalReader, SnapManager, SplitCheckRunner};
 use raftstore::Result;
-use tikv::config::TiKvConfig;
+use security::SecurityManager;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
@@ -39,7 +40,6 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
-use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
@@ -212,8 +212,7 @@ impl Simulator for ServerCluster {
             engines.clone(),
             pool,
             raft_router,
-            gc_worker.get_config_manager(),
-            false,
+            ConfigController::default(),
             security_mgr.clone(),
         );
 

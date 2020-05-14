@@ -232,7 +232,7 @@ fn test_cdc_not_leader() {
             }),
         ))
         .unwrap();
-    rx.recv_timeout(Duration::from_millis(200)).unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(suite
         .obs
         .get(&leader.get_store_id())

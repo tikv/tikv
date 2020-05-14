@@ -11,6 +11,8 @@ use openssl::x509::X509StoreContextRef;
 use pprof;
 use pprof::protos::Message;
 use regex::Regex;
+use reqwest::{self, blocking::Client};
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -21,14 +23,15 @@ use tokio_threadpool::{Builder, ThreadPool};
 use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use super::Result;
 use crate::config::ConfigController;
+use pd_client::RpcClient;
+use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
-use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod profiler_guard {
@@ -73,6 +76,9 @@ mod profiler_guard {
     }
 }
 
+const COMPONENT_REQUEST_RETRY: usize = 5;
+static COMPONENT: &str = "tikv";
+
 #[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
 #[cfg(feature = "failpoints")]
@@ -85,11 +91,16 @@ pub struct StatusServer {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
-    cfg_controller: Option<ConfigController>,
+    pd_client: Option<Arc<RpcClient>>,
+    cfg_controller: ConfigController,
 }
 
 impl StatusServer {
-    pub fn new(status_thread_pool_size: usize, cfg_controller: ConfigController) -> Self {
+    pub fn new(
+        status_thread_pool_size: usize,
+        pd_client: Option<Arc<RpcClient>>,
+        cfg_controller: ConfigController,
+    ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -106,7 +117,8 @@ impl StatusServer {
             tx,
             rx: Some(rx),
             addr: None,
-            cfg_controller: Some(cfg_controller),
+            pd_client,
+            cfg_controller,
         }
     }
 
@@ -214,7 +226,7 @@ impl StatusServer {
     fn get_config(
         cfg_controller: &ConfigController,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let res = match serde_json::to_string(cfg_controller.get_current()) {
+        let res = match serde_json::to_string(&cfg_controller.get_current()) {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
@@ -228,15 +240,15 @@ impl StatusServer {
     }
 
     fn update_config(
-        cfg_controller: Arc<RwLock<ConfigController>>,
+        cfg_controller: ConfigController,
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
-            let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
-                Ok(change) => match cfg_controller.write().unwrap().update(change) {
+            let res = match decode_json(body.into_bytes().as_ref()) {
+                Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("fail to update, error: {:?}", e),
+                        format!("failed to update, error: {:?}", e),
                     ),
                     Ok(_) => {
                         let mut resp = Response::default();
@@ -244,9 +256,9 @@ impl StatusServer {
                         resp
                     }
                 },
-                Err(_) => StatusServer::err_response(
+                Err(e) => StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "fail to decode".to_owned(),
+                    format!("failed to decode, error: {:?}", e),
                 ),
             };
             ok(res)
@@ -405,8 +417,7 @@ impl StatusServer {
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite + Send + 'static,
     {
-        // TODO: use future lock
-        let cfg_controller = Arc::new(RwLock::new(self.cfg_controller.take().unwrap()));
+        let cfg_controller = self.cfg_controller.clone();
         // Start to serve.
         let server = builder.serve(move || {
             let cfg_controller = cfg_controller.clone();
@@ -429,9 +440,7 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => {
-                                Self::get_config(&cfg_controller.read().unwrap())
-                            }
+                            (Method::GET, "/config") => Self::get_config(&cfg_controller),
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req)
                             }
@@ -520,10 +529,14 @@ impl StatusServer {
             let server = Server::builder(tcp_stream);
             self.start_serve(server);
         }
+        // register the status address to pd
+        self.register_addr(status_addr);
         Ok(())
     }
 
     pub fn stop(self) {
+        // unregister the status address to pd
+        self.unregister_addr();
         let _ = self.tx.send(());
         self.thread_pool
             .shutdown_now()
@@ -536,6 +549,72 @@ impl StatusServer {
     // in test to avoid port conflict.
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
+    }
+
+    fn register_addr(&self, status_addr: String) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        let json = {
+            let mut body = std::collections::HashMap::new();
+            body.insert("component".to_owned(), COMPONENT.to_owned());
+            body.insert("addr".to_owned(), status_addr);
+            serde_json::to_string(&body).unwrap()
+        };
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path("pd/api/v1/component");
+                let res = client
+                    .post(url.as_str())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(json.clone())
+                    .send();
+                match res {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to register addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
+    }
+
+    fn unregister_addr(&self) {
+        if self.pd_client.is_none() {
+            return;
+        }
+        let status_addr = format!("{}", self.listening_addr());
+        let pd_client = self.pd_client.as_ref().unwrap();
+        let client = Client::new();
+        for _ in 0..COMPONENT_REQUEST_RETRY {
+            for pd_addr in pd_client.get_leader().get_client_urls() {
+                let mut url = url::Url::parse(pd_addr).unwrap();
+                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
+                match client.delete(url.as_str()).send() {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
+                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                }
+            }
+            // refresh the pd leader
+            if let Err(e) = pd_client.reconnect() {
+                error!("failed to reconnect pd client"; "err" => ?e);
+            }
+        }
+        error!(
+            "failed to unregister addr to pd after {} tries",
+            COMPONENT_REQUEST_RETRY
+        );
     }
 }
 
@@ -615,6 +694,29 @@ fn handle_fail_points_request(
     }
 }
 
+// Decode different type of json value to string value
+fn decode_json(
+    data: &[u8],
+) -> std::result::Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+    let json: Value = serde_json::from_slice(data)?;
+    if let Value::Object(map) = json {
+        let mut dst = std::collections::HashMap::new();
+        for (k, v) in map.into_iter() {
+            let v = match v {
+                Value::Bool(v) => format!("{}", v),
+                Value::Number(v) => format!("{}", v),
+                Value::String(v) => v,
+                Value::Array(_) => return Err("array type are not supported".to_owned().into()),
+                _ => return Err("wrong format".to_owned().into()),
+            };
+            dst.insert(k, v);
+        }
+        Ok(dst)
+    } else {
+        Err("wrong format".to_owned().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, Future};
@@ -630,13 +732,13 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
-    use tikv_util::security::SecurityConfig;
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -681,7 +783,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -717,7 +819,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -849,7 +951,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -890,7 +992,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -951,7 +1053,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let _ = status_server.start(
             "127.0.0.1:0".to_string(),
             &new_security_cfg(Some(allowed_cn)),

@@ -36,6 +36,7 @@ addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
 status-thread-pool-size = 1
+max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -474,15 +475,15 @@ cert-allowed-cn = [
     "example.tikv.com",
 ]
 
-[encryption]
+[security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
-[encryption.master-key]
+[security.encryption.master-key]
 type = "file"
 path = "/master/key/path"
 
-[encryption.previous-master-key]
+[security.encryption.previous-master-key]
 type = "plaintext"
 
 [import]

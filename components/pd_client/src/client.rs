@@ -11,15 +11,15 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
+use security::SecurityManager;
+use tikv_util::time::duration_to_sec;
+use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::time::duration_to_sec;
-use tikv_util::{Either, HandyRwLock};
-use txn_types::TimeStamp;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -72,6 +72,11 @@ impl RpcClient {
     /// Gets the leader of PD.
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
+    }
+
+    /// Re-establishes connection with PD leader in synchronized fashion.
+    pub fn reconnect(&self) -> Result<()> {
+        self.leader_client.reconnect()
     }
 
     /// Creates a new call option with default request timeout.

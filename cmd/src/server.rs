@@ -33,6 +33,7 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager,
     },
 };
+use security::SecurityManager;
 use std::{
     convert::TryFrom,
     env, fmt,
@@ -64,7 +65,6 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    security::SecurityManager,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -76,9 +76,6 @@ pub fn run_tikv(config: TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
-    // TODO: currently the logger config can not be managed
-    // by PD and has to be provided when starting (or default
-    // config will be use). Consider remove this constraint.
     initial_logger(&config);
 
     // Print version information.
@@ -101,7 +98,7 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
     let server_config = tikv.init_servers(&gc_worker);
-    tikv.register_services(gc_worker);
+    tikv.register_services();
     tikv.init_metrics_flusher();
 
     tikv.run_server(server_config);
@@ -160,7 +157,7 @@ impl TiKVServer {
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
-        let config = cfg_controller.get_current().clone();
+        let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
@@ -204,8 +201,6 @@ impl TiKVServer {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
-        // TODO: register addr to pd
-
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
 
@@ -326,10 +321,12 @@ impl TiKVServer {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager =
-            DataKeyManager::from_config(&self.config.encryption, &self.config.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+        self.encryption_key_manager = DataKeyManager::from_config(
+            &self.config.security.encryption,
+            &self.config.storage.data_dir,
+        )
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
     }
 
     fn init_engines(&mut self) {
@@ -615,7 +612,7 @@ impl TiKVServer {
         server_config
     }
 
-    fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter>>) {
+    fn register_services(&mut self) {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
@@ -646,8 +643,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker.get_config_manager(),
-            self.config.enable_dynamic_config,
+            self.cfg_controller.as_ref().unwrap().clone(),
             self.security_mgr.clone(),
         );
         if servers
@@ -662,6 +658,7 @@ impl TiKVServer {
         let diag_service = DiagnosticsService::new(
             pool,
             self.config.log_file.clone(),
+            self.config.slow_log_file.clone(),
             self.security_mgr.clone(),
         );
         if servers
@@ -769,6 +766,7 @@ impl TiKVServer {
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
                 self.config.server.status_thread_pool_size,
+                Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
             ));
             // Start the status server.
