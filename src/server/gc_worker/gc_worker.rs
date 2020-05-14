@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -501,7 +501,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
 
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
@@ -515,7 +515,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn update_statistics_metrics(&mut self) {
-        let stats = mem::replace(&mut self.stats, Statistics::default());
+        let stats = mem::take(&mut self.stats);
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
@@ -942,7 +942,7 @@ mod tests {
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksEngine>;
+        type Snap = RegionSnapshot<RocksSnapshot>;
 
         fn async_write(
             &self,
@@ -1188,9 +1188,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),

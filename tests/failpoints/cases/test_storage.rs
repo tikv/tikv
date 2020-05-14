@@ -4,16 +4,14 @@ use std::sync::{mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;
 
-use fail;
 use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
-use tikv::storage;
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::*;
+use tikv::storage::{self, lock_manager::DummyLockManager, test_util::*, *};
 use tikv_util::{collections::HashMap, HandyRwLock};
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
@@ -27,7 +25,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::from_engine(engine0).build().unwrap();
+    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine0)
+        .build()
+        .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -193,4 +193,132 @@ fn test_raftkv_early_error_report() {
         }
     }
     fail::remove(raftkv_fp);
+}
+
+#[test]
+fn test_pipelined_pessimistic_lock() {
+    let rockskv_async_write_fp = "rockskv_async_write";
+    let rockskv_write_modifies_fp = "rockskv_write_modifies";
+    let scheduler_async_write_finish_fp = "scheduler_async_write_finish";
+    let scheduler_pipelined_write_finish_fp = "scheduler_pipelined_write_finish";
+
+    let storage = TestStorageBuilder::new()
+        .set_lock_mgr(DummyLockManager {})
+        .set_pipelined_pessimistic_lock(true)
+        .build()
+        .unwrap();
+
+    let (tx, rx) = channel();
+    let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
+
+    // Even if storage fails to write the lock to engine, client should
+    // receive the successful response.
+    fail::cfg(rockskv_write_modifies_fp, "return()").unwrap();
+    fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            expect_pessimistic_lock_res_callback(
+                tx.clone(),
+                PessimisticLockRes::Values(vec![None]),
+            ),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    fail::remove(rockskv_write_modifies_fp);
+    fail::remove(scheduler_async_write_finish_fp);
+    storage
+        .sched_txn_command(
+            commands::PrewritePessimistic::new(
+                vec![(Mutation::Put((key.clone(), val.clone())), true)],
+                key.to_raw().unwrap(),
+                10.into(),
+                3000,
+                10.into(),
+                1,
+                11.into(),
+                Context::default(),
+            ),
+            expect_ok_callback(tx.clone(), 0),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    storage
+        .sched_txn_command(
+            commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
+            expect_ok_callback(tx.clone(), 0),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+
+    // Should report failure if storage fails to schedule write request to engine.
+    fail::cfg(rockskv_async_write_fp, "return()").unwrap();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            expect_fail_callback(tx.clone(), 0, |_| ()),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    fail::remove(rockskv_async_write_fp);
+
+    // Shouldn't release latches until async write finished.
+    fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
+    for blocked in &[false, true] {
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                expect_pessimistic_lock_res_callback(
+                    tx.clone(),
+                    PessimisticLockRes::Values(vec![Some(val.clone())]),
+                ),
+            )
+            .unwrap();
+
+        if !*blocked {
+            rx.recv().unwrap();
+        } else {
+            // Blocked by latches.
+            rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+        }
+    }
+    fail::remove(scheduler_async_write_finish_fp);
+    rx.recv().unwrap();
+    delete_pessimistic_lock(&storage, key.clone(), 40, 40);
+
+    // Pipelined write is finished before async write.
+    fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            expect_pessimistic_lock_res_callback(
+                tx.clone(),
+                PessimisticLockRes::Values(vec![Some(val.clone())]),
+            ),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    fail::remove(scheduler_async_write_finish_fp);
+    delete_pessimistic_lock(&storage, key.clone(), 50, 50);
+
+    // Async write is finished before pipelined write due to thread scheduling.
+    // Storage should handle it properly.
+    fail::cfg(scheduler_pipelined_write_finish_fp, "pause").unwrap();
+    storage
+        .sched_txn_command(
+            new_acquire_pessimistic_lock_command(
+                vec![(key.clone(), false), (Key::from_raw(b"nonexist"), false)],
+                60,
+                60,
+                true,
+            ),
+            expect_pessimistic_lock_res_callback(
+                tx,
+                PessimisticLockRes::Values(vec![Some(val), None]),
+            ),
+        )
+        .unwrap();
+    rx.recv().unwrap();
+    fail::remove(scheduler_pipelined_write_finish_fp);
+    delete_pessimistic_lock(&storage, key, 60, 60);
 }

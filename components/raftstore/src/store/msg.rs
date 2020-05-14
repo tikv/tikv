@@ -3,14 +3,15 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -24,10 +25,10 @@ use tikv_util::escape;
 
 use super::RegionSnapshot;
 
-#[derive(Debug, Clone)]
-pub struct ReadResponse<E: KvEngine> {
+#[derive(Debug)]
+pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot<E>>,
+    pub snapshot: Option<RegionSnapshot<S>>,
 }
 
 #[derive(Debug)]
@@ -35,7 +36,22 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
+// This is only necessary because of seeming limitations in derive(Clone) w/r/t
+// generics. If it can be deleted in the future in favor of derive, it should
+// be.
+impl<S> Clone for ReadResponse<S>
+where
+    S: Snapshot,
+{
+    fn clone(&self) -> ReadResponse<S> {
+        ReadResponse {
+            response: self.response.clone(),
+            snapshot: self.snapshot.clone(),
+        }
+    }
+}
+
+pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -43,18 +59,18 @@ pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-pub enum Callback<E: KvEngine> {
+pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<E>),
+    Read(ReadCallback<S>),
     /// Write callback.
     Write(WriteCallback),
 }
 
-impl<E> Callback<E>
+impl<S> Callback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
@@ -73,7 +89,7 @@ where
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse<E>) {
+    pub fn invoke_read(self, args: ReadResponse<S>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
@@ -88,9 +104,9 @@ where
     }
 }
 
-impl<E> fmt::Debug for Callback<E>
+impl<S> fmt::Debug for Callback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -178,13 +194,17 @@ pub enum SignificantMsg {
         // False means it came from target region.
         stale: bool,
     },
+    StoreResolved {
+        store_id: u64,
+        group_id: u64,
+    },
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<RocksEngine>,
+        callback: Callback<RocksSnapshot>,
     },
-    LeaderCallback(Callback<RocksEngine>),
+    LeaderCallback(Callback<RocksSnapshot>),
 }
 
 /// Message that will be sent to a peer.
@@ -197,7 +217,7 @@ pub enum CasualMessage<E: KvEngine> {
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
 
     /// Hash result of ComputeHash command.
@@ -234,9 +254,8 @@ pub enum CasualMessage<E: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
-    /// A test only message, it is useful when we want to access
-    /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+    /// A message to access peer's internal state.
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -274,7 +293,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::Test(_) => write!(fmt, "Test"),
+            CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
 }
@@ -282,15 +301,15 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
-pub struct RaftCommand<E: KvEngine> {
+pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback<E>,
+    pub callback: Callback<S>,
 }
 
-impl<E: KvEngine> RaftCommand<E> {
+impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<E>) -> RaftCommand<E> {
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
@@ -308,7 +327,7 @@ pub enum PeerMsg<E: KvEngine> {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<E>),
+    RaftCommand(RaftCommand<E::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
@@ -325,6 +344,8 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Asks region to change replication mode.
+    UpdateReplicationMode,
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -343,6 +364,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }
@@ -376,6 +398,8 @@ pub enum StoreMsg {
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -400,6 +424,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
+            StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }

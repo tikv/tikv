@@ -10,6 +10,28 @@ use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_shared_expr::rand::MySQLRng;
 
+const I64_TEN_POWS: [i64; 19] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+];
+
 #[rpn_fn]
 #[inline]
 pub fn pi() -> Result<Option<Real>> {
@@ -465,6 +487,34 @@ pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
 
 #[inline]
 #[rpn_fn]
+pub fn truncate_int_with_int(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(d)) => {
+            if d >= 0 {
+                Ok(Some(x))
+            } else {
+                if d <= -(I64_TEN_POWS.len() as i64) {
+                    return Ok(Some(0));
+                }
+                let shift = I64_TEN_POWS[-d as usize];
+                Ok(Some(x / shift * shift))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_int_with_uint(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (&Some(x), &Some(_)) => Ok(Some(x)),
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
 pub fn truncate_real_with_int(arg0: &Option<Real>, arg1: &Option<Int>) -> Result<Option<Real>> {
     match (arg0, arg1) {
         (&Some(x), &Some(d)) => {
@@ -681,7 +731,7 @@ mod tests {
             let arg = arg.parse::<Decimal>().ok();
             let expect_output = expect_output.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::AbsDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
@@ -1466,6 +1516,36 @@ mod tests {
                 .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_truncate_int() {
+        let tests = vec![
+            (1028 as i64, 0 as i64, false, 1028 as i64),
+            (1028, 5, false, 1028),
+            (1028, -2, false, 1000),
+            (1028, 309, false, 1028),
+            (1028, i64::min_value(), false, 0),
+            (1028, u64::max_value() as i64, true, 1028),
+        ];
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Int::from(lhs)))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Int>(ScalarFuncSig::TruncateInt)
+                .unwrap();
+
+            assert_eq!(output, Some(Int::from(expected)));
         }
     }
 
