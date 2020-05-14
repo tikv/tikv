@@ -12,6 +12,7 @@ use pprof;
 use pprof::protos::Message;
 use regex::Regex;
 use reqwest::{self, blocking::Client};
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -27,10 +28,10 @@ use std::sync::Arc;
 use super::Result;
 use crate::config::ConfigController;
 use pd_client::RpcClient;
+use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
-use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 mod profiler_guard {
@@ -243,11 +244,11 @@ impl StatusServer {
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
-            let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
+            let res = match decode_json(body.into_bytes().as_ref()) {
                 Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("fail to update, error: {:?}", e),
+                        format!("failed to update, error: {:?}", e),
                     ),
                     Ok(_) => {
                         let mut resp = Response::default();
@@ -255,9 +256,9 @@ impl StatusServer {
                         resp
                     }
                 },
-                Err(_) => StatusServer::err_response(
+                Err(e) => StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "fail to decode".to_owned(),
+                    format!("failed to decode, error: {:?}", e),
                 ),
             };
             ok(res)
@@ -693,6 +694,29 @@ fn handle_fail_points_request(
     }
 }
 
+// Decode different type of json value to string value
+fn decode_json(
+    data: &[u8],
+) -> std::result::Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+    let json: Value = serde_json::from_slice(data)?;
+    if let Value::Object(map) = json {
+        let mut dst = std::collections::HashMap::new();
+        for (k, v) in map.into_iter() {
+            let v = match v {
+                Value::Bool(v) => format!("{}", v),
+                Value::Number(v) => format!("{}", v),
+                Value::String(v) => v,
+                Value::Array(_) => return Err("array type are not supported".to_owned().into()),
+                _ => return Err("wrong format".to_owned().into()),
+            };
+            dst.insert(k, v);
+        }
+        Ok(dst)
+    } else {
+        Err("wrong format".to_owned().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, Future};
@@ -708,9 +732,9 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
-    use tikv_util::security::SecurityConfig;
 
     #[test]
     fn test_status_service() {
