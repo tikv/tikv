@@ -296,6 +296,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::Sha1
             | ScalarFuncSig::Md5
+            | ScalarFuncSig::Password
             | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
@@ -897,6 +898,7 @@ dispatch_call! {
         Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
+        Password => password,
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,
