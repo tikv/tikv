@@ -11,6 +11,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -253,9 +254,8 @@ pub enum CasualMessage<S: Snapshot> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
-    /// A test only message, it is useful when we want to access
-    /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm<S>) + Send + 'static>),
+    /// A message to access peer's internal state.
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<S>) + Send + 'static>),
 }
 
 impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
@@ -293,7 +293,7 @@ impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::Test(_) => write!(fmt, "Test"),
+            CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
 }
@@ -344,6 +344,8 @@ pub enum PeerMsg<S: Snapshot> {
     CasualMessage(CasualMessage<S>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Asks region to change replication mode.
+    UpdateReplicationMode,
 }
 
 impl<S: Snapshot> fmt::Debug for PeerMsg<S> {
@@ -362,6 +364,7 @@ impl<S: Snapshot> fmt::Debug for PeerMsg<S> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }
@@ -395,6 +398,8 @@ pub enum StoreMsg {
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -419,6 +424,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
+            StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }

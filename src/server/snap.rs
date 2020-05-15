@@ -18,7 +18,7 @@ use kvproto::tikvpb::TikvClient;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
-use tikv_util::security::SecurityManager;
+use security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 

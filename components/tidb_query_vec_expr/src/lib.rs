@@ -189,6 +189,14 @@ where
     Ok(mapper(rhs_is_unsigned))
 }
 
+fn truncate_int_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_int_with_uint_fn_meta()
+    } else {
+        truncate_int_with_int_fn_meta()
+    }
+}
+
 fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     if rhs_is_unsigned {
         truncate_real_with_uint_fn_meta()
@@ -446,6 +454,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
@@ -516,6 +525,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
+        ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
+        ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
