@@ -2550,6 +2550,9 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
+        let meta = ctx.store_meta.lock().unwrap();
+        let reader = meta.readers.get(&self.region_id).unwrap();
+        resp.extra_read_option = Some(reader.extra_read_option.clone());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3053,6 +3056,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    extra_read_option: None,
                 };
             }
         }
@@ -3074,6 +3078,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
+                            extra_read_option: None,
                         };
                     }
                 },
@@ -3113,7 +3118,11 @@ where
         } else {
             None
         };
-        ReadResponse { response, snapshot }
+        ReadResponse {
+            response,
+            snapshot,
+            extra_read_option: None,
+        }
     }
 }
 

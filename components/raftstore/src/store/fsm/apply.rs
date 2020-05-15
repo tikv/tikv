@@ -2929,6 +2929,7 @@ where
                         apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
+                    extra_read_option: None,
                 }
             }
             Err(e) => {
@@ -2936,6 +2937,7 @@ where
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    extra_read_option: None,
                 });
                 return;
             }
@@ -3282,6 +3284,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
+                        extra_read_option: None,
                     };
                     cb.invoke_read(resp);
                     return;

@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
+    pub extra_read_option: ExtraReadOption,
 }
 
 impl ReadDelegate {
@@ -55,6 +56,7 @@ impl ReadDelegate {
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
+            extra_read_option: ExtraReadOption::default(),
         }
     }
 
@@ -126,6 +128,37 @@ impl Display for ReadDelegate {
             self.applied_index_term,
             self.leader_lease.is_some(),
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExtraReadOption(Arc<AtomicU8>);
+
+impl ExtraReadOption {
+    const READ_NONE: u8 = 0;
+    const READ_DELETED: u8 = 1;
+    const READ_UPDATED: u8 = 2;
+
+    pub fn read_deleted(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::READ_DELETED
+    }
+
+    pub fn read_updated(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == Self::READ_UPDATED
+    }
+
+    pub fn enable_read_deleted(&self) {
+        self.0.store(Self::READ_DELETED, Ordering::SeqCst);
+    }
+
+    pub fn enable_read_updated(&self) {
+        self.0.store(Self::READ_UPDATED, Ordering::SeqCst);
+    }
+}
+
+impl Default for ExtraReadOption {
+    fn default() -> Self {
+        ExtraReadOption(Arc::new(AtomicU8::new(Self::READ_NONE)))
     }
 }
 
@@ -216,6 +249,7 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
+            extra_read_option: None,
         };
 
         cmd.callback.invoke_read(read_resp);
@@ -344,6 +378,7 @@ where
                     cmd.callback.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
+                        extra_read_option: None,
                     });
                     self.delegates.borrow_mut().remove(&region_id);
                     return;
@@ -687,6 +722,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
                 invalid: Arc::new(AtomicBool::new(false)),
+                extra_read_option: ExtraReadOption::default(),
             };
             meta.readers.insert(1, read_delegate);
         }

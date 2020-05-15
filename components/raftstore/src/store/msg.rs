@@ -19,6 +19,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
+use crate::store::worker::ExtraReadOption;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
@@ -29,6 +30,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
+    pub extra_read_option: Option<ExtraReadOption>,
 }
 
 #[derive(Debug)]
@@ -47,6 +49,7 @@ where
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
+            extra_read_option: self.extra_read_option.clone(),
         }
     }
 }
@@ -79,6 +82,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
+                    extra_read_option: None,
                 };
                 read(resp);
             }
