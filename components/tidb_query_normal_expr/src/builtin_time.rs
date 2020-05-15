@@ -551,6 +551,50 @@ impl ScalarFunc {
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
     }
+
+    #[inline]
+    pub fn sec_to_time(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<MyDuration>> {
+        let mut seconds_float = try_opt!(self.children[0].eval_real(ctx, row));
+        let minute: i64;
+        let second: i64;
+        let decimal: f64;
+        let second_decimal: f64;
+        let mut negative: &str = "";
+
+        if seconds_float < 0.0 {
+            negative = "-";
+            seconds_float = seconds_float.abs();
+        }
+
+        // golang f64 to i64 conversion is by default truncate
+        let seconds: i64 = seconds_float.trunc() as i64;
+        decimal = seconds_float - seconds as f64;
+
+        let mut hour = seconds / 3600;
+        if hour > 838 {
+            hour = 838;
+            minute = 59;
+            second = 59;
+        } else {
+            minute = (seconds % 3600) / 60;
+            second = seconds % 60;
+        }
+
+        second_decimal = second as f64 + decimal;
+
+        // get fsp
+        let fsp = self.field_type.get_decimal() as i8;
+
+        // format {} is equivalent to strconv.FormatFloat(v, 'f', -1, 64) in go
+        match MyDuration::parse(
+            ctx,
+            format!("{}{:02}{:02}{}", negative, hour, minute, second_decimal).as_bytes(),
+            fsp,
+        ) {
+            Ok(result) => Ok(Some(result)),
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1796,5 +1840,61 @@ mod tests {
 
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
+    }
+
+    #[test]
+    fn test_sec_to_time() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (
+                Datum::I64(2378),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:39:38", 0).unwrap()),
+            ),
+            (
+                Datum::I64(3864000),
+                Datum::Dur(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap()),
+            ),
+            (
+                Datum::I64(-3864000),
+                Datum::Dur(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap()),
+            ),
+            (
+                Datum::F64(86401.4),
+                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.4", 1).unwrap()),
+            ),
+            (
+                Datum::F64(-86401.4),
+                Datum::Dur(Duration::parse(&mut ctx, b"-24:00:01.4", 1).unwrap()),
+            ),
+            (
+                Datum::F64(86401.54321),
+                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.54321", 5).unwrap()),
+            ),
+            (
+                Datum::F64(86401.54321),
+                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.543210", -1).unwrap()),
+            ),
+            (
+                Datum::Bytes(b"123.4".to_vec()),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.400000", 0).unwrap()),
+            ),
+            (
+                Datum::Bytes(b"123.4567891".to_vec()),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.456789", 0).unwrap()),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.000000", 0).unwrap()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:00:00.000000", 0).unwrap()),
+            ),
+        ];
+
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::SecToTime, arg, exp);
+        }
     }
 }

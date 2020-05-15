@@ -315,7 +315,8 @@ impl ScalarFunc {
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::RandomBytes
-            | ScalarFuncSig::JsonKeysSig => (1, 1),
+            | ScalarFuncSig::JsonKeysSig
+            | ScalarFuncSig::SecToTime => (1, 1),
 
             ScalarFuncSig::JsonKeys2ArgsSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
@@ -977,6 +978,8 @@ dispatch_call! {
         SubDurationAndDuration => sub_duration_and_duration,
         SubDurationAndString => sub_duration_and_string,
         SubTimeDurationNull => sub_time_duration_null,
+
+        SecToTime => sec_to_time,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
