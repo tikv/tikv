@@ -270,7 +270,7 @@ impl BatchRaftCmdRequestBuilder {
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
-        if 0 == req.get_requests().len() || f64::from(req_size) > self.raft_entry_max_size * 0.2 {
+        if req.get_requests().is_empty() || f64::from(req_size) > self.raft_entry_max_size * 0.2 {
             return false;
         }
         for r in req.get_requests() {
@@ -3432,78 +3432,72 @@ mod tests {
         let mut builder = BatchRaftCmdRequestBuilder::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
-        {
-            let mut req = RaftCmdRequest::default();
-            req.set_admin_request(AdminRequest::default());
-            assert!(!builder.can_batch(&req, 0));
+
+        let mut req = RaftCmdRequest::default();
+        req.set_admin_request(AdminRequest::default());
+        assert!(!builder.can_batch(&req, 0));
+
+        let mut req = RaftCmdRequest::default();
+        req.set_status_request(StatusRequest::default());
+        assert!(!builder.can_batch(&req, 0));
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(b"bbbb".to_vec());
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&req, req_size));
+
+        let mut req = RaftCmdRequest::default();
+        q.set_cmd_type(CmdType::Snap);
+        req.mut_requests().push(q.clone());
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(b"bbbb".to_vec());
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&req, req_size));
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(vec![8 as u8; 2000]);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&req, req_size));
+
+        // Check batch callback
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(vec![8 as u8; 20]);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q);
+        let mut cbs_flags = vec![];
+        let mut response = RaftCmdResponse::default();
+        for _ in 0..10 {
+            let flag = Arc::new(AtomicBool::new(false));
+            cbs_flags.push(flag.clone());
+            let cb = Callback::Write(Box::new(move |_resp| {
+                flag.store(true, Ordering::Release);
+            }));
+            response.mut_responses().push(Response::default());
+            builder.add(req.clone(), 100, cb);
         }
-        {
-            let mut req = RaftCmdRequest::default();
-            req.set_status_request(StatusRequest::default());
-            assert!(!builder.can_batch(&req, 0));
-        }
-        {
-            let mut req = RaftCmdRequest::default();
-            let mut put = PutRequest::default();
-            put.set_key(b"aaaa".to_vec());
-            put.set_value(b"bbbb".to_vec());
-            q.set_cmd_type(CmdType::Put);
-            q.set_put(put);
-            req.mut_requests().push(q.clone());
-            let _ = q.take_put();
-            let req_size = req.compute_size();
-            assert!(builder.can_batch(&req, req_size));
-        }
-        {
-            let mut req = RaftCmdRequest::default();
-            q.set_cmd_type(CmdType::Snap);
-            req.mut_requests().push(q.clone());
-            let mut put = PutRequest::default();
-            put.set_key(b"aaaa".to_vec());
-            put.set_value(b"bbbb".to_vec());
-            q.set_cmd_type(CmdType::Put);
-            q.set_put(put);
-            req.mut_requests().push(q.clone());
-            let req_size = req.compute_size();
-            assert!(!builder.can_batch(&req, req_size));
-        }
-        {
-            let mut req = RaftCmdRequest::default();
-            let mut put = PutRequest::default();
-            put.set_key(b"aaaa".to_vec());
-            put.set_value(vec![8 as u8; 2000]);
-            q.set_cmd_type(CmdType::Put);
-            q.set_put(put);
-            req.mut_requests().push(q.clone());
-            let req_size = req.compute_size();
-            assert!(!builder.can_batch(&req, req_size));
-        }
-        {
-            // Check batch callback
-            let mut req = RaftCmdRequest::default();
-            let mut put = PutRequest::default();
-            put.set_key(b"aaaa".to_vec());
-            put.set_value(vec![8 as u8; 20]);
-            q.set_cmd_type(CmdType::Put);
-            q.set_put(put);
-            req.mut_requests().push(q);
-            let mut cbs_flags = vec![];
-            let mut response = RaftCmdResponse::default();
-            for _ in 0..10 {
-                let flag = Arc::new(AtomicBool::new(false));
-                cbs_flags.push(flag.clone());
-                let cb = Callback::Write(Box::new(move |_resp| {
-                    flag.store(true, Ordering::Release);
-                }));
-                response.mut_responses().push(Response::default());
-                builder.add(req.clone(), 100, cb);
-            }
-            let (req, cb) = builder.build(&mut metric).unwrap();
-            assert_eq!(10, req.get_requests().len());
-            cb.invoke_with_response(response);
-            for flag in cbs_flags {
-                assert!(flag.load(Ordering::Acquire));
-            }
+        let (req, cb) = builder.build(&mut metric).unwrap();
+        assert_eq!(10, req.get_requests().len());
+        cb.invoke_with_response(response);
+        for flag in cbs_flags {
+            assert!(flag.load(Ordering::Acquire));
         }
     }
 }
