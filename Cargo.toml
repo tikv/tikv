@@ -85,7 +85,6 @@ libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
 protobuf = "~2.0"
-prometheus = { version = "0.8", features = ["nightly", "push"] }
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
@@ -149,9 +148,14 @@ batch-system = { path = "components/batch-system" }
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
+[dependencies.prometheus]
+version = "0.4.2"
+default-features = false
+features = ["nightly", "push"]
+
 [dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
+version = "0.1.4"
+default-features = false
 
 # TODO: remove this when slog is compatible with the log 0.4
 [replace]
