@@ -14,7 +14,9 @@ use tokio_timer::timer::Handle;
 
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationMode, ReplicationStatus};
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+};
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
@@ -1002,6 +1004,14 @@ impl TestPdClient {
         self.cluster.wl().replication_status = Some(status);
     }
 
+    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
+        let mut cluster = self.cluster.wl();
+        let status = cluster.replication_status.as_mut().unwrap();
+        let mut dr = status.mut_dr_auto_sync();
+        dr.state_id += 1;
+        dr.set_state(state);
+    }
+
     pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
         self.cluster
             .rl()
@@ -1259,16 +1269,16 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
 
         // Cache it directly now.
         let store_id = stats.get_store_id();
-        self.cluster.wl().store_stats.insert(store_id, stats);
-
-        Box::new(ok(()))
+        let mut cluster = self.cluster.wl();
+        cluster.store_stats.insert(store_id, stats);
+        Box::new(ok(cluster.replication_status.clone()))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
