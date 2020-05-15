@@ -119,7 +119,7 @@ mod tests {
         encrypted_content1
             .mut_metadata()
             .get_mut(MetadataKey::AesGcmTag.as_str())
-            .unwrap()[0] += 1;
+            .unwrap()[0] ^= 0b11111111u8;
         backend.decrypt_content(&encrypted_content1).unwrap_err();
 
         // Must tag not found.
