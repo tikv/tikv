@@ -131,8 +131,8 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub region_split_size: ReadableSize,
+
     #[serde(with = "rocks_config::perf_level_serde")]
-    #[config(skip)]
     pub perf_level: PerfLevel,
 }
 

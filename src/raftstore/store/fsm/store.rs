@@ -528,7 +528,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
         report_perf_context!(
             self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM
         );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
@@ -912,7 +912,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

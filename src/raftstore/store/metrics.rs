@@ -1,21 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
-use prometheus_static_metric::*;
-
-make_auto_flush_static_metric! {
-    pub label_enum PerfContextType {
-        write_wal_time,
-        write_memtable_time,
-        pre_and_post_process,
-        write_thread_wait,
-        db_mutex_lock_nanos,
-    }
-
-    pub struct PerfContextTimeDuration : LocalHistogram {
-        "type" => PerfContextType
-    }
-}
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -261,10 +246,4 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
-    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
-        auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
-
-    pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
-        auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
 }

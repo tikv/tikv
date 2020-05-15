@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::{fmt, u64};
 
 use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
-use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
@@ -616,12 +615,12 @@ macro_rules! report_perf_context {
         if $ctx.perf_level != PerfLevel::Disable {
             let perf_context = PerfContext::get();
             let pre_and_post_process = perf_context.write_pre_and_post_process_time();
-            let write_thread_wait = perf_context.write_thread_wait_nanos();
+            // let write_thread_wait = perf_context.write_thread_wait_nanos();
             observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
             observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
-            observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            // observe_perf_context_type!($ctx, $metric, write_thread_wait);
         }
     };
 }
@@ -629,12 +628,16 @@ macro_rules! report_perf_context {
 #[macro_export]
 macro_rules! observe_perf_context_type {
     ($s:expr, $metric: expr, $v:ident) => {
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $metric
+            .with_label_values(&[stringify!($v)])
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
         $s.$v = $v;
     };
     ($s:expr, $context: expr, $metric: expr, $v:ident) => {
         let $v = $context.$v();
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $metric
+            .with_label_values(&[stringify!($v)])
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
         $s.$v = $v;
     };
 }

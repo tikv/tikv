@@ -15,6 +15,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
+use engine::rocks::{PerfContext, PerfLevel};
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
@@ -393,7 +394,7 @@ impl ApplyContext {
                 });
             report_perf_context!(
                 self.perf_context_statistics,
-                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM
             );
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();

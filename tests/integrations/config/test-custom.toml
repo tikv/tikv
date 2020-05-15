@@ -133,13 +133,8 @@ apply-pool-size = 4
 store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
-<<<<<<< HEAD
 hibernate-regions = true
-=======
-hibernate-regions = false
-early-apply = false
 perf-level = 5
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 
 [coprocessor]
 split-region-on-table = false
