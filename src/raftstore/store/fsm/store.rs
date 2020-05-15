@@ -3,9 +3,9 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
+use engine::rocks::{CompactionJobInfo, PerfContext, PerfLevel};
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::rocks::{CompactionJobInfo, PerfContext, PerfLevel};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -24,6 +24,7 @@ use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::import::SSTImporter;
+use crate::observe_perf_context_type;
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -32,8 +33,6 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
 #[cfg(not(feature = "no-fail"))]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
@@ -53,10 +52,11 @@ use crate::raftstore::store::worker::{
     SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, SnapshotDeleter,
+    StoreMsg, StoreTick,
 };
 use crate::raftstore::Result;
+use crate::report_perf_context;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};

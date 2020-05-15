@@ -34,6 +34,7 @@ use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as Ra
 use uuid::Uuid;
 
 use crate::import::SSTImporter;
+use crate::observe_perf_context_type;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
@@ -44,7 +45,6 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::{KeysInfoFormatter, PerfContextStatistics};
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use crate::observe_perf_context_type;
 use crate::report_perf_context;
 
 use tikv_util::escape;
