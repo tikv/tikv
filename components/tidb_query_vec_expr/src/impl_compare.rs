@@ -886,7 +886,6 @@ mod tests {
     fn test_greatest_int() {
         let cases = vec![
             (vec![None, None], None),
-            (vec![Some(1)], Some(1)),
             (vec![Some(1), Some(1)], Some(1)),
             (vec![Some(1), Some(-1), None], None),
             (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(2)),
