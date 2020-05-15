@@ -153,7 +153,6 @@ pub fn rpad_utf8(
     }
 }
 
-
 #[rpn_fn]
 #[inline]
 pub fn lpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Result<Option<Bytes>> {
