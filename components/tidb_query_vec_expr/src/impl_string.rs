@@ -149,6 +149,29 @@ pub fn lpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Resu
 
 #[rpn_fn]
 #[inline]
+pub fn rpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match (arg, len, pad) {
+        (Some(arg), Some(len), Some(pad)) => {
+            match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
+                None => Ok(None),
+                Some(0) => Ok(Some(b"".to_vec())),
+                Some(target_len) => {
+                    let r = arg
+                        .iter()
+                        .chain(pad.iter().cycle())
+                        .copied()
+                        .take(target_len)
+                        .collect::<Bytes>();
+                    Ok(Some(r))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn replace(
     s: &Option<Bytes>,
     from_str: &Option<Bytes>,
@@ -1036,6 +1059,97 @@ mod tests {
                 .push_param(len)
                 .push_param(pad)
                 .evaluate(ScalarFuncSig::Lpad)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn common_rpad_cases() -> Vec<(Option<Bytes>, Option<Int>, Option<Bytes>, Option<Bytes>)> {
+        vec![
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"?".to_vec()),
+                Some(b"hi???".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"?".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"?".to_vec()),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"ab".to_vec()),
+                Some(b"hiaba".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(6),
+                Some(b"ab".to_vec()),
+                Some(b"hiabab".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(-1), Some(b"?".to_vec()), None),
+            (Some(b"hi".to_vec()), Some(5), Some(b"".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_rpad() {
+        let mut cases = vec![
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(5),
+                Some(b"\x35".to_vec()),
+                Some(b"\x61\x76\x5e\x35\x35".to_vec()),
+            ),
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(2),
+                Some(b"\x35".to_vec()),
+                Some(b"\x61\x76".to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(13),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Some(b"abc".to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) + 1),
+                Some(b"aa".to_vec()),
+                None,
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::Rpad)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
