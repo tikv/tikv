@@ -33,7 +33,6 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use encryption::EncryptionConfig;
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, get_cf_handle, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
@@ -51,9 +50,9 @@ use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
+use security::SecurityConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
-use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
@@ -623,6 +622,11 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -779,6 +783,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub enable_pipelined_write: bool,
     #[config(skip)]
+    pub enable_multi_batch_write: bool,
+    #[config(skip)]
     pub enable_unordered_write: bool,
     #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -824,6 +830,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_multi_batch_write: true,
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -879,7 +886,11 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(
+            (self.enable_pipelined_write || self.enable_multi_batch_write)
+                && !self.enable_unordered_write,
+        );
+        opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
 
@@ -918,7 +929,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write {
+            if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
         }
@@ -1080,7 +1091,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_unordered_write: false,
-            allow_concurrent_memtable_write: false,
+            allow_concurrent_memtable_write: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
@@ -1903,9 +1914,6 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
 
     #[config(skip)]
-    pub encryption: EncryptionConfig,
-
-    #[config(skip)]
     pub import: ImportConfig,
 
     #[config(submodule)]
@@ -1939,7 +1947,6 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
-            encryption: EncryptionConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
@@ -2303,8 +2310,17 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub fn write_config<P: AsRef<Path>>(tem_dir: P, path: P, content: &[u8]) -> CfgResult<()> {
-    let tmp_cfg_path = tem_dir.as_ref().join(TMP_CONFIG_FILE);
+pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
+    let tmp_cfg_path = match path.as_ref().parent() {
+        Some(p) => p.join(TMP_CONFIG_FILE),
+        None => {
+            return Err(format!(
+                "failed to get parent path of config file: {}",
+                path.as_ref().display()
+            )
+            .into())
+        }
+    };
     {
         let mut f = fs::File::create(&tmp_cfg_path)?;
         f.write_all(content)?;
@@ -2325,15 +2341,17 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         typed: &ConfigChange,
         value: String,
     ) -> CfgResult<()> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             return match typed.get(&f) {
-                None => Err(format!("unexpect fields: {}", f).into()),
-                Some(ConfigValue::Skip) => Err(format!("config {:?} can not be change", f).into()),
+                None => Err(format!("unexpect fields: {}", field).into()),
+                Some(ConfigValue::Skip) => {
+                    Err(format!("config {} can not be changed", field).into())
+                }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
                         .entry(f)
@@ -2353,7 +2371,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                             }
                         };
                     }
-                    Err(format!("unexpect fields: {:?}", fields).into())
+                    let c: Vec<_> = fields.into_iter().rev().collect();
+                    Err(format!("unexpect fields: {}", c[..].join(".")).into())
                 }
             };
         }
@@ -2388,15 +2407,15 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             match typed.get(&f) {
                 None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get fields: {}", f).into())
+                    Err(format!("failed to get field: {}", field).into())
                 }
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
@@ -2463,7 +2482,6 @@ impl From<&str> for Module {
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
             "security" => Module::Security,
-            "encryption" => Module::Encryption,
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
@@ -2537,11 +2555,7 @@ impl ConfigController {
             t.write_change(src, change);
             t.finish()
         };
-        write_config(
-            &inner.current.storage.data_dir,
-            &inner.current.cfg_path,
-            &content,
-        )?;
+        write_config(&inner.current.cfg_path, &content)?;
         Ok(())
     }
 

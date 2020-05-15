@@ -85,6 +85,17 @@ fn flush_metrics(db: &DB, name: &str, shared_block_cache: bool) {
             flush_engine_histogram_metrics(*t, v, name);
         }
     }
+    if db.is_titan() {
+        for t in TITAN_ENGINE_TICKER_TYPES {
+            let v = db.get_and_reset_statistics_ticker_count(*t);
+            flush_engine_ticker_metrics(*t, v, name);
+        }
+        for t in TITAN_ENGINE_HIST_TYPES {
+            if let Some(v) = db.get_statistics_histogram(*t) {
+                flush_engine_histogram_metrics(*t, v, name);
+            }
+        }
+    }
     flush_engine_properties(db, name, shared_block_cache);
     flush_engine_iostall_properties(db, name);
 }

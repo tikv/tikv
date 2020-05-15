@@ -33,6 +33,7 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager,
     },
 };
+use security::SecurityManager;
 use std::{
     convert::TryFrom,
     env, fmt,
@@ -64,7 +65,6 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    security::SecurityManager,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -321,10 +321,12 @@ impl TiKVServer {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager =
-            DataKeyManager::from_config(&self.config.encryption, &self.config.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+        self.encryption_key_manager = DataKeyManager::from_config(
+            &self.config.security.encryption,
+            &self.config.storage.data_dir,
+        )
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
     }
 
     fn init_engines(&mut self) {
@@ -656,6 +658,7 @@ impl TiKVServer {
         let diag_service = DiagnosticsService::new(
             pool,
             self.config.log_file.clone(),
+            self.config.slow_log_file.clone(),
             self.security_mgr.clone(),
         );
         if servers

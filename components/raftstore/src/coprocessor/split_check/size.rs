@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use engine_traits::LARGE_CFS;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -205,7 +205,10 @@ pub fn get_region_approximate_size(
 ) -> Result<u64> {
     let mut size = 0;
     for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)?
+        size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)
+            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+            // backward compatibility.
+            .or_else(|e| if cfname == &CF_LOCK { Ok(0) } else { Err(e) })?;
     }
     Ok(size)
 }
@@ -258,7 +261,7 @@ pub fn get_region_approximate_size_cf(
     Ok(total_size)
 }
 
-/// Get region approximate split keys based on default and write cf.
+/// Get region approximate split keys based on default, write and lock cf.
 fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
@@ -267,25 +270,22 @@ fn get_approximate_split_keys(
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
+    let cfs = [
+        (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
+        (CF_WRITE, box_try!(get_cf_size(CF_WRITE))),
+        // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+        // backward compatibility.
+        (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),
+    ];
 
-    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
-    if default_cf_size + write_cf_size == 0 {
-        return Err(box_err!("default cf and write cf is empty"));
+    let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
+    if total_size == 0 {
+        return Err(box_err!("all CFs are empty"));
     }
 
+    let (cf, cf_size) = cfs.iter().max_by_key(|(_, s)| s).unwrap();
     // assume the size of keys is uniform distribution in both cfs.
-    let (cf, cf_split_size) = if default_cf_size >= write_cf_size {
-        (
-            CF_DEFAULT,
-            split_size * default_cf_size / (default_cf_size + write_cf_size),
-        )
-    } else {
-        (
-            CF_WRITE,
-            split_size * write_cf_size / (default_cf_size + write_cf_size),
-        )
-    };
+    let cf_split_size = split_size * cf_size / total_size;
 
     get_approximate_split_keys_cf(db, cf, &region, cf_split_size, max_size, batch_split_limit)
 }
@@ -390,24 +390,29 @@ pub mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::{Compat, RocksEngine};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
     use std::sync::mpsc;
     use std::sync::Arc;
-    use std::{iter, u64};
+    use std::{
+        iter::{self, FromIterator},
+        u64,
+    };
     use tempfile::Builder;
+    use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
     use txn_types::Key;
 
     use super::*;
 
-    pub fn must_split_at(
+    fn must_split_at_impl(
         rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
+        ignore_split_keys: bool,
     ) {
         loop {
             match rx.try_recv() {
@@ -425,7 +430,9 @@ pub mod tests {
                 )) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
-                    assert_eq!(split_keys, exp_split_keys);
+                    if !ignore_split_keys {
+                        assert_eq!(split_keys, exp_split_keys);
+                    }
                     break;
                 }
                 others => panic!("expect split check result, but got {:?}", others),
@@ -433,18 +440,32 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn test_split_check() {
+    pub fn must_split_at(
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        exp_region: &Region,
+        exp_split_keys: Vec<Vec<u8>>,
+    ) {
+        must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let cfs_with_range_prop = HashSet::from_iter(cfs_with_range_prop.iter().cloned());
+        let mut cf_opt = ColumnFamilyOptions::new();
         let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
+        cf_opt.add_table_properties_collector_factory("tikv.range-collector", f);
 
         let cfs_opts = ALL_CFS
             .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    CFOptions::new(cf, cf_opt.clone())
+                } else {
+                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                }
+            })
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
@@ -469,10 +490,11 @@ pub mod tests {
             cfg,
         );
 
+        let cf_handle = engine.cf_handle(data_cf).unwrap();
         // so split key will be [z0006]
         for i in 0..7 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
+            engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
 
         runnable.run(SplitCheckTask::split_check(
@@ -490,7 +512,7 @@ pub mod tests {
 
         for i in 7..11 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
+            engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
 
         // Approximate size of memtable is inaccurate for small data,
@@ -507,7 +529,7 @@ pub mod tests {
         // so split keys will be [z0006, z0012]
         for i in 11..19 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
+            engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
         engine.flush(true).unwrap();
         runnable.run(SplitCheckTask::split_check(
@@ -521,7 +543,7 @@ pub mod tests {
         // so split kets will be [z0006, z0012, z0018, z0024, z0030]
         for i in 19..51 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
+            engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
         engine.flush(true).unwrap();
         runnable.run(SplitCheckTask::split_check(
@@ -544,6 +566,104 @@ pub mod tests {
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
+    }
+
+    #[test]
+    fn test_split_check() {
+        test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
+        test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
+        for cf in LARGE_CFS {
+            test_split_check_impl(LARGE_CFS, cf);
+        }
+    }
+
+    #[test]
+    fn test_cf_lock_without_range_prop() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opt.add_table_properties_collector_factory("tikv.range-collector", f);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cf != &CF_LOCK {
+                    CFOptions::new(cf, cf_opt.clone())
+                } else {
+                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                }
+            })
+            .collect();
+
+        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let mut cfg = Config::default();
+        cfg.region_max_size = ReadableSize(100);
+        cfg.region_split_size = ReadableSize(60);
+        cfg.batch_split_limit = 5;
+
+        let mut runnable = SplitCheckRunner::new(
+            Arc::clone(&engine),
+            tx.clone(),
+            CoprocessorHost::new(tx.clone()),
+            cfg.clone(),
+        );
+
+        for cf in LARGE_CFS {
+            let cf_handle = engine.cf_handle(cf).unwrap();
+            for i in 0..7 {
+                let s = keys::data_key(format!("{:04}", i).as_bytes());
+                engine.put_cf(&cf_handle, &s, &s).unwrap();
+            }
+            engine.flush_cf(&cf_handle, true).unwrap();
+        }
+
+        for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
+            runnable.run(SplitCheckTask::split_check(region.clone(), true, *policy));
+            // Ignore the split keys. Only check whether it can split or not.
+            must_split_at_impl(&rx, &region, vec![], true);
+        }
+
+        drop(engine);
+        drop(runnable);
+
+        // Reopen the engine and all cfs have range properties.
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .collect();
+        let engine = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
+
+        let mut runnable = SplitCheckRunner::new(
+            Arc::clone(&engine),
+            tx.clone(),
+            CoprocessorHost::new(tx),
+            cfg,
+        );
+
+        // Flush a sst of CF_LOCK with range properties.
+        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
+        for i in 7..15 {
+            let s = keys::data_key(format!("{:04}", i).as_bytes());
+            engine.put_cf(&cf_handle, &s, &s).unwrap();
+        }
+        engine.flush_cf(&cf_handle, true).unwrap();
+        for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
+            runnable.run(SplitCheckTask::split_check(region.clone(), true, *policy));
+            // Ignore the split keys. Only check whether it can split or not.
+            must_split_at_impl(&rx, &region, vec![], true);
+        }
     }
 
     #[test]
@@ -627,8 +747,7 @@ pub mod tests {
         );
     }
 
-    #[test]
-    fn test_get_approximate_split_keys() {
+    fn test_get_approximate_split_keys_impl(data_cf: CfName) {
         let tmp = Builder::new()
             .prefix("test_raftstore_util")
             .tempdir()
@@ -646,7 +765,7 @@ pub mod tests {
             .collect();
         let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
-        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let cf_handle = engine.cf_handle(data_cf).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
 
@@ -742,6 +861,13 @@ pub mod tests {
                 b"key_014".to_vec(),
             ]
         );
+    }
+
+    #[test]
+    fn test_get_approximate_split_keys() {
+        for cf in LARGE_CFS {
+            test_get_approximate_split_keys_impl(*cf);
+        }
     }
 
     #[test]

@@ -36,6 +36,7 @@ addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
 status-thread-pool-size = 1
+max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -59,7 +60,7 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = false
+request-batch-enable-cross-command = true
 request-batch-wait-duration = "10ms"
 
 [server.labels]
@@ -143,8 +144,11 @@ cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
 apply-max-batch-size = 22
 apply-pool-size = 4
+apply-reschedule-duration = "3s"
+apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
+store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
@@ -184,6 +188,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
+enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -397,7 +402,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
-allow-concurrent-memtable-write = true
+allow-concurrent-memtable-write = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 
@@ -473,15 +478,15 @@ cert-allowed-cn = [
     "example.tikv.com",
 ]
 
-[encryption]
+[security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
-[encryption.master-key]
+[security.encryption.master-key]
 type = "file"
 path = "/master/key/path"
 
-[encryption.previous-master-key]
+[security.encryption.previous-master-key]
 type = "plaintext"
 
 [import]

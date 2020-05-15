@@ -219,6 +219,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -259,6 +260,8 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tikv_util",
@@ -474,6 +477,7 @@ dependencies = [
  "raft",
  "raftstore",
  "resolved_ts",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -595,6 +599,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "serde_json",
  "signal",
  "slog",
@@ -1026,6 +1031,7 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio 0.2.13",
@@ -1498,9 +1504,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a779eb8dc982fa4a552eb21e2962b2d927ea9037cb21be8645034c9e79ee4a29"
+checksum = "7a60cc544face71ebbc053d821fdf880b809340b67d19f5d07d6b829e9e36e63"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1527,9 +1533,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b3080bdcfde08451cc7994f0b7c0c71c638629f8fb0049217af76a69d0742c3"
+checksum = "8ae317d29eb55297b760ca3641662f140e17b9dc36e3f23a3e7e7327e3c33c7e"
 dependencies = [
  "bindgen",
  "cc",
@@ -1935,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#8c0ffd3e32593623230fb9c32b78b776cc4b67d1"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#f7b6982b0416c1d3d64dd82dd7f92a8a2bf9047a"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1958,18 +1964,6 @@ name = "libc"
 version = "0.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
-
-[[package]]
-name = "libflate"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9135df43b1f5d0e333385cb6e7897ecd1a43d7d11b91ac003f4d2c2d2401fdd"
-dependencies = [
- "adler32",
- "crc32fast",
- "rle-decode-fast",
- "take_mut",
-]
 
 [[package]]
 name = "libfuzzer-sys"
@@ -2004,7 +1998,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#98aea256eb454a1e3147b3fbed106c6dbd786e94"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2023,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#98aea256eb454a1e3147b3fbed106c6dbd786e94"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2592,6 +2586,7 @@ dependencies = [
  "log",
  "prometheus",
  "quick-error",
+ "security",
  "serde",
  "serde_derive",
  "slog",
@@ -2772,20 +2767,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "procfs"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e767ab205e4b292ea2c8e9fa454efe7e66e35026432eef34fed7daa763136d09"
-dependencies = [
- "bitflags",
- "byteorder",
- "hex 0.4.2",
- "lazy_static",
- "libc",
- "libflate",
-]
-
-[[package]]
 name = "procinfo"
 version = "0.4.2"
 source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6e8afc3c665a56e#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
@@ -2817,7 +2798,6 @@ dependencies = [
  "fnv",
  "lazy_static",
  "libc",
- "procfs",
  "protobuf",
  "reqwest",
  "spin",
@@ -3006,6 +2986,7 @@ dependencies = [
  "rand 0.6.5",
  "serde",
  "serde_derive",
+ "serde_with",
  "slog",
  "slog-global",
  "sst_importer",
@@ -3363,15 +3344,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 
 [[package]]
-name = "rle-decode-fast"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
-
-[[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#440860ffb5084693c452bd042cf9dac00a534238"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#98aea256eb454a1e3147b3fbed106c6dbd786e94"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3619,6 +3594,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42e15e59b18a828bbf5c58ea01debb36b9b096346de35d941dcb89009f24a0d"
 
 [[package]]
+name = "security"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "grpcio",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tempfile",
+ "tikv_util",
+]
+
+[[package]]
 name = "security-framework"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3696,6 +3684,27 @@ dependencies = [
  "itoa",
  "serde",
  "url",
+]
+
+[[package]]
+name = "serde_with"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89d3d595d64120bbbc70b7f6d5ae63298b62a3d9f373ec2f56acf5365ca8a444"
+dependencies = [
+ "serde",
+ "serde_with_macros",
+]
+
+[[package]]
+name = "serde_with_macros"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4070d2c9b9d258465ad1d82aabb985b84cd9a3afa94da25ece5a9938ba5f1606"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3865,6 +3874,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_sst_importer",
+ "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio-sync",
@@ -4126,6 +4136,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
@@ -4167,12 +4178,16 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "fail",
  "grpcio",
+ "kvproto",
  "rand 0.7.3",
  "rand_isaac 0.2.0",
+ "security",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "time 0.1.42",
 ]
@@ -4182,6 +4197,7 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "arrow",
+ "batch-system",
  "byteorder",
  "cdc",
  "configuration",
@@ -4211,6 +4227,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift 0.2.0",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
@@ -4409,6 +4426,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rev_lines",
+ "security",
  "serde",
  "serde_derive",
  "serde_json",
