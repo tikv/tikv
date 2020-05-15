@@ -38,7 +38,7 @@ impl Default for EncryptionConfig {
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct FileCofnig {
+pub struct FileConfig {
     pub path: String,
 }
 
@@ -89,7 +89,7 @@ pub enum MasterKeyConfig {
     #[serde(rename_all = "kebab-case")]
     File {
         #[serde(flatten)]
-        config: FileCofnig,
+        config: FileConfig,
     },
 
     #[serde(rename_all = "kebab-case")]
