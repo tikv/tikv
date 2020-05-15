@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use fail;
 use futures::Future;
 use raft::eraftpb::ConfChangeType;
@@ -203,4 +205,41 @@ fn test_stale_peer_cache() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("stale_peer_cache_2", "return").unwrap();
     cluster.must_put(b"k2", b"v2");
+}
+
+#[test]
+fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k", b"v");
+
+    let region = pd_client.get_region(b"k").unwrap();
+
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    let yield_apply_conf_change_3_fp = "yield_apply_conf_change_3";
+    fail::cfg(yield_apply_conf_change_3_fp, "return()").unwrap();
+
+    // Make store 1 and 3 become quorum
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    // Wait for peer fsm to send committed entries to apply fsm
+    sleep_ms(100);
+    fail::remove(yield_apply_conf_change_3_fp);
+    cluster.clear_send_filters();
+    // Add new peer 4 to store 3
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+
+    for i in 0..10 {
+        cluster.must_put(format!("kk{}", i).as_bytes(), b"v1");
+    }
 }
