@@ -1,17 +1,20 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::KvEngine;
 use futures::future::{err, ok};
 use futures::stream::Stream;
+use futures::sync::oneshot;
 use futures::{self, Future};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509StoreContextRef;
-use pprof;
 use pprof::protos::Message;
+use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use reqwest::{self, blocking::Client};
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslAcceptorExt;
@@ -20,6 +23,7 @@ use tokio_tcp::TcpListener;
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::error::Error as StdError;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,11 +31,13 @@ use std::sync::Arc;
 use super::Result;
 use crate::config::ConfigController;
 use pd_client::RpcClient;
+use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
-use tikv_util::security::{self, SecurityConfig};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
+pub mod region_meta;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -60,9 +66,8 @@ mod profiler_guard {
 
     impl Drop for ProfGuard {
         fn drop(&mut self) {
-            match deactivate_prof() {
-                _ => {} // TODO: handle error here
-            }
+            // TODO: handle error here
+            let _ = deactivate_prof();
         }
     }
 
@@ -76,6 +81,7 @@ mod profiler_guard {
 }
 
 const COMPONENT_REQUEST_RETRY: usize = 5;
+
 static COMPONENT: &str = "tikv";
 
 #[cfg(feature = "failpoints")]
@@ -85,20 +91,65 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer {
+pub struct StatusServer<E, R> {
     thread_pool: ThreadPool,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
+    router: R,
+    _engine: PhantomData<E>,
 }
 
-impl StatusServer {
+impl StatusServer<(), ()> {
+    fn extract_thread_name(thread_name: &str) -> String {
+        lazy_static! {
+            static ref THREAD_NAME_RE: Regex =
+                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+        }
+
+        THREAD_NAME_RE
+            .captures(thread_name)
+            .and_then(|cap| {
+                cap.name("thread_name").map(|thread_name| {
+                    THREAD_NAME_REPLACE_SEPERATOR_RE
+                        .replace_all(thread_name.as_str(), "-")
+                        .into_owned()
+                })
+            })
+            .unwrap_or_else(|| thread_name.to_owned())
+    }
+
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
+        move |frames| {
+            let name = Self::extract_thread_name(&frames.thread_name);
+            frames.thread_name = name;
+        }
+    }
+
+    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+    where
+        T: Into<Body>,
+    {
+        Response::builder()
+            .status(status_code)
+            .body(message.into())
+            .unwrap()
+    }
+}
+
+impl<E, R> StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     pub fn new(
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
+        router: R,
     ) -> Self {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
@@ -118,6 +169,8 @@ impl StatusServer {
             addr: None,
             pd_client,
             cfg_controller,
+            router,
+            _engine: PhantomData,
         }
     }
 
@@ -212,16 +265,6 @@ impl StatusServer {
         )
     }
 
-    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-    where
-        T: Into<Body>,
-    {
-        Response::builder()
-            .status(status_code)
-            .body(message.into())
-            .unwrap()
-    }
-
     fn get_config(
         cfg_controller: &ConfigController,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -243,11 +286,11 @@ impl StatusServer {
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = req.into_body().concat2().and_then(move |body| {
-            let res = match serde_json::from_slice(body.into_bytes().as_ref()) {
+            let res = match decode_json(body.into_bytes().as_ref()) {
                 Ok(change) => match cfg_controller.update(change) {
                     Err(e) => StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("fail to update, error: {:?}", e),
+                        format!("failed to update, error: {:?}", e),
                     ),
                     Ok(_) => {
                         let mut resp = Response::default();
@@ -255,40 +298,14 @@ impl StatusServer {
                         resp
                     }
                 },
-                Err(_) => StatusServer::err_response(
+                Err(e) => StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "fail to decode".to_owned(),
+                    format!("failed to decode, error: {:?}", e),
                 ),
             };
             ok(res)
         });
         Box::new(res)
-    }
-
-    fn extract_thread_name(thread_name: &str) -> String {
-        lazy_static! {
-            static ref THREAD_NAME_RE: Regex =
-                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
-            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
-        }
-
-        THREAD_NAME_RE
-            .captures(thread_name)
-            .and_then(|cap| {
-                cap.name("thread_name").map(|thread_name| {
-                    THREAD_NAME_REPLACE_SEPERATOR_RE
-                        .replace_all(thread_name.as_str(), "-")
-                        .into_owned()
-                })
-            })
-            .unwrap_or_else(|| thread_name.to_owned())
-    }
-
-    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
-        move |frames| {
-            let name = Self::extract_thread_name(&frames.thread_name);
-            frames.thread_name = name;
-        }
     }
 
     pub fn dump_rsprof(
@@ -314,7 +331,7 @@ impl StatusServer {
                                 Box::new(
                                     match guard
                                         .report()
-                                        .frames_post_processor(Self::frames_post_processor())
+                                        .frames_post_processor(StatusServer::frames_post_processor())
                                         .build()
                                     {
                                         Ok(report) => ok(report),
@@ -410,129 +427,6 @@ impl StatusServer {
         )
     }
 
-    fn start_serve<I>(&mut self, builder: HyperBuilder<I>)
-    where
-        I: Stream + Send + 'static,
-        I::Error: Into<Box<dyn StdError + Send + Sync>>,
-        I::Item: AsyncRead + AsyncWrite + Send + 'static,
-    {
-        let cfg_controller = self.cfg_controller.clone();
-        // Start to serve.
-        let server = builder.serve(move || {
-            let cfg_controller = cfg_controller.clone();
-            // Create a status service.
-            service_fn(
-                    move |req: Request<Body>| -> Box<
-                        dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
-                    > {
-                        let path = req.uri().path().to_owned();
-                        let method = req.method().to_owned();
-
-                        #[cfg(feature = "failpoints")]
-                        {
-                            if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
-                                return handle_fail_points_request(req);
-                            }
-                        }
-
-                        match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
-                            (Method::GET, "/status") => Box::new(ok(Response::default())),
-                            (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => Self::get_config(&cfg_controller),
-                            (Method::POST, "/config") => {
-                                Self::update_config(cfg_controller.clone(), req)
-                            }
-                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
-                            _ => Box::new(ok(StatusServer::err_response(
-                                StatusCode::NOT_FOUND,
-                                "path not found",
-                            ))),
-                        }
-                    },
-                )
-        });
-
-        let graceful = server
-            .with_graceful_shutdown(self.rx.take().unwrap())
-            .map_err(|e| error!("Status server error: {:?}", e));
-        self.thread_pool.spawn(graceful);
-    }
-
-    pub fn start(&mut self, status_addr: String, security_config: &SecurityConfig) -> Result<()> {
-        let addr = SocketAddr::from_str(&status_addr)?;
-
-        let tcp_listener = TcpListener::bind(&addr)?;
-        self.addr = Some(tcp_listener.local_addr()?);
-
-        if !security_config.cert_path.is_empty()
-            && !security_config.key_path.is_empty()
-            && !security_config.ca_path.is_empty()
-        {
-            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&security_config.cert_path)?;
-            acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
-
-            if !security_config.cert_allowed_cn.is_empty() {
-                let allowed_cn = security_config.cert_allowed_cn.clone();
-                // The verification callback to check if the peer CN is allowed.
-                let verify_cb = move |flag: bool, x509_ctx: &mut X509StoreContextRef| {
-                    if !flag || x509_ctx.error_depth() != 0 {
-                        return flag;
-                    }
-                    if let Some(chains) = x509_ctx.chain() {
-                        if chains.len() != 0 {
-                            if let Some(pattern) = chains
-                                .get(0)
-                                .unwrap()
-                                .subject_name()
-                                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                                .next()
-                            {
-                                let data = pattern.data().as_slice();
-                                return security::match_peer_names(
-                                    &allowed_cn,
-                                    std::str::from_utf8(data).unwrap(),
-                                );
-                            }
-                        }
-                    }
-                    false
-                };
-                // Request and require cert from client-side.
-                acceptor.set_verify_callback(
-                    SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
-                    verify_cb,
-                );
-            }
-
-            let acceptor = acceptor.build();
-
-            let tls_stream = tcp_listener
-                .incoming()
-                .and_then(move |stream| {
-                    acceptor.accept_async(stream).then(|r| match r {
-                        Ok(stream) => Ok(Some(stream)),
-                        Err(e) => {
-                            error!("failed to accept TLS connection"; "err" => ?e);
-                            Ok(None)
-                        }
-                    })
-                })
-                .filter_map(|x| x);
-            let server = Server::builder(tls_stream);
-            self.start_serve(server);
-        } else {
-            let tcp_stream = tcp_listener.incoming();
-            let server = Server::builder(tcp_stream);
-            self.start_serve(server);
-        }
-        // register the status address to pd
-        self.register_addr(status_addr);
-        Ok(())
-    }
-
     pub fn stop(self) {
         // unregister the status address to pd
         self.unregister_addr();
@@ -617,6 +511,225 @@ impl StatusServer {
     }
 }
 
+impl<E, R> StatusServer<E, R>
+where
+    E: KvEngine,
+    R: 'static + Send + CasualRouter<E> + Clone,
+{
+    pub fn dump_region_meta(
+        req: Request<Body>,
+        router: &R,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        lazy_static! {
+            static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
+        }
+
+        type Resp = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
+
+        fn err_resp(status_code: StatusCode, msg: impl Into<Body>) -> Resp {
+            Box::new(ok(StatusServer::err_response(status_code, msg)))
+        }
+
+        fn not_found(msg: impl Into<Body>) -> Resp {
+            err_resp(StatusCode::NOT_FOUND, msg)
+        }
+
+        match REGION.captures(req.uri().path()) {
+            None => not_found(format!("path {} not found", req.uri().path())),
+            Some(cap) => {
+                let id: u64 = match cap["id"].parse() {
+                    Ok(id) => id,
+                    Err(err) => {
+                        return err_resp(
+                            StatusCode::BAD_REQUEST,
+                            format!("invalid region id: {}", err),
+                        );
+                    }
+                };
+                let (tx, rx) = oneshot::channel();
+                match router.send(
+                    id,
+                    CasualMessage::AccessPeer(Box::new(move |peer| {
+                        if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                            error!("receiver dropped, region meta: {:?}", meta)
+                        }
+                    })),
+                ) {
+                    Ok(_) => (),
+                    Err(raftstore::Error::RegionNotFound(_)) => {
+                        return not_found(format!("region({}) not found", id));
+                    }
+                    Err(err) => {
+                        return err_resp(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("channel pending or disconnect: {}", err),
+                        );
+                    }
+                }
+
+                Box::new(
+                    rx.map_err(|_| {
+                        StatusServer::err_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "query cancelled",
+                        )
+                    })
+                    .and_then(|meta| {
+                        serde_json::to_vec(&meta).map_err(|err| {
+                            StatusServer::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("fails to json: {}", err),
+                            )
+                        })
+                    })
+                    .and_then(|body| {
+                        Response::builder()
+                            .header("content-type", "application/json")
+                            .body(hyper::Body::from(body))
+                            .map_err(|err| {
+                                StatusServer::err_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("fails to build response: {}", err),
+                                )
+                            })
+                    })
+                    .then(|ret| match ret {
+                        Ok(resp) | Err(resp) => Ok(resp),
+                    }),
+                )
+            }
+        }
+    }
+
+    fn start_serve<I>(&mut self, builder: HyperBuilder<I>)
+    where
+        I: Stream + Send + 'static,
+        I::Error: Into<Box<dyn StdError + Send + Sync>>,
+        I::Item: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        let cfg_controller = self.cfg_controller.clone();
+        let router = self.router.clone();
+        // Start to serve.
+        let server = builder.serve(move || {
+            let cfg_controller = cfg_controller.clone();
+            let router = router.clone();
+            // Create a status service.
+            service_fn(
+                move |req: Request<Body>| -> Box<
+                    dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
+                > {
+                    let path = req.uri().path().to_owned();
+                    let method = req.method().to_owned();
+
+                    #[cfg(feature = "failpoints")]
+                        {
+                            if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
+                                return handle_fail_points_request(req);
+                            }
+                        }
+
+                    match (method, path.as_ref()) {
+                        (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
+                        (Method::GET, "/status") => Box::new(ok(Response::default())),
+                        (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
+                        (Method::GET, "/config") => Self::get_config(&cfg_controller),
+                        (Method::POST, "/config") => {
+                            Self::update_config(cfg_controller.clone(), req)
+                        }
+                        (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
+                        (Method::GET, path) if path.starts_with("/region") => {
+                            Self::dump_region_meta(req, &router)
+                        }
+                        _ => Box::new(ok(StatusServer::err_response(
+                            StatusCode::NOT_FOUND,
+                            "path not found",
+                        ))),
+                    }
+                },
+            )
+        });
+
+        let graceful = server
+            .with_graceful_shutdown(self.rx.take().unwrap())
+            .map_err(|e| error!("Status server error: {:?}", e));
+        self.thread_pool.spawn(graceful);
+    }
+
+    pub fn start(&mut self, status_addr: String, security_config: &SecurityConfig) -> Result<()> {
+        let addr = SocketAddr::from_str(&status_addr)?;
+
+        let tcp_listener = TcpListener::bind(&addr)?;
+        self.addr = Some(tcp_listener.local_addr()?);
+
+        if !security_config.cert_path.is_empty()
+            && !security_config.key_path.is_empty()
+            && !security_config.ca_path.is_empty()
+        {
+            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
+            acceptor.set_ca_file(&security_config.ca_path)?;
+            acceptor.set_certificate_chain_file(&security_config.cert_path)?;
+            acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
+
+            if !security_config.cert_allowed_cn.is_empty() {
+                let allowed_cn = security_config.cert_allowed_cn.clone();
+                // The verification callback to check if the peer CN is allowed.
+                let verify_cb = move |flag: bool, x509_ctx: &mut X509StoreContextRef| {
+                    if !flag || x509_ctx.error_depth() != 0 {
+                        return flag;
+                    }
+                    if let Some(chains) = x509_ctx.chain() {
+                        if chains.len() != 0 {
+                            if let Some(pattern) = chains
+                                .get(0)
+                                .unwrap()
+                                .subject_name()
+                                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                                .next()
+                            {
+                                let data = pattern.data().as_slice();
+                                return security::match_peer_names(
+                                    &allowed_cn,
+                                    std::str::from_utf8(data).unwrap(),
+                                );
+                            }
+                        }
+                    }
+                    false
+                };
+                // Request and require cert from client-side.
+                acceptor.set_verify_callback(
+                    SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+                    verify_cb,
+                );
+            }
+
+            let acceptor = acceptor.build();
+
+            let tls_stream = tcp_listener
+                .incoming()
+                .and_then(move |stream| {
+                    acceptor.accept_async(stream).then(|r| match r {
+                        Ok(stream) => Ok(Some(stream)),
+                        Err(e) => {
+                            error!("failed to accept TLS connection"; "err" => ?e);
+                            Ok(None)
+                        }
+                    })
+                })
+                .filter_map(|x| x);
+            let server = Server::builder(tls_stream);
+            self.start_serve(server);
+        } else {
+            let tcp_stream = tcp_listener.incoming();
+            let server = Server::builder(tcp_stream);
+            self.start_serve(server);
+        }
+        // register the status address to pd
+        self.register_addr(status_addr);
+        Ok(())
+    }
+}
+
 // For handling fail points related requests
 #[cfg(feature = "failpoints")]
 fn handle_fail_points_request(
@@ -693,6 +806,29 @@ fn handle_fail_points_request(
     }
 }
 
+// Decode different type of json value to string value
+fn decode_json(
+    data: &[u8],
+) -> std::result::Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+    let json: Value = serde_json::from_slice(data)?;
+    if let Value::Object(map) = json {
+        let mut dst = std::collections::HashMap::new();
+        for (k, v) in map.into_iter() {
+            let v = match v {
+                Value::Bool(v) => format!("{}", v),
+                Value::Number(v) => format!("{}", v),
+                Value::String(v) => v,
+                Value::Array(_) => return Err("array type are not supported".to_owned().into()),
+                _ => return Err("wrong format".to_owned().into()),
+            };
+            dst.insert(k, v);
+        }
+        Ok(dst)
+    } else {
+        Err("wrong format".to_owned().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, Future};
@@ -708,13 +844,25 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use engine_rocks::RocksEngine;
+    use raftstore::store::transport::CasualRouter;
+    use raftstore::store::CasualMessage;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
-    use tikv_util::security::SecurityConfig;
+
+    #[derive(Clone)]
+    struct MockRouter;
+
+    impl CasualRouter<RocksEngine> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+            Err(raftstore::Error::RegionNotFound(region_id))
+        }
+    }
 
     #[test]
     fn test_status_service() {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -759,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
@@ -795,7 +943,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -927,7 +1075,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -968,7 +1116,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
@@ -1029,7 +1177,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server = StatusServer::new(1, None, ConfigController::default());
+        let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
         let _ = status_server.start(
             "127.0.0.1:0".to_string(),
             &new_security_cfg(Some(allowed_cn)),

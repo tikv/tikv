@@ -5,7 +5,6 @@ use std::sync::Arc;
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use engine_rocks::RocksEngine;
-use fail;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -21,10 +20,8 @@ use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
+use security::{check_common_name, SecurityManager};
 use tikv_util::metrics;
-use tikv_util::security::{check_common_name, SecurityManager};
-
-use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {

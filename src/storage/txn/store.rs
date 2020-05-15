@@ -570,6 +570,7 @@ mod tests {
     use engine_traits::CfName;
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
+    use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -578,7 +579,7 @@ mod tests {
 
     struct TestStore {
         keys: Vec<String>,
-        snapshot: RocksSnapshot,
+        snapshot: Arc<RocksSnapshot>,
         ctx: Context,
         engine: RocksEngine,
     }
@@ -640,7 +641,7 @@ mod tests {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        fn store(&self) -> SnapshotStore<RocksSnapshot> {
+        fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {
             SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS.next(),
