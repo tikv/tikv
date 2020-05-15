@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::{ReadableSize, VersionTrack};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -33,17 +33,8 @@ impl Default for GcConfig {
 
 impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<GcConfig>>,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
-            rollback_or!(rb_collector, batch_keys, {
-                Err(("gc.batch_keys should not be 0.").into())
-            })
+            return Err(("gc.batch_keys should not be 0.").into());
         }
         Ok(())
     }
