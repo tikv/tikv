@@ -5,26 +5,18 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
-<<<<<<< HEAD:src/raftstore/store/util.rs
-=======
-use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
+use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/util.rs
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
-<<<<<<< HEAD:src/raftstore/store/util.rs
 use crate::raftstore::{Error, Result};
 use tikv_util::time::monotonic_raw_now;
-=======
-use crate::{Error, Result};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/util.rs
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -618,12 +610,6 @@ impl<
     }
 }
 
-<<<<<<< HEAD:src/raftstore/store/util.rs
-=======
-pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
-    (voters + 1) / 2 + 1
-}
-
 #[macro_export]
 macro_rules! report_perf_context {
     ($ctx: expr, $metric: ident) => {
@@ -689,7 +675,6 @@ impl PerfContextStatistics {
     }
 }
 
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/util.rs
 #[cfg(test)]
 mod tests {
     use std::thread;

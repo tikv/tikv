@@ -4,27 +4,10 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-<<<<<<< HEAD:src/raftstore/store/config.rs
 use crate::raftstore::{coprocessor, Result};
 use tikv_util::config::{ReadableDuration, ReadableSize};
-=======
-use crate::{coprocessor, Result};
-use configuration::{
-    rollback_or, ConfigChange, ConfigManager, ConfigValue, Configuration, RollbackCollector,
-};
-use engine_rocks::config as rocks_config;
-use engine_rocks::PerfLevel;
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
-lazy_static! {
-    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
-        "tikv_config_raftstore",
-        "Config information of raftstore",
-        &["name"]
-    )
-    .unwrap();
-}
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/config.rs
+use engine::rocks::{util::config as rocks_config, PerfLevel};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

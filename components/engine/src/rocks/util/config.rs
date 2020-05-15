@@ -1,12 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD:components/engine/src/rocks/util/config.rs
+pub use crate::rocks::PerfLevel;
 use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
-=======
-use configuration::ConfigValue;
-pub use rocksdb::PerfLevel;
-use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/engine_rocks/src/config.rs
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -43,7 +38,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use rocksdb::DBCompressionType;
+    use crate::rocks::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -147,7 +142,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
+            use crate::rocks::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -183,7 +178,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use rocksdb::$enum;
+                use crate::rocks::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -240,15 +235,15 @@ numeric_enum_mod! {perf_level_serde PerfLevel {
     Disable = 1,
     EnableCount = 2,
     EnableTimeExceptForMutex = 3,
-    EnableTimeAndCPUTimeExceptForMutex = 4,
-    EnableTime = 5,
-    OutOfBounds = 6,
+    // EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTime = 4,
+    OutOfBounds = 5,
 }}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::DBCompressionType;
+    use crate::rocks::DBCompressionType;
 
     #[test]
     fn test_parse_compression_type() {

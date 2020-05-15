@@ -19,13 +19,10 @@ extern crate slog_global;
 extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
-<<<<<<< HEAD
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-=======
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

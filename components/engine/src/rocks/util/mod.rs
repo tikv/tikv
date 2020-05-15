@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod config;
 pub mod engine_metrics;
 mod event_listener;
 pub mod io_limiter;

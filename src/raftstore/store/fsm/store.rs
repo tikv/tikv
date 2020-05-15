@@ -2,20 +2,10 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use engine::rocks;
-use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-=======
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
-use engine_traits::{
-    CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
-    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
-};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/store.rs
+use engine::rocks::{CompactionJobInfo, PerfContext, PerfLevel};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -33,7 +23,6 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use crate::import::SSTImporter;
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
@@ -42,23 +31,14 @@ use crate::raftstore::store::config::Config;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
-=======
-use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+};
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
-use crate::store::config::Config;
-use crate::store::fsm::metrics::*;
-use crate::store::fsm::peer::{
-    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/store.rs
-};
 #[cfg(not(feature = "no-fail"))]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
 };
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use crate::raftstore::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
@@ -66,40 +46,21 @@ use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
+use crate::raftstore::store::util::{self, PerfContextStatistics};
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
     SplitCheckRunner, SplitCheckTask,
-=======
-use crate::store::fsm::{ApplyNotifier, RegionProposal};
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
-use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, PerfContextStatistics};
-use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/store.rs
 };
 use crate::raftstore::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
+    Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
     SnapshotDeleter, StoreMsg, StoreTick,
 };
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
-=======
 
-use crate::Result;
-use engine_rocks::{CompactedEvent, CompactionListener};
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
-use sst_importer::SSTImporter;
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/store.rs
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -624,32 +585,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         if self.pending_proposals.capacity() == 0 {
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
         self.timer = SlowTimer::new();
-=======
-        self.timer = TiInstant::now_coarse();
-        // update config
-        self.poll_ctx.perf_context_statistics.start();
-        if let Some(incoming) = self.cfg_tracker.any_new() {
-            match Ord::cmp(
-                &incoming.messages_per_tick,
-                &self.poll_ctx.cfg.messages_per_tick,
-            ) {
-                CmpOrdering::Greater => {
-                    self.store_msg_buf.reserve(incoming.messages_per_tick);
-                    self.peer_msg_buf.reserve(incoming.messages_per_tick);
-                    self.messages_per_tick = incoming.messages_per_tick;
-                }
-                CmpOrdering::Less => {
-                    self.store_msg_buf.shrink_to(incoming.messages_per_tick);
-                    self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
-                    self.messages_per_tick = incoming.messages_per_tick;
-                }
-                _ => {}
-            }
-            self.poll_ctx.cfg = incoming.clone();
-        }
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/raftstore/src/store/fsm/store.rs
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
