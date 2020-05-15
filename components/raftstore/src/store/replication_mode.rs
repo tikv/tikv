@@ -21,7 +21,7 @@ impl StoreGroup {
     ///
     /// Panics if the store is registered twice with different store ID.
     pub fn register_store(&mut self, store_id: u64, label: String) -> u64 {
-        debug!("associated {} {}", store_id, label);
+        info!("associated {} {}", store_id, label);
         match self.stores.entry(store_id) {
             HashMapEntry::Occupied(o) => {
                 assert_eq!(
@@ -53,17 +53,18 @@ impl StoreGroup {
 pub struct GlobalReplicationState {
     pub status: ReplicationStatus,
     pub group: StoreGroup,
-    pub group_buffer: Vec<(u64, u64)>,
+    group_buffer: Vec<(u64, u64)>,
 }
 
 impl GlobalReplicationState {
-    pub fn calculate_commit_group(&mut self, peers: &[metapb::Peer]) {
+    pub fn calculate_commit_group(&mut self, peers: &[metapb::Peer]) -> &mut Vec<(u64, u64)> {
         self.group_buffer.clear();
         for p in peers {
             if let Some(label_id) = self.group.group_id(p.store_id) {
                 self.group_buffer.push((p.id, label_id));
             }
         }
+        &mut self.group_buffer
     }
 }
 
@@ -91,7 +92,7 @@ mod tests {
             state.group.register_store(3, "label 2".to_owned())
         );
 
-        state.calculate_commit_group(&[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
-        assert_eq!(state.group_buffer, vec![(1, 1), (2, 1), (3, 2)]);
+        let gb = state.calculate_commit_group(&[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
+        assert_eq!(*gb, vec![(1, 1), (2, 1), (3, 2)]);
     }
 }

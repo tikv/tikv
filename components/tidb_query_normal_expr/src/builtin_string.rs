@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -9,44 +8,19 @@ use std::iter;
 
 use hex::{self, FromHex};
 
-use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
-use tidb_query_shared_expr::string::validate_target_len_for_pad;
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, strip_whitespace, trim, validate_target_len_for_pad, TrimDirection,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
+};
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
 const SPACE: u8 = 0o40u8;
-
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
-
-enum TrimDirection {
-    Both = 1,
-    Leading,
-    Trailing,
-}
-
-impl TrimDirection {
-    fn from_i64(i: i64) -> Option<Self> {
-        match i {
-            1 => Some(TrimDirection::Both),
-            2 => Some(TrimDirection::Leading),
-            3 => Some(TrimDirection::Trailing),
-            _ => None,
-        }
-    }
-}
 
 impl ScalarFunc {
     #[inline]
@@ -487,7 +461,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        trim(&s, " ", TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, " ", TrimDirection::Both))))
     }
 
     #[inline]
@@ -498,7 +472,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        trim(&s, &pat, TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, &pat, TrimDirection::Both))))
     }
 
     #[inline]
@@ -511,7 +485,7 @@ impl ScalarFunc {
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let direction = try_opt!(self.children[2].eval_int(ctx, row));
         match TrimDirection::from_i64(direction) {
-            Some(d) => trim(&s, &pat, d),
+            Some(d) => Ok(Some(Cow::Owned(trim(&s, &pat, d)))),
             _ => Err(box_err!("invalid direction value: {}", direction)),
         }
     }
@@ -1030,52 +1004,6 @@ impl ScalarFunc {
 }
 
 #[inline]
-fn strip_whitespace(input: &[u8]) -> Vec<u8> {
-    let mut input_copy = Vec::<u8>::with_capacity(input.len());
-    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
-    input_copy
-}
-
-#[inline]
-fn encoded_size(len: usize) -> Option<usize> {
-    if len == 0 {
-        return Some(0);
-    }
-    // size_without_wrap = (len + (3 - 1)) / 3 * 4
-    // size = size_without_wrap + (size_withou_wrap - 1) / 76
-    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
-        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
-        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
-        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
-}
-
-// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
-// there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
-fn line_wrap(buf: &mut [u8], input_len: usize) {
-    let line_len = BASE64_LINE_WRAP_LENGTH;
-    if input_len <= line_len {
-        return;
-    }
-    let last_line_len = if input_len % line_len == 0 {
-        line_len
-    } else {
-        input_len % line_len
-    };
-    let lines_with_ending = (input_len - 1) / line_len;
-    let line_with_ending_len = line_len + 1;
-    let mut old_start = input_len - last_line_len;
-    let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
-    for _ in 0..lines_with_ending {
-        old_start -= line_len;
-        new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
-        buf[new_start + line_len] = BASE64_LINE_WRAP;
-    }
-}
-
-#[inline]
 fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
     let mut cnt = 0;
@@ -1106,16 +1034,6 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
         positions.push_back(bg);
     }
     s[positions[0]..].to_string()
-}
-
-#[inline]
-fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
-    let r = match direction {
-        TrimDirection::Leading => s.trim_start_matches(pat),
-        TrimDirection::Trailing => s.trim_end_matches(pat),
-        _ => s.trim_start_matches(pat).trim_end_matches(pat),
-    };
-    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]

@@ -81,7 +81,7 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let mut cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Raftstore,
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
@@ -102,6 +102,7 @@ fn start_raftstore(
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            Arc::default(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
@@ -142,9 +143,8 @@ where
 #[test]
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.enable_dynamic_config = false;
     config.validate().unwrap();
-    let (mut cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
+    let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
     // dispatch updated config
     let change = {
@@ -172,10 +172,9 @@ fn test_update_raftstore_config() {
 #[test]
 fn test_update_apply_store_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.enable_dynamic_config = false;
     config.raft_store.sync_log = true;
     config.validate().unwrap();
-    let (mut cfg_controller, raft_router, apply_router, mut system) =
+    let (cfg_controller, raft_router, apply_router, mut system) =
         start_raftstore(config.clone(), &_dir);
 
     // register region

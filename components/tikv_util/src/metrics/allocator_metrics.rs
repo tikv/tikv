@@ -4,8 +4,6 @@ use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{IntGaugeVec, Opts, Result};
 
-use tikv_alloc;
-
 pub fn monitor_allocator_stats<S: Into<String>>(namespace: S) -> Result<()> {
     prometheus::register(Box::new(AllocStatsCollector::new(namespace)?))
 }

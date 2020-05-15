@@ -1016,8 +1016,8 @@ mod tests {
 
         for (lhs, rhs) in test_cases {
             let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
-                .push_param(lhs.clone())
-                .push_param(rhs.clone())
+                .push_param(lhs)
+                .push_param(rhs)
                 .evaluate(ScalarFuncSig::IntDivideDecimal);
 
             assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);

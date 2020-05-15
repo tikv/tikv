@@ -1,21 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
+use std::{cmp, io};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
 use engine_traits::KvEngine;
-use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -28,7 +28,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -80,7 +80,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -88,7 +88,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -103,6 +103,7 @@ where
         written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
+        replication_status: Option<RegionReplicationStatus>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -214,12 +215,14 @@ where
             Task::Heartbeat {
                 ref region,
                 ref peer,
+                ref replication_status,
                 ..
             } => write!(
                 f,
-                "heartbeat for region {:?}, leader {}",
+                "heartbeat for region {:?}, leader {}, replication status {:?}",
                 region,
-                peer.get_id()
+                peer.get_id(),
+                replication_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -292,8 +295,8 @@ where
             timer: None,
             sender: None,
             thread_info_interval: interval,
-            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
-            collect_interval: DEFAULT_COLLECT_INTERVAL,
+            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
+            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
         }
     }
 
@@ -303,8 +306,16 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
+        if self.collect_interval < DEFAULT_COLLECT_INTERVAL {
+            info!("it seems we are running tests, skip stats monitoring.");
+            return Ok(());
+        }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
         let collect_interval = self.collect_interval;
+        if self.thread_info_interval < self.collect_interval {
+            info!("running in test mode, skip starting monitor.");
+            return Ok(());
+        }
         let thread_info_interval = self
             .thread_info_interval
             .div_duration_f64(self.collect_interval) as i32;
@@ -430,10 +441,10 @@ where
         router: RaftRouter<E>,
         db: E,
         scheduler: Scheduler<Task<E>>,
-        store_heartbeat_interval: u64,
+        store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
     ) -> Runner<E, T> {
-        let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
+        let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
@@ -453,6 +464,7 @@ where
         }
     }
 
+    // Deprecate
     fn handle_ask_split(
         &self,
         handle: &Handle,
@@ -460,7 +472,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -504,7 +516,8 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
+        task: String,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -519,6 +532,7 @@ where
                             "region_id" => region.get_id(),
                             "new_region_ids" => ?resp.get_ids(),
                             "region" => ?region,
+                            "task" => task,
                         );
 
                         let req = new_batch_split_region_request(
@@ -582,6 +596,7 @@ where
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -598,7 +613,7 @@ where
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -682,9 +697,18 @@ where
             .with_label_values(&["available"])
             .set(available as i64);
 
-        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .store_heartbeat(stats)
+            .map_err(|e| {
+                error!("store heartbeat failed"; "err" => ?e);
+            })
+            .map(move |status| {
+                if let Some(status) = status {
+                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                }
+            });
         handle.spawn(f);
     }
 
@@ -913,6 +937,7 @@ where
         }
 
         match task {
+            // AskSplit has deprecated, use AskBatchSplit
             Task::AskSplit {
                 region,
                 split_key,
@@ -926,7 +951,7 @@ where
                 peer,
                 right_derive,
                 callback,
-                String::from("AskSplit"),
+                String::from("ask_split"),
             ),
             Task::AskBatchSplit {
                 region,
@@ -941,20 +966,21 @@ where
                 peer,
                 right_derive,
                 callback,
+                String::from("batch_split"),
             ),
             Task::AutoSplit { split_infos } => {
                 for split_info in split_infos {
                     if let Ok(Some(region)) =
                         self.pd_client.get_region_by_id(split_info.region_id).wait()
                     {
-                        self.handle_ask_split(
+                        self.handle_ask_batch_split(
                             handle,
                             region,
-                            split_info.split_key,
+                            vec![split_info.split_key],
                             split_info.peer,
                             true,
                             Callback::None,
-                            String::from("AutoSplit"),
+                            String::from("auto_split"),
                         );
                     }
                 }
@@ -970,6 +996,7 @@ where
                 written_keys,
                 approximate_size,
                 approximate_keys,
+                replication_status,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region, 0).unwrap_or_default()
@@ -1025,6 +1052,7 @@ where
                         approximate_keys,
                         last_report_ts,
                     },
+                    replication_status,
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
@@ -1115,7 +1143,7 @@ fn send_admin_request<E>(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<E>,
+    callback: Callback<E::Snapshot>,
 ) where
     E: KvEngine,
 {

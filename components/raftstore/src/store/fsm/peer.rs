@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Peekable};
 use futures::Future;
@@ -23,6 +23,7 @@ use kvproto::raft_serverpb::{
     ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
     RegionLocalState,
 };
+use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -40,6 +41,7 @@ use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
     RegionProposal,
 };
+use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
@@ -101,6 +103,16 @@ pub struct PeerFsm<E: KvEngine> {
     pub receiver: Receiver<PeerMsg<E>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
+
+    // Batch raft command which has the same header into an entry
+    batch_req_builder: BatchRaftCmdRequestBuilder,
+}
+
+pub struct BatchRaftCmdRequestBuilder {
+    raft_entry_max_size: f64,
+    batch_req_size: u32,
+    request: Option<RaftCmdRequest>,
+    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -132,7 +144,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<E>> {
@@ -166,6 +178,9 @@ impl<E: KvEngine> PeerFsm<E> {
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(
+                    cfg.raft_entry_max_size.0 as f64,
+                ),
             }),
         ))
     }
@@ -176,7 +191,7 @@ impl<E: KvEngine> PeerFsm<E> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksEngine>>,
+        sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
@@ -205,6 +220,9 @@ impl<E: KvEngine> PeerFsm<E> {
                 mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
+                batch_req_builder: BatchRaftCmdRequestBuilder::new(
+                    cfg.raft_entry_max_size.0 as f64,
+                ),
             }),
         ))
     }
@@ -235,6 +253,102 @@ impl<E: KvEngine> PeerFsm<E> {
 
     pub fn schedule_applying_snapshot(&mut self) {
         self.peer.mut_store().schedule_applying_snapshot();
+    }
+}
+
+impl BatchRaftCmdRequestBuilder {
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder {
+        BatchRaftCmdRequestBuilder {
+            raft_entry_max_size,
+            request: None,
+            batch_req_size: 0,
+            callbacks: vec![],
+        }
+    }
+
+    fn can_batch(&self, req: &RaftCmdRequest, req_size: u32) -> bool {
+        // No batch request whose size exceed 20% of raft_entry_max_size,
+        // so total size of request in batch_raft_request would not exceed
+        // (40% + 20%) of raft_entry_max_size
+        if req.get_requests().is_empty() || f64::from(req_size) > self.raft_entry_max_size * 0.2 {
+            return false;
+        }
+        for r in req.get_requests() {
+            match r.get_cmd_type() {
+                CmdType::Delete | CmdType::Put => (),
+                _ => {
+                    return false;
+                }
+            }
+        }
+
+        if let Some(batch_req) = self.request.as_ref() {
+            if batch_req.get_header() != req.get_header() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksSnapshot>) {
+        let req_num = req.get_requests().len();
+        if let Some(batch_req) = self.request.as_mut() {
+            let requests: Vec<_> = req.take_requests().into();
+            for q in requests {
+                batch_req.mut_requests().push(q);
+            }
+        } else {
+            self.request = Some(req);
+        };
+        self.callbacks.push((cb, req_num));
+        self.batch_req_size += req_size;
+    }
+
+    fn should_finish(&self) -> bool {
+        if let Some(batch_req) = self.request.as_ref() {
+            // Limit the size of batch request so that it will not exceed raft_entry_max_size after
+            // adding header.
+            if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
+                return true;
+            }
+            if batch_req.get_requests().len() > WRITE_BATCH_MAX_KEYS {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn build(
+        &mut self,
+        metric: &mut RaftProposeMetrics,
+    ) -> Option<(RaftCmdRequest, Callback<RocksSnapshot>)> {
+        if let Some(req) = self.request.take() {
+            self.batch_req_size = 0;
+            if self.callbacks.len() == 1 {
+                let (cb, _) = self.callbacks.pop().unwrap();
+                return Some((req, cb));
+            }
+            metric.batch += self.callbacks.len() - 1;
+            let cbs = std::mem::replace(&mut self.callbacks, vec![]);
+            let cb = Callback::Write(Box::new(move |resp| {
+                let mut last_index = 0;
+                let has_error = resp.response.get_header().has_error();
+                for (cb, req_num) in cbs {
+                    let next_index = last_index + req_num;
+                    let mut cmd_resp = RaftCmdResponse::default();
+                    cmd_resp.set_header(resp.response.get_header().clone());
+                    if !has_error {
+                        cmd_resp.set_responses(
+                            resp.response.get_responses()[last_index..next_index].into(),
+                        );
+                    }
+                    cb.invoke_with_response(cmd_resp);
+                    last_index = next_index;
+                }
+            }));
+            return Some((req, cb));
+        }
+        None
     }
 }
 
@@ -298,7 +412,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
-                    self.propose_raft_command(cmd.request, cmd.callback)
+                    let req_size = cmd.request.compute_size();
+                    if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
+                        self.fsm
+                            .batch_req_builder
+                            .add(cmd.request, req_size, cmd.callback);
+                        if self.fsm.batch_req_builder.should_finish() {
+                            self.propose_batch_raft_command();
+                        }
+                    } else {
+                        self.propose_batch_raft_command();
+                        self.propose_raft_command(cmd.request, cmd.callback)
+                    }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes { res } => {
@@ -313,7 +438,30 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
+        }
+        // Propose batch request which may be still waiting for more raft-command
+        self.propose_batch_raft_command();
+    }
+
+    fn propose_batch_raft_command(&mut self) {
+        if let Some((req, cb)) = self
+            .fsm
+            .batch_req_builder
+            .build(&mut self.ctx.raft_metrics.propose)
+        {
+            self.propose_raft_command(req, cb)
+        }
+    }
+
+    fn on_update_replication_mode(&mut self) {
+        self.fsm
+            .peer
+            .switch_replication_mode(&self.ctx.global_replication_state);
+        if self.fsm.peer.is_leader() {
+            self.reset_raft_tick(GroupState::Ordered);
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -363,7 +511,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_base_tick();
 
                 if self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
+                    // FIXME: should use `bcast_check_stale_peer_message` instead.
+                    // Sending a new enum type msg to a old tikv may cause panic during rolling update
+                    // we should change the protobuf behavior and check if properly handled in all place
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -371,7 +522,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::Test(cb) => cb(self.fsm),
+            CasualMessage::AccessPeer(cb) => cb(self.fsm),
         }
     }
 
@@ -503,7 +654,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let region_id = self.region_id();
         let msg =
@@ -562,6 +713,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
+            SignificantMsg::StoreResolved { store_id, group_id } => {
+                let state = self.ctx.global_replication_state.lock().unwrap();
+                if state.status.get_mode() != ReplicationMode::DrAutoSync {
+                    return;
+                }
+                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                    return;
+                }
+                drop(state);
+                self.fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .assign_commit_groups(&[(store_id, group_id)]);
+            }
             SignificantMsg::CaptureChange {
                 cmd,
                 region_epoch,
@@ -598,7 +764,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<RocksEngine>) {
+    fn on_leader_callback(&mut self, cb: Callback<RocksSnapshot>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -619,7 +785,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksEngine>>) {
+    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksSnapshot>>) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -831,6 +997,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
             self.register_raft_base_tick();
+        } else {
+            self.register_pd_heartbeat_tick();
         }
     }
 
@@ -889,6 +1057,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_merge_target() {
+            fail_point!("on_has_merge_target", |_| Ok(()));
             if self.need_gc_merge(&msg)? {
                 self.on_stale_merge();
             }
@@ -900,7 +1069,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(&msg);
+            self.on_extra_message(msg);
             return Ok(());
         }
 
@@ -943,14 +1112,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         Ok(())
     }
 
-    fn on_extra_message(&mut self, msg: &RaftMessage) {
-        let extra_msg = msg.get_extra_msg();
-        match extra_msg.get_type() {
-            ExtraMessageType::MsgRegionWakeUp => {
-                self.reset_raft_tick(GroupState::Ordered);
+    fn on_extra_message(&mut self, mut msg: RaftMessage) {
+        match msg.get_extra_msg().get_type() {
+            ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
+                if self.fsm.group_state == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
+                }
             }
             ExtraMessageType::MsgWantRollbackMerge => {
-                unimplemented!("remove this after #6584 merged")
+                self.fsm.peer.maybe_add_want_rollback_merge_peer(
+                    msg.get_from_peer().get_id(),
+                    msg.get_extra_msg(),
+                );
+            }
+            ExtraMessageType::MsgCheckStalePeerResponse => {
+                self.fsm.peer.on_check_stale_peer_response(
+                    msg.get_region_epoch().get_conf_ver(),
+                    msg.mut_extra_msg().take_check_peers().into(),
+                );
             }
         }
     }
@@ -1020,9 +1199,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             let mut need_gc_msg = util::is_vote_msg(msg.get_message());
             if msg.has_extra_msg() {
-                // A learner can't vote so it sends the wake-up msg to others to find out whether
+                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
                 // it is removed due to conf change or merge.
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
+                need_gc_msg |=
+                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                // For backward compatibility
+                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
             }
             // The message is stale and not in current region.
             self.ctx.handle_stale_msg(
@@ -1423,6 +1605,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
 
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
         // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.pending_merge_targets.remove(&region_id);
@@ -1515,6 +1700,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
+                let group_id = self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .group
+                    .group_id(peer.store_id);
+                if let Some(group_id) = group_id {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer.id, group_id)]);
+                }
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
                 }
@@ -1687,6 +1886,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     panic!("create new split region {:?} err {:?}", new_region, e);
                 }
             };
+            let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+            new_peer.peer.init_replication_mode(&mut *replication_state);
+            drop(replication_state);
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {
@@ -1905,18 +2107,64 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_check_merge(&mut self) {
-        if self.fsm.stopped || self.fsm.peer.pending_merge_state.is_none() {
+        if self.fsm.stopped
+            || self.fsm.peer.pending_remove
+            || self.fsm.peer.pending_merge_state.is_none()
+        {
             return;
         }
         self.register_merge_check_tick();
+        fail_point!(
+            "on_check_merge_not_1001",
+            self.fsm.peer_id() != 1001,
+            |_| {}
+        );
         if let Err(e) = self.schedule_merge() {
-            info!(
-                "failed to schedule merge, rollback";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-            self.rollback_merge();
+            if self.fsm.peer.is_leader() {
+                self.fsm
+                    .peer
+                    .add_want_rollback_merge_peer(self.fsm.peer_id());
+                if self.fsm.peer.want_rollback_merge_peers.len()
+                    >= raft::majority(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .status()
+                            .progress
+                            .unwrap()
+                            .voter_ids()
+                            .len(),
+                    )
+                {
+                    info!(
+                        "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    );
+                    self.rollback_merge();
+                }
+            } else if !self.fsm.peer.peer.get_is_learner() {
+                info!(
+                    "want to rollback merge";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "leader_id" => self.fsm.peer.leader_id(),
+                    "err" => %e,
+                );
+                if self.fsm.peer.leader_id() != raft::INVALID_ID {
+                    self.ctx.need_flush_trans = true;
+                    self.fsm.peer.send_want_rollback_merge(
+                        self.fsm
+                            .peer
+                            .pending_merge_state
+                            .as_ref()
+                            .unwrap()
+                            .get_commit(),
+                        &mut self.ctx.trans,
+                    );
+                }
+            }
         }
     }
 
@@ -2084,7 +2332,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.tag, pending_commit, commit
             );
         }
+        // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
+        self.fsm.peer.want_rollback_merge_peers.clear();
+
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
@@ -2152,6 +2403,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "region" => ?region,
         );
 
+        if prev_region.get_peers() != region.get_peers() {
+            let mut state = self.ctx.global_replication_state.lock().unwrap();
+            let gb = state.calculate_commit_group(region.get_peers());
+            self.fsm.peer.raft_group.raft.assign_commit_groups(&gb);
+        }
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
             "check snapshot range";
@@ -2188,7 +2445,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksEngine>>,
+        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2214,7 +2471,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     region,
                     index,
                     snap,
-                    _phantom,
                 } => self.on_ready_compute_hash(region, index, snap),
                 ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
                 ExecResult::DeleteRange { .. } => {
@@ -2382,7 +2638,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksEngine>) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksSnapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2640,7 +2896,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -2802,6 +3058,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
         self.fsm.peer.heartbeat_pd(self.ctx);
+        if self.ctx.cfg.hibernate_regions && self.fsm.peer.replication_mode_need_catch_up() {
+            self.register_pd_heartbeat_tick();
+        }
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
@@ -2881,11 +3140,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // for peer B in case 1 above
                 warn!(
                     "leader missing longer than max_leader_missing_duration. \
-                     To check with pd whether it's still valid";
+                     To check with pd and other peers whether it's still valid";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
+
+                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
                     region: self.fsm.peer.region().clone(),
@@ -3162,5 +3424,95 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         Ok(resp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatchRaftCmdRequestBuilder;
+    use crate::store::local_metrics::RaftProposeMetrics;
+    use crate::store::msg::Callback;
+
+    use kvproto::raft_cmdpb::{
+        AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
+        StatusRequest,
+    };
+    use protobuf::Message;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder() {
+        let max_batch_size = 1000.0;
+        let mut builder = BatchRaftCmdRequestBuilder::new(max_batch_size);
+        let mut q = Request::default();
+        let mut metric = RaftProposeMetrics::default();
+
+        let mut req = RaftCmdRequest::default();
+        req.set_admin_request(AdminRequest::default());
+        assert!(!builder.can_batch(&req, 0));
+
+        let mut req = RaftCmdRequest::default();
+        req.set_status_request(StatusRequest::default());
+        assert!(!builder.can_batch(&req, 0));
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(b"bbbb".to_vec());
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&req, req_size));
+
+        let mut req = RaftCmdRequest::default();
+        q.set_cmd_type(CmdType::Snap);
+        req.mut_requests().push(q.clone());
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(b"bbbb".to_vec());
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&req, req_size));
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(vec![8 as u8; 2000]);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&req, req_size));
+
+        // Check batch callback
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        put.set_value(vec![8 as u8; 20]);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q);
+        let mut cbs_flags = vec![];
+        let mut response = RaftCmdResponse::default();
+        for _ in 0..10 {
+            let flag = Arc::new(AtomicBool::new(false));
+            cbs_flags.push(flag.clone());
+            let cb = Callback::Write(Box::new(move |_resp| {
+                flag.store(true, Ordering::Release);
+            }));
+            response.mut_responses().push(Response::default());
+            builder.add(req.clone(), 100, cb);
+        }
+        let (req, cb) = builder.build(&mut metric).unwrap();
+        assert_eq!(10, req.get_requests().len());
+        cb.invoke_with_response(response);
+        for flag in cbs_flags {
+            assert!(flag.load(Ordering::Acquire));
+        }
     }
 }

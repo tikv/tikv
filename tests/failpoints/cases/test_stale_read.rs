@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{mem, thread};
 
-use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
@@ -417,4 +416,54 @@ fn test_read_index_when_transfer_leader_2() {
     assert!(resp2.get_header().get_error().has_stale_command());
     drop(cluster);
     fail::remove("pause_on_peer_collect_message");
+}
+
+#[test]
+fn test_read_after_peer_destroyed() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // Add 2 peers.
+    for i in 2..4 {
+        pd_client.must_add_peer(r1, new_peer(i, i));
+    }
+
+    // Make sure peer 1 leads the region.
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    let destroy_peer_fp = "destroy_peer";
+    fail::cfg(destroy_peer_fp, "pause").unwrap();
+    pd_client.must_remove_peer(r1, new_peer(1, 1));
+    sleep_ms(300);
+
+    // Try writing k2 to peer3
+    let mut request = new_request(
+        r1,
+        cluster.pd_client.get_region_epoch(r1),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    // Wait for raftstore receives the read request.
+    sleep_ms(200);
+    fail::remove(destroy_peer_fp);
+
+    let resp = rx.recv_timeout(Duration::from_millis(200)).unwrap();
+    assert!(
+        resp.get_header().get_error().has_region_not_found(),
+        "{:?}",
+        resp
+    );
 }

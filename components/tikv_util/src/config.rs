@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use url;
 
 use super::time::Instant;
 use crate::slow_log;
@@ -579,7 +578,6 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use libc;
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::path::Path;
@@ -611,6 +609,9 @@ mod check_data_dir {
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            if afile.is_null() {
+                return Err(ConfigError::FileSystem("error opening fstab".to_string()));
+            }
             let mut fs = FsInfo::default();
             loop {
                 let ent = libc::getmntent(afile);
@@ -761,11 +762,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
+            let tmp_dir = Builder::new()
+                .prefix("test-check-data-dir")
+                .tempdir()
+                .unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
+            ::std::fs::create_dir(&data_path).unwrap();
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
-            // data_path may not mountted on a normal device on container
+            // data_path may not mounted on a normal device on container
             if !fs_info.fsname.starts_with("/dev") {
                 return;
             }
@@ -1074,9 +1079,9 @@ impl TomlWriter {
         if change.is_empty() {
             return;
         }
+        self.write_current_table(&mut change);
         while !change.is_empty() {
             self.current_table = TomlLine::get_prefix(change.keys().last().unwrap());
-            self.new_line();
             self.write(format!("[{}]", self.current_table).as_bytes());
             self.write_current_table(&mut change);
         }
@@ -1100,6 +1105,7 @@ impl TomlWriter {
         self.dst.extend_from_slice(s);
         self.new_line();
     }
+
     fn new_line(&mut self) {
         self.dst.push(b'\n');
     }
@@ -1117,7 +1123,6 @@ mod tests {
 
     use super::*;
     use tempfile::Builder;
-    use toml;
 
     #[test]
     fn test_readable_size() {
@@ -1476,6 +1481,7 @@ normal-concurrency = 1
 
 [rocksdb.defaultcf]
 compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
+
 "#;
         let mut m = HashMap::new();
         m.insert("log-file".to_owned(), "log-file-name".to_owned());
@@ -1519,5 +1525,45 @@ yyy = 100
 
 "#;
         assert_eq!(expect.as_bytes(), t.finish().as_slice());
+    }
+
+    #[test]
+    fn test_update_empty_content() {
+        // empty content
+        let mut src = "".to_owned();
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.high-concurrency".to_owned(),
+                "1".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["high-concurrency"].as_integer(),
+            Some(1)
+        );
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.normal-concurrency".to_owned(),
+                "2".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
+            Some(2)
+        );
     }
 }
