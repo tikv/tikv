@@ -227,7 +227,7 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(varg, min_args = 2)]
 #[inline]
 pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, max)
