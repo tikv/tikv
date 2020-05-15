@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
@@ -349,6 +350,8 @@ where
     use_delete_range: bool,
 
     perf_context_statistics: PerfContextStatistics,
+
+    yield_duration: Duration,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -387,6 +390,7 @@ where
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            yield_duration: cfg.apply_yield_duration.0,
         }
     }
 
@@ -729,7 +733,8 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written: bool,
+    /// The start time of the current round to execute commands.
+    handle_start: Option<Instant>,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -783,7 +788,7 @@ where
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            written: false,
+            handle_start: None,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -922,10 +927,11 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written {
-                    return ApplyResult::Yield;
+                if let Some(start) = self.handle_start.as_ref() {
+                    if start.elapsed() >= apply_ctx.yield_duration {
+                        return ApplyResult::Yield;
+                    }
                 }
-                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -1558,7 +1564,7 @@ where
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        { self.id == 2 && self.region_id() == 1 },
+                        self.id == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -1743,7 +1749,7 @@ where
     ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
-            { self.id == 3 && self.region_id() == 1 },
+            self.id == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -1925,7 +1931,7 @@ where
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
-                    { self.region_id() == 1 && self.id != 4 },
+                    self.region_id() == 1 && self.id != 4,
                     |_| {}
                 );
             };
@@ -3095,7 +3101,7 @@ where
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written = false;
+        normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
@@ -3333,12 +3339,8 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    let (router, system) = batch_system::create_system(
-        cfg.apply_pool_size,
-        cfg.apply_max_batch_size,
-        tx,
-        Box::new(ControlFsm),
-    );
+    let (router, system) =
+        batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
@@ -3348,6 +3350,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
+    use std::thread;
     use std::time::*;
 
     use crate::coprocessor::*;
@@ -3704,15 +3707,21 @@ mod tests {
             region_id: u64,
             tx: Sender<RaftCmdResponse>,
         ) -> EntryBuilder {
+            let cb = Callback::Write(Box::new(move |resp: WriteResponse| {
+                tx.send(resp.response).unwrap();
+            }));
+            self.capture_resp_with_cb(router, id, region_id, cb)
+        }
+
+        fn capture_resp_with_cb(
+            self,
+            router: &ApplyRouter,
+            id: u64,
+            region_id: u64,
+            cb: Callback<RocksSnapshot>,
+        ) -> EntryBuilder {
             // TODO: may need to support conf change.
-            let prop = Proposal::new(
-                false,
-                self.entry.get_index(),
-                self.entry.get_term(),
-                Callback::Write(Box::new(move |resp: WriteResponse| {
-                    tx.send(resp.response).unwrap();
-                })),
-            );
+            let prop = Proposal::new(false, self.entry.get_index(), self.entry.get_term(), cb);
             router.schedule_task(
                 region_id,
                 Msg::Proposal(RegionProposal::new(id, region_id, vec![prop])),
@@ -4060,8 +4069,18 @@ mod tests {
             .epoch(0, 3)
             .build();
         // Add a put above to test flush before ingestion.
+        let capture_tx_clone = capture_tx.clone();
         let ingest_ok = EntryBuilder::new(10, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
+            .capture_resp_with_cb(
+                &router,
+                3,
+                1,
+                Callback::Write(Box::new(move |resp: WriteResponse| {
+                    // Sleep until yield timeout.
+                    thread::sleep(Duration::from_millis(500));
+                    capture_tx_clone.send(resp.response).unwrap();
+                })),
+            )
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
@@ -4082,7 +4101,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // Two continuous writes inside the same region will yield.
+        // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);

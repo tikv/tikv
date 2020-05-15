@@ -431,7 +431,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             .collect();
         let aggr_fns_len = entities.each_aggr_fn.len();
 
-        let groups = std::mem::replace(&mut self.groups, HashMap::default());
+        let groups = std::mem::take(&mut self.groups);
         for (_, group_index) in groups {
             let states_start_offset = group_index * aggr_fns_len;
             iteratee(
