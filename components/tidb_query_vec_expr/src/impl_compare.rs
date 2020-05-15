@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 
 use tidb_query_codegen::rpn_fn;
 
@@ -225,6 +225,38 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
         }
     }
     Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, max)
+}
+
+#[inline]
+fn do_get_extremum<T, E>(args: &[&Option<T>], chooser: E) -> Result<Option<T>>
+where
+    T: Ord + Copy,
+    E: Fn(T, T) -> T,
+{
+    let first = args[0];
+    match first {
+        None => Ok(None),
+        Some(first_val) => {
+            let mut res = *first_val;
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        return Ok(None);
+                    }
+                    Some(v) => {
+                        res = chooser(res, *v);
+                    }
+                }
+            }
+            Ok(Some(res))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -846,6 +878,30 @@ mod tests {
                 .push_params(args)
                 .evaluate(ScalarFuncSig::CoalesceInt)
                 .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_int() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(1)], Some(1)),
+            (vec![Some(1), Some(1)], Some(1)),
+            (vec![Some(1), Some(-1), None], None),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(2)),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MAX),
+            ),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
+        ];
+        for (args, expected) in cases {
+            let mut evaluator = RpnFnScalarEvaluator::new();
+            for arg in args {
+                evaluator = evaluator.push_param(arg);
+            }
+            let output = evaluator.evaluate(ScalarFuncSig::GreatestInt).unwrap();
             assert_eq!(output, expected);
         }
     }
