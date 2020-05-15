@@ -724,7 +724,7 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                _ => {
+                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
@@ -2467,11 +2467,11 @@ impl ApplyFsm {
         }
     }
 
-    fn resume_pending(&mut self, ctx: &mut ApplyContext) -> bool {
+    fn resume_pending(&mut self, ctx: &mut ApplyContext) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
-                return false;
+                return;
             }
             self.delegate.ready_source_region_id = source_region_id;
         }
@@ -2490,24 +2490,13 @@ impl ApplyFsm {
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
                 s.pending_msgs = state.pending_msgs;
-                return false;
+                return;
             }
         }
 
         if !state.pending_msgs.is_empty() {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
-
-        if self.delegate.yield_state.is_some() {
-            return false;
-        }
-
-        info!(
-            "all pending logs are applied";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-        );
-        true
     }
 
     fn catch_up_logs_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
@@ -2697,8 +2686,17 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                 // query the length.
                 expected_msg_count = Some(normal.receiver.len());
             }
-            if !normal.resume_pending(&mut self.apply_ctx) {
+            normal.resume_pending(&mut self.apply_ctx);
+            if normal.delegate.wait_merge_state.is_some() {
+                // Yield due to applying CommitMerge, this fsm can be released if its
+                // channel msg count equals to expected_msg_count because it will receive
+                // a new message if its source region has applied all needed logs.
                 return expected_msg_count;
+            } else if normal.delegate.yield_state.is_some() {
+                // Yield due to other reasons, this fsm must not be released because
+                // it's possible that no new message will be sent to itself.
+                // The remaining messages will be handled in next rounds.
+                return None;
             }
             expected_msg_count = None;
         }
