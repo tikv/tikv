@@ -310,6 +310,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -664,6 +665,7 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         ToSeconds => to_seconds,
+        TimeToSec => time_to_sec,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
