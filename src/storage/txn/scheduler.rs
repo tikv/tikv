@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
-use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
@@ -120,9 +119,23 @@ struct TaskContext {
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
-    latch_timer: Option<HistogramTimer>,
+    // latch_timer: Option<Instant>,
+    latch_timer: Instant,
     // Total duration of a command.
-    _cmd_timer: HistogramTimer,
+    _cmd_timer: CmdTimer,
+}
+
+struct CmdTimer {
+    tag: metrics::CommandKind,
+    begin: Instant,
+}
+
+impl Drop for CmdTimer {
+    fn drop(&mut self) {
+        SCHED_HISTOGRAM_VEC_STATIC
+            .get(self.tag)
+            .observe(self.begin.elapsed_secs());
+    }
 }
 
 impl TaskContext {
@@ -145,13 +158,18 @@ impl TaskContext {
             cb: Some(cb),
             write_bytes,
             tag,
-            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
-            _cmd_timer: SCHED_HISTOGRAM_VEC_STATIC.get(tag).start_coarse_timer(),
+            latch_timer: Instant::now_coarse(),
+            _cmd_timer: CmdTimer {
+                tag,
+                begin: Instant::now_coarse(),
+            },
         }
     }
 
     fn on_schedule(&mut self) {
-        self.latch_timer.take();
+        SCHED_LATCH_HISTOGRAM_VEC
+            .get(self.tag)
+            .observe(self.latch_timer.elapsed_secs());
     }
 }
 

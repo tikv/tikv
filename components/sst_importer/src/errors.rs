@@ -6,8 +6,10 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
+use encryption::Error as EncryptionError;
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
+use tikv_util::codec::Error as CodecError;
 use tokio_sync::oneshot::error::RecvError;
 use uuid::Error as UuidError;
 
@@ -28,6 +30,8 @@ pub fn error_inc(err: &Error) {
         Error::CannotReadExternalStorage(..) => "read_external_storage",
         Error::WrongKeyPrefix(..) => "wrong_prefix",
         Error::BadFormat(..) => "bad_format",
+        Error::Encryption(..) => "encryption",
+        Error::CodecError(..) => "codec",
         _ => return,
     };
     IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
@@ -97,6 +101,16 @@ quick_error! {
         }
         BadFormat(msg: String) {
             display("bad format {}", msg)
+        }
+        Encryption(err: EncryptionError) {
+            from()
+            description("encryption error")
+            display("Encryption {:?}", err)
+        }
+        CodecError(err: CodecError) {
+            from()
+            cause(err)
+            description(err.description())
         }
     }
 }
