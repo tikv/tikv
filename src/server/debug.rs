@@ -522,16 +522,18 @@ impl Debugger {
             Ok(())
         };
 
-        while box_try!(iter.next()) {
+        while box_try!(iter.valid()) {
             let (key, value) = (iter.key(), iter.value());
             if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
+                    box_try!(iter.next());
                     continue;
                 }
                 if let Err(e) = check_value(value) {
                     res.push((region_id, e));
                 }
             }
+            box_try!(iter.next());
         }
         Ok(res)
     }
@@ -1140,8 +1142,8 @@ impl MvccInfoIterator {
 
     fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
         let iter = &mut self.lock_iter;
-        if box_try!(iter.next()) {
-            let (key, value) = (iter.key(), iter.value());
+        if box_try!(iter.valid()) {
+            let (key, value) = (iter.key().to_owned(), iter.value());
             let lock = box_try!(Lock::parse(&value));
             let mut lock_info = MvccLock::default();
             match lock.lock_type {
@@ -1153,7 +1155,8 @@ impl MvccInfoIterator {
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            return Ok(Some((key.to_owned(), lock_info)));
+            box_try!(iter.next());
+            return Ok(Some((key, lock_info)));
         };
         Ok(None)
     }
