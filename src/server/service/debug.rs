@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use engine::Engines;
-use engine_rocks::{RocksEngine, Compat};
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::MiscExt;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;

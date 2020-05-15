@@ -5,8 +5,8 @@ pub use self::imp::wait_for_signal;
 #[cfg(unix)]
 mod imp {
     use engine::Engines;
-    use engine_traits::MiscExt;
     use engine_rocks::Compat;
+    use engine_traits::MiscExt;
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
     use signal::trap::Trap;

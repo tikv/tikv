@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result, ALL_CFS, CFNamesExt};
+use engine_traits::{CFNamesExt, MiscExt, Range, Result, ALL_CFS};
 use rocksdb::Range as RocksRange;
 
 impl MiscExt for RocksEngine {
@@ -101,7 +101,10 @@ impl MiscExt for RocksEngine {
         // common rocksdb stats.
         for name in self.cf_names() {
             let handler = util::get_cf_handle(self.as_inner(), name)?;
-            if let Some(v) = self.as_inner().get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+            if let Some(v) = self
+                .as_inner()
+                .get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY)
+            {
                 s.extend_from_slice(v.as_bytes());
             }
         }
