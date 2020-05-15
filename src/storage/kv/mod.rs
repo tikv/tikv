@@ -36,12 +36,22 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
+    pub extra_read: Option<ExtraRead>,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
-        CbContext { term: None }
+        CbContext {
+            term: None,
+            extra_read: None,
+        }
     }
+}
+
+#[derive(Debug)]
+pub enum ExtraRead {
+    Deleted,
+    Updated,
 }
 
 #[derive(Debug)]
