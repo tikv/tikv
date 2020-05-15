@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, Peekable, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -2957,7 +2957,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
     engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
+    snapshot: Option<Arc<E::Snapshot>>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -2987,7 +2987,7 @@ where
         if self.snapshot.is_some() {
             return;
         }
-        self.snapshot = Some(self.engine.snapshot().into_sync());
+        self.snapshot = Some(Arc::new(self.engine.snapshot()));
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
