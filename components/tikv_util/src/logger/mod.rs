@@ -524,63 +524,70 @@ mod tests {
         }
     }
 
+    macro_rules! log_format_cases {
+        ($logger:ident) => {
+            use std::time::Duration;
+
+            // Empty message is not recommend, just for test purpose here.
+            slog_info!($logger, "");
+            slog_info!($logger, "Welcome");
+            slog_info!($logger, "Welcome TiKV");
+            slog_info!($logger, "欢迎");
+            slog_info!($logger, "欢迎 TiKV");
+
+            slog_info!($logger, "failed to fetch URL";
+                        "url" => "http://example.com",
+                        "attempt" => 3,
+                        "backoff" => ?Duration::new(3, 0),
+            );
+
+            slog_info!(
+                $logger,
+                "failed to \"fetch\" [URL]: {}",
+                "http://example.com"
+            );
+
+            slog_debug!($logger, "Slow query";
+                "sql" => "SELECT * FROM TABLE WHERE ID=\"abc\"",
+                "duration" => ?Duration::new(0, 123),
+                "process keys" => 1500,
+            );
+
+            slog_warn!($logger, "Type";
+                "Counter" => std::f64::NAN,
+                "Score" => std::f64::INFINITY,
+                "Other" => std::f64::NEG_INFINITY
+            );
+
+            let none: Option<u8> = None;
+            slog_info!($logger, "more type tests";
+                "field1" => "no_quote",
+                "field2" => "in quote",
+                "urls" => ?["http://xxx.com:2347", "http://xxx.com:2432"],
+                "url-peers" => ?["peer1", "peer 2"],
+                "store ids" => ?[1, 2, 3],
+                "is_true" => true,
+                "is_false" => false,
+                "is_None" => none,
+                "u8" => 34 as u8,
+                "str_array" => ?["💖",
+                    "�",
+                    "☺☻☹",
+                    "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                    "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                    "\\x80\\x80\\x80\\x80",
+                    "<car><mirror>XML</mirror></car>"]
+            );
+        };
+    }
+
     #[test]
-    fn test_log_format() {
-        use std::time::Duration;
+    fn test_log_format_text() {
         let decorator = PlainSyncDecorator::new(TestWriter);
         let drain = TikvFormat::new(decorator).fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
 
-        // Empty message is not recommend, just for test purpose here.
-        slog_info!(logger, "");
-        slog_info!(logger, "Welcome");
-        slog_info!(logger, "Welcome TiKV");
-        slog_info!(logger, "欢迎");
-        slog_info!(logger, "欢迎 TiKV");
-
-        slog_info!(logger, "failed to fetch URL";
-                    "url" => "http://example.com",
-                    "attempt" => 3,
-                    "backoff" => ?Duration::new(3, 0),
-        );
-
-        slog_info!(
-            logger,
-            "failed to \"fetch\" [URL]: {}",
-            "http://example.com"
-        );
-
-        slog_debug!(logger, "Slow query";
-            "sql" => "SELECT * FROM TABLE WHERE ID=\"abc\"",
-            "duration" => ?Duration::new(0, 123),
-            "process keys" => 1500,
-        );
-
-        slog_warn!(logger, "Type";
-            "Counter" => std::f64::NAN,
-            "Score" => std::f64::INFINITY,
-            "Other" => std::f64::NEG_INFINITY
-        );
-
-        let none: Option<u8> = None;
-        slog_info!(logger, "more type tests";
-            "field1" => "no_quote",
-            "field2" => "in quote",
-            "urls" => ?["http://xxx.com:2347", "http://xxx.com:2432"],
-            "url-peers" => ?["peer1", "peer 2"],
-            "store ids" => ?[1, 2, 3],
-            "is_true" => true,
-            "is_false" => false,
-            "is_None" => none,
-            "u8" => 34 as u8,
-            "str_array" => ?["💖",
-                "�",
-                "☺☻☹",
-                "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-                "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-                "\\x80\\x80\\x80\\x80",
-                "<car><mirror>XML</mirror></car>"]
-        );
+        log_format_cases!(logger);
 
         let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
@@ -605,7 +612,7 @@ mod tests {
                 let expect_segments = re.captures(expect_line).unwrap();
                 let output_segments = re.captures(output_line).unwrap();
 
-                validate_log_datetime(peel(&expect_segments["datetime"]));
+                validate_log_datetime(peel(&output_segments["datetime"]));
 
                 assert!(validate_log_source_file(
                     peel(&expect_segments["source_file"]),
@@ -617,6 +624,49 @@ mod tests {
                     expect_segments.name("kvs").map(|s| s.as_str()),
                     output_segments.name("kvs").map(|s| s.as_str())
                 );
+            }
+        });
+    }
+
+    #[test]
+    fn test_log_format_json() {
+        use serde_json::{from_str, Value};
+        let drain = Mutex::new(json_format(TestWriter)).map(slog::Fuse);
+        let logger = slog::Logger::root_typed(drain, slog_o!());
+
+        log_format_cases!(logger);
+
+        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs","message":""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"Welcome"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"Welcome TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"欢迎"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"欢迎 TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"failed to \"fetch\" [URL]: http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs","message":"Type","Other":null,"Score":null,"Counter":null}
+{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
+"#;
+
+        BUFFER.with(|buffer| {
+            let buffer = buffer.borrow_mut();
+            let output = from_utf8(&*buffer).unwrap();
+            assert_eq!(output.lines().count(), expect.lines().count());
+
+            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+                let mut expect_json = from_str::<Value>(expect_line).unwrap();
+                let mut output_json = from_str::<Value>(output_line).unwrap();
+
+                validate_log_datetime(output_json["time"].take().as_str().unwrap());
+                // Remove time field to bypass timestamp mismatch.
+                let _ = expect_json["time"].take();
+
+                validate_log_source_file(
+                    output_json["caller"].as_str().unwrap(),
+                    expect_json["caller"].as_str().unwrap(),
+                );
+
+                assert_eq!(expect_json, output_json);
             }
         });
     }
