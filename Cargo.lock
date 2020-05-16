@@ -3864,6 +3864,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slog-json"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "slog",
+]
+
+[[package]]
 name = "slog-term"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4793,6 +4805,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-global",
+ "slog-json",
  "slog-term",
  "sysinfo",
  "tempfile",
