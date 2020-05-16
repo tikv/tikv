@@ -462,6 +462,22 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
         use slog::Drain;
+
+        // There might be remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one with a
+        // terminal logger.
+        if let Some(level) = log::max_level().to_level() {
+            let drainer = logger::term_drainer();
+            let _ = logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+                vec![],
+                0,
+            );
+        }
+
         if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
@@ -483,21 +499,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             );
         } else {
             orig_hook(info);
-        }
-
-        // There might be remaining logs in the async logger.
-        // To collect remaining logs and also collect future logs, replace the old one with a
-        // terminal logger.
-        if let Some(level) = log::max_level().to_level() {
-            let drainer = logger::term_drainer();
-            let _ = logger::init_log(
-                drainer,
-                logger::convert_log_level_to_slog_level(level),
-                false, // Use sync logger to avoid an unnecessary log thread.
-                false, // It is initialized already.
-                vec![],
-                0,
-            );
         }
 
         // If PANIC_MARK is true, create panic mark file.
