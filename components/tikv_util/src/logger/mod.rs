@@ -602,7 +602,7 @@ mod tests {
 "#;
 
         BUFFER.with(|buffer| {
-            let buffer = buffer.borrow_mut();
+            let mut buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
@@ -625,6 +625,7 @@ mod tests {
                     output_segments.name("kvs").map(|s| s.as_str())
                 );
             }
+            buffer.clear();
         });
     }
 
@@ -649,7 +650,7 @@ mod tests {
 "#;
 
         BUFFER.with(|buffer| {
-            let buffer = buffer.borrow_mut();
+            let mut buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
@@ -668,6 +669,7 @@ mod tests {
 
                 assert_eq!(expect_json, output_json);
             }
+            buffer.clear();
         });
     }
 
