@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Log format, one of json, text. Default to text.
+# log-format = "text"
+
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs

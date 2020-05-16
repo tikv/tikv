@@ -9,6 +9,7 @@ use chrono::Local;
 use clap::ArgMatches;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
+use tikv_util::config::LogFormat;
 use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.
@@ -42,7 +43,7 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
-        let drainer = logger::term_drainer();
+        let drainer = logger::term_drainer(config.log_format);
         // use async drainer and init std log.
         logger::init_log(
             drainer,
@@ -57,6 +58,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         });
     } else {
         let drainer = logger::file_drainer(
+            config.log_format,
             &config.log_file,
             config.log_rotation_timespan,
             config.log_rotation_size,
@@ -83,6 +85,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
         } else {
             let slow_log_drainer = logger::file_drainer(
+                config.log_format,
                 &config.slow_log_file,
                 config.log_rotation_timespan,
                 config.log_rotation_size,
@@ -142,6 +145,15 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(file) = matches.value_of("log-file") {
         config.log_file = file.to_owned();
+    }
+
+    if let Some(format) = matches.value_of("log-format") {
+        let format = match format {
+            "text" => LogFormat::Text,
+            "json" => LogFormat::Json,
+            _ => panic!("Must be one of text or json"),
+        };
+        config.log_format = format;
     }
 
     if let Some(addr) = matches.value_of("addr") {

@@ -53,6 +53,15 @@ fn main() {
                 .long_help("Set the log file path. If not set, logs will output to stderr"),
         )
         .arg(
+            Arg::with_name("log-format")
+                .long("log-format")
+                .takes_value(true)
+                .value_name("FORMAT")
+                .help("Sets log format")
+                .possible_values(&["text", "json"])
+                .long_help("Set the log format. Default to text"),
+        )
+        .arg(
             Arg::with_name("addr")
                 .short("A")
                 .long("addr")
