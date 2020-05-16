@@ -32,8 +32,7 @@ openssl = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 quick-error = "1.2.3"
 rand = "0.7"
-serde = "1.0"
-serde_derive = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
