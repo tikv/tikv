@@ -233,6 +233,12 @@ pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, max)
 }
 
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, |x, y| x.max(y))
+}
+
 #[inline]
 fn do_get_extremum<T, E>(args: &[&Option<T>], chooser: E) -> Result<Option<T>>
 where
@@ -883,8 +889,8 @@ mod tests {
     }
 
     #[test]
-    fn test_greatest_int() {
-        let cases = vec![
+    fn test_greatest() {
+        let _int_cases = vec![
             (vec![None, None], None),
             (vec![Some(1), Some(1)], Some(1)),
             (vec![Some(1), Some(-1), None], None),
@@ -895,13 +901,63 @@ mod tests {
             ),
             (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
         ];
-        for (args, expected) in cases {
-            let mut evaluator = RpnFnScalarEvaluator::new();
-            for arg in args {
-                evaluator = evaluator.push_param(arg);
+
+        let _real_cases = vec![
+            (vec![None, None], None),
+            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (
+                vec![
+                    Real::new(1.0).ok(),
+                    Real::new(-1.0).ok(),
+                    Real::new(-2.0).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(1.0).ok(),
+            ),
+            (
+                vec![
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(f64::MAX).ok(),
+            ),
+            (
+                vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()],
+                None,
+            ),
+            (
+                vec![
+                    Real::new(f64::INFINITY).ok(),
+                    Real::new(f64::NEG_INFINITY).ok(),
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                ],
+                Real::new(f64::INFINITY).ok(),
+            ),
+        ];
+
+        fn test_greatest_int(cases: Vec<(Vec<Option<i64>>, Option<i64>)>) {
+            for (row, expected) in cases {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(row)
+                    .evaluate(ScalarFuncSig::GreatestInt)
+                    .unwrap();
+                assert_eq!(output, expected);
             }
-            let output = evaluator.evaluate(ScalarFuncSig::GreatestInt).unwrap();
-            assert_eq!(output, expected);
         }
+
+        fn test_greatest_real(cases: Vec<(Vec<Option<Real>>, Option<Real>)>) {
+            for (row, expected) in cases {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(row)
+                    .evaluate(ScalarFuncSig::GreatestReal)
+                    .unwrap();
+                assert_eq!(output, expected);
+            }
+        }
+
+        test_greatest_int(_int_cases);
+        test_greatest_real(_real_cases);
     }
 }
