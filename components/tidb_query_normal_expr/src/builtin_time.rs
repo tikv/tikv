@@ -6,7 +6,7 @@ use crate::ScalarFunc;
 use tidb_query_datatype::codec::error::Error;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
-use tidb_query_datatype::codec::mysql::{Duration as MyDuration, Time, TimeType};
+use tidb_query_datatype::codec::mysql::{Duration as MyDuration, Time, TimeType, MAX_FSP};
 use tidb_query_datatype::codec::Datum;
 use tidb_query_datatype::expr::SqlMode;
 use tidb_query_datatype::expr::{EvalContext, Result};
@@ -583,13 +583,12 @@ impl ScalarFunc {
         second_decimal = second as f64 + decimal;
 
         // get fsp
-        let fsp = self.field_type.get_decimal() as i8;
-
+        // let fsp = self.field_type.get_decimal() as i8;
         // format {} is equivalent to strconv.FormatFloat(v, 'f', -1, 64) in go
         match MyDuration::parse(
             ctx,
-            format!("{}{:02}{:02}{}", negative, hour, minute, second_decimal).as_bytes(),
-            fsp,
+            format!("{}{:02}:{:02}:{}", negative, hour, minute, second_decimal).as_bytes(),
+            MAX_FSP,
         ) {
             Ok(result) => Ok(Some(result)),
             Err(_) => Ok(None),
@@ -1848,51 +1847,42 @@ mod tests {
 
         let cases = vec![
             (
-                Datum::I64(2378),
-                Datum::Dur(Duration::parse(&mut ctx, b"00:39:38", 0).unwrap()),
+                Datum::F64(2378.0),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:39:38", MAX_FSP).unwrap()),
             ),
             (
-                Datum::I64(3864000),
-                Datum::Dur(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap()),
+                Datum::F64(3864000.0),
+                Datum::Dur(Duration::parse(&mut ctx, b"838:59:59", MAX_FSP).unwrap()),
             ),
             (
-                Datum::I64(-3864000),
-                Datum::Dur(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap()),
+                Datum::F64(-3864000.0),
+                Datum::Dur(Duration::parse(&mut ctx, b"-838:59:59", MAX_FSP).unwrap()),
             ),
             (
                 Datum::F64(86401.4),
-                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.4", 1).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.4", MAX_FSP).unwrap()),
             ),
             (
                 Datum::F64(-86401.4),
-                Datum::Dur(Duration::parse(&mut ctx, b"-24:00:01.4", 1).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"-24:00:01.4", MAX_FSP).unwrap()),
             ),
             (
                 Datum::F64(86401.54321),
-                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.54321", 5).unwrap()),
+                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.54321", MAX_FSP).unwrap()),
             ),
             (
-                Datum::F64(86401.54321),
-                Datum::Dur(Duration::parse(&mut ctx, b"24:00:01.543210", -1).unwrap()),
+                Datum::F64(123.4),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.400000", MAX_FSP).unwrap()),
             ),
             (
-                Datum::Bytes(b"123.4".to_vec()),
-                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.400000", 0).unwrap()),
+                Datum::F64(123.4567891),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.456789", MAX_FSP).unwrap()),
             ),
             (
-                Datum::Bytes(b"123.4567891".to_vec()),
-                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.456789", 0).unwrap()),
-            ),
-            (
-                Datum::Bytes(b"123".to_vec()),
-                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.000000", 0).unwrap()),
-            ),
-            (
-                Datum::Bytes(b"abc".to_vec()),
-                Datum::Dur(Duration::parse(&mut ctx, b"00:00:00.000000", 0).unwrap()),
+                Datum::F64(123.0),
+                Datum::Dur(Duration::parse(&mut ctx, b"00:02:03.000000", MAX_FSP).unwrap()),
             ),
         ];
-
         for (arg, exp) in cases {
             test_ok_case_one_arg(&mut ctx, ScalarFuncSig::SecToTime, arg, exp);
         }
