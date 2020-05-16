@@ -489,7 +489,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
         if let Some(level) = log::max_level().to_level() {
-            let drainer = logger::term_drainer();
+            let drainer = logger::term_drainer(config::LogFormat::Text);
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),

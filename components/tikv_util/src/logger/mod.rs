@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use log::{self, SetLoggerError};
-use slog::{self, Drain, Key, OwnedKVList, Record, KV};
+use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::{ReadableDuration, ReadableSize};
+use crate::config::{LogFormat, ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
@@ -116,11 +116,12 @@ pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
 /// Constructs a new file drainer which outputs log to a file at the specified
 /// path. The file drainer rotates for the specified timespan.
 pub fn file_drainer<N>(
+    format: LogFormat,
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
     rename: N,
-) -> io::Result<TikvFormat<RotatingFileDecorator>>
+) -> io::Result<Box<dyn Drain<Ok = (), Err = io::Error> + Send>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
@@ -130,15 +131,41 @@ where
             .add_rotator(RotateBySize::new(rotation_size))
             .build()?,
     );
-    let decorator = PlainDecorator::new(logger);
-    let drain = TikvFormat::new(decorator);
-    Ok(drain)
+
+    Ok(match format {
+        LogFormat::Text => {
+            let decorator = PlainDecorator::new(logger);
+            Box::new(TikvFormat::new(decorator))
+        }
+        LogFormat::Json => Box::new(json_format(logger)),
+    })
 }
 
 /// Constructs a new terminal drainer which outputs logs to stderr.
-pub fn term_drainer() -> TikvFormat<TermDecorator> {
-    let decorator = TermDecorator::new().stderr().build();
-    TikvFormat::new(decorator)
+pub fn term_drainer(format: LogFormat) -> Box<dyn Drain<Ok = (), Err = io::Error> + Send> {
+    match format {
+        LogFormat::Text => {
+            let decorator = TermDecorator::new().stderr().build();
+            Box::new(TikvFormat::new(decorator))
+        }
+        LogFormat::Json => Box::new(json_format(io::stderr())),
+    }
+}
+
+fn json_format<W: io::Write>(io: W) -> slog_json::Json<W> {
+    slog_json::Json::new(io)
+        .set_newlines(true)
+        .set_flush(true)
+        .add_key_value(slog_o!(
+            "message" => PushFnValue(|record, ser| ser.emit(record.msg())),
+            "caller" => FnValue(|record| Path::new(record.file())
+                .file_name()
+                .and_then(|path| path.to_str()).unwrap_or("<unknown>")
+            ),
+            "level" => FnValue(|record| get_unified_log_level(record.level())),
+            "time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),
+        ))
+        .build()
 }
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
@@ -250,7 +277,7 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if let Err(e) = self.0.log(record, values) {
-            let fatal_drainer = Mutex::new(term_drainer()).ignore_res();
+            let fatal_drainer = Mutex::new(term_drainer(LogFormat::Text)).ignore_res();
             fatal_drainer.log(record, values).unwrap();
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
