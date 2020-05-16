@@ -498,7 +498,7 @@ mod tests {
         let (control_tx, mut control_fsm) = new_runner(10);
         let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
         control_fsm.sender = Some(control_drop_tx);
-        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let (router, mut system) = batch::create_system(2, 2, 3, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
 
@@ -595,7 +595,7 @@ mod tests {
     #[bench]
     fn bench_send(b: &mut Bencher) {
         let (control_tx, control_fsm) = new_runner(100000);
-        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let (router, mut system) = batch::create_system(2, 2, 3, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
         let (normal_tx, normal_fsm) = new_runner(100000);

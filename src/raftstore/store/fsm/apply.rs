@@ -299,6 +299,8 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    max_written_count: usize,
 }
 
 impl ApplyContext {
@@ -332,6 +334,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            max_written_count: cfg.apply_yield_count,
         }
     }
 
@@ -609,7 +612,7 @@ pub struct ApplyDelegate {
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written: bool,
+    written_count: usize,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -641,6 +644,8 @@ pub struct ApplyDelegate {
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+
+    schedule_time: Option<Instant>,
 }
 
 impl ApplyDelegate {
@@ -655,7 +660,7 @@ impl ApplyDelegate {
             term: reg.term,
             stopped: false,
             merged: false,
-            written: false,
+            written_count: 0,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -663,6 +668,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            schedule_time: None,
         }
     }
 
@@ -738,6 +744,12 @@ impl ApplyDelegate {
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    } else {
+                        APPLY_YIELD_COUNT.inc();
+                        if let Some(t) = self.schedule_time.take() {
+                            APPLY_EXECUTE_DURATION
+                                .observe(t.elapsed().as_millis() as f64 / 1000f64);
+                        }
                     }
                     return;
                 }
@@ -792,10 +804,10 @@ impl ApplyDelegate {
 
             if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
-                if self.written {
+                if self.written_count >= apply_ctx.max_written_count {
                     return ApplyResult::Yield;
                 }
-                self.written = true;
+                self.written_count += 1;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -2348,6 +2360,7 @@ pub struct ApplyFsm {
     delegate: ApplyDelegate,
     receiver: Receiver<Msg>,
     mailbox: Option<BasicMailbox<ApplyFsm>>,
+    reschedule_time: Option<Instant>,
 }
 
 impl ApplyFsm {
@@ -2365,6 +2378,7 @@ impl ApplyFsm {
                 delegate,
                 receiver: rx,
                 mailbox: None,
+                reschedule_time: None,
             }),
         )
     }
@@ -2605,6 +2619,11 @@ impl ApplyFsm {
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
+                    let mut log_size = 0;
+                    for entry in apply.entries.iter() {
+                        log_size += entry.get_data().len() as i64;
+                    }
+                    APPLY_PENDING_BYTES_GAUGE.sub(log_size);
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -2623,8 +2642,15 @@ impl ApplyFsm {
             }
         }
         if let Some(timer) = channel_timer {
-            let elapsed = duration_to_sec(timer.elapsed());
-            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+            let elapsed = timer.elapsed();
+            if elapsed.as_secs() >= 30 {
+                info!(
+                    "region {} apply {:?} wait too long",
+                    self.delegate.region_id(),
+                    self.delegate.apply_state,
+                );
+            }
+            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         }
     }
 }
@@ -2651,6 +2677,19 @@ impl Fsm for ApplyFsm {
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    #[inline]
+    fn after_scheduled(&mut self) {
+        self.delegate.schedule_time = Some(Instant::now_coarse());
+        if let Some(t) = self.reschedule_time.take() {
+            APPLY_RESCHEDULE_WAIT_DURATION.observe(t.elapsed().as_millis() as f64 / 1000f64);
+        }
+    }
+
+    #[inline]
+    fn before_reschedule(&mut self) {
+        self.reschedule_time = Some(Instant::now_coarse());
     }
 }
 
@@ -2689,7 +2728,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written = false;
+        normal.delegate.written_count = 0;
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
@@ -2862,6 +2901,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
     super::batch::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
+        cfg.reschedule_count,
         tx,
         Box::new(ControlFsm),
     )

@@ -6,6 +6,7 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
+use crate::raftstore::store::metrics::*;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
@@ -43,6 +44,10 @@ pub trait Fsm {
     {
         None
     }
+
+    fn after_scheduled(&mut self) {}
+
+    fn before_reschedule(&mut self) {}
 }
 
 /// A unify type for FSMs so that they can be sent to channel easily.
@@ -286,10 +291,12 @@ pub trait PollHandler<N, C> {
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
 struct Poller<N: Fsm, C: Fsm, Handler> {
+    tag: String,
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
+    reschedule_count: usize,
 }
 
 enum ReschedulePolicy {
@@ -358,12 +365,13 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     if p.is_stopped() {
                         reschedule_fsms.push((i, ReschedulePolicy::Remove));
                     } else {
-                        if batch.counters[i] > 3 {
+                        if batch.counters[i] > self.reschedule_count {
                             hot_fsm_count += 1;
                             // We should only reschedule a half of the hot regions, otherwise,
                             // it's possible all the hot regions are fetched in a batch the
                             // next time.
                             if hot_fsm_count % 2 == 0 {
+                                p.before_reschedule();
                                 reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                                 continue;
                             }
@@ -381,7 +389,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 match mark {
                     ReschedulePolicy::Release(l) => batch.release(r, l),
                     ReschedulePolicy::Remove => batch.remove(r),
-                    ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
+                    ReschedulePolicy::Schedule => {
+                        RESCHEDULE_FSM_COUNT
+                            .with_label_values(&[self.tag.as_str()])
+                            .inc();
+                        batch.reschedule(&self.router, r)
+                    }
                 }
             }
             // Fetch batch after every round is finished. It's helpful to protect regions
@@ -410,6 +423,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
+    reschedule_count: usize,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -430,10 +444,12 @@ where
         for i in 0..self.pool_size {
             let handler = builder.build();
             let mut poller = Poller {
+                tag: name_prefix.clone(),
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
+                reschedule_count: self.reschedule_count,
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
@@ -468,6 +484,7 @@ pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlSchedule
 pub fn create_system<N: Fsm, C: Fsm>(
     pool_size: usize,
     max_batch_size: usize,
+    reschedule_count: usize,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
@@ -483,6 +500,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         pool_size,
         max_batch_size,
         workers: vec![],
+        reschedule_count,
     };
     (router, system)
 }
@@ -602,7 +620,7 @@ pub mod tests {
     #[test]
     fn test_batch() {
         let (control_tx, control_fsm) = new_runner(10);
-        let (router, mut system) = super::create_system(2, 2, control_tx, control_fsm);
+        let (router, mut system) = super::create_system(2, 2, 3, control_tx, control_fsm);
         let builder = Builder::new();
         let metrics = builder.metrics.clone();
         system.spawn("test".to_owned(), builder);

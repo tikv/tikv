@@ -161,6 +161,8 @@ fn test_serde_custom_tikv_config() {
         store_pool_size: 3,
         future_poll_size: 2,
         hibernate_regions: true,
+        apply_yield_count: 1,
+        reschedule_count: 3,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     value.rocksdb = DbConfig {
