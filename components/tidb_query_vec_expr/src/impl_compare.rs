@@ -922,10 +922,7 @@ mod tests {
                 ],
                 Real::new(f64::MAX).ok(),
             ),
-            (
-                vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()],
-                None,
-            ),
+            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
             (
                 vec![
                     Real::new(f64::INFINITY).ok(),
