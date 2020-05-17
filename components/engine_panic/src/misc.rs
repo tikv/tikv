@@ -45,4 +45,8 @@ impl MiscExt for PanicEngine {
     fn sync_wal(&self) -> Result<()> {
         panic!()
     }
+
+    fn exists(path: &str) -> bool {
+        panic!()
+    }
 }

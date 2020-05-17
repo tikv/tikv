@@ -92,6 +92,10 @@ impl MiscExt for RocksEngine {
     fn sync_wal(&self) -> Result<()> {
         Ok(self.as_inner().sync_wal()?)
     }
+
+    fn exists(path: &str) -> bool {
+        engine::rocks::util::db_exist(path)
+    }
 }
 
 #[cfg(test)]
