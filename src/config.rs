@@ -2090,16 +2090,6 @@ impl TiKvConfig {
         self.import.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
-        self.rocksdb.info_log_dir = if self.rocksdb.info_log_dir.is_empty() {
-            config::canonicalize_log_dir(&config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?, "LOG")?
-        } else {
-            config::canonicalize_log_dir(&self.rocksdb.info_log_dir,"rocksdb.log")?
-        };
-        self.raftdb.info_log_dir = if self.raftdb.info_log_dir.is_empty() {
-            config::canonicalize_log_dir(&self.raft_store.raftdb_path.clone(),"LOG")?
-        } else {
-            config::canonicalize_log_dir(&self.raftdb.info_log_dir,"raft.log")?
-        };
         Ok(())
     }
 
