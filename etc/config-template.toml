@@ -783,6 +783,63 @@
 # key-path = ""
 # cert-allowed-cn = []
 
+# Configurations for encryption at rest. Experimental.
+[security.encryption]
+## Encryption method to use for data files.
+## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
+## "plaintext" means encryption is enabled, in which case master key must be specified.
+# data-encryption-method = "plaintext"
+
+## Specifies how often TiKV rotates data encryption key.
+# data-key-rotation-period = "7d"
+
+## Specifies master key if encryption is enabled. There are three types of master key:
+##
+##   * "plaintext":
+##
+##     Plaintext as master key means no master key is given and only applicable when
+##     encryption is not enabled, i.e. data-encryption-method = "plaintext". This type doesn't
+##     have sub-config items. Example:
+##     
+##     [security.encryption.master-key]
+##     type = "plaintext"
+##
+##   * "kms":
+##
+##     Use a KMS service to supply master key. Currently only AWS KMS is supported. This type of
+##     master key is recommended for production use. Example:
+##
+##     [security.encryption.master-key]
+##     type = "kms"
+##     ## KMS CMK key id. Must be a valid KMS CMK where the TiKV process has access to.
+##     ## In production is recommended to grant access of the CMK to TiKV using IAM.
+##     key-id = "1234abcd-12ab-34cd-56ef-1234567890ab"
+##     ## AWS region of the KMS CMK.
+##     region = "us-west-2"
+##     ## (Optional) AWS KMS service endpoint. Only required when non-default KMS endpoint is
+##     ## desired.
+##     endpoint = "https://kms.us-west-2.amazonaws.com"
+##
+##   * "file":
+##
+##     Supply a custom encryption key stored in a file. It is recommended NOT to use in production,
+##     as it breaks the purpose of encryption at rest, unless the file is stored in tempfs.
+##     The file must contain a 256-bits (32 bytes, regardless of key length implied by 
+##     data-encryption-method) key encoded as hex string and end with newline ("\n"). Example:
+##
+##     [security.encryption.master-key]
+##     type = "file"
+##     path = "/path/to/master/key/file"
+##
+[security.encryption.master-key]
+# type = "plaintext"
+
+## Specifies the old master key when rotating master key. Same config format as master-key.
+## The key is only access once during TiKV startup, after that TiKV do not need access to the key.
+## And it is okay to leave the stale previous-master-key config after master key rotation.
+[security.encryption.previous-master-key]
+# type = "plaintext"
+
 [import]
 ## Number of threads to handle RPC requests.
 # num-threads = 8
