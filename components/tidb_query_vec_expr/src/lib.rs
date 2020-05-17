@@ -525,6 +525,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Lpad => lpad_fn_meta(),
+        ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
         ScalarFuncSig::Rpad => rpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
         ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
