@@ -12,15 +12,15 @@ use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use security::SecurityManager;
+use tikv_util::time::duration_to_sec;
+use tikv_util::{Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::time::duration_to_sec;
-use tikv_util::{Either, HandyRwLock};
-use txn_types::TimeStamp;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -434,7 +434,7 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
@@ -449,12 +449,12 @@ impl PdClient for RpcClient {
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap();
-            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                Ok(())
+                Ok(resp.replication_status.take())
             })) as PdFuture<_>
         };
 
