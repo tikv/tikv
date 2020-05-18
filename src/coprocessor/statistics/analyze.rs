@@ -18,6 +18,7 @@ use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use tikv_util::trace::TraceEvent;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -103,6 +104,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
+    #[minitrace::trace(TraceEvent::HandleAnalyze)]
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {

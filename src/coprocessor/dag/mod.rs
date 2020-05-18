@@ -13,6 +13,7 @@ use tipb::{DagRequest, SelectResponse, StreamResponse};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
+use tikv_util::trace::TraceEvent;
 
 pub struct DagHandlerBuilder<S: Store + 'static> {
     req: DagRequest,
@@ -125,6 +126,7 @@ impl DAGHandler {
 
 #[async_trait]
 impl RequestHandler for DAGHandler {
+    #[minitrace::trace(TraceEvent::HandleDag)]
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request();
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
@@ -167,6 +169,7 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
+    #[minitrace::trace(TraceEvent::HandleBatchDag)]
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)

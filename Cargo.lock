@@ -1972,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/renkai/kvproto?branch=minitrace#afa578b39fca6262858a53759b52d17dc8cebb12"
+source = "git+https://github.com/renkai/kvproto?branch=minitrace#ae659a18fbe1cb4f15a0c5c91656d8b35c830a75"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2211,7 +2211,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git#fe577bc271516a11869c34d84c76f0e72ecdf556"
+source = "git+https://github.com/zhongzc/minitrace.git#3b763c3b72c4387fdc712b95cbb68cc66e99eaa9"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2225,8 +2225,9 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.0.1"
-source = "git+https://github.com/zhongzc/minitrace.git#fe577bc271516a11869c34d84c76f0e72ecdf556"
+source = "git+https://github.com/zhongzc/minitrace.git#3b763c3b72c4387fdc712b95cbb68cc66e99eaa9"
 dependencies = [
+ "proc-macro-error 1.0.2",
  "quote 1.0.3",
  "syn 1.0.5",
 ]
@@ -2789,7 +2790,20 @@ version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7959c6467d962050d639361f7703b2051c43036d03493c36f01d440fdd3138a"
 dependencies = [
- "proc-macro-error-attr",
+ "proc-macro-error-attr 0.4.11",
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+ "version_check 0.9.1",
+]
+
+[[package]]
+name = "proc-macro-error"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98e9e4b82e0ef281812565ea4751049f1bdcdfccda7d3f459f2e138a40c08678"
+dependencies = [
+ "proc-macro-error-attr 1.0.2",
  "proc-macro2 1.0.9",
  "quote 1.0.3",
  "syn 1.0.5",
@@ -2801,6 +2815,19 @@ name = "proc-macro-error-attr"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4002d9f55991d5e019fb940a90e1a95eb80c24e77cb2462dd4dc869604d543a"
+dependencies = [
+ "proc-macro2 1.0.9",
+ "quote 1.0.3",
+ "syn 1.0.5",
+ "syn-mid",
+ "version_check 0.9.1",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f5444ead4e9935abd7f27dc51f7e852a0569ac888096d5ec2499470794e2e53"
 dependencies = [
  "proc-macro2 1.0.9",
  "quote 1.0.3",
@@ -4101,7 +4128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6e79c80e0f4efd86ca960218d4e056249be189ff1c42824dcd9a7f51a56f0bd"
 dependencies = [
  "heck",
- "proc-macro-error",
+ "proc-macro-error 0.4.11",
  "proc-macro2 1.0.9",
  "quote 1.0.3",
  "syn 1.0.5",

@@ -422,7 +422,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let (tx, rx) = minitrace::Collector::new_default();
+        let (tx, rx) = minitrace::Collector::unbounded();
         let _enable_trace = req.enable_trace;
         //TODO remove before merge
         let enable_trace = true;
@@ -442,7 +442,7 @@ impl<E: Engine> Endpoint<E> {
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
-            .map(|mut resp: coppb::Response| {
+            .map(move |mut resp: coppb::Response| {
                 resp.set_spans(tikv_util::trace::encode_spans(rx).collect());
                 resp
             })
@@ -652,6 +652,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
+        #[minitrace::trace(TraceEvent::HandleUnaryFixture)]
         async fn handle_request(&mut self) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()

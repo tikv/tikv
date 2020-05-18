@@ -9,6 +9,12 @@ pub enum TraceEvent {
     Scheduled = 2u32,
     Snapshot = 3u32,
     HandleRequest = 4u32,
+    HandleUnaryFixture = 5u32,
+    HandleChecksum = 6u32,
+    HandleDag = 7u32,
+    HandleBatchDag = 8u32,
+    HandleAnalyze = 9u32,
+    HandleCached = 10u32,
 }
 
 impl Into<u32> for TraceEvent {
@@ -25,6 +31,12 @@ impl From<u32> for TraceEvent {
             _ if x == TraceEvent::Scheduled as u32 => TraceEvent::Scheduled,
             _ if x == TraceEvent::Snapshot as u32 => TraceEvent::Snapshot,
             _ if x == TraceEvent::HandleRequest as u32 => TraceEvent::HandleRequest,
+            _ if x == TraceEvent::HandleUnaryFixture as u32 => TraceEvent::HandleUnaryFixture,
+            _ if x == TraceEvent::HandleChecksum as u32 => TraceEvent::HandleChecksum,
+            _ if x == TraceEvent::HandleDag as u32 => TraceEvent::HandleDag,
+            _ if x == TraceEvent::HandleBatchDag as u32 => TraceEvent::HandleBatchDag,
+            _ if x == TraceEvent::HandleAnalyze as u32 => TraceEvent::HandleAnalyze,
+            _ if x == TraceEvent::HandleCached as u32 => TraceEvent::HandleCached,
             _ => unimplemented!("enumeration not exhausted"),
         }
     }
@@ -38,12 +50,18 @@ impl Into<spanpb::Event> for TraceEvent {
             TraceEvent::Scheduled => spanpb::Event::Scheduled,
             TraceEvent::Snapshot => spanpb::Event::Snapshot,
             TraceEvent::HandleRequest => spanpb::Event::HandleRequest,
+            TraceEvent::HandleUnaryFixture => spanpb::Event::HandleUnaryFixture,
+            TraceEvent::HandleChecksum => spanpb::Event::HandleChecksum,
+            TraceEvent::HandleDag => spanpb::Event::HandleDag,
+            TraceEvent::HandleBatchDag => spanpb::Event::HandleBatchDag,
+            TraceEvent::HandleAnalyze => spanpb::Event::HandleAnalyze,
+            TraceEvent::HandleCached => spanpb::Event::HandleCached,
         }
     }
 }
 
-pub fn encode_spans(rx: CollectorRx) -> impl Iterator<Item = spanpb::Span> {
-    let finished_spans = rx.collect();
+pub fn encode_spans(mut rx: CollectorRx) -> impl Iterator<Item = spanpb::Span> {
+    let finished_spans = rx.collect().unwrap();
     let spans = finished_spans.into_iter().map(|span| {
         let mut s = spanpb::Span::default();
 
