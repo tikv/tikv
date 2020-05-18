@@ -110,7 +110,6 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        is_raw_kv: bool,
         speed_limiter: Limiter,
         sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
@@ -121,15 +120,7 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(
-            meta,
-            backend,
-            name,
-            rewrite_rule,
-            is_raw_kv,
-            speed_limiter,
-            sst_writer,
-        ) {
+        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -147,7 +138,6 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        is_raw_kv: bool,
         speed_limiter: Limiter,
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
@@ -213,7 +203,7 @@ impl SSTImporter {
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
         let range_start_bound = key_to_bound(range_start);
-        let range_end_bound = if is_raw_kv && meta.get_end_key_exclusive() {
+        let range_end_bound = if meta.get_end_key_exclusive() {
             key_to_exclusive_bound(range_end)
         } else {
             key_to_bound(range_end)
@@ -1134,7 +1124,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1182,7 +1171,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1229,7 +1217,6 @@ mod tests {
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1272,7 +1259,6 @@ mod tests {
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1334,7 +1320,6 @@ mod tests {
                     &backend,
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
-                    false,
                     Limiter::new(INFINITY),
                     sst_writer,
                 )
@@ -1398,7 +1383,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1442,7 +1426,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
-                false,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1486,7 +1469,6 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1511,7 +1493,6 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1534,7 +1515,6 @@ mod tests {
             &backend,
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
-            false,
             Limiter::new(INFINITY),
             sst_writer,
         );
@@ -1615,7 +1595,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                true,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1667,7 +1646,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                true,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
@@ -1715,7 +1693,6 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                true,
                 Limiter::new(INFINITY),
                 sst_writer,
             )
