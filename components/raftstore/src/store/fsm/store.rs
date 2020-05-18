@@ -1252,12 +1252,8 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch_system::create_system(
-        cfg.store_pool_size,
-        cfg.store_max_batch_size,
-        store_tx,
-        store_fsm,
-    );
+    let (router, system) =
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
