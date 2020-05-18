@@ -176,25 +176,29 @@ impl SSTImporter {
 
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
+        let range_start_bound = key_to_bound(range_start);
+        let range_end_bound = if meta.get_end_key_exclusive() {
+            key_to_exclusive_bound(range_end)
+        } else {
+            key_to_bound(range_end)
+        };
 
-        let range_start = keys::rewrite::rewrite_prefix_of_start_bound(
-            new_prefix,
-            old_prefix,
-            key_to_bound(range_start),
-        )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST start range", range_start.to_vec(), new_prefix.to_vec())
-        })?;
-        let range_end = keys::rewrite::rewrite_prefix_of_end_bound(
-            new_prefix,
-            old_prefix,
-            key_to_bound(range_end),
-        )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
-        })?;
+        let range_start =
+            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
+                .map_err(|_| {
+                    Error::WrongKeyPrefix(
+                        "SST start range",
+                        range_start.to_vec(),
+                        new_prefix.to_vec(),
+                    )
+                })?;
+        let range_end =
+            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
+                .map_err(|_| {
+                    Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
+                })?;
 
-        // read and first and last keys from the SST, determine if we could
+        // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter();
         let direct_retval = (|| {
@@ -577,19 +581,27 @@ fn key_to_bound(key: &[u8]) -> Bound<&[u8]> {
     }
 }
 
-fn is_before_start_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
-    match bound {
-        Bound::Unbounded => false,
-        Bound::Included(b) => *value < **b,
-        Bound::Excluded(b) => *value <= **b,
+fn key_to_exclusive_bound(key: &[u8]) -> Bound<&[u8]> {
+    if key.is_empty() {
+        Bound::Unbounded
+    } else {
+        Bound::Excluded(key)
     }
 }
 
-fn is_after_end_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
+fn is_before_start_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
     match bound {
         Bound::Unbounded => false,
-        Bound::Included(b) => *value > **b,
-        Bound::Excluded(b) => *value >= **b,
+        Bound::Included(b) => *value < *b.as_ref(),
+        Bound::Excluded(b) => *value <= *b.as_ref(),
+    }
+}
+
+fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
+    match bound {
+        Bound::Unbounded => false,
+        Bound::Included(b) => *value > *b.as_ref(),
+        Bound::Excluded(b) => *value >= *b.as_ref(),
     }
 }
 
@@ -600,6 +612,7 @@ mod tests {
 
     use std::collections::HashMap;
     use std::f64::INFINITY;
+<<<<<<< HEAD:src/import/sst_importer.rs
     use std::sync::Arc;
 
     use crate::storage::mvcc::WriteType;
@@ -608,6 +621,18 @@ mod tests {
     use engine::rocks::{
         ColumnFamilyOptions, DBEntryType, SstWriterBuilder, TablePropertiesCollector,
         TablePropertiesCollectorFactory,
+=======
+
+    use engine_traits::{collect, name_to_cf, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS};
+    use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
+    use engine_traits::{
+        ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
+        UserCollectedProperties,
+    };
+    use tempfile::Builder;
+    use test_sst_importer::{
+        new_sst_reader, new_sst_writer, new_test_engine, RocksSstWriter, PROP_TEST_MARKER_CF_NAME,
+>>>>>>> 6b09cad... Fix the issue that end key of a partial rawkv-restore range is inclusive (#7196):components/sst_importer/src/sst_importer.rs
     };
     use engine::util::get_range_properties_cf;
     use engine::{name_to_cf, CF_DEFAULT, CF_WRITE, DATA_CFS};
@@ -802,6 +827,7 @@ mod tests {
         assert_eq!(meta, new_meta);
     }
 
+<<<<<<< HEAD:src/import/sst_importer.rs
     fn create_sample_external_sst_file() -> Result<(TempDir, StorageBackend, SSTMeta)> {
         let ext_sst_dir = TempDir::new("external_storage")?;
         let mut sst_writer = SstWriterBuilder::new()
@@ -811,6 +837,18 @@ mod tests {
         sst_writer.put(b"zt123_r07", b"pqrst")?;
         // sst_writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
         sst_writer.put(b"zt123_r13", b"www")?;
+=======
+    fn create_external_sst_file_with_write_fn<F>(
+        write_fn: F,
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)>
+    where
+        F: FnOnce(&mut RocksSstWriter) -> Result<()>,
+    {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut sst_writer =
+            new_sst_writer(ext_sst_dir.path().join("sample.sst").to_str().unwrap());
+        write_fn(&mut sst_writer)?;
+>>>>>>> 6b09cad... Fix the issue that end key of a partial rawkv-restore range is inclusive (#7196):components/sst_importer/src/sst_importer.rs
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
@@ -825,6 +863,38 @@ mod tests {
 
         let backend = external_storage::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
+    }
+
+    fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        create_external_sst_file_with_write_fn(|writer| {
+            writer.put(b"zt123_r01", b"abc")?;
+            writer.put(b"zt123_r04", b"xyz")?;
+            writer.put(b"zt123_r07", b"pqrst")?;
+            // writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
+            writer.put(b"zt123_r13", b"www")?;
+            Ok(())
+        })
+    }
+
+    fn create_sample_external_rawkv_sst_file(
+        start_key: &[u8],
+        end_key: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        let (dir, backend, mut meta) = create_external_sst_file_with_write_fn(|writer| {
+            writer.put(b"za", b"v1")?;
+            writer.put(b"zb", b"v2")?;
+            writer.put(b"zb\x00", b"v3")?;
+            writer.put(b"zc", b"v4")?;
+            writer.put(b"zc\x00", b"v5")?;
+            writer.put(b"zc\x00\x00", b"v6")?;
+            writer.put(b"zd", b"v7")?;
+            Ok(())
+        })?;
+        meta.mut_range().set_start(start_key.to_vec());
+        meta.mut_range().set_end(end_key.to_vec());
+        meta.set_end_key_exclusive(end_key_exclusive);
+        Ok((dir, backend, meta))
     }
 
     fn get_encoded_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -1362,4 +1432,201 @@ mod tests {
             _ => panic!("unexpected download result: {:?}", result),
         }
     }
+<<<<<<< HEAD:src/import/sst_importer.rs
+=======
+
+    #[test]
+    fn test_write_sst() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let name = importer.get_path(&meta);
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+        let default = <TestEngine as SstExt>::SstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_db(&db)
+            .set_cf(CF_DEFAULT)
+            .build(&name.to_str().unwrap())
+            .unwrap();
+        let write = <TestEngine as SstExt>::SstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_db(&db)
+            .set_cf(CF_WRITE)
+            .build(&name.to_str().unwrap())
+            .unwrap();
+
+        let mut w = importer
+            .new_writer::<TestEngine>(default, write, meta)
+            .unwrap();
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // wirte cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 2);
+    }
+
+    #[test]
+    fn test_download_rawkv_sst() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"0", b"z", false).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"a");
+        assert_eq!(range.get_end(), b"d");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+        assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"za".to_vec(), b"v1".to_vec()),
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+                (b"zc\x00\x00".to_vec(), b"v6".to_vec()),
+                (b"zd".to_vec(), b"v7".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_download_rawkv_sst_partial() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", false).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c\x00");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+                (b"zc\x00".to_vec(), b"v5".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_download_rawkv_sst_partial_exclusive_end_key() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) =
+            create_sample_external_rawkv_sst_file(b"b", b"c\x00", true).unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                sst_writer,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"b");
+        assert_eq!(range.get_end(), b"c");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zb".to_vec(), b"v2".to_vec()),
+                (b"zb\x00".to_vec(), b"v3".to_vec()),
+                (b"zc".to_vec(), b"v4".to_vec()),
+            ]
+        );
+    }
+>>>>>>> 6b09cad... Fix the issue that end key of a partial rawkv-restore range is inclusive (#7196):components/sst_importer/src/sst_importer.rs
 }
