@@ -5,10 +5,10 @@ use minitrace::CollectorRx;
 pub enum TraceEvent {
     #[allow(dead_code)]
     Unknown = 0u32,
-    CoprRequest,
-    Scheduled,
-    Snapshot,
-    HandleRequest,
+    CoprRequest = 1u32,
+    Scheduled = 2u32,
+    Snapshot = 3u32,
+    HandleRequest = 4u32,
 }
 
 impl Into<u32> for TraceEvent {
