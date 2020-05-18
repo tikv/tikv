@@ -75,18 +75,13 @@ pub trait Engine: Send + Clone + 'static {
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
-    fn async_cache_snapshot(
+    fn async_snapshot_with_cache(
         &self,
-        _cache: Option<Self::Snap>,
+        _ts: Timespec,
         ctx: &Context,
         callback: Callback<Self::Snap>,
     ) -> Result<()> {
         self.async_snapshot(ctx, callback)
-    }
-    fn get_snapshot_cache(&self) -> Result<Self::Snap> {
-        Err(Error(Box::new(ErrorInner::Other(box_err!(
-            "not supported"
-        )))))
     }
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {

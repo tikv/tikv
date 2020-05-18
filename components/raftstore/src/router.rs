@@ -6,12 +6,13 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, RegionSnapshot, SignificantMsg,
-    StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::KvEngine;
 use raft::SnapshotStatus;
+use std::cell::RefCell;
+use time::Timespec;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<E>: Send + Clone
@@ -25,12 +26,7 @@ where
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
-    fn read(
-        &self,
-        _snap: Option<RegionSnapshot<E>>,
-        req: RaftCmdRequest,
-        cb: Callback<E>,
-    ) -> RaftStoreResult<()> {
+    fn read(&self, _ts: Timespec, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
 
@@ -106,7 +102,7 @@ where
     E: KvEngine,
 {
     router: RaftRouter<E>,
-    local_reader: LocalReader<RaftRouter<E>, E>,
+    local_reader: RefCell<LocalReader<RaftRouter<E>, E>>,
 }
 
 impl<E> ServerRaftStoreRouter<E>
@@ -116,8 +112,9 @@ where
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<E>,
-        local_reader: LocalReader<RaftRouter<E>, E>,
+        reader: LocalReader<RaftRouter<E>, E>,
     ) -> ServerRaftStoreRouter<E> {
+        let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -155,25 +152,16 @@ where
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if LocalReader::<RaftRouter<E>, E>::acceptable(&cmd.request) {
-            self.local_reader.execute_raft_command(cmd);
-            Ok(())
-        } else {
-            let region_id = cmd.request.get_header().get_region_id();
-            self.router
-                .send_raft_command(cmd)
-                .map_err(|e| handle_send_error(region_id, e))
-        }
+        let region_id = cmd.request.get_header().get_region_id();
+        self.router
+            .send_raft_command(cmd)
+            .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn read(
-        &self,
-        snap: Option<RegionSnapshot<E>>,
-        req: RaftCmdRequest,
-        cb: Callback<E>,
-    ) -> RaftStoreResult<()> {
+    fn read(&self, ts: Timespec, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        self.local_reader.read(snap, cmd);
+        let mut local_reader = self.local_reader.borrow_mut();
+        local_reader.read(ts, cmd);
         Ok(())
     }
 

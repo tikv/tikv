@@ -12,9 +12,7 @@ use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::{
-    CfName, KvEngine, Snapshot as SnapshotTrait, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
-};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{IterOptions, Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -286,10 +284,6 @@ impl Engine for RocksEngine {
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
-    }
-
-    fn get_snapshot_cache(&self) -> Result<Self::Snap> {
-        Ok(self.engines.kv.c().snapshot().into_sync())
     }
 }
 

@@ -2449,7 +2449,7 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<RocksEngine> {
-        let mut resp = ReadExecutor::execute(
+        let mut resp = ReadExecutor::execute_read_index(
             &ctx.engines.kv,
             &req,
             self.region(),
@@ -2747,26 +2747,6 @@ where
         }
     }
 
-    #[inline]
-    pub fn snapshot_time(&mut self) -> Option<Timespec> {
-        self.maybe_update_snapshot();
-        self.snapshot_time
-    }
-
-    #[inline]
-    fn maybe_update_snapshot(&mut self) {
-        if self.snapshot.is_some() {
-            return;
-        }
-        self.snapshot = Some(self.engine.snapshot().into_sync());
-        // Reading current timespec after snapshot, in case we do not
-        // expire lease in time.
-        atomic::fence(atomic::Ordering::Release);
-        if self.need_snapshot_time {
-            self.snapshot_time = Some(monotonic_raw_now());
-        }
-    }
-
     fn do_get(engine: &E, req: &Request, region: &metapb::Region) -> Result<Response> {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
@@ -2805,26 +2785,12 @@ where
         Ok(resp)
     }
 
-    pub fn execute(
+    fn execute(
         engine: &E,
         msg: &RaftCmdRequest,
         region: &metapb::Region,
-        check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<E> {
-        if check_epoch {
-            if let Err(e) = check_region_epoch(msg, region, true) {
-                debug!(
-                    "epoch not match";
-                    "region_id" => region.get_id(),
-                    "err" => ?e,
-                );
-                return ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                };
-            }
-        }
+    ) -> (RaftCmdResponse, bool) {
         let mut need_snapshot = false;
         let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -2839,10 +2805,7 @@ where
                             "region_id" => region.get_id(),
                             "err" => ?e,
                         );
-                        return ReadResponse {
-                            response: cmd_resp::new_error(e),
-                            snapshot: None,
-                        };
+                        return (cmd_resp::new_error(e), false);
                     }
                 },
                 CmdType::Snap => {
@@ -2870,9 +2833,44 @@ where
             resp.set_cmd_type(cmd_type);
             responses.push(resp);
         }
-
         let mut response = RaftCmdResponse::default();
         response.set_responses(responses.into());
+        (response, need_snapshot)
+    }
+
+    pub fn execute_with_cache(
+        engine: &E,
+        msg: &RaftCmdRequest,
+        region: &metapb::Region,
+        snap: RegionSnapshot<E>,
+    ) -> ReadResponse<E> {
+        let (mut response, need_snapshot) = Self::execute(engine, msg, region, None);
+        let snapshot = if need_snapshot { Some(snap) } else { None };
+        ReadResponse { response, snapshot }
+    }
+
+    pub fn execute_read_index(
+        engine: &E,
+        msg: &RaftCmdRequest,
+        region: &metapb::Region,
+        check_epoch: bool,
+        read_index: Option<u64>,
+    ) -> ReadResponse<E> {
+        if check_epoch {
+            if let Err(e) = check_region_epoch(msg, region, true) {
+                debug!(
+                    "epoch not match";
+                    "region_id" => region.get_id(),
+                    "err" => ?e,
+                );
+                return ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                };
+            }
+        }
+
+        let (mut response, need_snapshot) = Self::execute(engine, msg, region, read_index);
         let snapshot = if need_snapshot {
             let snapshot = engine.snapshot().into_sync();
             Some(RegionSnapshot::from_snapshot(

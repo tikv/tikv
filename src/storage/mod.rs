@@ -51,7 +51,9 @@ use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
+use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::Instant;
+use time::Timespec;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -185,19 +187,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.clone()
     }
 
-    /// Get a snapshot cache of `engine`.
-    fn get_snapshot_cache(engine: &E) -> Result<E::Snap> {
-        engine.get_snapshot_cache().map_err(Error::from)
-    }
-
     /// Get a snapshot of `engine`.
     fn snapshot_with_cache(
         engine: &E,
-        cache: &E::Snap,
+        ts: Timespec,
         ctx: &Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_cache_snapshot(Some(cache.clone()), ctx, callback);
+        let val = engine.async_snapshot_with_cache(ts, ctx, callback);
         // make engine not cross yield point
         async move {
             val?;
@@ -310,24 +307,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let cache = Self::with_tls_engine(|engine| Self::get_snapshot_cache(engine))?;
+                let now = monotonic_raw_now();
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
-                let mut batch_count = 0;
-                for mut req in gets {
+                let mut snaps = vec![];
+                for req in gets {
+                    let snap = Self::with_tls_engine(|engine| {
+                        Self::snapshot_with_cache(engine, now, &req.ctx)
+                    });
+                    snaps.push((req, snap));
+                }
+                for (mut req, snap) in snaps {
                     let start_ts = req.ts.unwrap();
                     let isolation_level = req.ctx.get_isolation_level();
                     let fill_cache = !req.ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(req.ctx.take_resolved_locks());
-                    match Self::with_tls_engine(|engine| {
-                        Self::snapshot_with_cache(engine, &cache, &req.ctx)
-                    })
-                    .await
-                    {
+                    match snap.await {
                         Ok(snapshot) => {
-                            if snapshot.get_create_time() == cache.get_create_time() {
-                                batch_count += 1;
-                            }
                             let snap_store = SnapshotStore::new(
                                 snapshot,
                                 start_ts,
@@ -347,7 +343,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     }
                 }
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc_by(batch_count);
+                // KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc_by(batch_count);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
                     .observe(command_duration.elapsed_secs());
