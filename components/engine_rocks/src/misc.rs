@@ -126,8 +126,14 @@ impl MiscExt for RocksEngine {
     }
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
-        self.as_inner()
+        match self
+            .as_inner()
             .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
     }
 }
 

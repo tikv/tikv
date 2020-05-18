@@ -193,11 +193,8 @@ impl PendingDeleteRanges {
         self.ranges.insert(start_key.to_owned(), info);
     }
 
-    /// Gets all timeout ranges info.
-    pub fn timeout_ranges(
-        &self,
-        oldest_sequence: u64,
-    ) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
+    /// Gets all stale ranges info.
+    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
         self.ranges
             .iter()
             .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
@@ -458,14 +455,14 @@ where
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-        let oldest_sequence = if !overlap_ranges.is_empty() {
-            self.engines
-                .kv
-                .get_oldest_snapshot_sequence_number()
-                .unwrap_or(u64::MAX)
-        } else {
-            0
-        };
+        if overlap_ranges.is_empty() {
+            return;
+        }
+        let oldest_sequence = self
+            .engines
+            .kv
+            .get_oldest_snapshot_sequence_number()
+            .unwrap_or(u64::MAX);
         for (region_id, s_key, e_key, stale_sequence) in overlap_ranges {
             // `delete_files_in_range` may break current rocksdb snapshots consistency,
             // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
@@ -498,8 +495,8 @@ where
         );
     }
 
-    /// Cleans up timeouted ranges.
-    fn clean_timeout_ranges(&mut self) {
+    /// Cleans up stale ranges.
+    fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
         let oldest_sequence = self
@@ -511,7 +508,7 @@ where
         {
             let now = Instant::now();
             for (region_id, start_key, end_key) in
-                self.pending_delete_ranges.timeout_ranges(oldest_sequence)
+                self.pending_delete_ranges.stale_ranges(oldest_sequence)
             {
                 self.cleanup_range(
                     region_id, start_key, end_key, true, /* use_delete_files */
@@ -521,7 +518,7 @@ where
                 if elapsed >= CLEANUP_MAX_DURATION {
                     let len = cleaned_range_keys.len();
                     let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean timeout ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
+                    info!("clean stale ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
                     break;
                 }
             }
@@ -675,7 +672,10 @@ where
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
                 self.ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key)
+                    .insert_pending_delete_range(region_id, &start_key, &end_key);
+
+                // try to delete stale ranges if there are any
+                self.ctx.clean_stale_ranges();
             }
         }
     }
@@ -707,7 +707,7 @@ where
                 );
             }
             Event::CheckStalePeer => {
-                self.ctx.clean_timeout_ranges();
+                self.ctx.clean_stale_ranges();
                 timer.add_task(
                     Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
                     Event::CheckStalePeer,
@@ -792,7 +792,7 @@ mod tests {
         // at t1, [a, c) and [x, z) will timeout
         {
             let now = 11;
-            let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
             assert_eq!(
                 ranges,
                 [
@@ -813,7 +813,7 @@ mod tests {
         // at t2, [g, q) will timeout
         {
             let now = 14;
-            let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
             assert_eq!(ranges, [(id + 2, "g".as_bytes(), "q".as_bytes())]);
             for start_key in ranges
                 .into_iter()
