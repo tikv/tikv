@@ -149,7 +149,7 @@ impl SSTImporter {
         rewrite_rule: &RewriteRule,
         is_raw_kv: bool,
         speed_limiter: Limiter,
-        sst_writer: E::SstWriter,
+        mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let start = Instant::now();
         let path = self.dir.join(meta)?;
@@ -206,49 +206,33 @@ impl SSTImporter {
             "path" => path_str,
         );
 
-        if is_raw_kv {
-            self.finish_downloading_rawkv::<E>(meta, path, sst_writer, start)
-        } else {
-            self.finish_downloading::<E>(meta, rewrite_rule, path, sst_writer, start)
-        }
-    }
-
-    fn finish_downloading<E: KvEngine>(
-        &self,
-        meta: &SstMeta,
-        rewrite_rule: &RewriteRule,
-        path: ImportPath,
-        mut sst_writer: E::SstWriter,
-        timer: Instant,
-    ) -> Result<Option<Range>> {
-        // now validate the SST file.
-        let path_str = path.temp.to_str().unwrap();
-        let sst_reader = E::SstReader::open(path_str)?;
-        sst_reader.verify_checksum()?;
-
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
 
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
+        let range_start_bound = key_to_bound(range_start);
+        let range_end_bound = if is_raw_kv && meta.get_end_key_exclusive() {
+            key_to_exclusive_bound(range_end)
+        } else {
+            key_to_bound(range_end)
+        };
 
-        let range_start = keys::rewrite::rewrite_prefix_of_start_bound(
-            new_prefix,
-            old_prefix,
-            key_to_bound(range_start),
-        )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST start range", range_start.to_vec(), new_prefix.to_vec())
-        })?;
-        let range_end = keys::rewrite::rewrite_prefix_of_end_bound(
-            new_prefix,
-            old_prefix,
-            key_to_bound(range_end),
-        )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
-        })?;
+        let range_start =
+            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
+                .map_err(|_| {
+                    Error::WrongKeyPrefix(
+                        "SST start range",
+                        range_start.to_vec(),
+                        new_prefix.to_vec(),
+                    )
+                })?;
+        let range_end =
+            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
+                .map_err(|_| {
+                    Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
+                })?;
 
         // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
@@ -300,7 +284,7 @@ impl SSTImporter {
                     .ok_or_else(|| Error::InvalidSSTPath(path.save.clone()))?;
                 key_manager.rename_file(temp_str, save_str)?;
             }
-            let duration = timer.elapsed();
+            let duration = start.elapsed();
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
                 .observe(duration.as_secs_f64());
@@ -365,128 +349,18 @@ impl SSTImporter {
             }
         }
 
-        let duration = timer.elapsed();
+        let _ = fs::remove_file(&path.temp);
+
+        let duration = start.elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
             .observe(duration.as_secs_f64());
-
-        let _ = fs::remove_file(&path.temp);
 
         if let Some(start_key) = first_key {
             sst_writer.finish()?;
             let mut final_range = Range::default();
             final_range.set_start(start_key);
             final_range.set_end(keys::origin_key(&key).to_vec());
-            Ok(Some(final_range))
-        } else {
-            // nothing is written: prevents finishing the SST at all.
-            Ok(None)
-        }
-    }
-
-    fn finish_downloading_rawkv<E: KvEngine>(
-        &self,
-        meta: &SstMeta,
-        path: ImportPath,
-        mut sst_writer: E::SstWriter,
-        timer: Instant,
-    ) -> Result<Option<Range>> {
-        // now validate the SST file.
-        let path_str = path.temp.to_str().unwrap();
-        let sst_reader = E::SstReader::open(path_str)?;
-        sst_reader.verify_checksum()?;
-
-        let range_start_key = meta.get_range().get_start();
-        let range_end_key = meta.get_range().get_end();
-
-        let range_start = key_to_bound(range_start_key);
-        let range_end = if meta.get_end_key_exclusive() {
-            key_to_exclusive_bound(range_end_key)
-        } else {
-            key_to_bound(range_end_key)
-        };
-
-        // TODO: This code is partially duplicated with `import_sst`
-        // read the first and last keys from the SST, determine if we could
-        // simply move the entire SST instead of iterating and generate a new one.
-        let mut iter = sst_reader.iter();
-        let direct_retval = (|| -> Result<Option<_>> {
-            if !iter.seek(SeekKey::Start)? {
-                // the SST is empty, so no need to iterate at all (should be impossible?)
-                return Ok(Some(meta.get_range().clone()));
-            }
-            let start_key = keys::origin_key(iter.key());
-            if is_before_start_bound(start_key, &range_start) {
-                // SST's start is before the range to consume, so needs to iterate to skip over
-                return Ok(None);
-            }
-            let start_key = start_key.to_vec();
-
-            // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End)?;
-            let last_key = keys::origin_key(iter.key());
-            if is_after_end_bound(last_key, &range_end) {
-                // SST's end is after the range to consume
-                return Ok(None);
-            }
-
-            // range contained the entire SST, no need to iterate, just moving the file is ok
-            let mut range = Range::default();
-            range.set_start(start_key);
-            range.set_end(last_key.to_vec());
-            Ok(Some(range))
-        })()?;
-
-        if let Some(range) = direct_retval {
-            // TODO: what about encrypted SSTs?
-            fs::rename(&path.temp, &path.save)?;
-            let duration = timer.elapsed();
-            IMPORTER_DOWNLOAD_DURATION
-                .with_label_values(&["rename"])
-                .observe(duration.as_secs_f64());
-            return Ok(Some(range));
-        }
-
-        let mut first_key = None;
-        let mut last_key = None;
-
-        match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start)?,
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
-            Bound::Excluded(_) => unreachable!(),
-        };
-        while iter.valid()? {
-            let key = iter.key().to_vec();
-            let origin_key = keys::origin_key(&key);
-            if is_after_end_bound(origin_key, &range_end) {
-                break;
-            }
-
-            if first_key.is_none() {
-                first_key = Some(origin_key.to_vec());
-            }
-
-            let value = iter.value();
-            sst_writer.put(&key, value)?;
-            iter.next()?;
-
-            last_key = Some(origin_key.to_vec());
-        }
-
-        let duration = timer.elapsed();
-        IMPORTER_DOWNLOAD_DURATION
-            .with_label_values(&["rewrite"])
-            .observe(duration.as_secs_f64());
-
-        let _ = fs::remove_file(&path.temp);
-
-        if let Some(start_key) = first_key {
-            assert!(last_key.is_some());
-
-            sst_writer.finish()?;
-            let mut final_range = Range::default();
-            final_range.set_start(start_key);
-            final_range.set_end(last_key.unwrap());
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
