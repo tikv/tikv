@@ -136,4 +136,8 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
     ///
     /// For debugging. The format and content is unspecified.
     fn dump_stats(&self) -> Result<String>;
+
+    fn get_latest_sequence_number(&self) -> u64;
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64>;
 }

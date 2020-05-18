@@ -120,6 +120,15 @@ impl MiscExt for RocksEngine {
 
         Ok(box_try!(String::from_utf8(s)))
     }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        self.as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+    }
 }
 
 #[cfg(test)]

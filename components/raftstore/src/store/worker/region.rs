@@ -461,15 +461,15 @@ where
         let oldest_sequence = if !overlap_ranges.is_empty() {
             self.engines
                 .kv
-                .get_property_int("rocksdb.oldest-snapshot-sequence")
-                .unwrap()
+                .get_oldest_snapshot_sequence_number()
+                .unwrap_or(u64::MAX)
         } else {
             0
         };
         for (region_id, s_key, e_key, stale_sequence) in overlap_ranges {
             // `delete_files_in_range` may break current rocksdb snapshots consistency,
             // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
-            let use_delete_files = stale_sequence > oldest_sequence;
+            let use_delete_files = stale_sequence < oldest_sequence;
             if use_delete_files {
                 SNAP_COUNTER_VEC
                     .with_label_values(&["overlap", "not_timeout"])
@@ -505,8 +505,8 @@ where
         let oldest_sequence = self
             .engines
             .kv
-            .get_property_int("rocksdb.oldest-snapshot-sequence")
-            .unwrap();
+            .get_oldest_snapshot_sequence_number()
+            .unwrap_or(u64::MAX);
         let mut cleaned_range_keys = vec![];
         {
             let now = Instant::now();
