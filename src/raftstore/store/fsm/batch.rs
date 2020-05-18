@@ -144,7 +144,8 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => {
+            FsmTypes::Normal(mut n) => {
+                n.after_scheduled();
                 self.normals.push(n);
                 self.counters.push(0);
             }

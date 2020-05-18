@@ -2645,9 +2645,10 @@ impl ApplyFsm {
             let elapsed = timer.elapsed();
             if elapsed.as_secs() >= 30 {
                 info!(
-                    "region {} apply {:?} wait too long",
+                    "region {} apply {:?} wait too long, takes {:?}",
                     self.delegate.region_id(),
                     self.delegate.apply_state,
+                    elapsed,
                 );
             }
             APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(duration_to_sec(elapsed));
