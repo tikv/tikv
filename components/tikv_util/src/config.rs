@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use url;
 
 use super::time::Instant;
 use crate::slow_log;
@@ -265,6 +264,57 @@ impl Into<ReadableDuration> for ConfigValue {
     }
 }
 
+impl FromStr for ReadableDuration {
+    type Err = String;
+
+    fn from_str(dur_str: &str) -> Result<ReadableDuration, String> {
+        let dur_str = dur_str.trim();
+        if !dur_str.is_ascii() {
+            return Err(format!("unexpect ascii string: {}", dur_str));
+        }
+        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let mut left = dur_str.as_bytes();
+        let mut last_unit = DAY + 1;
+        let mut dur = 0f64;
+        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+            let (first, second) = left.split_at(idx);
+            let unit = if second.starts_with(b"ms") {
+                left = &left[idx + 2..];
+                MS
+            } else {
+                let u = match second[0] {
+                    b'd' => DAY,
+                    b'h' => HOUR,
+                    b'm' => MINUTE,
+                    b's' => SECOND,
+                    _ => return Err(err_msg),
+                };
+                left = &left[idx + 1..];
+                u
+            };
+            if unit >= last_unit {
+                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+            }
+            // do we need to check 12h360m?
+            let number_str = unsafe { str::from_utf8_unchecked(first) };
+            dur += match number_str.trim().parse::<f64>() {
+                Ok(n) => n * unit as f64,
+                Err(_) => return Err(err_msg),
+            };
+            last_unit = unit;
+        }
+        if !left.is_empty() {
+            return Err(err_msg);
+        }
+        if dur.is_sign_negative() {
+            return Err("duration should be positive.".to_owned());
+        }
+        let secs = dur as u64 / SECOND as u64;
+        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
+        Ok(ReadableDuration(Duration::new(secs, millis)))
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -283,6 +333,10 @@ impl ReadableDuration {
 
     pub fn hours(hours: u64) -> ReadableDuration {
         ReadableDuration::minutes(hours * 60)
+    }
+
+    pub fn days(days: u64) -> ReadableDuration {
+        ReadableDuration::hours(days * 24)
     }
 
     pub fn as_secs(&self) -> u64 {
@@ -363,56 +417,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
             where
                 E: de::Error,
             {
-                let dur_str = dur_str.trim();
-                if !dur_str.is_ascii() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &"ascii string"));
-                }
-                let err_msg = "valid duration, only d, h, m, s, ms are supported.";
-                let mut left = dur_str.as_bytes();
-                let mut last_unit = DAY + 1;
-                let mut dur = 0f64;
-                while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
-                    let (first, second) = left.split_at(idx);
-                    let unit = if second.starts_with(b"ms") {
-                        left = &left[idx + 2..];
-                        MS
-                    } else {
-                        let u = match second[0] {
-                            b'd' => DAY,
-                            b'h' => HOUR,
-                            b'm' => MINUTE,
-                            b's' => SECOND,
-                            _ => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                        };
-                        left = &left[idx + 1..];
-                        u
-                    };
-                    if unit >= last_unit {
-                        return Err(E::invalid_value(
-                            Unexpected::Str(dur_str),
-                            &"d, h, m, s, ms should occur in given order.",
-                        ));
-                    }
-                    // do we need to check 12h360m?
-                    let number_str = unsafe { str::from_utf8_unchecked(first) };
-                    dur += match number_str.trim().parse::<f64>() {
-                        Ok(n) => n * unit as f64,
-                        Err(_) => return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg)),
-                    };
-                    last_unit = unit;
-                }
-                if !left.is_empty() {
-                    return Err(E::invalid_value(Unexpected::Str(dur_str), &err_msg));
-                }
-                if dur.is_sign_negative() {
-                    return Err(E::invalid_value(
-                        Unexpected::Str(dur_str),
-                        &"duration should be positive.",
-                    ));
-                }
-                let secs = dur as u64 / SECOND as u64;
-                let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-                Ok(ReadableDuration(Duration::new(secs, millis)))
+                dur_str.parse().map_err(E::custom)
             }
         }
 
@@ -425,15 +430,24 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let parent = Path::new(path);
-    let p = parent.join(Path::new(sub_path));
-    if p.exists() && p.is_file() {
-        return Err(format!("{}/{} is not a directory!", path, sub_path).into());
+    let mut path = Path::new(path).canonicalize()?;
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
     }
-    if !p.exists() {
-        fs::create_dir_all(p.as_path())?;
+    if path.exists() && path.is_file() {
+        return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
-    Ok(format!("{}", p.canonicalize()?.display()))
+    Ok(format!("{}", path.display()))
+}
+
+pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
+    if !path.is_empty() {
+        let p = Path::new(path);
+        if !p.exists() {
+            fs::create_dir_all(p)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -564,7 +578,6 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use libc;
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::path::Path;
@@ -596,6 +609,9 @@ mod check_data_dir {
             let profile = CString::new(mnt_file).unwrap();
             let retype = CString::new("r").unwrap();
             let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            if afile.is_null() {
+                return Err(ConfigError::FileSystem("error opening fstab".to_string()));
+            }
             let mut fs = FsInfo::default();
             loop {
                 let ent = libc::getmntent(afile);
@@ -746,11 +762,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
+            let tmp_dir = Builder::new()
+                .prefix("test-check-data-dir")
+                .tempdir()
+                .unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
+            ::std::fs::create_dir(&data_path).unwrap();
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
-            // data_path may not mountted on a normal device on container
+            // data_path may not mounted on a normal device on container
             if !fs_info.fsname.starts_with("/dev") {
                 return;
             }
@@ -949,6 +969,152 @@ impl<T> Tracker<T> {
     }
 }
 
+use std::collections::HashMap;
+
+/// TomlLine use to parse one line content of a toml file
+#[derive(Debug)]
+enum TomlLine {
+    // the `Keys` from "[`Keys`]"
+    Table(String),
+    // the `Keys` from "`Keys` = value"
+    KVPair(String),
+    // Comment, empty line, etc.
+    Unknown,
+}
+
+impl TomlLine {
+    fn encode_kv(key: &str, val: &str) -> String {
+        format!("{} = {}", key, val)
+    }
+
+    // parse kv pair from format of "`Keys` = value"
+    fn parse_kv(s: &str) -> TomlLine {
+        let mut v: Vec<_> = s.split('=').map(|s| s.trim().to_owned()).rev().collect();
+        if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
+            return TomlLine::Unknown;
+        }
+        TomlLine::KVPair(v.pop().unwrap())
+    }
+
+    fn parse(s: &str) -> TomlLine {
+        let s = s.trim();
+        // try to parse table from format of "[`Keys`]"
+        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+            return match TomlLine::parse_key(k) {
+                Some(k) => TomlLine::Table(k),
+                None => TomlLine::Unknown,
+            };
+        }
+        // remove one prefix of '#' if exist
+        let kv = s.strip_prefix('#').unwrap_or(s);
+        TomlLine::parse_kv(kv)
+    }
+
+    // Parse `Keys`, only bare keys and dotted keys are supportted
+    // bare keys only contains chars of A-Za-z0-9_-
+    // dotted keys are a sequence of bare key joined with a '.'
+    fn parse_key(s: &str) -> Option<String> {
+        if s.is_empty() || s.starts_with('.') || s.ends_with('.') {
+            return None;
+        }
+        let ks: Vec<_> = s.split('.').map(str::trim).collect();
+        let is_valid_key = |s: &&str| -> bool {
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+        };
+        if ks.iter().all(is_valid_key) {
+            return Some(ks.join("."));
+        }
+        None
+    }
+
+    fn concat_key(k1: &str, k2: &str) -> String {
+        match (k1.is_empty(), k2.is_empty()) {
+            (false, false) => format!("{}.{}", k1, k2),
+            (_, true) => k1.to_owned(),
+            (true, _) => k2.to_owned(),
+        }
+    }
+
+    // get the prefix keys: "`Keys`.bare_key" -> Keys
+    fn get_prefix(key: &str) -> String {
+        key.rsplitn(2, '.').last().unwrap().to_owned()
+    }
+}
+
+/// TomlWriter use to update the config file and only cover the most commom toml
+/// format that used by tikv config file, toml format like: quoted keys, multi-line
+/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// for more detail.
+pub struct TomlWriter {
+    dst: Vec<u8>,
+    current_table: String,
+}
+
+impl TomlWriter {
+    pub fn new() -> TomlWriter {
+        TomlWriter {
+            dst: Vec::new(),
+            current_table: "".to_owned(),
+        }
+    }
+
+    pub fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
+        for line in src.lines() {
+            match TomlLine::parse(&line) {
+                TomlLine::Table(keys) => {
+                    self.write_current_table(&mut change);
+                    self.write(line.as_bytes());
+                    self.current_table = keys;
+                }
+                TomlLine::KVPair(keys) => {
+                    match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
+                        None => self.write(line.as_bytes()),
+                        Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
+                    }
+                }
+                TomlLine::Unknown => self.write(line.as_bytes()),
+            }
+        }
+        if change.is_empty() {
+            return;
+        }
+        self.write_current_table(&mut change);
+        while !change.is_empty() {
+            self.current_table = TomlLine::get_prefix(change.keys().last().unwrap());
+            self.write(format!("[{}]", self.current_table).as_bytes());
+            self.write_current_table(&mut change);
+        }
+        self.new_line();
+    }
+
+    fn write_current_table(&mut self, change: &mut HashMap<String, String>) {
+        let keys: Vec<_> = change
+            .keys()
+            .filter_map(|k| k.split('.').last())
+            .map(str::to_owned)
+            .collect();
+        for k in keys {
+            if let Some(chg) = change.remove(&TomlLine::concat_key(&self.current_table, &k)) {
+                self.write(TomlLine::encode_kv(&k, &chg).as_bytes());
+            }
+        }
+    }
+
+    fn write(&mut self, s: &[u8]) {
+        self.dst.extend_from_slice(s);
+        self.new_line();
+    }
+
+    fn new_line(&mut self) {
+        self.dst.push(b'\n');
+    }
+
+    pub fn finish(self) -> Vec<u8> {
+        self.dst
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -957,7 +1123,6 @@ mod tests {
 
     use super::*;
     use tempfile::Builder;
-    use toml;
 
     #[test]
     fn test_readable_size() {
@@ -1120,25 +1285,29 @@ mod tests {
 
     #[test]
     fn test_canonicalize_path() {
-        let tmp_dir = Builder::new()
+        let tmp = Builder::new()
             .prefix("test-canonicalize")
             .tempdir()
             .unwrap();
-        let path1 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test1.dump").display()
-        );
-        let res_path1 = canonicalize_path(&path1).unwrap();
-        assert!(Path::new(&path1).exists());
+        let tmp_dir = tmp.path();
+
+        let res_path1 = canonicalize_sub_path(tmp_dir.to_str().unwrap(), "test1.dump").unwrap();
+        assert!(!Path::new(&res_path1).exists());
         assert_eq!(
             Path::new(&res_path1),
-            Path::new(&path1).canonicalize().unwrap()
+            tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!(
-            "{}",
-            tmp_dir.path().to_path_buf().join("test2.dump").display()
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
+        assert!(canonicalize_path(&path2).is_err());
+        ensure_dir_exist(&path2).unwrap();
+        let res_path2 = canonicalize_path(&path2).unwrap();
+        assert_eq!(
+            Path::new(&res_path2),
+            Path::new(&path2).canonicalize().unwrap()
         );
+
+        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();
         }
@@ -1293,5 +1462,108 @@ mod tests {
         }
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
+    }
+
+    #[test]
+    fn test_toml_writer() {
+        let cfg = r#"
+## commet1
+log-level = "info"
+
+[readpool.storage]
+## commet2
+normal-concurrency = 1
+# high-concurrency = 1
+
+## commet3
+[readpool.coprocessor]
+normal-concurrency = 1
+
+[rocksdb.defaultcf]
+compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
+
+"#;
+        let mut m = HashMap::new();
+        m.insert("log-file".to_owned(), "log-file-name".to_owned());
+        m.insert("readpool.storage.xxx".to_owned(), "zzz".to_owned());
+        m.insert(
+            "readpool.storage.high-concurrency".to_owned(),
+            "345".to_owned(),
+        );
+        m.insert(
+            "readpool.coprocessor.normal-concurrency".to_owned(),
+            "123".to_owned(),
+        );
+        m.insert("not-in-file-config1.xxx.yyy".to_owned(), "100".to_owned());
+        m.insert(
+            "rocksdb.defaultcf.compression-per-level".to_owned(),
+            "[\"no\", \"no\", \"lz4\", \"lz4\", \"lz4\", \"zstd\", \"zstd\"]".to_owned(),
+        );
+
+        let mut t = TomlWriter::new();
+        t.write_change(cfg.to_owned(), m);
+        let expect = r#"
+## commet1
+log-level = "info"
+
+log-file = log-file-name
+[readpool.storage]
+## commet2
+normal-concurrency = 1
+high-concurrency = 345
+
+## commet3
+xxx = zzz
+[readpool.coprocessor]
+normal-concurrency = 123
+
+[rocksdb.defaultcf]
+compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
+
+[not-in-file-config1.xxx]
+yyy = 100
+
+"#;
+        assert_eq!(expect.as_bytes(), t.finish().as_slice());
+    }
+
+    #[test]
+    fn test_update_empty_content() {
+        // empty content
+        let mut src = "".to_owned();
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.high-concurrency".to_owned(),
+                "1".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["high-concurrency"].as_integer(),
+            Some(1)
+        );
+
+        src = {
+            let mut m = HashMap::new();
+            m.insert(
+                "readpool.storage.normal-concurrency".to_owned(),
+                "2".to_owned(),
+            );
+            let mut t = TomlWriter::new();
+            t.write_change(src.clone(), m);
+            String::from_utf8_lossy(t.finish().as_slice()).to_string()
+        };
+        // src should have valid toml format
+        let toml_value: toml::Value = toml::from_str(src.as_str()).unwrap();
+        assert_eq!(
+            toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
+            Some(2)
+        );
     }
 }

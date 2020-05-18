@@ -61,7 +61,6 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
         } else {
             let is_pessimistic_lock = req.take_is_pessimistic_lock();
             let mutations = req
@@ -80,7 +79,6 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
         }
     }
 }
@@ -108,6 +106,7 @@ impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
             req.get_for_update_ts().into(),
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
+            req.get_min_commit_ts().into(),
             req.take_context(),
         )
     }
@@ -219,7 +218,7 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLock::new(txn_status, None, vec![], req.take_context()).into()
+            ResolveLock::new(txn_status, None, vec![], req.take_context())
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());
@@ -386,6 +385,7 @@ command! {
         /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
         /// later read in the same transaction.
         return_values: bool,
+        min_commit_ts: TimeStamp,
     }
 }
 

@@ -14,8 +14,6 @@ pub struct BufferVec {
 
 impl std::fmt::Debug for BufferVec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use hex::ToHex;
-
         write!(f, "[")?;
         for (i, item) in self.iter().enumerate() {
             if i != 0 {
@@ -24,7 +22,7 @@ impl std::fmt::Debug for BufferVec {
             if item.is_empty() {
                 write!(f, "null")?;
             } else {
-                item.write_hex_upper(f)?;
+                write!(f, "{}", hex::encode_upper(item))?;
             }
         }
         write!(f, "]")
@@ -352,7 +350,7 @@ impl<'a> Iterator for Iter<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.nth(0)
+        Self::nth(self, 0)
     }
 
     #[inline]
@@ -844,9 +842,9 @@ mod tests {
         assert!(it.last().unwrap().is_empty());
 
         let mut it = v.iter();
-        assert!(it.nth(0).unwrap().is_empty());
+        assert!(it.next().unwrap().is_empty());
         assert_eq!(it.count(), 5);
-        assert_eq!(it.nth(0).unwrap(), &[0xAA, 0xBB, 0x0C]);
+        assert_eq!(it.next().unwrap(), &[0xAA, 0xBB, 0x0C]);
         assert_eq!(it.count(), 4);
         assert_eq!(it.nth(2).unwrap(), &[0x00]);
         assert_eq!(it.count(), 1);
@@ -864,7 +862,7 @@ mod tests {
         assert_eq!(it.count(), 0);
         assert_eq!(it.next(), None);
         assert_eq!(it.count(), 0);
-        assert_eq!(it.nth(0), None);
+        assert_eq!(it.next(), None);
         assert_eq!(it.last(), None);
 
         let mut it = v.iter();

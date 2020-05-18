@@ -10,7 +10,7 @@ use grpcio::{
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
-use tikv_util::security::*;
+use security::*;
 
 use kvproto::pdpb::*;
 
@@ -409,6 +409,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _req: ScanRegionsRequest,
         _sink: UnarySink<ScanRegionsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn update_service_gc_safe_point(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: UpdateServiceGcSafePointRequest,
+        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
         unimplemented!()
     }

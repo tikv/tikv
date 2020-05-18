@@ -2,7 +2,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tikv_util::time::{duration_to_sec, Instant};
 
 use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
@@ -20,7 +21,9 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
+use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
@@ -31,9 +34,9 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::HistogramTimer;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
+use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -46,7 +49,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
+pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
@@ -67,9 +70,11 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     grpc_thread_load: Arc<ThreadLoad>,
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
+
+    security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
@@ -81,6 +86,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         req_batch_wait_duration: Option<Duration>,
+        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
@@ -99,6 +105,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
+            security_mgr,
         }
     }
 
@@ -117,10 +124,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
+            if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+                return;
+            }
+            let begin_instant = Instant::now_coarse();
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
+                .map(move |_| GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed())))
                 .map_err(move |e| {
                     debug!("kv rpc failed";
                         "request" => stringify!($fn_name),
@@ -134,7 +144,9 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+    for Service<T, E, L>
+{
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -256,10 +268,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .kv_gc
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_gc",
@@ -272,10 +291,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .coprocessor
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "coprocessor",
@@ -293,9 +319,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RegisterLockObserverRequest,
         sink: UnarySink<RegisterLockObserverResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .register_lock_observer
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
@@ -308,7 +335,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .register_lock_observer
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "register_lock_observer",
@@ -326,9 +357,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CheckLockObserverRequest,
         sink: UnarySink<CheckLockObserverResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .check_lock_observer
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res = self
@@ -347,7 +379,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .check_lock_observer
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "check_lock_observer",
@@ -365,9 +401,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RemoveLockObserverRequest,
         sink: UnarySink<RemoveLockObserverResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .remove_lock_observer
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
@@ -380,7 +417,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .remove_lock_observer
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "remove_lock_observer",
@@ -398,9 +439,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: PhysicalScanLockRequest,
         sink: UnarySink<PhysicalScanLockResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .physical_scan_lock
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.physical_scan_lock(
@@ -420,7 +462,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .physical_scan_lock
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "physical_scan_lock",
@@ -438,9 +484,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .unsafe_destroy_range
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
@@ -464,7 +511,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .unsafe_destroy_range
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "unsafe_destroy_range",
@@ -482,9 +533,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .coprocessor_stream
-            .start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let stream = self
             .cop
@@ -497,7 +549,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             });
         let future = sink
             .send_all(stream)
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .coprocessor_stream
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
@@ -516,6 +572,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let ch = self.ch.clone();
         ctx.spawn(
             stream
@@ -545,6 +604,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
@@ -583,6 +645,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
@@ -601,7 +666,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
@@ -655,7 +723,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .split_region
+                    .observe(duration_to_sec(begin_instant.elapsed()))
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "split_region",
@@ -673,7 +745,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::default();
@@ -724,7 +799,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .read_index
+                    .observe(begin_instant.elapsed_secs())
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "read_index",
@@ -742,6 +821,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         stream: RequestStream<BatchCommandsRequest>,
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
@@ -762,7 +844,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 let req_batcher = req_batcher.clone();
                 let req_batcher2 = req_batcher.clone();
                 let stopped = Arc::clone(&stopped);
-                let start = Instant::now();
+                let start = std::time::Instant::now();
                 let timer = GLOBAL_TIMER_HANDLE.clone();
                 self.timer_pool.lock().unwrap().spawn(
                     timer
@@ -857,13 +939,77 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             );
         }));
     }
+
+    fn ver_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerGetRequest,
+        _sink: UnarySink<VerGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchGetRequest,
+        _sink: UnarySink<VerBatchGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerMutRequest,
+        _sink: UnarySink<VerMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchMutRequest,
+        _sink: UnarySink<VerBatchMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_scan(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerScanRequest,
+        _sink: UnarySink<VerScanResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_delete_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerDeleteRangeRequest,
+        _sink: UnarySink<VerDeleteRangeResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn batch_coprocessor(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: BatchRequest,
+        _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
-    timer: HistogramTimer,
+    begin_instant: Instant,
+    label_enum: GrpcTypeKind,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
@@ -872,7 +1018,9 @@ fn response_batch_commands_request<F>(
             error!("KvService response batch commands fail");
             return Err(());
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .get(label_enum)
+            .observe(begin_instant.elapsed_secs());
         Ok(())
     });
     poll_future_notify(f);
@@ -930,16 +1078,16 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             match req.cmd {
                 None => {
                     // For some invalid requests.
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+                    let begin_instant = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx, timer);
+                    response_batch_commands_request(id, resp, tx, begin_instant, GrpcTypeKind::invalid);
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.$metric_name.start_coarse_timer();
+                    let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx, timer);
+                    response_batch_commands_request(id, resp, tx, begin_instant, GrpcTypeKind::$metric_name);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -969,6 +1117,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
+        VerGet, future_ver_get(storage), ver_get;
+        VerBatchGet, future_ver_batch_get(storage), ver_batch_get;
+        VerMut, future_ver_mut(storage), ver_mut;
+        VerBatchMut, future_ver_batch_mut(storage), ver_batch_mut;
+        VerScan, future_ver_scan(storage), ver_scan;
+        VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
@@ -979,14 +1133,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
-    tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
-        .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::default();
-            res.set_test_id(req.get_test_id());
-            res
-        })
-        .map_err(|_| unreachable!())
+    let mut res = BatchCommandsEmptyResponse::default();
+    res.set_test_id(req.get_test_id());
+    // `BatchCommandsNotify` processes futures in notify. If delay_time is too small, notify
+    // can be called immediately, so the future is polled recursively and lead to deadlock.
+    if req.get_delay_time() < 10 {
+        Either::A(future::result(Ok(res)))
+    } else {
+        Either::B(
+            tikv_util::timer::GLOBAL_TIMER_HANDLE
+                .delay(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(req.get_delay_time()),
+                )
+                .map(move |_| res)
+                .map_err(|_| unreachable!()),
+        )
+    }
 }
 
 fn future_get<E: Engine, L: LockManager>(
@@ -1020,9 +1183,8 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
-        .kv_batch_get_command
-        .start_coarse_timer();
+    let begin_instant = Instant::now_coarse();
+
     storage.batch_get_command(commands).then(move |v| {
         match v {
             Ok(v) => {
@@ -1063,7 +1225,9 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
                 }
             }
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .kv_batch_get_command
+            .observe(begin_instant.elapsed_secs());
         Ok(())
     })
 }
@@ -1187,9 +1351,7 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     cf: String,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
-        .raw_batch_get_command
-        .start_coarse_timer();
+    let begin_instant = Instant::now_coarse();
     storage.raw_batch_get_command(cf, commands).then(move |v| {
         match v {
             Ok(v) => {
@@ -1230,7 +1392,9 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
                 }
             }
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .raw_batch_get_command
+            .observe(duration_to_sec(begin_instant.elapsed()));
         Ok(())
     })
 }
@@ -1418,6 +1582,60 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     })
 }
 
+// unimplemented
+fn future_ver_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerGetRequest,
+) -> impl Future<Item = VerGetResponse, Error = Error> {
+    let resp = VerGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_get<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchGetRequest,
+) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
+    let resp = VerBatchGetResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerMutRequest,
+) -> impl Future<Item = VerMutResponse, Error = Error> {
+    let resp = VerMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_batch_mut<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerBatchMutRequest,
+) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
+    let resp = VerBatchMutResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_scan<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerScanRequest,
+) -> impl Future<Item = VerScanResponse, Error = Error> {
+    let resp = VerScanResponse::default();
+    future::ok(resp)
+}
+
+// unimplemented
+fn future_ver_delete_range<E: Engine, L: LockManager>(
+    _storage: &Storage<E, L>,
+    mut _req: VerDeleteRangeRequest,
+) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
+    let resp = VerDeleteRangeResponse::default();
+    future::ok(resp)
+}
+
 fn future_cop<E: Engine>(
     cop: &Endpoint<E>,
     peer: Option<String>,
@@ -1521,7 +1739,10 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     min_commit_ts,
                 } => {
                     resp.set_lock_ttl(lock_ttl);
-                    if min_commit_ts > caller_start_ts {
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // Even though the min_commit_ts is not pushed, the point get can ingore the lock
+                    // next time because it's not committed. So we pretend it has been pushed.
+                    if min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                 }

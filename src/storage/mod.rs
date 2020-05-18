@@ -32,6 +32,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
@@ -43,13 +44,15 @@ use crate::storage::{
     },
     types::StorageCallbackType,
 };
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
+use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -148,18 +151,6 @@ macro_rules! check_key_size {
 }
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
-    /// Get concurrency of normal readpool.
-    pub fn readpool_normal_concurrency(&self) -> usize {
-        if let ReadPoolHandle::FuturePools {
-            read_pool_normal, ..
-        } = &self.read_pool
-        {
-            read_pool_normal.get_pool_size()
-        } else {
-            0
-        }
-    }
-
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -228,21 +219,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                if let Ok(key) = key.to_owned().into_raw() {
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -250,26 +249,31 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
-                            metrics::tls_collect_key_reads(CMD, 1);
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                             r
                         });
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
 
                     result
-                });
-                tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -283,18 +287,35 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_get_command";
+        const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        tls_collect_qps(
+                            get.ctx.get_region_id(),
+                            get.ctx.get_peer(),
+                            &key,
+                            &key,
+                            false,
+                        );
+                    }
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let mut snap_store = SnapshotStore::new(
                         snapshot,
@@ -302,6 +323,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         Default::default(),
+                        false,
                     );
                     let mut results = vec![];
                     // TODO: optimize using seek.
@@ -318,10 +340,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .map_err(Error::from),
                         );
                     }
-                    results
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                Ok(result)
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(results)
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -339,18 +366,32 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "batch_get";
+        const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                let mut key_ranges = vec![];
+                for key in &keys {
+                    if let Ok(key) = key.to_owned().into_raw() {
+                        key_ranges.push(build_key_range(&key, &key, false));
+                    }
+                }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -358,6 +399,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
@@ -375,20 +417,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     _ => unreachable!(),
                                 })
                                 .collect();
-                            metrics::tls_collect_key_reads(CMD, kv_pairs.len());
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                .get(CMD)
+                                .observe(kv_pairs.len() as f64);
                             kv_pairs
                         });
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     result
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -410,51 +457,82 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "scan";
+        const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                if let Ok(start_key) = start_key.to_owned().into_raw() {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                            key = end_key;
+                        }
+                    }
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        &start_key,
+                        &key,
+                        reverse_scan,
+                    );
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
+                        false,
                     );
 
                     let mut scanner;
                     if !reverse_scan {
-                        scanner = snap_store.scanner(false, key_only, Some(start_key), end_key)?;
+                        scanner =
+                            snap_store.scanner(false, key_only, false, Some(start_key), end_key)?;
                     } else {
-                        scanner = snap_store.scanner(true, key_only, end_key, Some(start_key))?;
+                        scanner =
+                            snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
                     let res = scanner.scan(limit);
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
 
                     res.map_err(Error::from).map(|results| {
-                        metrics::tls_collect_key_reads(CMD, results.len());
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(results.len() as f64);
                         results
                             .into_iter()
                             .map(|x| x.map_err(Error::from))
                             .collect()
                     })
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
-            start_ts.into_inner(),
+            thread_rng().next_u64(),
         );
 
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -550,16 +628,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
@@ -570,12 +655,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         stats.data.flow_stats.read_keys = 1;
                         stats.data.flow_stats.read_bytes = key_len + value.len();
                         tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        tls_collect_key_reads(CMD, 1);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     }
+
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     Ok(r)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -591,27 +682,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "raw_batch_get_command";
+        const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                for get in &gets {
+                    if let Ok(key) = get.key.to_owned().into_raw() {
+                        // todo no raw?
+                        tls_collect_qps(
+                            get.ctx.get_region_id(),
+                            get.ctx.get_peer(),
+                            &key,
+                            &key,
+                            false,
+                        );
+                    }
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
                     // TODO: optimize using seek.
                     for get in gets {
                         results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
                     }
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     Ok(results)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -627,16 +742,27 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_get";
+        const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                let mut key_ranges = vec![];
+                for key in &keys {
+                    key_ranges.push(build_key_range(key, key, false));
+                }
+                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
@@ -659,12 +785,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         })
                         .collect();
 
-                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(stats.data.flow_stats.read_keys as f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     Ok(result)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -814,9 +946,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOption::default();
+        let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -852,9 +987,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOption::default();
+        let mut option = IterOptions::default();
         if let Some(end) = end_key {
             option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -878,8 +1016,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     /// Scan raw keys in a range.
     ///
-    /// If `reverse` is false, the range is [`key`, `end_key`); otherwise, the range is
-    /// [`end_key`, `key`) and it scans from `key` and goes backwards. If `end_key` is `None`, it
+    /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
+    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is `None`, it
     /// means unbounded.
     ///
     /// This function scans at most `limit` keys.
@@ -890,31 +1028,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         ctx: Context,
         cf: String,
-        key: Vec<u8>,
+        start_key: Vec<u8>,
         end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_scan";
+        const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                {
+                    let end_key = match &end_key {
+                        Some(end_key) => end_key.to_vec(),
+                        None => vec![],
+                    };
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        &start_key,
+                        &end_key,
+                        reverse_scan,
+                    );
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now_coarse();
+
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
-                    let result = if reverse {
+                    let result = if reverse_scan {
                         Self::reverse_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -925,7 +1083,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Self::forward_raw_scan(
                             &snapshot,
                             &cf,
-                            &Key::from_encoded(key),
+                            &Key::from_encoded(start_key),
                             end_key,
                             limit,
                             &mut statistics,
@@ -935,15 +1093,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     };
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    metrics::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
                     result
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -997,21 +1159,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
-        reverse: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_scan";
+        const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
 
         let res = self.read_pool.spawn_handle(
             async move {
-                metrics::tls_collect_command_count(CMD, priority_tag);
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                let result = metrics::tls_processing_read_observe_duration(CMD, || {
+                {
+                    let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse) {
+                    if !Self::check_key_ranges(&ranges, reverse_scan) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
@@ -1028,7 +1194,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = if reverse {
+                        let pairs = if reverse_scan {
                             Self::reverse_raw_scan(
                                 &snapshot,
                                 &cf,
@@ -1051,17 +1217,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         };
                         result.extend(pairs.into_iter());
                     }
-
+                    let mut key_ranges = vec![];
+                    for range in ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
+                    }
+                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    metrics::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(statistics.write.flow_stats.read_keys as f64);
                     metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
                     Ok(result)
-                });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
-                result
+                }
             },
             priority,
             thread_rng().next_u64(),
@@ -1121,32 +1298,32 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine> {
+pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pessimistic_txn_enabled: bool,
     pipelined_pessimistic_lock: bool,
+    lock_mgr: Option<L>,
 }
 
-impl TestStorageBuilder<RocksEngine> {
+impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new() -> Self {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
-            pessimistic_txn_enabled: false,
             pipelined_pessimistic_lock: false,
+            lock_mgr: None,
         }
     }
 }
 
-impl<E: Engine> TestStorageBuilder<E> {
+impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             engine,
             config: Config::default(),
-            pessimistic_txn_enabled: false,
             pipelined_pessimistic_lock: false,
+            lock_mgr: None,
         }
     }
 
@@ -1158,66 +1335,55 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
+    pub fn set_lock_mgr(mut self, lock_mgr: L) -> Self {
+        self.lock_mgr = Some(lock_mgr);
+        self
+    }
+
     pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock = enabled;
         self
     }
 
-    pub fn enable_pessimistic_txn(mut self) -> Self {
-        self.pessimistic_txn_enabled = true;
-        self
-    }
-
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
+    pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        let lock_manager = if self.pessimistic_txn_enabled || self.pipelined_pessimistic_lock {
-            Some(DummyLockManager {})
-        } else {
-            None
-        };
+
         Storage::from_engine(
             self.engine,
             &self.config,
             ReadPool::from(read_pool).handle(),
-            lock_manager,
+            self.lock_mgr,
             self.pipelined_pessimistic_lock,
         )
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub mod test_util {
     use super::*;
-
-    use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-    use futures03::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+    use crate::storage::txn::commands;
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
     };
-    use tikv_util::collections::HashMap;
-    use tikv_util::config::ReadableSize;
-    use txn_types::Mutation;
 
-    fn expect_none(x: Result<Option<Value>>) {
+    pub fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
     }
 
-    fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
+    pub fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
         assert_eq!(x.unwrap().unwrap(), v);
     }
 
-    fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
+    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
         let x: Vec<Option<KvPair>> = x.unwrap().into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
-    fn expect_error<T, F>(err_matcher: F, x: Result<T>)
+    pub fn expect_error<T, F>(err_matcher: F, x: Result<T>)
     where
         F: FnOnce(Error) + Send + 'static,
     {
@@ -1227,14 +1393,14 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
+    pub fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
             done.send(id).unwrap();
         })
     }
 
-    fn expect_fail_callback<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
+    pub fn expect_fail_callback<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
     where
         F: FnOnce(Error) + Send + 'static,
     {
@@ -1244,7 +1410,7 @@ mod tests {
         })
     }
 
-    fn expect_too_busy_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
+    pub fn expect_too_busy_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
@@ -1257,7 +1423,7 @@ mod tests {
         })
     }
 
-    fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
+    pub fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
         done: Sender<i32>,
         id: i32,
         value: T,
@@ -1267,6 +1433,88 @@ mod tests {
             done.send(id).unwrap();
         })
     }
+
+    pub fn expect_pessimistic_lock_res_callback(
+        done: Sender<i32>,
+        pessimistic_lock_res: PessimisticLockRes,
+    ) -> Callback<Result<PessimisticLockRes>> {
+        Box::new(move |res: Result<Result<PessimisticLockRes>>| {
+            assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
+            done.send(0).unwrap();
+        })
+    }
+
+    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
+    pub fn new_acquire_pessimistic_lock_command(
+        keys: Vec<(Key, bool)>,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        return_values: bool,
+    ) -> PessimisticLockCommand {
+        let primary = keys[0].0.clone().to_raw().unwrap();
+        let for_update_ts: TimeStamp = for_update_ts.into();
+        commands::AcquirePessimisticLock::new(
+            keys,
+            primary,
+            start_ts.into(),
+            3000,
+            false,
+            for_update_ts,
+            None,
+            return_values,
+            for_update_ts.next(),
+            Context::default(),
+        )
+    }
+
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
+        key: Key,
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PessimisticRollback::new(
+                    vec![key],
+                    start_ts.into(),
+                    for_update_ts.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{test_util::*, *};
+
+    use crate::config::TitanDBConfig;
+    use crate::storage::{
+        config::BlockCacheConfig,
+        lock_manager::{Lock, WaitTimeout},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
+    };
+    use engine::rocks::util::CFOptions;
+    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
+    use futures03::executor::block_on;
+    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc::{channel, Sender},
+            Arc,
+        },
+        time::Duration,
+    };
+    use tikv_util::collections::HashMap;
+    use tikv_util::config::ReadableSize;
+    use txn_types::Mutation;
 
     #[test]
     fn test_get_put() {
@@ -1328,7 +1576,9 @@ mod tests {
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -1652,6 +1902,253 @@ mod tests {
                     2,
                     5.into(),
                     false,
+                    true,
+                )
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_scan_with_key_only() {
+        let mut titan_db_config = TitanDBConfig::default();
+        titan_db_config.enabled = true;
+        let mut db_config = crate::config::DbConfig::default();
+        db_config.titan = titan_db_config;
+        let engine = {
+            let path = "".to_owned();
+            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfg_rocksdb = db_config;
+            let cache = BlockCacheConfig::default().build_shared_cache();
+            let cfs_opts = vec![
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+            ];
+            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        }
+        .unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine(engine)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    ],
+                    b"a".to_vec(),
+                    1.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![
+                        Key::from_raw(b"a"),
+                        Key::from_raw(b"b"),
+                        Key::from_raw(b"c"),
+                    ],
+                    1.into(),
+                    2.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Forward
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"c".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), vec![])),
+                Some((b"b".to_vec(), vec![])),
+                Some((b"a".to_vec(), vec![])),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5.into(),
+                    true,
+                    true,
+                )
+                .wait(),
+        );
+
+        // Forward with limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), vec![])), Some((b"b".to_vec(), vec![]))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5.into(),
+                    true,
                     true,
                 )
                 .wait(),
@@ -3866,60 +4363,8 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
-        fn new_acquire_pessimistic_lock_command(
-            keys: Vec<(Key, bool)>,
-            start_ts: impl Into<TimeStamp>,
-            for_update_ts: impl Into<TimeStamp>,
-            return_values: bool,
-        ) -> PessimisticLockCommand {
-            let primary = keys[0].0.clone().to_raw().unwrap();
-            commands::AcquirePessimisticLock::new(
-                keys,
-                primary,
-                start_ts.into(),
-                3000,
-                false,
-                for_update_ts.into(),
-                None,
-                return_values,
-                Context::default(),
-            )
-        }
-
-        fn delete_pessimistic_lock<E: Engine, L: LockManager>(
-            storage: &Storage<E, L>,
-            key: Key,
-            start_ts: u64,
-            for_update_ts: u64,
-        ) {
-            let (tx, rx) = channel();
-            storage
-                .sched_txn_command(
-                    commands::PessimisticRollback::new(
-                        vec![key],
-                        start_ts.into(),
-                        for_update_ts.into(),
-                        Context::default(),
-                    ),
-                    expect_ok_callback(tx, 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-        }
-
-        fn expect_pessimistic_lock_res_callback(
-            done: Sender<i32>,
-            pessimistic_lock_res: PessimisticLockRes,
-        ) -> Callback<Result<PessimisticLockRes>> {
-            Box::new(move |res: Result<Result<PessimisticLockRes>>| {
-                assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
-                done.send(0).unwrap();
-            })
-        }
-
         let storage = TestStorageBuilder::new()
-            .enable_pessimistic_txn()
+            .set_lock_mgr(DummyLockManager {})
             .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
@@ -3992,8 +4437,7 @@ mod tests {
                 )
                 .unwrap();
             // The DummyLockManager consumes the Msg::WaitForLock.
-            rx.recv_timeout(std::time::Duration::from_millis(100))
-                .unwrap_err();
+            rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         }
 
         // Put key and key2.
@@ -4082,5 +4526,482 @@ mod tests {
     fn test_pessimistic_lock() {
         test_pessimistic_lock_impl(false);
         test_pessimistic_lock_impl(true);
+    }
+
+    pub enum Msg {
+        WaitFor {
+            start_ts: TimeStamp,
+            cb: StorageCallback,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+        },
+
+        WakeUp {
+            lock_ts: TimeStamp,
+            hashes: Vec<u64>,
+            commit_ts: TimeStamp,
+            is_pessimistic_txn: bool,
+        },
+    }
+
+    // `ProxyLockMgr` sends all msgs it received to `Sender`.
+    // It's used to check whether we send right messages to lock manager.
+    #[derive(Clone)]
+    pub struct ProxyLockMgr {
+        tx: Sender<Msg>,
+        has_waiter: Arc<AtomicBool>,
+    }
+
+    impl ProxyLockMgr {
+        pub fn new(tx: Sender<Msg>) -> Self {
+            Self {
+                tx,
+                has_waiter: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        pub fn set_has_waiter(&mut self, has_waiter: bool) {
+            self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        }
+    }
+
+    impl LockManager for ProxyLockMgr {
+        fn wait_for(
+            &self,
+            start_ts: TimeStamp,
+            cb: StorageCallback,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+        ) {
+            self.tx
+                .send(Msg::WaitFor {
+                    start_ts,
+                    cb,
+                    pr,
+                    lock,
+                    is_first_lock,
+                    timeout,
+                })
+                .unwrap();
+        }
+
+        fn wake_up(
+            &self,
+            lock_ts: TimeStamp,
+            hashes: Vec<u64>,
+            commit_ts: TimeStamp,
+            is_pessimistic_txn: bool,
+        ) {
+            self.tx
+                .send(Msg::WakeUp {
+                    lock_ts,
+                    hashes,
+                    commit_ts,
+                    is_pessimistic_txn,
+                })
+                .unwrap();
+        }
+
+        fn has_waiter(&self) -> bool {
+            self.has_waiter.load(Ordering::Relaxed)
+        }
+    }
+
+    // Test whether `Storage` sends right wait-for-lock msgs to `LockManager`.
+    #[test]
+    fn validate_wait_for_lock_msg() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .set_lock_mgr(ProxyLockMgr::new(msg_tx))
+            .build()
+            .unwrap();
+
+        let (k, v) = (b"k".to_vec(), b"v".to_vec());
+        let (tx, rx) = channel();
+        // Write lock-k.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::Put((Key::from_raw(&k), v))],
+                    k.clone(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No wait for msg
+        assert!(msg_rx.try_recv().is_err());
+
+        // Meet lock-k.
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
+                    k.clone(),
+                    20.into(),
+                    3000,
+                    true,
+                    20.into(),
+                    Some(WaitTimeout::Millis(100)),
+                    false,
+                    21.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        // The transaction should be waiting for lock released so cb won't be called.
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+
+        let msg = msg_rx.try_recv().unwrap();
+        // Check msg validation.
+        match msg {
+            Msg::WaitFor {
+                start_ts,
+                pr,
+                lock,
+                is_first_lock,
+                timeout,
+                ..
+            } => {
+                assert_eq!(start_ts, TimeStamp::new(20));
+                assert_eq!(
+                    lock,
+                    Lock {
+                        ts: 10.into(),
+                        hash: Key::from_raw(&k).gen_hash(),
+                    }
+                );
+                assert_eq!(is_first_lock, true);
+                assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
+                match pr {
+                    ProcessResult::PessimisticLockRes { res } => match res {
+                        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            MvccError(box MvccErrorInner::KeyIsLocked(info)),
+                        ))))) => {
+                            assert_eq!(info.get_key(), k.as_slice());
+                            assert_eq!(info.get_primary_lock(), k.as_slice());
+                            assert_eq!(info.get_lock_version(), 10);
+                        }
+                        _ => panic!("unexpected error"),
+                    },
+                    _ => panic!("unexpected process result"),
+                };
+            }
+
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    // Test whether `Storage` sends right wake-up msgs to `LockManager`
+    #[test]
+    fn validate_wake_up_msg() {
+        fn assert_wake_up_msg_eq(
+            msg: Msg,
+            expected_lock_ts: TimeStamp,
+            expected_hashes: Vec<u64>,
+            expected_commit_ts: TimeStamp,
+            expected_is_pessimistic_txn: bool,
+        ) {
+            match msg {
+                Msg::WakeUp {
+                    lock_ts,
+                    hashes,
+                    commit_ts,
+                    is_pessimistic_txn,
+                } => {
+                    assert_eq!(lock_ts, expected_lock_ts);
+                    assert_eq!(hashes, expected_hashes);
+                    assert_eq!(commit_ts, expected_commit_ts);
+                    assert_eq!(is_pessimistic_txn, expected_is_pessimistic_txn);
+                }
+                _ => panic!("unexpected msg"),
+            }
+        }
+
+        let (msg_tx, msg_rx) = channel();
+        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+        lock_mgr.set_has_waiter(true);
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .set_lock_mgr(lock_mgr)
+            .build()
+            .unwrap();
+
+        let (tx, rx) = channel();
+        let prewrite_locks = |keys: &[Key], ts: TimeStamp| {
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        keys.iter()
+                            .map(|k| Mutation::Put((k.clone(), b"v".to_vec())))
+                            .collect(),
+                        keys[0].to_raw().unwrap(),
+                        ts,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        };
+        let acquire_pessimistic_locks = |keys: &[Key], ts: TimeStamp| {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        keys.iter().map(|k| (k.clone(), false)).collect(),
+                        ts,
+                        ts,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        };
+
+        let keys = vec![
+            Key::from_raw(b"a"),
+            Key::from_raw(b"b"),
+            Key::from_raw(b"c"),
+        ];
+        let key_hashes: Vec<u64> = keys.iter().map(|k| k.gen_hash()).collect();
+
+        // Commit
+        prewrite_locks(&keys, 10.into());
+        // If locks don't exsit, hashes of released locks should be empty.
+        for empty_hashes in &[false, true] {
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(keys.clone(), 10.into(), 20.into(), Context::default()),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let msg = msg_rx.recv().unwrap();
+            let hashes = if *empty_hashes {
+                Vec::new()
+            } else {
+                key_hashes.clone()
+            };
+            assert_wake_up_msg_eq(msg, 10.into(), hashes, 20.into(), false);
+        }
+
+        // Cleanup
+        for pessimistic in &[false, true] {
+            let mut ts = TimeStamp::new(30);
+            if *pessimistic {
+                ts.incr();
+                acquire_pessimistic_locks(&keys[..1], ts);
+            } else {
+                prewrite_locks(&keys[..1], ts);
+            }
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::Cleanup::new(
+                            keys[0].clone(),
+                            ts,
+                            TimeStamp::max(),
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let (hashes, pessimistic) = if *empty_hashes {
+                    (Vec::new(), false)
+                } else {
+                    (key_hashes[..1].to_vec(), *pessimistic)
+                };
+                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+            }
+        }
+
+        // Rollback
+        for pessimistic in &[false, true] {
+            let mut ts = TimeStamp::new(40);
+            if *pessimistic {
+                ts.incr();
+                acquire_pessimistic_locks(&keys, ts);
+            } else {
+                prewrite_locks(&keys, ts);
+            }
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::Rollback::new(keys.clone(), ts, Context::default()),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let (hashes, pessimistic) = if *empty_hashes {
+                    (Vec::new(), false)
+                } else {
+                    (key_hashes.clone(), *pessimistic)
+                };
+                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+            }
+        }
+
+        // PessimisticRollback
+        acquire_pessimistic_locks(&keys, 50.into());
+        for empty_hashes in &[false, true] {
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        keys.clone(),
+                        50.into(),
+                        50.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let msg = msg_rx.recv().unwrap();
+            let (hashes, pessimistic) = if *empty_hashes {
+                (Vec::new(), false)
+            } else {
+                (key_hashes.clone(), true)
+            };
+            assert_wake_up_msg_eq(msg, 50.into(), hashes, 0.into(), pessimistic);
+        }
+
+        // ResolveLockLite
+        for commit in &[false, true] {
+            let mut start_ts = TimeStamp::new(60);
+            let commit_ts = if *commit {
+                start_ts.incr();
+                start_ts.next()
+            } else {
+                TimeStamp::zero()
+            };
+            prewrite_locks(&keys, start_ts);
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::ResolveLockLite::new(
+                            start_ts,
+                            commit_ts,
+                            keys.clone(),
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let hashes = if *empty_hashes {
+                    Vec::new()
+                } else {
+                    key_hashes.clone()
+                };
+                assert_wake_up_msg_eq(msg, start_ts, hashes, commit_ts, false);
+            }
+        }
+
+        // ResolveLock
+        let mut txn_status = HashMap::default();
+        acquire_pessimistic_locks(&keys, 70.into());
+        // Rollback start_ts=70
+        txn_status.insert(TimeStamp::new(70), TimeStamp::zero());
+        let committed_keys = vec![
+            Key::from_raw(b"d"),
+            Key::from_raw(b"e"),
+            Key::from_raw(b"f"),
+        ];
+        let committed_key_hashes: Vec<u64> = committed_keys.iter().map(|k| k.gen_hash()).collect();
+        // Commit start_ts=75
+        prewrite_locks(&committed_keys, 75.into());
+        txn_status.insert(TimeStamp::new(75), TimeStamp::new(76));
+        storage
+            .sched_txn_command(
+                commands::ResolveLock::new(txn_status, None, vec![], Context::default()),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut msg1 = msg_rx.recv().unwrap();
+        let mut msg2 = msg_rx.recv().unwrap();
+        match msg1 {
+            Msg::WakeUp { lock_ts, .. } => {
+                if lock_ts != TimeStamp::new(70) {
+                    // Let msg1 be the msg of rolled back transaction.
+                    std::mem::swap(&mut msg1, &mut msg2);
+                }
+                assert_wake_up_msg_eq(msg1, 70.into(), key_hashes, 0.into(), true);
+                assert_wake_up_msg_eq(msg2, 75.into(), committed_key_hashes, 76.into(), false);
+            }
+            _ => panic!("unexpect msg"),
+        }
+
+        // CheckTxnStatus
+        let key = Key::from_raw(b"k");
+        let start_ts = TimeStamp::compose(100, 0);
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_lock_ttl(
+                    vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                    key.to_raw().unwrap(),
+                    start_ts,
+                    100,
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Not expire
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key.clone(),
+                    start_ts,
+                    TimeStamp::compose(110, 0),
+                    TimeStamp::compose(150, 0),
+                    false,
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 0, TxnStatus::uncommitted(100, 0.into())),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No msg
+        assert!(msg_rx.try_recv().is_err());
+
+        // Expired
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key.clone(),
+                    start_ts,
+                    TimeStamp::compose(110, 0),
+                    TimeStamp::compose(201, 0),
+                    false,
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_wake_up_msg_eq(
+            msg_rx.recv().unwrap(),
+            start_ts,
+            vec![key.gen_hash()],
+            0.into(),
+            false,
+        );
     }
 }

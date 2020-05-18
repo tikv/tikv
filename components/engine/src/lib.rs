@@ -4,25 +4,15 @@
 
 #[macro_use]
 extern crate slog_global;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 use std::sync::Arc;
 
 pub mod rocks;
-pub use crate::rocks::{CFHandle, DBIterator, Range, ReadOptions, WriteOptions, DB};
+pub use crate::rocks::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
 mod errors;
 pub use crate::errors::*;
-mod iterable;
-pub use crate::iterable::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
@@ -43,10 +33,10 @@ impl Engines {
     }
 
     pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::RocksDb)
+        self.kv.sync_wal().map_err(Error::Engine)
     }
 
     pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::RocksDb)
+        self.raft.sync_wal().map_err(Error::Engine)
     }
 }

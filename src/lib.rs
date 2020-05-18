@@ -26,6 +26,7 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
+#![feature(str_strip)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -53,6 +54,8 @@ extern crate failure;
 #[cfg(test)]
 extern crate test;
 
+extern crate encryption;
+
 pub mod config;
 pub mod coprocessor;
 pub mod import;
@@ -65,6 +68,7 @@ pub fn tikv_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
     format!(
         "\nRelease Version:   {}\
+         \nEdition:           {}\
          \nGit Commit Hash:   {}\
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
@@ -72,6 +76,7 @@ pub fn tikv_version_info() -> String {
          \nEnable Features:   {}\
          \nProfile:           {}",
         env!("CARGO_PKG_VERSION"),
+        option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
@@ -86,7 +91,7 @@ pub fn tikv_version_info() -> String {
 /// Prints the tikv version information to the standard output.
 pub fn log_tikv_info() {
     info!("Welcome to TiKV");
-    for line in tikv_version_info().lines() {
+    for line in tikv_version_info().lines().filter(|s| !s.is_empty()) {
         info!("{}", line);
     }
 }

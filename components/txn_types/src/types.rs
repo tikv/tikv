@@ -1,6 +1,5 @@
 use super::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
-use hex::ToHex;
 use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
@@ -92,10 +91,9 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
-    pub fn append_ts(self, ts: TimeStamp) -> Key {
-        let mut encoded = self.0;
-        encoded.encode_u64_desc(ts.into_inner()).unwrap();
-        Key(encoded)
+    pub fn append_ts(mut self, ts: TimeStamp) -> Key {
+        self.0.encode_u64_desc(ts.into_inner()).unwrap();
+        self
     }
 
     /// Gets the timestamp contained in this key.
@@ -216,13 +214,13 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.write_hex_upper(f)
+        f.write_str(&hex::encode_upper(&self.0))
     }
 }
 

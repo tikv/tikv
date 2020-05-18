@@ -6,21 +6,26 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
+use batch_system::Config as BatchSystemConfig;
+use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
+use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
+use raftstore::store::Config as RaftstoreConfig;
+use security::SecurityConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
+use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::security::SecurityConfig;
 
 mod dynamic;
 mod test_config_client;
@@ -59,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
+        max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -85,11 +91,10 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
-        request_batch_enable_cross_command: false,
+        request_batch_enable_cross_command: true,
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
-        unify_read_pool: Some(true),
         unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
@@ -97,6 +102,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker: 2200,
         },
         storage: StorageReadPoolConfig {
+            use_unified_pool: Some(true),
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
@@ -106,6 +112,7 @@ fn test_serde_custom_tikv_config() {
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprReadPoolConfig {
+            use_unified_pool: Some(false),
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -120,6 +127,14 @@ fn test_serde_custom_tikv_config() {
         address: "example.com:443".to_owned(),
         job: "tikv_1".to_owned(),
     };
+    let mut apply_batch_system = BatchSystemConfig::default();
+    apply_batch_system.max_batch_size = 22;
+    apply_batch_system.pool_size = 4;
+    apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
+    let mut store_batch_system = BatchSystemConfig::default();
+    store_batch_system.max_batch_size = 21;
+    store_batch_system.pool_size = 3;
+    store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
         sync_log: false,
         prevote: false,
@@ -172,14 +187,13 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
-        apply_max_batch_size: 22,
-        apply_pool_size: 4,
-        store_max_batch_size: 21,
-        store_pool_size: 3,
+        apply_batch_system,
+        store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
+        apply_yield_duration: ReadableDuration::millis(333),
+        perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -192,6 +206,10 @@ fn test_serde_custom_tikv_config() {
         sample_ratio: 0.982,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
+        level_merge: true,
+        range_merge: true,
+        max_sorted_runs: 100,
+        gc_merge_rewrite: true,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
@@ -226,6 +244,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        enable_multi_batch_write: false,
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
@@ -320,6 +339,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -374,6 +397,10 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -428,10 +455,58 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
+                level_merge: false,
+                range_merge: true,
+                max_sorted_runs: 20,
+                gc_merge_rewrite: false,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+        },
+        ver_defaultcf: VersionCfConfig {
+            block_size: ReadableSize::kb(12),
+            block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: false,
+            pin_l0_filter_and_index_blocks: false,
+            use_bloom_filter: false,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 123,
+            block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+                DBCompressionType::No,
+                DBCompressionType::Zstd,
+                DBCompressionType::Lz4,
+            ],
+            write_buffer_size: ReadableSize::mb(1),
+            max_write_buffer_number: 12,
+            min_write_buffer_number_to_merge: 12,
+            max_bytes_for_level_base: ReadableSize::kb(12),
+            target_file_size_base: ReadableSize::kb(123),
+            level0_file_num_compaction_trigger: 123,
+            level0_slowdown_writes_trigger: 123,
+            level0_stop_writes_trigger: 123,
+            max_compaction_bytes: ReadableSize::gb(1),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
+            titan: titan_cf_config.clone(),
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         titan: titan_db_config.clone(),
     };
@@ -457,7 +532,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_unordered_write: false,
-        allow_concurrent_memtable_write: true,
+        allow_concurrent_memtable_write: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
@@ -531,12 +606,24 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
     };
+    let mut cert_allowed_cn = HashSet::default();
+    cert_allowed_cn.insert("example.tikv.com".to_owned());
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
-        cipher_file: "invalid path".to_owned(),
+        cert_allowed_cn,
+        encryption: EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            data_key_rotation_period: ReadableDuration::days(14),
+            master_key: MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "/master/key/path".to_owned(),
+                },
+            },
+            previous_master_key: MasterKeyConfig::Plaintext,
+        },
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -547,6 +634,12 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
+    };
+    value.pessimistic_txn = PessimisticTxnConfig {
+        enabled: false,
+        wait_for_lock_timeout: ReadableDuration::millis(10),
+        wake_up_delay_duration: ReadableDuration::millis(100),
+        pipelined: true,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -614,13 +707,16 @@ fn test_readpool_default_config() {
 }
 
 #[test]
-fn test_do_not_unify_readpool_with_legacy_config() {
+fn test_do_not_use_unified_readpool_with_legacy_config() {
     let content = r#"
         [readpool.storage]
         normal-concurrency = 1
+
+        [readpool.coprocessor]
+        normal-concurrency = 1
     "#;
     let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    assert!(!cfg.readpool.is_unified());
+    assert!(!cfg.readpool.is_unified_pool_enabled());
 }
 
 #[test]

@@ -12,6 +12,13 @@ use rocksdb::{DBIterator, Writable, DB};
 
 use crate::db_vector::RocksDBVector;
 use crate::options::RocksReadOptions;
+use crate::rocks_metrics::{
+    flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
+    flush_engine_ticker_metrics,
+};
+use crate::rocks_metrics_defs::{
+    ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
+};
 use crate::util::get_cf_handle;
 use crate::{RocksEngineIterator, RocksSnapshot};
 
@@ -58,6 +65,35 @@ impl KvEngine for RocksEngine {
 
     fn sync(&self) -> Result<()> {
         self.0.sync_wal().map_err(Error::Engine)
+    }
+
+    fn flush_metrics(&self, instance: &str, shared_block_cache: bool) {
+        for t in ENGINE_TICKER_TYPES {
+            let v = self.0.get_and_reset_statistics_ticker_count(*t);
+            flush_engine_ticker_metrics(*t, v, instance);
+        }
+        for t in ENGINE_HIST_TYPES {
+            if let Some(v) = self.0.get_statistics_histogram(*t) {
+                flush_engine_histogram_metrics(*t, v, instance);
+            }
+        }
+        if self.0.is_titan() {
+            for t in TITAN_ENGINE_TICKER_TYPES {
+                let v = self.0.get_and_reset_statistics_ticker_count(*t);
+                flush_engine_ticker_metrics(*t, v, instance);
+            }
+            for t in TITAN_ENGINE_HIST_TYPES {
+                if let Some(v) = self.0.get_statistics_histogram(*t) {
+                    flush_engine_histogram_metrics(*t, v, instance);
+                }
+            }
+        }
+        flush_engine_properties(&self.0, instance, shared_block_cache);
+        flush_engine_iostall_properties(&self.0, instance);
+    }
+
+    fn reset_statistics(&self) {
+        self.0.reset_statistics();
     }
 
     fn bad_downcast<T: 'static>(&self) -> &T {

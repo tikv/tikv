@@ -18,8 +18,8 @@ use tempfile::{Builder, TempDir};
 
 use engine::rocks;
 use engine::{Engines, DB};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, Mutable, Peekable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -58,7 +58,7 @@ pub trait Simulator {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
@@ -183,8 +183,11 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
+            engine
+                .kv
+                .c()
+                .compact_range("default", None, None, false, 1)
+                .unwrap();
         }
     }
 
@@ -232,6 +235,7 @@ impl<T: Simulator> Cluster<T> {
                 }
             }
         }
+        self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
     }
 
@@ -436,7 +440,7 @@ impl<T: Simulator> Cluster<T> {
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
-    fn bootstrap_region(&mut self) -> Result<()> {
+    pub fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
@@ -452,11 +456,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(engines, self.id(), id).unwrap();
+            bootstrap_store(&engines.c(), self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(engines, &region)?;
+            prepare_bootstrap_cluster(&engines.c(), &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -465,14 +469,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Return first region id.
-    fn bootstrap_conf_change(&mut self) -> u64 {
+    pub fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(engines, self.id(), id).unwrap();
+            bootstrap_store(&engines.c(), self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -480,7 +484,7 @@ impl<T: Simulator> Cluster<T> {
         let peer_id = 1;
 
         let region = initial_region(node_id, region_id, peer_id);
-        prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
+        prepare_bootstrap_cluster(&self.engines[&node_id].c(), &region).unwrap();
         self.bootstrap_cluster(region);
         region_id
     }
@@ -1023,7 +1027,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region: &metapb::Region,
         split_key: &[u8],
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
@@ -1090,6 +1094,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn wait_region_split(&mut self, region: &metapb::Region) {
+        self.wait_region_split_max_cnt(region, 20, 250, true);
+    }
+
+    pub fn wait_region_split_max_cnt(
+        &mut self,
+        region: &metapb::Region,
+        itvl_ms: u64,
+        max_try_cnt: u64,
+        is_panic: bool,
+    ) {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
@@ -1104,11 +1118,19 @@ impl<T: Simulator> Cluster<T> {
                 };
             }
 
-            if try_cnt > 250 {
-                panic!("region {:?} has not been split after 5000ms", region);
+            if try_cnt > max_try_cnt {
+                if is_panic {
+                    panic!(
+                        "region {:?} has not been split after {}ms",
+                        region,
+                        max_try_cnt * itvl_ms
+                    );
+                } else {
+                    return;
+                }
             }
             try_cnt += 1;
-            sleep_ms(20);
+            sleep_ms(itvl_ms);
         }
     }
 
@@ -1217,7 +1239,7 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
                 let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);

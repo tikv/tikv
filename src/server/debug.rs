@@ -3,25 +3,20 @@
 use std::cmp::Ordering;
 use std::iter::FromIterator;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
-    DB,
-};
-use engine::IterOptionsExt;
-use engine::{self, Engines, IterOption};
-use engine_rocks::{Compat, RocksWriteBatch};
+use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
+use engine::{self, Engines};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, SeekKey, TableProperties,
+    TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType, Module};
+use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
@@ -29,11 +24,10 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
+use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::Iterator as EngineIterator;
+use engine_rocks::properties::MvccProperties;
 use engine_rocks::RangeProperties;
-use raftstore::coprocessor::properties::MvccProperties;
 use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -46,26 +40,20 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
-const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
-
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = RocksIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
-            description(msg)
             display("Invalid Argument {:?}", msg)
         }
         NotFound(msg: String) {
-            description(msg)
             display("Not Found {:?}", msg)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
     }
@@ -136,14 +124,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger {
     engines: Engines,
-    gc_worker_cfg: Option<GcWorkerConfigManager>,
+    cfg_controller: ConfigController,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+    pub fn new(engines: Engines, cfg_controller: ConfigController) -> Debugger {
         Debugger {
             engines,
-            gc_worker_cfg,
+            cfg_controller,
         }
     }
 
@@ -292,14 +280,14 @@ impl Debugger {
         cf: &str,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let db = &self.engines.kv;
-        let cf_handle = get_cf_handle(db, cf).unwrap();
-        let mut read_opt = ReadOptions::new();
-        read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start.to_vec());
-        if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end.to_vec());
-        }
-        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        let end = if !end.is_empty() {
+            Some(KeyBuilder::from_vec(end.to_vec(), 0, 0))
+        } else {
+            None
+        };
+        let iter_opt =
+            IterOptions::new(Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)), end, false);
+        let mut iter = box_try!(db.c().iterator_cf_opt(cf, iter_opt));
         if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
@@ -478,19 +466,17 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(
+        let readopts = IterOptions::new(
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
-        )
-        .build_read_opts();
-        let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
-        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
+        );
+        let mut iter = box_try!(self.engines.kv.c().iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
-        let check_value = |value: Vec<u8>| -> Result<()> {
+        let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
             box_try!(local_state.merge_from_bytes(&value));
 
@@ -509,8 +495,8 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::new(
-                self.engines.clone(),
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
+                self.engines.c(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
@@ -536,15 +522,18 @@ impl Debugger {
             Ok(())
         };
 
-        for (key, value) in &mut iter {
+        while box_try!(iter.valid()) {
+            let (key, value) = (iter.key(), iter.value());
             if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
+                    box_try!(iter.next());
                     continue;
                 }
                 if let Err(e) = check_value(value) {
                     res.push((region_id, e));
                 }
             }
+            box_try!(iter.next());
         }
         Ok(res)
     }
@@ -719,115 +708,13 @@ impl Debugger {
             })
     }
 
-    fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-        let rocksdb = self.get_db_from_type(db)?;
-        let handle = box_try!(get_cf_handle(rocksdb, cf_name));
-        let opt = rocksdb.get_options_cf(handle);
-        let capacity = ReadableSize::from_str(config_value);
-        if let Err(e) = capacity {
-            return Err(Error::InvalidArgument(format!(
-                "bad block cache size: {:?}",
-                e
-            )));
+    pub fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
+        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
+            return Err(Error::Other(
+                format!("failed to update config, err: {:?}", e).into(),
+            ));
         }
-        let cache_size = capacity.unwrap().0;
-        box_try!(opt.set_block_cache_capacity(cache_size));
-        CONFIG_ROCKSDB_GAUGE
-            .with_label_values(&[cf_name, "block_cache_size"])
-            .set(cache_size as f64);
         Ok(())
-    }
-
-    pub fn modify_tikv_config(
-        &self,
-        module: Module,
-        config_name: &str,
-        config_value: &str,
-    ) -> Result<()> {
-        use super::CONFIG_ROCKSDB_GAUGE;
-
-        match module {
-            Module::Storage => {
-                if config_name != "block_cache.capacity" {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                if !self.engines.shared_block_cache {
-                    return Err(Error::InvalidArgument(
-                        "shared block cache is disabled".to_string(),
-                    ));
-                }
-                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
-                // the size through any of them. Here we change it through default CF in kvdb.
-                // A better way to do it is to hold the cache reference somewhere, and use it to
-                // change cache size.
-                self.modify_block_cache_size(DBType::Kv, CF_DEFAULT, config_value)
-            }
-            Module::Kvdb | Module::Raftdb => {
-                let db = if module == Module::Kvdb {
-                    DBType::Kv
-                } else {
-                    DBType::Raft
-                };
-                let rocksdb = self.get_db_from_type(db)?;
-                let vec: Vec<&str> = config_name.split('.').collect();
-                if vec.len() == 1 {
-                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-                } else if vec.len() == 2 {
-                    let cf = vec[0];
-                    let config_name = vec[1];
-                    validate_db_and_cf(db, cf)?;
-
-                    // currently we can't modify block_cache_size via set_options_cf
-                    if config_name == "block_cache_size" {
-                        if self.engines.shared_block_cache {
-                            return Err(Error::InvalidArgument(
-                                "shared block cache is enabled, change cache size through \
-                                 block_cache.capacity in storage module instead"
-                                    .to_string(),
-                            ));
-                        }
-                        self.modify_block_cache_size(db, cf, config_value)?
-                    } else {
-                        let handle = box_try!(get_cf_handle(rocksdb, cf));
-                        let mut opt = Vec::new();
-                        opt.push((config_name, config_value));
-                        box_try!(rocksdb.set_options_cf(handle, &opt));
-                        if let Ok(v) = config_value.parse::<f64>() {
-                            CONFIG_ROCKSDB_GAUGE
-                                .with_label_values(&[cf, config_name])
-                                .set(v);
-                        }
-                    }
-                } else {
-                    return Err(Error::InvalidArgument(format!(
-                        "bad argument: {}",
-                        config_name
-                    )));
-                }
-                Ok(())
-            }
-            Module::Server => {
-                if config_name == GC_IO_LIMITER_CONFIG_NAME {
-                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        self.gc_worker_cfg.as_ref().expect("must be some").update(
-                            move |cfg: &mut GcConfig| {
-                                cfg.max_write_bytes_per_sec = bytes_per_sec;
-                            },
-                        );
-                        return Ok(());
-                    }
-                }
-                Err(Error::InvalidArgument(format!(
-                    "bad argument: {} {}",
-                    config_name, config_value
-                )))
-            }
-            _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        }
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -859,7 +746,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(get_region_approximate_middle(db, &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -875,6 +762,7 @@ impl Debugger {
             ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
             ("mvcc.num_rows", mvcc_properties.num_rows),
             ("mvcc.num_puts", mvcc_properties.num_puts),
+            ("mvcc.num_deletes", mvcc_properties.num_deletes),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
@@ -945,9 +833,9 @@ fn recover_mvcc_for_range(
 }
 
 pub struct MvccChecker {
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
+    lock_iter: RocksEngineIterator,
+    default_iter: RocksEngineIterator,
+    write_iter: RocksEngineIterator,
     scan_count: usize,
     lock_fix_count: usize,
     default_fix_count: usize,
@@ -962,14 +850,12 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(
+            let readopts = IterOptions::new(
                 Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
-            )
-            .build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            );
+            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
             iter.seek(SeekKey::Start).unwrap();
             Ok(iter)
         };
@@ -986,7 +872,11 @@ impl MvccChecker {
         })
     }
 
-    fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
+    fn min_key(
+        key: Option<Vec<u8>>,
+        iter: &RocksEngineIterator,
+        f: fn(&[u8]) -> &[u8],
+    ) -> Option<Vec<u8>> {
         let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
@@ -1214,9 +1104,9 @@ fn region_overlap(r1: &Region, r2: &Region) -> bool {
 pub struct MvccInfoIterator {
     limit: u64,
     count: u64,
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
+    lock_iter: RocksEngineIterator,
+    default_iter: RocksEngineIterator,
+    write_iter: RocksEngineIterator,
 }
 
 pub type Kv = (Vec<u8>, Vec<u8>);
@@ -1236,9 +1126,8 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOption::new(None, to, false).build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
+            let readopts = IterOptions::new(None, to, false);
+            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
             iter.seek(SeekKey::from(from)).unwrap();
             Ok(iter)
         };
@@ -1252,8 +1141,9 @@ impl MvccInfoIterator {
     }
 
     fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
-        let mut iter = &mut self.lock_iter;
-        if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
+        let iter = &mut self.lock_iter;
+        if box_try!(iter.valid()) {
+            let (key, value) = (iter.key().to_owned(), iter.value());
             let lock = box_try!(Lock::parse(&value));
             let mut lock_info = MvccLock::default();
             match lock.lock_type {
@@ -1265,6 +1155,7 @@ impl MvccInfoIterator {
             lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            box_try!(iter.next());
             return Ok(Some((key, lock_info)));
         };
         Ok(None)
@@ -1308,7 +1199,7 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
+    fn next_grouped(iter: &mut RocksEngineIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
         if iter.valid().unwrap() {
             let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
@@ -1459,8 +1350,13 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_WRITE, &region));
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(
+        db.c(),
+        CF_DEFAULT,
+        &region,
+        0
+    ));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region, 0));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
@@ -1655,7 +1551,7 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines, Some(Default::default()))
+        Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger {
@@ -2090,29 +1986,6 @@ mod tests {
     }
 
     #[test]
-    fn test_modify_tikv_config() {
-        let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 2);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "max_background_jobs", "8")
-            .unwrap();
-        let db_opts = engine.get_db_options();
-        assert_eq!(db_opts.get_max_background_jobs(), 8);
-
-        let cf = engine.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
-        debugger
-            .modify_tikv_config(Module::Kvdb, "default.disable_auto_compactions", "true")
-            .unwrap();
-        let cf_opts = engine.get_options_cf(cf);
-        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
-    }
-
-    #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
         let engine = RocksEngine::from_ref(&debugger.engines.kv);
@@ -2390,19 +2263,5 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
-    }
-
-    #[test]
-    fn test_modify_gc_io_limit() {
-        let debugger = new_debugger();
-        debugger
-            .modify_tikv_config(Module::Server, "gc", "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap_err();
-        debugger
-            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .unwrap();
     }
 }

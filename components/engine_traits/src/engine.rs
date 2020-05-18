@@ -20,6 +20,7 @@ pub trait KvEngine:
     + ImportExt
     + SstExt
     + TablePropertiesExt
+    + CompactExt
     + MiscExt
     + Send
     + Sync
@@ -27,12 +28,23 @@ pub trait KvEngine:
     + Debug
     + 'static
 {
-    type Snapshot: Snapshot<Self>;
+    type Snapshot: Snapshot;
 
     fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;
 
+    /// Flush out metrics. `instance` indicates its name.
+    /// TODO: remove `shared_block_cache`.
+    fn flush_metrics(&self, _instance: &str, _shared_block_cache: bool) {}
+    /// Reset internal statistics.
+    fn reset_statistics(&self) {}
+
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+}
+
+pub trait WriteBatchVecExt<E: KvEngine> {
+    fn write_batch_vec(e: &E, vec_size: usize, cap: usize) -> Self;
+    fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
 }

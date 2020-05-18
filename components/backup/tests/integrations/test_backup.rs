@@ -6,8 +6,8 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use futures::sync::mpsc as future_mpsc;
-use futures::{Future, Stream};
+use futures::channel::mpsc as future_mpsc;
+use futures::StreamExt;
 use futures_executor::block_on;
 use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -24,8 +24,8 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
-use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query::storage::{IntervalRange, Range};
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
@@ -253,9 +253,10 @@ impl TestSuite {
             IsolationLevel::Si,
             false,
             Default::default(),
+            false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::from(snap_store),
+            storage: TiKVStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,
@@ -346,7 +347,7 @@ fn test_backup_and_import() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files1 = resps1[0].files.clone();
@@ -365,7 +366,7 @@ fn test_backup_and_import() {
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next())),
     );
-    let resps2 = rx.collect().wait().unwrap();
+    let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
@@ -378,7 +379,7 @@ fn test_backup_and_import() {
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     let mut metas = vec![];
     for f in files1.clone().into_iter() {
-        let mut reader = storage.read(&f.name).unwrap();
+        let mut reader = storage.read(&f.name);
         let mut content = vec![];
         block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
@@ -423,7 +424,7 @@ fn test_backup_and_import() {
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
-    let resps3 = rx.collect().wait().unwrap();
+    let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
 
     suite.stop();
@@ -465,7 +466,7 @@ fn test_backup_meta() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
@@ -508,7 +509,7 @@ fn test_backup_rawkv() {
         cf.clone(),
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files1 = resps1[0].files.clone();
@@ -524,7 +525,7 @@ fn test_backup_rawkv() {
         cf.clone(),
         &tmp.path().join(format!("{}", backup_ts.next())),
     );
-    let resps2 = rx.collect().wait().unwrap();
+    let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
@@ -537,7 +538,7 @@ fn test_backup_rawkv() {
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     let mut metas = vec![];
     for f in files1.clone().into_iter() {
-        let mut reader = storage.read(&f.name).unwrap();
+        let mut reader = storage.read(&f.name);
         let mut content = vec![];
         block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
@@ -582,7 +583,7 @@ fn test_backup_rawkv() {
         cf,
         &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
-    let resps3 = rx.collect().wait().unwrap();
+    let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
 
     suite.stop();
@@ -612,7 +613,7 @@ fn test_backup_raw_meta() {
         cf,
         &storage_path,
     );
-    let resps1 = rx.collect().wait().unwrap();
+    let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
     let files: Vec<_> = resps1[0].files.clone().into_iter().collect();

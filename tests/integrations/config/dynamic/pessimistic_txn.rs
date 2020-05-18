@@ -2,11 +2,12 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use pd_client::PdClient;
+use security::SecurityManager;
 use tikv::config::*;
 use tikv::server::lock_manager::*;
 use tikv::server::resolve::{Callback, StoreAddrResolver};
 use tikv::server::{Error, Result};
-use tikv_util::security::SecurityManager;
+use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_config_validate() {
@@ -14,7 +15,7 @@ fn test_config_validate() {
     cfg.validate().unwrap();
 
     let mut invalid_cfg = Config::default();
-    invalid_cfg.wait_for_lock_timeout = 0;
+    invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
     assert!(invalid_cfg.validate().is_err());
 }
 
@@ -55,7 +56,7 @@ fn setup(
         mgr.waiter_mgr_scheduler.clone(),
         mgr.detector_scheduler.clone(),
     );
-    let mut cfg_controller = ConfigController::new(cfg, Default::default());
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::PessimisticTxn, Box::new(mgr));
 
     (cfg_controller, w, d, lock_mgr)
@@ -63,7 +64,7 @@ fn setup(
 
 fn validate_waiter<F>(router: &WaiterMgrScheduler, f: F)
 where
-    F: FnOnce(u64, u64) + Send + 'static,
+    F: FnOnce(ReadableDuration, ReadableDuration) + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
     router.validate(Box::new(move |v1, v2| {
@@ -89,65 +90,77 @@ where
 fn test_lock_manager_cfg_update() {
     const DEFAULT_TIMEOUT: u64 = 3000;
     const DEFAULT_DELAY: u64 = 100;
-    let mut cfg = TiKvConfig::default();
-    cfg.pessimistic_txn.wait_for_lock_timeout = DEFAULT_TIMEOUT;
-    cfg.pessimistic_txn.wake_up_delay_duration = DEFAULT_DELAY;
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
+    cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.validate().unwrap();
-    let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg.clone());
+    let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
     // update of other module's config should not effect lock manager config
-    let mut incoming = cfg.clone();
-    incoming.raft_store.raft_log_gc_threshold = 2000;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
-    validate_waiter(&waiter, move |timeout: u64, delay: u64| {
-        assert_eq!(timeout, DEFAULT_TIMEOUT);
-        assert_eq!(delay, DEFAULT_DELAY);
-    });
+    cfg_controller
+        .update_config("raftstore.raft-log-gc-threshold", "2000")
+        .unwrap();
+    validate_waiter(
+        &waiter,
+        move |timeout: ReadableDuration, delay: ReadableDuration| {
+            assert_eq!(timeout.as_millis(), DEFAULT_TIMEOUT);
+            assert_eq!(delay.as_millis(), DEFAULT_DELAY);
+        },
+    );
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, DEFAULT_TIMEOUT);
     });
 
     // only update wake_up_delay_duration
-    let mut incoming = cfg.clone();
-    incoming.pessimistic_txn.wake_up_delay_duration = 500;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
-    validate_waiter(&waiter, move |timeout: u64, delay: u64| {
-        assert_eq!(timeout, DEFAULT_TIMEOUT);
-        assert_eq!(delay, 500);
-    });
+    cfg_controller
+        .update_config("pessimistic-txn.wake-up-delay-duration", "500ms")
+        .unwrap();
+    validate_waiter(
+        &waiter,
+        move |timeout: ReadableDuration, delay: ReadableDuration| {
+            assert_eq!(timeout.as_millis(), DEFAULT_TIMEOUT);
+            assert_eq!(delay.as_millis(), 500);
+        },
+    );
     validate_dead_lock(&deadlock, move |ttl: u64| {
         // dead lock ttl should not change
         assert_eq!(ttl, DEFAULT_TIMEOUT);
     });
 
     // only update wait_for_lock_timeout
-    let mut incoming = cfg.clone();
-    incoming.pessimistic_txn.wait_for_lock_timeout = 4000;
-    // keep wake_up_delay_duration the same as last update
-    incoming.pessimistic_txn.wake_up_delay_duration = 500;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
-    validate_waiter(&waiter, move |timeout: u64, delay: u64| {
-        assert_eq!(timeout, 4000);
-        // wake_up_delay_duration should be the same as last update
-        assert_eq!(delay, 500);
-    });
+    cfg_controller
+        .update_config("pessimistic-txn.wait-for-lock-timeout", "4000ms")
+        .unwrap();
+    validate_waiter(
+        &waiter,
+        move |timeout: ReadableDuration, delay: ReadableDuration| {
+            assert_eq!(timeout.as_millis(), 4000);
+            // wake_up_delay_duration should be the same as last update
+            assert_eq!(delay.as_millis(), 500);
+        },
+    );
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4000);
     });
 
     // update both config
-    let mut incoming = cfg;
-    incoming.pessimistic_txn.wait_for_lock_timeout = 4321;
-    incoming.pessimistic_txn.wake_up_delay_duration = 123;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    assert_eq!(rollback.right(), Some(true));
-    validate_waiter(&waiter, move |timeout: u64, delay: u64| {
-        assert_eq!(timeout, 4321);
-        assert_eq!(delay, 123);
-    });
+    let mut m = std::collections::HashMap::new();
+    m.insert(
+        "pessimistic-txn.wait-for-lock-timeout".to_owned(),
+        "4321ms".to_owned(),
+    );
+    m.insert(
+        "pessimistic-txn.wake-up-delay-duration".to_owned(),
+        "123ms".to_owned(),
+    );
+    cfg_controller.update(m).unwrap();
+    validate_waiter(
+        &waiter,
+        move |timeout: ReadableDuration, delay: ReadableDuration| {
+            assert_eq!(timeout.as_millis(), 4321);
+            assert_eq!(delay.as_millis(), 123);
+        },
+    );
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4321);
     });

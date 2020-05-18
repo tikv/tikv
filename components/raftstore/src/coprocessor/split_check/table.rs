@@ -1,14 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
 
-use engine::rocks::DB;
-use engine_rocks::Compat;
-use engine_traits::{IterOptions, Iterable, Iterator, SeekKey, CF_WRITE};
+use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tidb_query::codec::table as table_codec;
+use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;
 
@@ -24,7 +21,10 @@ pub struct Checker {
     policy: CheckPolicy,
 }
 
-impl SplitChecker for Checker {
+impl<E> SplitChecker<E> for Checker
+where
+    E: KvEngine,
+{
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
@@ -72,12 +72,15 @@ pub struct TableCheckObserver;
 
 impl Coprocessor for TableCheckObserver {}
 
-impl SplitCheckObserver for TableCheckObserver {
+impl<E> SplitCheckObserver<E> for TableCheckObserver
+where
+    E: KvEngine,
+{
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host,
-        engine: &Arc<DB>,
+        host: &mut Host<'_, E>,
+        engine: &E,
         policy: CheckPolicy,
     ) {
         if !host.cfg.split_region_on_table {
@@ -169,7 +172,7 @@ impl SplitCheckObserver for TableCheckObserver {
     }
 }
 
-fn last_key_of_region(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> {
+fn last_key_of_region(db: &impl KvEngine, region: &Region) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
@@ -179,7 +182,7 @@ fn last_key_of_region(db: &Arc<DB>, region: &Region) -> Result<Option<Vec<u8>>> 
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
-    let mut iter = box_try!(db.c().iterator_cf_opt(CF_WRITE, iter_opt));
+    let mut iter = box_try!(db.iterator_cf_opt(CF_WRITE, iter_opt));
 
     // the last key
     let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));
@@ -232,8 +235,9 @@ mod tests {
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
+    use engine_rocks::Compat;
     use engine_traits::ALL_CFS;
-    use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
@@ -290,7 +294,7 @@ mod tests {
                         .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
-                assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
+                assert_eq!(last_key_of_region(engine.c(), &region).unwrap(), want);
             }
         };
 
@@ -337,7 +341,7 @@ mod tests {
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable = SplitCheckRunner::new(Arc::clone(&engine), tx, coprocessor, cfg);
+        let mut runnable = SplitCheckRunner::new(engine.c().clone(), tx, coprocessor, cfg);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

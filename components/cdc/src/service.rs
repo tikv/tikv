@@ -2,10 +2,12 @@
 
 use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
@@ -25,7 +27,7 @@ pub struct ConnID(usize);
 
 impl ConnID {
     pub fn new() -> ConnID {
-        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -89,14 +91,18 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
+    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>) -> Service {
-        Service { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
+        Service {
+            scheduler,
+            security_mgr,
+        }
     }
 }
 
@@ -107,6 +113,9 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         sink: DuplexSink<ChangeDataEvent>,
     ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
         // TODO: make it a bounded channel.
         let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
         let conn = Conn::new(tx);
@@ -128,7 +137,8 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
         let recv_req = stream.for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
-            let downstream = Downstream::new(peer.clone(), region_epoch);
+            let req_id = request.get_request_id();
+            let downstream = Downstream::new(peer.clone(), region_epoch, req_id);
             scheduler
                 .schedule(Task::Register {
                     request,
