@@ -873,14 +873,22 @@ fn test_node_mutiple_rollback_merge() {
 // than recorded.
 #[test]
 fn test_node_merge_write_data_to_source_region_after_merging() {
+<<<<<<< HEAD
     let _guard = crate::setup();
+=======
+>>>>>>> cc79a5e... test: fix check split bug in pd (#7841)
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+<<<<<<< HEAD
     cluster.cfg.raft_store.apply_max_batch_size = 1;
     cluster.cfg.raft_store.apply_pool_size = 2;
+=======
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+>>>>>>> cc79a5e... test: fix check split bug in pd (#7841)
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -932,8 +940,13 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
         sleep_ms(10);
     }
     // Ignore this msg to make left region exist.
+<<<<<<< HEAD
     let on_need_gc_merge_fp = "on_need_gc_merge";
     fail::cfg(on_need_gc_merge_fp, "return").unwrap();
+=======
+    let on_has_merge_target_fp = "on_has_merge_target";
+    fail::cfg(on_has_merge_target_fp, "return").unwrap();
+>>>>>>> cc79a5e... test: fix check split bug in pd (#7841)
 
     cluster.clear_send_filters();
     // On store 3, now the right region is updated by snapshot not applying logs
@@ -941,7 +954,11 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     // Wait for left region to rollback merge (in previous wrong implementation)
     sleep_ms(200);
     // Write data to left region
+<<<<<<< HEAD
     let mut new_left = left.clone();
+=======
+    let mut new_left = left;
+>>>>>>> cc79a5e... test: fix check split bug in pd (#7841)
     let mut epoch = new_left.take_region_epoch();
     // prepareMerge => conf_ver + 1, version + 1
     // rollbackMerge => version + 1
