@@ -18,7 +18,6 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData,
 };
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
