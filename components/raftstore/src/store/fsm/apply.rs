@@ -2932,7 +2932,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
-                        apply_ctx.engine.snapshot().into_sync(),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         self.delegate.region.clone(),
                     )),
                 }
