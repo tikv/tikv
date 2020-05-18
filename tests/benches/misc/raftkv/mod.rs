@@ -13,7 +13,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::Snapshot;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{
@@ -48,7 +47,7 @@ impl SyncBenchRouter {
                 let region = self.region.to_owned();
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
                 })
             }
             Callback::Write(cb) => {
@@ -99,7 +98,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
-            snapshot.into_sync(),
+            Arc::new(snapshot),
             Region::default(),
         )),
     };

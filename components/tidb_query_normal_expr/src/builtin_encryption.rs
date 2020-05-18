@@ -113,6 +113,25 @@ impl ScalarFunc {
         }
         Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))
     }
+
+    #[inline]
+    pub fn password<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let pass = try_opt!(self.children[0].eval_string(ctx, row));
+        if pass.len() == 0 {
+            return Ok(Some(Cow::Owned(vec![])));
+        }
+        ctx.warnings.append_warning(Error::Other(box_err!(
+            "Warning: Deprecated syntax PASSWORD"
+        )));
+        let hash1 = hex_digest(MessageDigest::sha1(), &pass)?;
+        let mut hash2 = hex_digest(MessageDigest::sha1(), &hash1)?;
+        hash2.insert(0, b'*');
+        Ok(Some(Cow::Owned(hash2)))
+    }
 }
 
 #[inline]
@@ -345,5 +364,34 @@ mod tests {
                 .unwrap(),
             Datum::Null
         );
+    }
+
+    #[test]
+    fn test_password() {
+        let cases = vec![
+            ("TiKV", "*cca644408381f962dba8dfb9889db1371ee74208"),
+            ("Pingcap", "*f33bc75eac70ac317621fbbfa560d6251c43cf8a"),
+            ("rust", "*090c2b08e0c1776910e777b917c2185be6554c2e"),
+            ("database", "*02e86b4af5219d0ba6c974908aea62d42eb7da24"),
+            ("raft", "*b23a77787ed44e62ef2570f03ce8982d119fb699"),
+        ];
+        let mut ctx = EvalContext::default();
+
+        for (input_str, exp_str) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::Password, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
+            assert_eq!(got, exp, "password('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::Password, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "password(NULL)");
     }
 }
