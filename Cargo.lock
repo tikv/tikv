@@ -1941,7 +1941,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#f7b6982b0416c1d3d64dd82dd7f92a8a2bf9047a"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#6a4d5c264a8bb3d3dbd1d3346d195f163659b16c"
+>>>>>>> 6b09cad... Fix the issue that end key of a partial rawkv-restore range is inclusive (#7196)
 dependencies = [
  "futures 0.1.29",
  "grpcio",
