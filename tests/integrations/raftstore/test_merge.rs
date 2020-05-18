@@ -1015,6 +1015,7 @@ fn test_merge_isloated_stale_learner() {
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
 
+<<<<<<< HEAD
 // In the previous implementation, the source peer will propose rollback merge
 // after the local target peer's epoch is larger than recorded previously.
 // But it's wrong. This test constructs a case that writing data to the source region
@@ -1121,6 +1122,8 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     fail::remove(on_handle_apply_2_fp);
 }
 
+=======
+>>>>>>> cc79a5e... test: fix check split bug in pd (#7841)
 /// Test if a learner can be destroyed properly in such conditions as follows
 /// 1. A peer is isolated
 /// 2. Be the last removed peer in its peer list
