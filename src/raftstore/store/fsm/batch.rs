@@ -445,7 +445,7 @@ where
         for i in 0..self.pool_size {
             let handler = builder.build();
             let mut poller = Poller {
-                tag: name_prefix.clone(),
+                tag: format!("{}-{}", name_prefix, i),
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
                 handler,
