@@ -19,13 +19,13 @@ lazy_static! {
     pub static ref APPLY_RESCHEDULE_WAIT_DURATION: Histogram = register_histogram!(
         "tikv_raftstore_apply_reschedule_wait_duration_secs",
         "The interval of a fsm was rescheduled",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref APPLY_EXECUTE_DURATION: Histogram = register_histogram!(
         "tikv_raftstore_apply_execute_wait_duration_secs",
         "The interval of a fsm was handled",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref RESCHEDULE_FSM_COUNT: IntCounterVec = register_int_counter_vec!(
