@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use pd_client::PdClient;
 use security::SecurityManager;
+use test_raftstore::TestPdClient;
 use tikv::config::*;
 use tikv::server::lock_manager::*;
 use tikv::server::resolve::{Callback, StoreAddrResolver};
@@ -18,9 +19,6 @@ fn test_config_validate() {
     invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
     assert!(invalid_cfg.validate().is_err());
 }
-
-struct MockPdClient;
-impl PdClient for MockPdClient {}
 
 #[derive(Clone)]
 struct MockResolver;
@@ -39,7 +37,7 @@ fn setup(
     LockManager,
 ) {
     let mut lock_mgr = LockManager::new();
-    let pd_client = Arc::new(MockPdClient);
+    let pd_client = Arc::new(TestPdClient::new(0, true));
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
         .start(
