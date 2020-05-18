@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use kvproto::coprocessor::Response;
 
 use crate::coprocessor::RequestHandler;
@@ -22,8 +23,9 @@ impl CachedRequestHandler {
     }
 }
 
+#[async_trait]
 impl RequestHandler for CachedRequestHandler {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let mut resp = Response::default();
         resp.set_is_cache_hit(true);
         if let Some(v) = self.data_version {

@@ -34,7 +34,9 @@ use std::ops::Deref;
 use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use tikv_util::time::UnixSecs;
+use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
@@ -93,7 +95,11 @@ pub trait PdClient: Send + Sync {
     /// It may happen that multi nodes start at same time to try to
     /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
-    fn bootstrap_cluster(&self, _stores: metapb::Store, _region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        _stores: metapb::Store,
+        _region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -112,7 +118,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Informs PD when the store starts or some store information changes.
-    fn put_store(&self, _store: metapb::Store) -> Result<()> {
+    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -165,6 +171,7 @@ pub trait PdClient: Send + Sync {
         _region: metapb::Region,
         _leader: metapb::Peer,
         _region_stat: RegionStat,
+        _replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         unimplemented!();
     }
@@ -174,6 +181,7 @@ pub trait PdClient: Send + Sync {
     /// Please note that this method should only be called once.
     fn handle_region_heartbeat_response<F>(&self, _store_id: u64, _f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         unimplemented!();
@@ -194,7 +202,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -211,7 +219,11 @@ pub trait PdClient: Send + Sync {
     /// Registers a handler to the client, which will be invoked after reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
-    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
+    fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F)
+    where
+        Self: Sized,
+    {
+    }
 
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         unimplemented!();
@@ -225,6 +237,11 @@ pub trait PdClient: Send + Sync {
     /// Gets current operator of the region
     fn get_operator(&self, _region_id: u64) -> Result<pdpb::GetOperatorResponse> {
         unimplemented!();
+    }
+
+    /// Gets a timestamp from PD.
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        unimplemented!()
     }
 }
 

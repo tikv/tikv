@@ -50,7 +50,7 @@ impl AssertionStorage<SimulateEngine> {
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
-        self.ctx.set_peer(leader.clone());
+        self.ctx.set_peer(leader);
         self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     }
 
@@ -583,10 +583,16 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_locks_ok(
         &self,
         max_ts: impl Into<TimeStamp>,
-        start_key: Vec<u8>,
+        start_key: &[u8],
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(&start_key))
+        };
+
         assert_eq!(
             self.store
                 .scan_locks(self.ctx.clone(), max_ts.into(), start_key, limit)

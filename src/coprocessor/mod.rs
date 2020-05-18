@@ -24,8 +24,8 @@ mod checksum;
 pub mod dag;
 mod endpoint;
 mod error;
-pub mod local_metrics;
-mod metrics;
+mod interceptors;
+pub(crate) mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
@@ -34,12 +34,13 @@ pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
 
+use crate::storage::Statistics;
+use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-
+use metrics::ReqTag;
+use rand::prelude::*;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
-
-use crate::storage::Statistics;
 use txn_types::TsSet;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -49,9 +50,10 @@ pub const REQ_TYPE_CHECKSUM: i64 = 105;
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
+#[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 
@@ -80,7 +82,7 @@ type RequestHandlerBuilder<Snap> =
 #[derive(Debug, Clone)]
 pub struct ReqContext {
     /// The tag of the request
-    pub tag: &'static str,
+    pub tag: ReqTag,
 
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
@@ -111,11 +113,17 @@ pub struct ReqContext {
     ///
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
+
+    /// The lower bound key in ranges of the request
+    pub lower_bound: Vec<u8>,
+
+    /// The upper bound key in ranges of the request
+    pub upper_bound: Vec<u8>,
 }
 
 impl ReqContext {
     pub fn new(
-        tag: &'static str,
+        tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
@@ -126,6 +134,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
+        let lower_bound = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let upper_bound = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         Self {
             tag,
             context,
@@ -137,13 +153,15 @@ impl ReqContext {
             ranges_len: ranges.len(),
             bypass_locks,
             cache_match_version,
+            lower_bound,
+            upper_bound,
         }
     }
 
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
@@ -152,5 +170,43 @@ impl ReqContext {
             None,
             None,
         )
+    }
+
+    pub fn build_task_id(&self) -> u64 {
+        const ID_SHIFT: u32 = 16;
+        const MASK: u64 = u64::max_value() >> ID_SHIFT;
+        const MAX_TS: u64 = u64::max_value();
+        let base = match self.txn_start_ts {
+            Some(0) | Some(MAX_TS) | None => thread_rng().next_u64(),
+            Some(start_ts) => start_ts,
+        };
+        let task_id: u64 = self.context.get_task_id();
+        if task_id > 0 {
+            // It is assumed that the lower bits of task IDs in a single transaction
+            // tend to be different. So if task_id is provided, we concatenate the
+            // low 16 bits of the task_id and the low 48 bits of the start_ts to build
+            // the final task id.
+            (task_id << (64 - ID_SHIFT)) | (base & MASK)
+        } else {
+            // Otherwise we use the start_ts as the task_id.
+            base
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_task_id() {
+        let mut ctx = ReqContext::default_for_test();
+        let start_ts: u64 = 0x05C6_1BFA_2648_324A;
+        ctx.txn_start_ts = Some(start_ts);
+        ctx.context.set_task_id(1);
+        assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
+
+        ctx.context.set_task_id(0);
+        assert_eq!(ctx.build_task_id(), start_ts);
     }
 }

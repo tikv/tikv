@@ -10,11 +10,11 @@ use tipb::ColumnInfo;
 use tipb::TableScan;
 
 use test_coprocessor::*;
-use tidb_query::batch::executors::BatchTableScanExecutor;
-use tidb_query::batch::interface::*;
-use tidb_query::executor::Executor;
-use tidb_query::executor::TableScanExecutor;
-use tidb_query::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_normal_executors::Executor;
+use tidb_query_normal_executors::TableScanExecutor;
+use tidb_query_vec_executors::interface::*;
+use tidb_query_vec_executors::BatchTableScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
@@ -48,7 +48,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
             black_box(req),
             black_box(EvalContext::default()),
             black_box(ranges.to_vec()),
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(false),
         )
         .unwrap();
@@ -75,7 +78,10 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         _: (),
     ) -> Self::E {
         let mut executor = BatchTableScanExecutor::new(
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(TiKVStorage::new(
+                ToTxnStore::<Self::T>::to_store(store),
+                false,
+            )),
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),
             black_box(ranges.to_vec()),

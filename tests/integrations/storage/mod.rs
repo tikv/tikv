@@ -4,4 +4,4 @@ mod test_raft_storage;
 mod test_raftkv;
 mod test_seek_region;
 mod test_storage;
-mod test_turnoff_titan;
+mod test_titan;

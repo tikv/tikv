@@ -5,7 +5,6 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::{self, MvccTxn};
-use tikv::storage::Options;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
@@ -20,7 +19,6 @@ where
     F: EngineFactory<E>,
 {
     let ctx = Context::default();
-    let option = Options::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
     let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
@@ -29,7 +27,10 @@ where
         txn.prewrite(
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
-            &option,
+            false,
+            0,
+            0,
+            TimeStamp::default(),
         )
         .unwrap();
     }
@@ -42,7 +43,6 @@ where
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let option = Options::default();
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
@@ -51,13 +51,14 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                     .iter()
                     .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
                     .collect();
-            (mutations, &option)
+            mutations
         },
-        |(mutations, option)| {
+        |mutations| {
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
-                txn.prewrite(mutation, &primary, option).unwrap();
+                txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
+                    .unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }

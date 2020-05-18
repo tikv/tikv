@@ -1,11 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::server::metrics::{GcKeysCF, GcKeysDetail};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
-use tikv_util::collections::HashMap;
-use tikv_util::worker::FutureScheduler;
-
-use crate::raftstore::store::PdTask;
+pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 const STAT_TOTAL: &str = "total";
 const STAT_PROCESSED: &str = "processed";
@@ -31,35 +29,6 @@ pub struct CfStatistics {
     pub flow_stats: FlowStatistics,
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct FlowStatistics {
-    pub read_keys: usize,
-    pub read_bytes: usize,
-}
-
-// Reports flow statistics to outside.
-pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
-    // Reports read flow statistics, the argument `read_stats` is a hash map
-    // saves the flow statistics of different region.
-    // TODO: maybe we need to return a Result later?
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
-}
-
-impl FlowStatistics {
-    pub fn add(&mut self, other: &Self) {
-        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
-        self.read_keys = self.read_keys.saturating_add(other.read_keys);
-    }
-}
-
 impl CfStatistics {
     #[inline]
     pub fn total_op_count(&self) -> usize {
@@ -76,6 +45,19 @@ impl CfStatistics {
             (STAT_SEEK, self.seek),
             (STAT_SEEK_FOR_PREV, self.seek_for_prev),
             (STAT_OVER_SEEK_BOUND, self.over_seek_bound),
+        ]
+    }
+
+    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 8] {
+        [
+            (GcKeysDetail::total, self.total_op_count()),
+            (GcKeysDetail::processed, self.processed),
+            (GcKeysDetail::get, self.get),
+            (GcKeysDetail::next, self.next),
+            (GcKeysDetail::prev, self.prev),
+            (GcKeysDetail::seek, self.seek),
+            (GcKeysDetail::seek_for_prev, self.seek_for_prev),
+            (GcKeysDetail::over_seek_bound, self.over_seek_bound),
         ]
     }
 
@@ -119,6 +101,14 @@ impl Statistics {
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
+        ]
+    }
+
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 8]); 3] {
+        [
+            (GcKeysCF::default, self.data.details_enum()),
+            (GcKeysCF::lock, self.lock.details_enum()),
+            (GcKeysCF::write, self.write.details_enum()),
         ]
     }
 

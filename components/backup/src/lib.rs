@@ -9,6 +9,8 @@ extern crate slog_global;
 extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate tikv_util;
 
 mod endpoint;
 mod errors;
@@ -19,4 +21,4 @@ mod writer;
 pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
 pub use service::Service;
-pub use writer::BackupWriter;
+pub use writer::{BackupRawKVWriter, BackupWriter};

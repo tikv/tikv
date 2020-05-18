@@ -10,13 +10,20 @@ mod threads_linux;
 #[cfg(target_os = "linux")]
 pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads, ThreadInfoStatistics};
 
-mod tls;
-pub use self::tls::*;
+#[cfg(target_os = "linux")]
+mod memory_linux;
+#[cfg(target_os = "linux")]
+pub use self::memory_linux::monitor_memory;
 
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::{monitor_threads, ThreadInfoStatistics};
+
+#[cfg(not(target_os = "linux"))]
+mod memory_dummy;
+#[cfg(not(target_os = "linux"))]
+pub use self::memory_dummy::monitor_memory;
 
 pub use self::allocator_metrics::monitor_allocator_stats;
 
@@ -41,13 +48,13 @@ pub fn run_prometheus(
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
         .spawn(move || loop {
-            let metric_familys = prometheus::gather();
+            let metric_families = prometheus::gather();
 
             let res = prometheus::push_metrics(
                 &job,
                 prometheus::hostname_grouping_key(),
                 &address,
-                metric_familys,
+                metric_families,
                 None,
             );
             if let Err(e) = res {
@@ -64,8 +71,8 @@ pub fn run_prometheus(
 pub fn dump() -> String {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
-    let metric_familys = prometheus::gather();
-    for mf in metric_familys {
+    let metric_families = prometheus::gather();
+    for mf in metric_families {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
             warn!("prometheus encoding error"; "err" => ?e);
         }

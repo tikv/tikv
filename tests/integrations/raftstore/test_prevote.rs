@@ -24,7 +24,7 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
     ));
     let request_notifier = Box::new(MessageTypeNotifier::new(
         MessageType::MsgRequestPreVote,
-        tx.clone(),
+        tx,
         Arc::from(AtomicBool::new(true)),
     ));
 
@@ -43,9 +43,12 @@ fn test_prevote<T: Simulator>(
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
+    // Disable this feature because the test could run slow, in which case peers shouldn't
+    // hibernate, otherwise it's possible to detect no vote messages.
+    cluster.cfg.raft_store.hibernate_regions = false;
     // To stable the test, we use a large election timeout to make
     // leader's readiness get handle within an election timeout
-    configure_for_lease_read(cluster, Some(10), Some(50));
+    configure_for_lease_read(cluster, Some(20), Some(10));
 
     let leader_id = 1;
     let detect_during_failure = detect_during_failure.into();
@@ -130,7 +133,7 @@ fn test_prevote<T: Simulator>(
 
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_majority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // Since the leader is in the majority and not rebooted, it sees no prevote.
     test_prevote(
         &mut cluster,
@@ -144,7 +147,7 @@ fn test_prevote_partition_leader_in_majority_detect_in_majority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_minority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -159,7 +162,7 @@ fn test_prevote_partition_leader_in_majority_detect_in_minority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_majority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -174,7 +177,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_majority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_minority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -188,7 +191,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_minority() {
 
 #[test]
 fn test_prevote_reboot_majority_followers() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // A prevote round will start, but nothing will succeed.
     test_prevote(
         &mut cluster,
@@ -201,7 +204,7 @@ fn test_prevote_reboot_majority_followers() {
 
 #[test]
 fn test_prevote_reboot_minority_followers() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // A prevote round will start, but nothing will succeed until recovery.
     test_prevote(
         &mut cluster,
@@ -213,7 +216,7 @@ fn test_prevote_reboot_minority_followers() {
 }
 
 // Test isolating a minority of the cluster and make sure that the remove themselves.
-#[cfg(feature = "protobuf_codec")]
+#[cfg(feature = "protobuf-codec")]
 fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -234,7 +237,7 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 // FIXME(nrc) failing on CI only
-#[cfg(feature = "protobuf_codec")]
+#[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_server_pair_isolated() {
     let mut cluster = new_server_cluster(0, 5);

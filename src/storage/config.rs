@@ -5,8 +5,8 @@
 use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
 use libc::c_int;
 use std::error::Error;
-use sys_info;
-use tikv_util::config::{self, ReadableSize, KB};
+use tikv_util::config::{self, ReadableSize};
+use tikv_util::sys::sys_quota::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -14,7 +14,7 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
-
+const DEFAULT_RESERVER_SPACE_SIZE: u64 = 2;
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
 // on average, in that situation the writing bytes estimated 10MB,
@@ -32,19 +32,22 @@ pub struct Config {
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
+    // Reserve disk space to make tikv would have enough space to compact when disk is full.
+    pub reserve_space: ReadableSize,
     pub block_cache: BlockCacheConfig,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let total_cpu = sys_info::cpu_num().unwrap();
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
+            scheduler_worker_pool_size: if cpu_num >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
+            reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
             block_cache: BlockCacheConfig::default(),
         }
     }
@@ -97,7 +100,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity {
             None => {
-                let total_mem = sys_info::mem_info().unwrap().total * KB;
+                let total_mem = SysQuota::new().memory_limit_in_bytes();
                 ((total_mem as f64) * 0.45) as usize
             }
             Some(c) => c.0 as usize,

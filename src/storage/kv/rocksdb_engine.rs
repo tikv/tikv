@@ -9,15 +9,13 @@ use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
-};
+use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
-use engine::Error as EngineError;
-use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::RocksEngineIterator;
-use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
+use engine_rocks::{Compat, RocksEngineIterator};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey, WriteBatchExt,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -31,13 +29,13 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RocksSnapshot>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -57,10 +55,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
-            )),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.c().snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -215,7 +210,9 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::default();
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = engine.kv.c().write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -224,8 +221,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_cf(handle, k.as_encoded())
+                    wb.delete_cf(cf, k.as_encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
@@ -234,8 +230,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.put_cf(handle, k.as_encoded(), &v)
+                    wb.put_cf(cf, k.as_encoded(), &v)
                 }
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
@@ -247,8 +242,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     "notify_only" => notify_only,
                 );
                 if !notify_only {
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
                 } else {
                     Ok(())
                 }
@@ -259,14 +253,16 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
             return Err(box_err!("{}", msg));
         }
     }
-    engine.write_kv(&wb)?;
+    engine.kv.c().write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
-    type Snap = RocksSnapshot;
+    type Snap = Arc<RocksSnapshot>;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+
         if modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
@@ -283,19 +279,18 @@ impl Engine for RocksEngine {
             header.mut_not_leader().set_region_id(100);
             header
         };
-        let _not_leader = not_leader.clone();
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::from(ErrorInner::Request(not_leader)))
+            Err(Error::from(ErrorInner::Request(not_leader.clone())))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::from(ErrorInner::Request(_not_leader)));
+            return Err(Error::from(ErrorInner::Request(not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -310,7 +305,7 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
         let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
@@ -319,7 +314,7 @@ impl Snapshot for RocksSnapshot {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
@@ -329,39 +324,32 @@ impl Snapshot for RocksSnapshot {
 }
 
 impl EngineIterator for RocksEngineIterator {
-    fn next(&mut self) -> bool {
-        Iterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        Iterator::next(self).map_err(Error::from)
     }
 
-    fn prev(&mut self) -> bool {
-        Iterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        Iterator::prev(self).map_err(Error::from)
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek(self, key.as_encoded().as_slice().into()))
+        Iterator::seek(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        Iterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        Iterator::seek(self, SeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::Start).map_err(Error::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        Iterator::seek(self, SeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::End).map_err(Error::from)
     }
 
-    fn valid(&self) -> bool {
-        Iterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        Iterator::status(self).map_err(From::from)
+    fn valid(&self) -> Result<bool> {
+        Iterator::valid(self).map_err(Error::from)
     }
 
     fn key(&self) -> &[u8] {
@@ -374,41 +362,32 @@ impl EngineIterator for RocksEngineIterator {
 }
 
 impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> bool {
-        DBIterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        DBIterator::next(self).map_err(|e| box_err!(e))
     }
 
-    fn prev(&mut self) -> bool {
-        DBIterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        DBIterator::prev(self).map_err(|e| box_err!(e))
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        DBIterator::seek(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        DBIterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, DBSeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::Start).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, DBSeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::End).map_err(|e| box_err!(e))
     }
 
-    fn valid(&self) -> bool {
-        DBIterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(Error::from)
+    fn valid(&self) -> Result<bool> {
+        DBIterator::valid(self).map_err(|e| box_err!(e))
     }
 
     fn key(&self) -> &[u8] {
@@ -501,7 +480,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Forward)
+            .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
 
         let mut statistics = CfStatistics::default();

@@ -7,9 +7,10 @@ use grpcio::CompressionAlgorithms;
 
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
+use tikv_util::sys::sys_quota::SysQuota;
 
-pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::config::Config as StorageConfig;
+pub use raftstore::store::Config as RaftStoreConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -32,6 +33,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
+
+const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -61,6 +64,8 @@ pub struct Config {
     pub status_addr: String,
     pub status_thread_pool_size: usize,
 
+    pub max_grpc_send_msg_len: i32,
+
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
@@ -80,6 +85,7 @@ pub struct Config {
     pub end_point_stream_batch_row_limit: usize,
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
+    pub end_point_max_concurrency: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
@@ -112,6 +118,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
+        let cpu_num = SysQuota::new().cpu_cores_quota();
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -119,6 +126,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             status_thread_pool_size: 1,
+            max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -142,6 +150,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
+            end_point_max_concurrency: cpu_num,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -151,7 +160,7 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
-            request_batch_enable_cross_command: true,
+            request_batch_enable_cross_command: false,
             request_batch_wait_duration: ReadableDuration::millis(1),
         }
     }

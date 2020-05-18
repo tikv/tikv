@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::collections::HashMap;
 use libc::{self, pid_t};
@@ -33,6 +33,7 @@ struct ThreadsCollector {
     pid: pid_t,
     descs: Vec<Desc>,
     metrics: Mutex<Metrics>,
+    tid_retriever: Mutex<TidRetriever>,
 }
 
 impl ThreadsCollector {
@@ -94,6 +95,7 @@ impl ThreadsCollector {
                 voluntary_ctxt_switches,
                 nonvoluntary_ctxt_switches,
             }),
+            tid_retriever: Mutex::new(TidRetriever::new(pid)),
         }
     }
 }
@@ -109,8 +111,10 @@ impl Collector for ThreadsCollector {
         // Clean previous threads state.
         metrics.threads_state.reset();
 
-        let tids = get_thread_ids(self.pid).unwrap();
+        let mut tid_retriever = self.tid_retriever.lock().unwrap();
+        let tids = tid_retriever.get_tids();
         for tid in tids {
+            let tid = *tid;
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
@@ -195,8 +199,9 @@ impl Collector for ThreadsCollector {
 }
 
 /// Gets thread ids of the given process id.
+/// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
-    Ok(fs::read_dir(format!("/proc/{}/task", pid))?
+    let mut tids: Vec<i32> = fs::read_dir(format!("/proc/{}/task", pid))?
         .filter_map(|task| {
             let file_name = match task {
                 Ok(t) => t.file_name(),
@@ -220,7 +225,9 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
                 }
             }
         })
-        .collect())
+        .collect();
+    tids.sort();
+    Ok(tids)
 }
 
 /// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
@@ -349,6 +356,7 @@ pub struct ThreadInfoStatistics {
     pid: pid_t,
     last_instant: Instant,
     tid_names: HashMap<i32, String>,
+    tid_retriever: TidRetriever,
     metrics_rate: ThreadMetrics,
     metrics_total: ThreadMetrics,
 }
@@ -357,13 +365,15 @@ impl ThreadInfoStatistics {
     pub fn new() -> Self {
         let pid = unsafe { libc::getpid() };
 
-        let mut thread_stats = ThreadInfoStatistics {
+        let mut thread_stats = Self {
             pid,
             last_instant: Instant::now(),
             tid_names: HashMap::default(),
+            tid_retriever: TidRetriever::new(pid),
             metrics_rate: ThreadMetrics::default(),
             metrics_total: ThreadMetrics::default(),
         };
+
         thread_stats.record();
         thread_stats
     }
@@ -372,11 +382,13 @@ impl ThreadInfoStatistics {
         let current_instant = Instant::now();
         let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
         self.last_instant = current_instant;
-
         self.metrics_rate.clear();
 
-        let tids = get_thread_ids(self.pid).unwrap();
+        let tids = self.tid_retriever.get_tids();
+
         for tid in tids {
+            let tid = *tid;
+
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 let name = get_name(&stat.command);
                 self.tid_names.entry(tid).or_insert(name);
@@ -428,19 +440,60 @@ impl ThreadInfoStatistics {
     }
 }
 
+const TID_MIN_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// A helper that buffers the thread id list internally.
+struct TidRetriever {
+    pid: pid_t,
+    tid_buffer: Vec<i32>,
+    tid_buffer_last_update: Instant,
+    tid_buffer_update_interval: Duration,
+}
+
+impl TidRetriever {
+    pub fn new(pid: pid_t) -> Self {
+        Self {
+            pid,
+            tid_buffer: get_thread_ids(pid).unwrap(),
+            tid_buffer_last_update: Instant::now(),
+            tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
+        }
+    }
+
+    pub fn get_tids(&mut self) -> &[pid_t] {
+        // Update the tid list according to tid_buffer_update_interval.
+        // If tid is not changed, update the tid list less frequently.
+        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
+            if new_tid_buffer == self.tid_buffer {
+                self.tid_buffer_update_interval *= 2;
+                if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
+                    self.tid_buffer_update_interval = TID_MAX_UPDATE_INTERVAL;
+                }
+            } else {
+                self.tid_buffer = new_tid_buffer;
+                self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
+            }
+            self.tid_buffer_last_update = Instant::now();
+        }
+
+        &self.tid_buffer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
     use std::io::Write;
+    use std::time::Duration;
     use std::{fs, sync, thread};
-
-    use libc;
 
     use super::*;
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "theadnametest66";
+        let name = "testthreadio";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
@@ -453,6 +506,7 @@ mod tests {
                 let mut f = fs::File::create(tmp.as_path()).unwrap();
                 f.write_all(name.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
                 fs::remove_file(tmp).unwrap();
@@ -494,6 +548,8 @@ mod tests {
         thread::Builder::new()
             .name(str1.to_owned())
             .spawn(move || {
+                tx1.send(()).unwrap();
+
                 // Make `io::write_bytes` > 0
                 let mut tmp = temp_dir();
                 tmp.push(str1.clone());
@@ -501,31 +557,34 @@ mod tests {
                 let mut f = fs::File::create(tmp.as_path()).unwrap();
                 f.write_all(str1.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
 
                 f.write_all(str2.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
 
                 fs::remove_file(tmp).unwrap();
+                tx1.send(()).unwrap();
             })
             .unwrap();
-        rx1.recv().unwrap();
 
         (tx, rx1)
     }
 
     #[test]
     fn test_thread_io_statistics() {
-        let mut thread_info = ThreadInfoStatistics::new();
-
         let s1 = "testio123";
         let s2 = "test45678";
 
         let (tx, rx1) = write_two_string(s1.to_owned(), s2.to_owned());
-        thread_info.record();
+        // Wait for thread creation
+        rx1.recv().unwrap();
+
+        let mut thread_info = ThreadInfoStatistics::new();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 };
         let pid = unsafe { libc::getpid() };
@@ -533,29 +592,32 @@ mod tests {
         for tid in tids {
             if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(s1) {
+                    rx1.recv().unwrap();
+                    thread_info.record();
                     {
                         let write_io = thread_info
                             .metrics_total
                             .write_ios
                             .entry(tid)
                             .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size);
+                        assert_eq!(*write_io as u64, page_size);
+                    }
+
+                    tx.send(()).unwrap();
+
+                    rx1.recv().unwrap();
+                    thread_info.record();
+                    {
+                        let write_io = thread_info
+                            .metrics_total
+                            .write_ios
+                            .entry(tid)
+                            .or_insert(0.0);
+                        assert_eq!(*write_io as u64, page_size * 2);
                     }
 
                     tx.send(()).unwrap();
                     rx1.recv().unwrap();
-                    thread_info.record();
-
-                    {
-                        let write_io = thread_info
-                            .metrics_total
-                            .write_ios
-                            .entry(tid)
-                            .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size * 2);
-                    }
-
-                    tx.send(()).unwrap();
                     return;
                 }
             }
@@ -572,6 +634,8 @@ mod tests {
         thread::Builder::new()
             .name(name)
             .spawn(move || {
+                tx1.send(()).unwrap();
+
                 let start = Instant::now();
                 loop {
                     if (Instant::now() - start).as_millis() > duration_ms.into() {
@@ -590,8 +654,12 @@ mod tests {
     #[test]
     fn test_thread_cpu_statistics() {
         let tn = "testcpu123";
-        let mut thread_info = ThreadInfoStatistics::new();
+
         let (tx, rx) = high_cpu_thread(tn.to_owned(), 200);
+        // Wait for thread creation
+        rx.recv().unwrap();
+
+        let mut thread_info = ThreadInfoStatistics::new();
 
         let pid = unsafe { libc::getpid() };
         let tids = get_thread_ids(pid).unwrap();

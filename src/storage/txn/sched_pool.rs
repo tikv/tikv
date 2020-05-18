@@ -9,9 +9,8 @@ use tikv_util::collections::HashMap;
 use tikv_util::future_pool::Builder as FuturePoolBuilder;
 use tikv_util::future_pool::FuturePool;
 
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics};
 use crate::storage::metrics::*;
-use crate::storage::{Engine, Statistics};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -42,7 +41,7 @@ impl SchedPool {
         let pool = FuturePoolBuilder::new()
             .pool_size(pool_size)
             .name_prefix(name_prefix)
-            .on_tick(move || tls_flush())
+            .on_tick(tls_flush)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
             .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))

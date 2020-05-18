@@ -1,0 +1,16 @@
+[package]
+name = "resolved_ts"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+protobuf-codec = ["txn_types/protobuf-codec"]
+prost-codec = ["txn_types/prost-codec"]
+
+[dependencies]
+hex = "0.4"
+tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }

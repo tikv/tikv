@@ -11,26 +11,29 @@ use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
+use super::*;
 use engine::*;
-use engine_rocks::RocksEngine;
-use tikv::config::TiKvConfig;
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::Peekable;
+use raftstore::coprocessor::config::SplitCheckConfigManager;
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
+use raftstore::store::config::RaftstoreConfigManager;
+use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::*;
+use raftstore::Result;
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::worker::FutureWorker;
-
-use super::*;
-use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use tikv_util::config::VersionTrack;
+use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -118,7 +121,8 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
+    #[allow(clippy::type_complexity)]
+    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
 
 impl NodeCluster {
@@ -135,7 +139,10 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
+    pub fn get_node_router(
+        &self,
+        node_id: u64,
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -149,7 +156,11 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
+    #[allow(clippy::type_complexity)]
+    pub fn post_create_coprocessor_host(
+        &mut self,
+        op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>,
+    ) {
         self.post_create_coprocessor_host = Some(op)
     }
 
@@ -164,18 +175,21 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter,
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
         let mut node = Node::new(
             system,
             &cfg.server,
-            &cfg.raft_store,
+            Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -197,7 +211,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -205,11 +219,35 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir).unwrap())
+            Arc::new(SSTImporter::new(dir, None).unwrap())
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader =
+            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let cfg_controller = ConfigController::new(cfg.clone());
+
+        let mut split_check_worker = Worker::new("split-check");
+        let split_check_runner = SplitCheckRunner::new(
+            engines.kv.c().clone(),
+            router.clone(),
+            coprocessor_host.clone(),
+            cfg.coprocessor.clone(),
+        );
+        split_check_worker.start(split_check_runner).unwrap();
+        cfg_controller.register(
+            Module::Coprocessor,
+            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+        );
+
+        let mut raftstore_cfg = cfg.raft_store;
+        raftstore_cfg.validate().unwrap();
+        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager(raft_store)),
+        );
+
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -218,9 +256,12 @@ impl Simulator for NodeCluster {
             store_meta,
             coprocessor_host,
             importer,
+            split_check_worker,
+            AutoSplitController::default(),
         )?;
         assert!(engines
             .kv
+            .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
@@ -286,7 +327,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         if !self
             .trans
@@ -339,7 +380,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

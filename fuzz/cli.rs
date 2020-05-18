@@ -11,29 +11,23 @@
 //!
 //! Adopted from https://github.com/rust-fuzz/targets
 
-#[macro_use]
-extern crate structopt;
-#[macro_use]
-extern crate clap;
-#[macro_use]
-extern crate failure;
-#[macro_use]
-extern crate lazy_static;
-extern crate cargo_metadata;
-extern crate regex;
-
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use failure::{Error, ResultExt};
+use anyhow::{anyhow, Context, Result};
+use cargo_metadata::MetadataCommand;
+use lazy_static::lazy_static;
+use structopt::clap::arg_enum;
+use structopt::StructOpt;
 
 lazy_static! {
-    static ref WORKSPACE_ROOT: PathBuf = {
-        let meta = cargo_metadata::metadata(None).unwrap();
-        PathBuf::from(meta.workspace_root)
-    };
+    static ref WORKSPACE_ROOT: PathBuf = MetadataCommand::new()
+        .no_deps()
+        .exec()
+        .unwrap()
+        .workspace_root;
     static ref FUZZ_ROOT: PathBuf = WORKSPACE_ROOT.join("fuzz");
     static ref FUZZ_TARGETS: Vec<String> = {
         let source = FUZZ_ROOT.join("targets/mod.rs");
@@ -88,8 +82,6 @@ impl Fuzzer {
 }
 
 fn main() -> Result<(), i32> {
-    use structopt::StructOpt;
-
     match Cli::from_args() {
         Cli::ListTargets => {
             for target in &*FUZZ_TARGETS {
@@ -109,7 +101,7 @@ fn main() -> Result<(), i32> {
 /// Write the fuzz target source file from corresponding template file.
 ///
 /// `target` must be a valid target.
-fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<(), Error> {
+fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<()> {
     use std::io::Write;
 
     let template_file_path = fuzzer.directory().join("template.rs");
@@ -139,7 +131,7 @@ fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<(), Err
 }
 
 /// Run one target fuzz test with specific fuzzer
-fn run(fuzzer: Fuzzer, target: &str) -> Result<(), Error> {
+fn run(fuzzer: Fuzzer, target: &str) -> Result<()> {
     if FUZZ_TARGETS.iter().find(|x| *x == target).is_none() {
         panic!(
             "Unknown fuzz target `{}`. Run `list-targets` command to see available fuzz targets.",
@@ -165,7 +157,7 @@ fn get_seed_dir(target: &str) -> PathBuf {
 }
 
 /// Create corpus dir for fuzz target
-fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Error> {
+fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf> {
     let base = base.as_ref();
     let corpus_dir = base.join(&format!("corpus-{}", target));
     fs::create_dir_all(&corpus_dir).context(format!(
@@ -176,14 +168,14 @@ fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Er
     Ok(corpus_dir)
 }
 
-fn pre_check(command: &mut Command, hint: &str) -> Result<(), Error> {
+fn pre_check(command: &mut Command, hint: &str) -> Result<()> {
     let check = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .unwrap();
     if !check.success() {
-        Err(format_err!(
+        Err(anyhow!(
             "Pre-checking for fuzzing failed. Consider run `{}` before fuzzing.",
             hint
         ))
@@ -193,7 +185,7 @@ fn pre_check(command: &mut Command, hint: &str) -> Result<(), Error> {
 }
 
 /// Run one target fuzz test using AFL
-fn run_afl(target: &str) -> Result<(), Error> {
+fn run_afl(target: &str) -> Result<()> {
     let fuzzer = Fuzzer::Afl;
 
     let seed_dir = get_seed_dir(target);
@@ -214,7 +206,7 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to complete building {}", fuzzer))?;
 
     if !fuzzer_build.success() {
-        return Err(format_err!(
+        return Err(anyhow!(
             "error building afl instrumented binary, exit code {:?}",
             fuzzer_build.code()
         ));
@@ -236,7 +228,7 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        return Err(anyhow!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
@@ -247,16 +239,16 @@ fn run_afl(target: &str) -> Result<(), Error> {
 }
 
 /// Run one target fuzz test using Honggfuzz
-fn run_honggfuzz(target: &str) -> Result<(), Error> {
+fn run_honggfuzz(target: &str) -> Result<()> {
     pre_check(
         Command::new("cargo").args(&["hfuzz", "version"]),
-        "cargo install hfuzz --version 0.5.34",
+        "cargo install honggfuzz --version 0.5.45",
     )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
-    rust_flags.push_str("-Z sanitizer=address");
+    rust_flags.push_str(" -Z sanitizer=address");
 
     let hfuzz_args = format!(
         "-f {} \
@@ -277,7 +269,7 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        return Err(anyhow!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
@@ -288,7 +280,7 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
 }
 
 /// Run one target fuzz test using Libfuzzer
-fn run_libfuzzer(target: &str) -> Result<(), Error> {
+fn run_libfuzzer(target: &str) -> Result<()> {
     let fuzzer = Fuzzer::Libfuzzer;
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
@@ -312,9 +304,8 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
          -C incremental=fuzz-incremental \
          -C passes=sancov \
          -C llvm-args=-sanitizer-coverage-level=4 \
-         -C llvm-args=-sanitizer-coverage-trace-pc-guard \
          -C llvm-args=-sanitizer-coverage-trace-compares \
-         -C llvm-args=-sanitizer-coverage-trace-divs \
+         -C llvm-args=-sanitizer-coverage-inline-8bit-counters \
          -C llvm-args=-sanitizer-coverage-trace-geps \
          -C llvm-args=-sanitizer-coverage-prune-blocks=0 \
          -C debug-assertions=on \
@@ -339,7 +330,7 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        return Err(anyhow!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()

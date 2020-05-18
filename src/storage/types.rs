@@ -3,10 +3,11 @@
 //! Core data types.
 
 use crate::storage::{
-    mvcc::{Lock, TimeStamp, Write},
-    Callback, Command, Error as StorageError, Result,
+    mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
+    txn::ProcessResult,
+    Callback, Result,
 };
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb;
 use std::fmt::Debug;
 use txn_types::{Key, Value};
 
@@ -19,6 +20,61 @@ pub struct MvccInfo {
     pub writes: Vec<(TimeStamp, Write)>,
     /// start_ts and value
     pub values: Vec<(TimeStamp, Value)>,
+}
+
+impl MvccInfo {
+    pub fn into_proto(self) -> kvrpcpb::MvccInfo {
+        fn extract_2pc_values(res: Vec<(TimeStamp, Value)>) -> Vec<kvrpcpb::MvccValue> {
+            res.into_iter()
+                .map(|(start_ts, value)| {
+                    let mut value_info = kvrpcpb::MvccValue::default();
+                    value_info.set_start_ts(start_ts.into_inner());
+                    value_info.set_value(value);
+                    value_info
+                })
+                .collect()
+        }
+
+        fn extract_2pc_writes(res: Vec<(TimeStamp, Write)>) -> Vec<kvrpcpb::MvccWrite> {
+            res.into_iter()
+                .map(|(commit_ts, write)| {
+                    let mut write_info = kvrpcpb::MvccWrite::default();
+                    let op = match write.write_type {
+                        WriteType::Put => kvrpcpb::Op::Put,
+                        WriteType::Delete => kvrpcpb::Op::Del,
+                        WriteType::Lock => kvrpcpb::Op::Lock,
+                        WriteType::Rollback => kvrpcpb::Op::Rollback,
+                    };
+                    write_info.set_type(op);
+                    write_info.set_start_ts(write.start_ts.into_inner());
+                    write_info.set_commit_ts(commit_ts.into_inner());
+                    write_info.set_short_value(write.short_value.unwrap_or_default());
+                    write_info
+                })
+                .collect()
+        }
+
+        let mut mvcc_info = kvrpcpb::MvccInfo::default();
+        if let Some(lock) = self.lock {
+            let mut lock_info = kvrpcpb::MvccLock::default();
+            let op = match lock.lock_type {
+                LockType::Put => kvrpcpb::Op::Put,
+                LockType::Delete => kvrpcpb::Op::Del,
+                LockType::Lock => kvrpcpb::Op::Lock,
+                LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+            };
+            lock_info.set_type(op);
+            lock_info.set_start_ts(lock.ts.into_inner());
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            mvcc_info.set_lock(lock_info);
+        }
+        let vv = extract_2pc_values(self.values);
+        let vw = extract_2pc_writes(self.writes);
+        mvcc_info.set_writes(vw.into());
+        mvcc_info.set_values(vv.into());
+        mvcc_info
+    }
 }
 
 /// Represents the status of a transaction.
@@ -52,61 +108,65 @@ impl TxnStatus {
     }
 }
 
-pub enum StorageCallback {
-    Boolean(Callback<()>),
-    Booleans(Callback<Vec<Result<()>>>),
-    MvccInfoByKey(Callback<MvccInfo>),
-    MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
-    Locks(Callback<Vec<LockInfo>>),
-    TxnStatus(Callback<TxnStatus>),
+#[derive(Clone, Debug, PartialEq)]
+pub enum PessimisticLockRes {
+    Values(Vec<Option<Value>>),
+    Empty,
 }
 
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<Result<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
-}
-
-impl StorageCallback {
-    /// Delivers the process result of a command to the storage callback.
-    pub fn execute(self, pr: ProcessResult) {
+impl PessimisticLockRes {
+    pub fn push(&mut self, value: Option<Value>) {
         match self {
-            StorageCallback::Boolean(cb) => match pr {
-                ProcessResult::Res => cb(Ok(())),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::Booleans(cb) => match pr {
-                ProcessResult::MultiRes { results } => cb(Ok(results)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::MvccInfoByKey(cb) => match pr {
-                ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::MvccInfoByStartTs(cb) => match pr {
-                ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::Locks(cb) => match pr {
-                ProcessResult::Locks { locks } => cb(Ok(locks)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::TxnStatus(cb) => match pr {
-                ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
+            PessimisticLockRes::Values(v) => v.push(value),
+            _ => panic!("unexpected PessimisticLockRes"),
         }
     }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        match self {
+            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
+            PessimisticLockRes::Empty => vec![],
+        }
+    }
+}
+
+macro_rules! storage_callback {
+    ($($variant: ident ( $cb_ty: ty ) $result_variant: pat => $result: expr,)*) => {
+        pub enum StorageCallback {
+            $($variant(Callback<$cb_ty>),)*
+        }
+
+        impl StorageCallback {
+            /// Delivers the process result of a command to the storage callback.
+            pub fn execute(self, pr: ProcessResult) {
+                match self {
+                    $(StorageCallback::$variant(cb) => match pr {
+                        $result_variant => cb(Ok($result)),
+                        ProcessResult::Failed { err } => cb(Err(err)),
+                        _ => panic!("process result mismatch"),
+                    },)*
+                }
+            }
+        }
+
+        $(impl StorageCallbackType for $cb_ty {
+            fn callback(cb: Callback<Self>) -> StorageCallback {
+                StorageCallback::$variant(cb)
+            }
+        })*
+    }
+}
+
+storage_callback! {
+    Boolean(()) ProcessResult::Res => (),
+    Booleans(Vec<Result<()>>) ProcessResult::MultiRes { results } => results,
+    MvccInfoByKey(MvccInfo) ProcessResult::MvccKey { mvcc } => mvcc,
+    MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
+    Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
+    TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+}
+
+pub trait StorageCallbackType: Sized {
+    fn callback(cb: Callback<Self>) -> StorageCallback;
 }

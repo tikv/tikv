@@ -9,10 +9,10 @@ use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
-use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{Engine, Error as StorageError, ErrorInner as StorageErrorInner};
+use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
@@ -51,12 +51,8 @@ fn test_raft_storage() {
     ctx.set_region_id(region_id + 1);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage
-        .scan(ctx.clone(), key.clone(), None, 1, false, 20)
-        .is_err());
-    assert!(storage
-        .scan_locks(ctx.clone(), 20, b"".to_vec(), 100)
-        .is_err());
+    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
 }
 
 #[test]
@@ -85,7 +81,7 @@ fn test_raft_storage_get_after_lease() {
     thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     assert_eq!(
         storage
-            .raw_get(ctx.clone(), "".to_string(), key.to_vec())
+            .raw_get(ctx, "".to_string(), key.to_vec())
             .unwrap()
             .unwrap(),
         value.to_vec()
@@ -98,7 +94,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     let ret = storage.rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10);
     assert!(ret.is_ok());
     let ret = storage.prewrite(
-        ctx.clone(),
+        ctx,
         vec![Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()))],
         b"key".to_vec(),
         10,
@@ -154,12 +150,8 @@ fn test_raft_storage_store_not_match() {
         panic!("expect store_not_match, but got {:?}", res);
     }
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage
-        .scan(ctx.clone(), key.clone(), None, 1, false, 20)
-        .is_err());
-    assert!(storage
-        .scan_locks(ctx.clone(), 20, b"".to_vec(), 100)
-        .is_err());
+    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
 }
 
 #[test]

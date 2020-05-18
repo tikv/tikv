@@ -4,35 +4,15 @@
 
 #[macro_use]
 extern crate slog_global;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 use std::sync::Arc;
 
-pub mod util;
-
 pub mod rocks;
-pub use crate::rocks::{
-    CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteBatch, WriteOptions, DB,
-};
+pub use crate::rocks::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
 mod errors;
 pub use crate::errors::*;
-mod peekable;
-pub use crate::peekable::*;
-mod iterable;
-pub use crate::iterable::*;
-mod mutable;
-pub use crate::mutable::*;
-mod cf;
-pub use crate::cf::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
@@ -52,27 +32,11 @@ impl Engines {
         }
     }
 
-    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
-        self.kv.write(wb).map_err(Error::RocksDb)
-    }
-
-    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, opts).map_err(Error::RocksDb)
-    }
-
     pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::RocksDb)
-    }
-
-    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
-        self.raft.write(wb).map_err(Error::RocksDb)
-    }
-
-    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, opts).map_err(Error::RocksDb)
+        self.kv.sync_wal().map_err(Error::Engine)
     }
 
     pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::RocksDb)
+        self.raft.sync_wal().map_err(Error::Engine)
     }
 }

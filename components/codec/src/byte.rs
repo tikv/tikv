@@ -27,11 +27,11 @@ impl MemComparableByteCodec {
     fn get_first_encoded_len_internal<T: MemComparableCodecHelper>(encoded: &[u8]) -> usize {
         let mut idx = MEMCMP_GROUP_SIZE;
         loop {
-            if unsafe { unlikely(encoded.len() < idx + 1) } {
+            if unlikely(encoded.len() < idx + 1) {
                 return encoded.len();
             }
             let marker = encoded[idx];
-            if unsafe { unlikely(T::parse_padding_size(marker) > 0) } {
+            if unlikely(T::parse_padding_size(marker) > 0) {
                 return idx + 1;
             }
             idx += MEMCMP_GROUP_SIZE + 1
@@ -444,7 +444,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     fn write_comparable_bytes(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
-        if unsafe { unlikely(buf.len() < len) } {
+        if unlikely(buf.len() < len) {
             return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all(bs, buf);
@@ -462,7 +462,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     fn write_comparable_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
-        if unsafe { unlikely(buf.len() < len) } {
+        if unlikely(buf.len() < len) {
             return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all_desc(bs, buf);
@@ -540,7 +540,7 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
     fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
         let vn = self.read_var_i64()? as usize;
         let data = self.bytes();
-        if unsafe { unlikely(data.len() < vn) } {
+        if unlikely(data.len() < vn) {
             return Err(ErrorInner::eof().into());
         }
         let bs = data[0..vn].to_vec();

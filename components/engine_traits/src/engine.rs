@@ -4,16 +4,24 @@ use std::fmt::Debug;
 
 use crate::*;
 
+// FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
+// here for lack of somewhere better to put them at the time of writing.
+// Consider moving everything into other traits and making KvEngine essentially
+// a trait typedef.
+
 pub trait KvEngine:
     Peekable
-    + Mutable
+    + SyncMutable
     + Iterable
+    + WriteBatchExt
     + DBOptionsExt
+    + CFNamesExt
     + CFHandleExt
     + ImportExt
     + SstExt
-    + IOLimiterExt
     + TablePropertiesExt
+    + CompactExt
+    + MiscExt
     + Send
     + Sync
     + Clone
@@ -21,20 +29,22 @@ pub trait KvEngine:
     + 'static
 {
     type Snapshot: Snapshot;
-    type WriteBatch: WriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
-    fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
-        self.write_opt(&WriteOptions::default(), wb)
-    }
-    fn write_batch(&self) -> Self::WriteBatch;
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
     fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;
 
-    fn cf_names(&self) -> Vec<&str>;
+    /// Flush out metrics. `instance` indicates its name.
+    /// TODO: remove `shared_block_cache`.
+    fn flush_metrics(&self, _instance: &str, _shared_block_cache: bool) {}
+    /// Reset internal statistics.
+    fn reset_statistics(&self) {}
 
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+}
+
+pub trait WriteBatchVecExt<E: KvEngine> {
+    fn write_batch_vec(e: &E, vec_size: usize, cap: usize) -> Self;
+    fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
 }

@@ -11,42 +11,26 @@ pub enum SeekKey<'a> {
 }
 
 pub trait Iterator {
-    fn seek(&mut self, key: SeekKey) -> bool;
-    fn seek_for_prev(&mut self, key: SeekKey) -> bool;
+    fn seek(&mut self, key: SeekKey) -> Result<bool>;
+    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool>;
 
-    fn seek_to_first(&mut self) -> bool {
+    fn seek_to_first(&mut self) -> Result<bool> {
         self.seek(SeekKey::Start)
     }
 
-    fn seek_to_last(&mut self) -> bool {
+    fn seek_to_last(&mut self) -> Result<bool> {
         self.seek(SeekKey::End)
     }
 
-    fn prev(&mut self) -> bool;
-    fn next(&mut self) -> bool;
+    fn prev(&mut self) -> Result<bool>;
+    fn next(&mut self) -> Result<bool>;
 
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 
-    fn kv(&self) -> Option<(Vec<u8>, Vec<u8>)> {
-        if self.valid() {
-            let k = self.key();
-            let v = self.value();
-            Some((k.to_vec(), v.to_vec()))
-        } else {
-            None
-        }
-    }
-
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
-
-    fn as_std(&mut self) -> StdIterator<Self>
-    where
-        Self: Sized,
-    {
-        StdIterator(self)
-    }
+    fn valid(&self) -> Result<bool>;
 }
 
 pub trait Iterable {
@@ -94,23 +78,20 @@ pub trait Iterable {
     // Seek the first key >= given key, if not found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.iterator()?;
-        iter.seek(SeekKey::Key(key));
-        if iter.valid() {
-            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
-        } else {
-            Ok(None)
+        if iter.seek(SeekKey::Key(key))? {
+            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
+            return Ok(Some((k, v)));
         }
+        Ok(None)
     }
 
     // Seek the first key >= given key, if not found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.iterator_cf(cf)?;
-        iter.seek(SeekKey::Key(key));
-        if iter.valid() {
-            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
-        } else {
-            Ok(None)
+        if iter.seek(SeekKey::Key(key))? {
+            return Ok(Some((iter.key().to_vec(), iter.value().to_vec())));
         }
+        Ok(None)
     }
 }
 
@@ -119,35 +100,31 @@ where
     Iter: Iterator,
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
-    it.seek(SeekKey::Key(start_key));
-    while it.valid() {
-        let r = f(it.key(), it.value())?;
-        if !r || !it.next() {
-            break;
-        }
+    let mut remained = it.seek(SeekKey::Key(start_key))?;
+    while remained {
+        remained = f(it.key(), it.value())? && it.next()?;
     }
-
-    it.status().map_err(From::from)
-}
-
-pub struct StdIterator<'a, I: Iterator>(&'a mut I);
-
-pub type Kv = (Vec<u8>, Vec<u8>);
-
-impl<'a, I: Iterator> std::iter::Iterator for StdIterator<'a, I> {
-    type Item = Kv;
-
-    fn next(&mut self) -> Option<Kv> {
-        let kv = self.0.kv();
-        if kv.is_some() {
-            I::next(&mut self.0);
-        }
-        kv
-    }
+    Ok(())
 }
 
 impl<'a> From<&'a [u8]> for SeekKey<'a> {
     fn from(bs: &'a [u8]) -> SeekKey {
         SeekKey::Key(bs)
     }
+}
+
+/// Collect all items of `it` into a vector, generally used for tests.
+///
+/// # Panics
+///
+/// If any errors occur during iterator.
+pub fn collect<I: Iterator>(mut it: I) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut v = Vec::new();
+    let mut it_valid = it.valid().unwrap();
+    while it_valid {
+        let kv = (it.key().to_vec(), it.value().to_vec());
+        v.push(kv);
+        it_valid = it.next().unwrap();
+    }
+    v
 }

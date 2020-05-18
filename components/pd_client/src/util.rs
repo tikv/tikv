@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use tikv_util::collections::HashSet;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -19,12 +18,13 @@ use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
+use security::SecurityManager;
+use tikv_util::collections::HashSet;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -82,7 +82,7 @@ impl Stream for HeartbeatReceiver {
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     timer: Handle,
-    inner: Arc<RwLock<Inner>>,
+    pub(crate) inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
@@ -315,6 +315,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
+    let mut err = None;
     for _ in 0..retry {
         // DO NOT put any lock operation in match statement, or it will cause dead lock!
         let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
@@ -327,11 +328,12 @@ where
                 if let Err(e) = client.reconnect() {
                     error!("reconnect failed"; "err" => ?e);
                 }
+                err.replace(e);
             }
         }
     }
 
-    Err(box_err!("fail to request"))
+    Err(err.unwrap_or(box_err!("fail to request")))
 }
 
 pub fn validate_endpoints(

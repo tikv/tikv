@@ -10,7 +10,7 @@ use grpcio::{
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
-use tikv_util::security::*;
+use security::*;
 
 use kvproto::pdpb::*;
 
@@ -50,7 +50,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let default_handler = Arc::clone(&handler);
         let mocker = PdMock {
             default_handler,
-            case: case.clone(),
+            case,
         };
         let mut server = Server {
             server: None,
@@ -77,8 +77,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         {
             let addrs: Vec<String> = server
                 .bind_addrs()
-                .iter()
-                .map(|addr| format!("{}:{}", addr.0, addr.1))
+                .map(|(host, port)| format!("{}:{}", host, port))
                 .collect();
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
@@ -97,7 +96,12 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server.as_ref().unwrap().bind_addrs().to_vec()
+        self.server
+            .as_ref()
+            .unwrap()
+            .bind_addrs()
+            .map(|(host, port)| (host.clone(), port))
+            .collect()
     }
 }
 
@@ -166,8 +170,23 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.get_members(&req))
     }
 
-    fn tso(&mut self, _: RpcContext<'_>, _: RequestStream<TsoRequest>, _: DuplexSink<TsoResponse>) {
-        unimplemented!()
+    fn tso(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RequestStream<TsoRequest>,
+        resp: DuplexSink<TsoResponse>,
+    ) {
+        let header = Service::header();
+        let fut = resp
+            .send_all(req.map(move |_| {
+                let mut r = TsoResponse::default();
+                r.set_header(header.clone());
+                r.mut_timestamp().physical = 42;
+                (r, WriteFlags::default())
+            }))
+            .map_err(|_| ())
+            .map(|_| ());
+        ctx.spawn(fut);
     }
 
     fn bootstrap(
@@ -390,6 +409,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _req: ScanRegionsRequest,
         _sink: UnarySink<ScanRegionsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn update_service_gc_safe_point(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: UpdateServiceGcSafePointRequest,
+        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
         unimplemented!()
     }

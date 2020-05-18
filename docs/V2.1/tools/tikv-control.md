@@ -19,7 +19,7 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     For this mode, if SSL is enabled in TiKV, `tikv-ctl` also needs to specify the related certificate file. For example:
 
     ```
-    $ tikv-ctl --ca-path ca.pem --cert-path client.pem --key-path client-key.pem --host 127.0.0.1:21060 <subcommands>
+    $ tikv-ctl --ca-path ca.pem --cert-path client.pem --key-path client-key.pem --host 127.0.0.1:20160 <subcommands>
     ```
 
     However, sometimes `tikv-ctl` communicates with PD instead of TiKV. In this case, you need to use the `--pd` option instead of `--host`. Here is an example:
@@ -58,7 +58,7 @@ Use the `raft` subcommand to view the status of the Raft state machine at a spec
 Use the `region` and `log` subcommands to obtain the above information respectively. The two subcommands both support the remote mode and the local mode at the same time. Their usage and output are as follows:
 
 ```bash
-$ tikv-ctl --host 127.0.0.1:21060 raft region -r 2
+$ tikv-ctl --host 127.0.0.1:20160 raft region -r 2
 region id: 2
 region state key: \001\003\000\000\000\000\000\000\000\002\001
 region state: Some(region {id: 2 region_epoch {conf_ver: 3 version: 1} peers {id: 3 store_id: 1} peers {id: 5 store_id: 4} peers {id: 7 store_id: 6}})
@@ -180,9 +180,9 @@ success!
 Use the `consistency-check` command to execute a consistency check among replicas in the corresponding Raft of a specific Region. If the check fails, TiKV itself panics. If the TiKV instance specified by `--host` is not the Region leader, an error is reported.
 
 ```bash
-$ tikv-ctl --host 127.0.0.1:21060 consistency-check -r 2
+$ tikv-ctl --host 127.0.0.1:20160 consistency-check -r 2
 success!
-$ tikv-ctl --host 127.0.0.1:21061 consistency-check -r 2
+$ tikv-ctl --host 127.0.0.1:20161 consistency-check -r 2
 DebugClient::check_region_consistency: RpcFailure(RpcStatus { status: Unknown, details: Some("StringError(\"Leader is on store 1\")") })
 ```
 

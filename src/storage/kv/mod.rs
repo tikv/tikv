@@ -1,35 +1,31 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::UnsafeCell;
-use std::fmt;
-use std::time::Duration;
-use std::{error, ptr, result};
-
-use engine::rocks::TablePropertiesCollection;
-use engine::IterOption;
-use engine::{CfName, CF_DEFAULT};
-use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
-
-use crate::into_other::IntoOther;
-use crate::raftstore::coprocessor::SeekRegionCallback;
-
 mod btree_engine;
-mod compact_listener;
 mod cursor;
 mod perf_context;
 mod rocksdb_engine;
 mod stats;
 
+use std::cell::UnsafeCell;
+use std::fmt;
+use std::time::Duration;
+use std::{error, ptr, result};
+
+use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::IterOptions;
+use engine_traits::{CfName, CF_DEFAULT};
+use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
+
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use into_other::IntoOther;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -110,6 +106,19 @@ pub trait Engine: Send + Clone + 'static {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
+
+    fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT, start, end)
+    }
+
+    fn get_properties_cf(
+        &self,
+        _: CfName,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Result<RocksTablePropertiesCollection> {
+        Err(box_err!("no user properties"))
+    }
 }
 
 pub trait Snapshot: Send + Clone {
@@ -117,19 +126,13 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
-    fn get_properties(&self) -> Result<TablePropertiesCollection> {
-        self.get_properties_cf(CF_DEFAULT)
-    }
-    fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
-        Err(box_err!("no user properties"))
-    }
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
@@ -152,27 +155,22 @@ pub trait Snapshot: Send + Clone {
 }
 
 pub trait Iterator: Send {
-    fn next(&mut self) -> bool;
-    fn prev(&mut self) -> bool;
+    fn next(&mut self) -> Result<bool>;
+    fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
-    fn seek_to_first(&mut self) -> bool;
-    fn seek_to_last(&mut self) -> bool;
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
+    fn seek_to_first(&mut self) -> Result<bool>;
+    fn seek_to_last(&mut self) -> Result<bool>;
+    fn valid(&self) -> Result<bool>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
     }
 
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
-}
-
-pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -187,29 +185,19 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
-            description("request to underhook engine failed")
             display("{:?}", err)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
         EmptyRequest {
-            description("an empty request")
             display("an empty request")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("unknown error {:?}", err)
         }
-    }
-}
-
-impl From<engine::Error> for ErrorInner {
-    fn from(err: engine::Error) -> ErrorInner {
-        ErrorInner::Request(err.into())
     }
 }
 
@@ -251,10 +239,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }
@@ -282,7 +266,9 @@ thread_local! {
 
 /// Execute the closure on the thread local engine.
 ///
-/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+/// # Safety
+///
+/// Precondition: `TLS_ENGINE_ANY` is non-null.
 pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
@@ -309,9 +295,12 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 
 /// Destroy the thread local engine.
 ///
-/// Safety: the current tls engine must have the same type as `E` (or at least
-/// there destructors must be compatible).
 /// Postcondition: `TLS_ENGINE_ANY` is null.
+///
+/// # Safety
+///
+/// The current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
 pub unsafe fn destroy_tls_engine<E: Engine>() {
     // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
     // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.
@@ -381,7 +370,7 @@ pub mod tests {
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -392,7 +381,7 @@ pub mod tests {
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         cursor
@@ -486,7 +475,7 @@ pub mod tests {
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         assert!(!iter
@@ -504,7 +493,7 @@ pub mod tests {
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
@@ -523,7 +512,7 @@ pub mod tests {
         }
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
@@ -539,7 +528,7 @@ pub mod tests {
     fn test_empty_seek<E: Engine>(engine: &E) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOptions::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CfStatistics::default();
         assert!(!cursor
@@ -597,8 +586,8 @@ pub mod tests {
         start_idx: usize,
         step: usize,
     ) {
-        let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
-        let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
+        let mut cursor = snapshot.iter(IterOptions::default(), mode).unwrap();
+        let mut near_cursor = snapshot.iter(IterOptions::default(), mode).unwrap();
         let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start_idx..(SEEK_BOUND as usize * 30))
@@ -732,7 +721,7 @@ pub mod tests {
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Forward)
+            .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
 
         let mut statistics = CfStatistics::default();

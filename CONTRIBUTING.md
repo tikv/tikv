@@ -2,8 +2,9 @@
 
 Thanks for your interest in contributing to TiKV! This document outlines some of the conventions on building, running, and testing TiKV, the development workflow, commit message formatting, contact points and other resources.
 
-If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk), or [WeChat](./README.md#WeChat).
+TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https:/tikv.org/chat), or [WeChat](./README.md#WeChat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
 
+[<img src="images/contribution-map.png" alt="contribution-map" width="180">](https://github.com/pingcap/tidb-map/blob/master/maps/contribution-map.md#tikv-distributed-transactional-key-value-database)
 
 ## Building and setting up a development workspace
 
@@ -62,7 +63,7 @@ It is particularly handy alongside `cargo-watch`, which runs a command each time
 
 ```bash
 cargo install cargo-watch
-cargo watch -s "cargo check -all"
+cargo watch -s "cargo check --all"
 ```
 
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR. Unfortunately, some tests will fail intermittently and others don't pass on all platforms. If you're unsure, just ask!
@@ -127,14 +128,19 @@ This is a rough outline of what a contributor's workflow looks like:
 - Run tests and make sure all tests pass.
 - Push your changes to a branch in your fork of the repository and submit a pull request.
 - Your PR will be reviewed by two maintainers, who may request some changes.
-- Our CI systems automatically test all the pull requests.
+  * Once you've made changes, your PR must be re-reviewed and approved.
+  * If the PR becomes out of date, you can use GitHub's 'update branch' button.
+  * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
+    You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
+- Our CI system automatically tests all pull requests.
+- Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
 Thanks for your contributions!
 
 
 ### Finding something to work on.
 
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
+For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aopen+is%3Aissue+label%3Astatus%2Fhelp-wanted) for a list, in which we have also marked the difficulty level.
 
 If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
 

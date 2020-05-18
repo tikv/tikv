@@ -8,11 +8,10 @@ use std::io::prelude::*;
 use std::sync::Mutex;
 
 use slog::{self, Drain, OwnedKVList, Record};
-use time;
 
 struct Serializer<'a>(&'a mut dyn std::io::Write);
 
-impl<'a> slog::ser::Serializer for Serializer<'a> {
+impl<'a> slog::Serializer for Serializer<'a> {
     fn emit_arguments(&mut self, key: slog::Key, val: &std::fmt::Arguments<'_>) -> slog::Result {
         write!(self.0, ", {}: {}", key, val)?;
         Ok(())
@@ -50,7 +49,7 @@ impl CaseTraceLogger {
             "{}{} {}:{}: [{}] {}",
             tag,
             &time_str[..time_str.len() - 6],
-            record.file().rsplit('/').nth(0).unwrap(),
+            record.file().rsplit('/').next().unwrap(),
             record.line(),
             record.level(),
             record.msg(),
@@ -115,6 +114,7 @@ pub fn init_log_for_test() {
         false, // disable async drainer
         true,  // init std log
         disabled_targets,
+        0,
     )
     .unwrap()
 }

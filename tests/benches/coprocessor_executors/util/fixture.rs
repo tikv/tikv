@@ -15,14 +15,14 @@ use tikv_util::collections::HashMap;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 
-use tidb_query::batch::interface::*;
-use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query::codec::data_type::Decimal;
-use tidb_query::codec::datum::{Datum, DatumEncoder};
-use tidb_query::codec::table::RowColsDict;
-use tidb_query::executor::{Executor, Row};
-use tidb_query::expr::{EvalContext, EvalWarnings};
-use tidb_query::storage::IntervalRange;
+use tidb_query_common::storage::IntervalRange;
+use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query_datatype::codec::data_type::Decimal;
+use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
+use tidb_query_datatype::codec::table::RowColsDict;
+use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+use tidb_query_normal_executors::{Executor, Row};
+use tidb_query_vec_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -287,7 +287,7 @@ impl FixtureBuilder {
                     .set_flag(ft.flag())
                     .set_flen(ft.flen())
                     .set_decimal(ft.decimal())
-                    .set_collation(ft.collation());
+                    .set_collation(ft.collation().unwrap());
                 ci
             })
             .collect();
@@ -341,10 +341,10 @@ impl BatchExecutor for BatchFixtureExecutor {
         for col in &mut self.columns {
             let mut column = LazyBatchColumn::raw_with_capacity(scan_rows);
             if col.len() > scan_rows {
-                column.mut_raw().extend_n(col.raw(), scan_rows);
+                column.mut_raw().copy_n_from(col.raw(), scan_rows);
                 col.mut_raw().shift(scan_rows);
             } else {
-                column.mut_raw().extend(col.raw());
+                column.mut_raw().copy_from(col.raw());
                 col.mut_raw().clear();
             }
             columns.push(column);
@@ -374,6 +374,11 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn take_scanned_range(&mut self) -> IntervalRange {
         unreachable!()
     }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
+        unreachable!()
+    }
 }
 
 pub struct NormalFixtureExecutor {
@@ -385,7 +390,7 @@ impl Executor for NormalFixtureExecutor {
     type StorageStats = Statistics;
 
     #[inline]
-    fn next(&mut self) -> tidb_query::Result<Option<Row>> {
+    fn next(&mut self) -> tidb_query_common::Result<Option<Row>> {
         Ok(self.rows.next())
     }
 
@@ -412,6 +417,11 @@ impl Executor for NormalFixtureExecutor {
 
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
+    }
+
+    #[inline]
+    fn can_be_cached(&self) -> bool {
         unreachable!()
     }
 }
