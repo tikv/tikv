@@ -17,7 +17,6 @@ use tikv::import::SSTImporter;
 
 use engine::Engines;
 use engine_traits::ALL_CFS;
-use pd_client::PdClient;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;

@@ -1,7 +1,6 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use pd_client::PdClient;
 use security::SecurityManager;
 use test_raftstore::TestPdClient;
 use tikv::config::*;
