@@ -235,7 +235,6 @@ numeric_enum_mod! {perf_level_serde PerfLevel {
     Disable = 1,
     EnableCount = 2,
     EnableTimeExceptForMutex = 3,
-    // EnableTimeAndCPUTimeExceptForMutex = 4,
     EnableTime = 4,
     OutOfBounds = 5,
 }}

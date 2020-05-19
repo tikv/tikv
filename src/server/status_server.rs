@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::future::ok;
+use futures::future::{err, ok};
 use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, Future};
 use hyper::service::service_fn;
@@ -17,7 +17,9 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
+use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 pub struct StatusServer {
     thread_pool: ThreadPool,

@@ -615,12 +615,12 @@ macro_rules! report_perf_context {
         if $ctx.perf_level != PerfLevel::Disable {
             let perf_context = PerfContext::get();
             let pre_and_post_process = perf_context.write_pre_and_post_process_time();
-            // let write_thread_wait = perf_context.write_thread_wait_nanos();
+            let write_thread_wait = perf_context.write_thread_wait_nanos();
             observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
             observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
-            // observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            observe_perf_context_type!($ctx, $metric, write_thread_wait);
         }
     };
 }
