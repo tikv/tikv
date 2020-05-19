@@ -147,7 +147,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
     }
 
     /// Whether we met newer ts data.
@@ -707,7 +707,7 @@ where
         Ok(self.read_next()?)
     }
     fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
     }
 }
 

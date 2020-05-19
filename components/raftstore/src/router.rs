@@ -23,7 +23,7 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
     fn read(&self, _ts: Timespec, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
@@ -79,7 +79,7 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<E>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<E::Snapshot>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -150,7 +150,7 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let region_id = cmd.request.get_header().get_region_id();
         self.router

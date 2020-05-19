@@ -34,9 +34,11 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
+use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::security::{check_common_name, SecurityManager};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
@@ -1707,7 +1709,10 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     min_commit_ts,
                 } => {
                     resp.set_lock_ttl(lock_ttl);
-                    if min_commit_ts > caller_start_ts {
+                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+                    // Even though the min_commit_ts is not pushed, the point get can ingore the lock
+                    // next time because it's not committed. So we pretend it has been pushed.
+                    if min_commit_ts > caller_start_ts || caller_start_ts.is_max() {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                 }

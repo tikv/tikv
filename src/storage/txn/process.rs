@@ -270,6 +270,13 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    // The normal write process is respond to clients and release latches
+                    // after async write finished. If pipelined pessimistic lock is enabled,
+                    // the process becomes parallel and there are two msgs for one command:
+                    //   1. Msg::PipelinedWrite: respond to clients
+                    //   2. Msg::WriteFinished: deque context and release latches
+                    // The order between these two msgs is uncertain due to thread scheduling
+                    // so we clone the result for each msg.
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
                         (pr.maybe_clone().unwrap(), pr)
                     } else {
@@ -280,6 +287,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         sched_pool
                             .pool
                             .spawn(async move {
+                                fail_point!("scheduler_async_write_finish");
+
                                 notify_scheduler(
                                     sched,
                                     Msg::WriteFinished {
@@ -305,6 +314,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else if pipelined {
+                        fail_point!("scheduler_pipelined_write_finish");
+
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
                         Msg::PipelinedWrite {
@@ -445,7 +456,7 @@ fn process_read_impl<E: Engine>(
                 };
                 Ok(ProcessResult::NextCommand {
                     cmd: ResolveLock::new(
-                        mem::replace(txn_status, Default::default()),
+                        mem::take(txn_status),
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),
@@ -780,7 +791,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !cmd.ctx.get_not_fill_cache());
 
             let mut scan_key = scan_key.take();
-            let mut write_size = 0;
             let rows = key_locks.len();
             // Map txn's start_ts to ReleasedLocks
             let mut released_locks = HashMap::default();
@@ -805,8 +815,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
                     .push(released);
 
-                write_size += txn.write_size();
-                if write_size >= MAX_TXN_WRITE_SIZE {
+                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(current_key);
                     break;
                 }

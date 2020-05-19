@@ -7,16 +7,17 @@ use super::{
 
 use std::{
     convert::TryInto,
+    fmt::Display,
     io::{Error, ErrorKind, Read, Result},
     sync::Arc,
 };
 
 use bytes::Bytes;
 use futures_util::{
+    future::{FutureExt, TryFutureExt},
     io::AsyncRead,
-    stream::{StreamExt, TryStreamExt},
+    stream::TryStreamExt,
 };
-use http::Method;
 use kvproto::backup::Gcs as Config;
 use reqwest::{Body, Client};
 use tame_gcs::{
@@ -26,12 +27,39 @@ use tame_gcs::{
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
 
+const HARDCODED_ENDPOINTS: &[&str] = &[
+    "https://www.googleapis.com/upload/storage/v1",
+    "https://www.googleapis.com/storage/v1",
+];
+
 // GCS compatible storage
 #[derive(Clone)]
 pub struct GCSStorage {
     config: Config,
     svc_access: Arc<ServiceAccountAccess>,
     client: Client,
+}
+
+trait ResultExt {
+    type Ok;
+
+    // Maps the error of this result as an `std::io::Error` with `Other` error
+    // kind.
+    fn or_io_error<D: Display>(self, msg: D) -> Result<Self::Ok>;
+
+    // Maps the error of this result as an `std::io::Error` with `InvalidInput`
+    // error kind.
+    fn or_invalid_input<D: Display>(self, msg: D) -> Result<Self::Ok>;
+}
+
+impl<T, E: Display> ResultExt for std::result::Result<T, E> {
+    type Ok = T;
+    fn or_io_error<D: Display>(self, msg: D) -> Result<T> {
+        self.map_err(|e| Error::new(ErrorKind::Other, format!("{}: {}", msg, e)))
+    }
+    fn or_invalid_input<D: Display>(self, msg: D) -> Result<T> {
+        self.map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
+    }
 }
 
 impl GCSStorage {
@@ -43,24 +71,13 @@ impl GCSStorage {
         if config.credentials_blob.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing credentials"));
         }
-        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid credentials_blob: {}", e),
-            )
-        })?;
-        let svc_access = ServiceAccountAccess::new(svc_info).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid credentials_blob {}", e),
-            )
-        })?;
-        let client = Client::builder().build().map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("unable to create reqwest client: {}", e),
-            )
-        })?;
+        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob)
+            .or_invalid_input("invalid credentials_blob")?;
+        let svc_access =
+            ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
+        let client = Client::builder()
+            .build()
+            .or_io_error("unable to create reqwest client")?;
         Ok(GCSStorage {
             config: config.clone(),
             svc_access: Arc::new(svc_access),
@@ -80,48 +97,42 @@ impl GCSStorage {
         R: AsyncRead + Send + Unpin,
     {
         let uri = req.uri().to_string();
-        let builder = match req.method().clone() {
-            Method::GET => self.client.get(&uri),
-            Method::POST => self.client.post(&uri),
-            method => {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("method unimplemented: {}", method.as_str()),
-                ))
-            }
-        };
-        Ok(builder
+        self.client
+            .request(req.method().clone(), &uri)
             .headers(req.headers().clone())
             .body(Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(
                 req.into_body(),
             )))
             .build()
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to build request: {}", e)))?)
+            .or_io_error("failed to build request")
     }
 
-    fn convert_response(&self, res: reqwest::Response) -> Result<http::Response<Bytes>> {
+    async fn convert_response(
+        &self,
+        tag: &str,
+        res: reqwest::Response,
+    ) -> Result<http::Response<Bytes>> {
         let mut builder = http::Response::builder()
             .status(res.status())
             .version(res.version());
         for (key, value) in res.headers().iter() {
             builder = builder.header(key, value);
         }
-        // Use blocking IO, since conver_response is only used to read access token.
-        let content = block_on_external_io(res.bytes())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to read response: {}", e)))?;
-        builder.body(content).map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("failed to build response body: {}", e),
-            )
-        })
+        // convert_response is only used to read access token.
+        let content = res
+            .bytes()
+            .await
+            .or_io_error(format_args!("failed to read {} response", tag))?;
+        builder
+            .body(content)
+            .or_io_error(format_args!("failed to build {} response body", tag))
     }
 
-    fn set_auth(&self, req: &mut reqwest::Request, scope: tame_gcs::Scopes) -> Result<()> {
+    async fn set_auth(&self, req: &mut reqwest::Request, scope: tame_gcs::Scopes) -> Result<()> {
         let token_or_request = self
             .svc_access
             .get_token(&[scope])
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to get token: {}", e)))?;
+            .or_io_error("failed to get token")?;
         let token = match token_or_request {
             TokenOrRequest::Token(token) => token,
             TokenOrRequest::Request {
@@ -129,52 +140,60 @@ impl GCSStorage {
                 scope_hash,
                 ..
             } => {
-                // Use blocking IO.
-                let res =
-                    block_on_external_io(self.client.execute(request.into())).map_err(|e| {
-                        Error::new(ErrorKind::Other, format!("request token failed: {}", e))
-                    })?;
-                let response = self.convert_response(res)?;
+                let res = self
+                    .client
+                    .execute(request.into())
+                    .await
+                    .or_io_error("request GCS access token failed")?;
+                let response = self.convert_response("GCS access token", res).await?;
 
                 self.svc_access
                     .parse_token_response(scope_hash, response)
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::Other,
-                            format!("failed to parse token response: {}", e),
-                        )
-                    })?
+                    .or_io_error("failed to parse GCS token response")?
             }
         };
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
-            token.try_into().map_err(|e| {
-                Error::new(ErrorKind::Other, format!("failed to set auth token: {}", e))
-            })?,
+            token
+                .try_into()
+                .or_io_error("failed to set GCS auth token")?,
         );
 
         Ok(())
     }
 
-    fn make_request(
+    async fn make_request(
         &self,
         mut req: reqwest::Request,
         scope: tame_gcs::Scopes,
     ) -> Result<reqwest::Response> {
-        self.set_auth(&mut req, scope)?;
-        let response = block_on_external_io(self.client.execute(req))
-            .map_err(|e| Error::new(ErrorKind::Other, format!("make request fail: {}", e)))?;
+        // replace the hard-coded GCS endpoint by the custom one.
+        let endpoint = self.config.get_endpoint();
+        if !endpoint.is_empty() {
+            let url = req.url().as_str();
+            for hardcoded in HARDCODED_ENDPOINTS {
+                if url.starts_with(hardcoded) {
+                    *req.url_mut() = reqwest::Url::parse(
+                        &[endpoint.trim_end_matches('/'), &url[hardcoded.len()..]].concat(),
+                    )
+                    .or_invalid_input("invalid custom GCS endpoint")?;
+                    break;
+                }
+            }
+        }
+
+        self.set_auth(&mut req, scope).await?;
+        let response = self
+            .client
+            .execute(req)
+            .await
+            .or_io_error("make GCS request failed")?;
         if !response.status().is_success() {
             let status = response.status();
-            let text = block_on_external_io(response.text()).map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!(
-                        "request failed and failed to read error message, status: {}, error: {}",
-                        status, e
-                    ),
-                )
-            })?;
+            let text = response.text().await.or_io_error(format_args!(
+                "GCS request failed and failed to read error message, status: {}, error",
+                status
+            ))?;
             return Err(Error::new(
                 ErrorKind::Other,
                 format!("request failed. status: {}, text: {}", status, text),
@@ -213,12 +232,10 @@ impl ExternalStorage for GCSStorage {
             None
         } else {
             Some(
-                serde_json::from_str(&self.config.storage_class).map_err(|e| {
-                    Error::new(
-                        ErrorKind::InvalidInput,
-                        format!("invalid storage_class {}: {}", self.config.storage_class, e),
-                    )
-                })?,
+                serde_json::from_str(&self.config.storage_class).or_invalid_input(format_args!(
+                    "invalid storage_class {}",
+                    self.config.storage_class
+                ))?,
             )
         };
         // Convert manually since PredefinedAcl doesn't implement Deserialize.
@@ -247,18 +264,14 @@ impl ExternalStorage for GCSStorage {
             ..Default::default()
         });
         let req = Object::insert_multipart(&bucket, reader, content_length, &metadata, optional)
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("failed to create insert request: {}", e),
-                )
-            })?;
-        self.make_request(self.convert_request(req)?, tame_gcs::Scopes::ReadWrite)?;
-
+            .or_io_error("failed to create GCS insert request")?;
+        block_on_external_io(
+            self.make_request(self.convert_request(req)?, tame_gcs::Scopes::ReadWrite),
+        )?;
         Ok(())
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         let bucket = self.config.bucket.clone();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);
@@ -277,22 +290,20 @@ impl ExternalStorage for GCSStorage {
         if let Err(e) = body.read_to_end(&mut body_content) {
             return GCSStorage::error_to_async_read(ErrorKind::Other, e);
         }
-        let response = match self.make_request(
-            http::Request::from_parts(parts, body_content).into(),
-            tame_gcs::Scopes::ReadOnly,
-        ) {
-            Ok(response) => response,
-            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::Other, e),
-        };
+
         Box::new(
-            response
-                .bytes_stream()
-                .map(|result| {
-                    result.map_err(|e| {
-                        Error::new(ErrorKind::Other, format!("download from gcs error {}", e))
-                    })
+            self.make_request(
+                http::Request::from_parts(parts, body_content).into(),
+                tame_gcs::Scopes::ReadOnly,
+            )
+            .boxed() // this `.boxed()` pin the future.
+            .map_ok(|response| {
+                response.bytes_stream().map_err(|e| {
+                    Error::new(ErrorKind::Other, format!("download from gcs error {}", e))
                 })
-                .into_async_read(),
+            })
+            .try_flatten_stream()
+            .into_async_read(),
         )
     }
 }

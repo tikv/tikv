@@ -3,8 +3,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use fail;
-
 use test_raftstore::*;
 
 use tikv_util::config::*;

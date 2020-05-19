@@ -79,6 +79,7 @@ portable = ["tikv/portable"]
 
 [dependencies]
 fail = { version = "0.3", optional = true }
+batch-system = { path = "../components/batch-system" }
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
@@ -126,9 +127,11 @@ rand_xorshift = "0.2"
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 external_storage = { path = "../components/external_storage" }
+hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys" }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
+security = { path = "../components/security" }
 tipb_helper = { path = "../components/tipb_helper" }
 tidb_query_datatype = { path = "../components/tidb_query_datatype" }
 test_util = { path = "../components/test_util" }

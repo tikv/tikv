@@ -8,7 +8,6 @@ use async_stream::try_stream;
 use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
-use rand::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -182,7 +181,11 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
-                let tag = if table_scan { "select" } else { "index" };
+                let tag = if table_scan {
+                    ReqTag::select
+                } else {
+                    ReqTag::index
+                };
 
                 req_ctx = ReqContext::new(
                     tag,
@@ -230,9 +233,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "analyze_table"
+                    ReqTag::analyze_table
                 } else {
-                    "analyze_index"
+                    ReqTag::analyze_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -261,9 +264,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "checksum_table"
+                    ReqTag::checksum_table
                 } else {
-                    "checksum_index"
+                    ReqTag::checksum_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -386,9 +389,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
@@ -499,9 +500,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
@@ -740,7 +739,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
