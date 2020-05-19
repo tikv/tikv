@@ -834,8 +834,14 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 let requests: Vec<_> = req.take_requests().into();
                 let mut batch_commands = Vec::default();
                 let mut reqs = Vec::default();
+                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
                 for (mut req, id) in requests.into_iter().zip(request_ids) {
                     if let Some(ref mut cmd) = req.cmd {
+                        if reqs.len() > 8 {
+                            future_batch_get_command(&storage, reqs, batch_commands, tx.clone());
+                            batch_commands = Vec::default();
+                            reqs = Vec::default();
+                        }
                         match cmd {
                             batch_commands_request::request::Cmd::Get(get_req)
                                 if get_req.get_context().get_priority() == CommandPri::Normal =>
