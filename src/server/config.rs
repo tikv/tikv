@@ -159,7 +159,7 @@ impl Default for Config {
             heavy_load_threshold: 300,
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
-            enable_request_batch: false,
+            enable_request_batch: true,
             request_batch_enable_cross_command: false,
             request_batch_wait_duration: ReadableDuration::millis(1),
         }
