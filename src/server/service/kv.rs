@@ -897,17 +897,19 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 let request_ids = req.take_request_ids();
                 let requests: Vec<_> = req.take_requests().into();
                 GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-                for (id, req) in request_ids.into_iter().zip(requests) {
-                    handle_batch_commands_request(
-                        &storage,
-                        &gc_worker,
-                        &cop,
-                        &peer,
-                        id,
-                        req,
-                        tx.clone(),
-                    );
-                }
+                GRPC_BATCH_HANDLE_TIME.observe_closure_duration(|| {
+                    for (id, req) in request_ids.into_iter().zip(requests) {
+                        handle_batch_commands_request(
+                            &storage,
+                            &gc_worker,
+                            &cop,
+                            &peer,
+                            id,
+                            req,
+                            tx.clone(),
+                        );
+                    }
+                });
                 future::ok(())
             });
             ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));

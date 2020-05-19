@@ -241,6 +241,12 @@ lazy_static! {
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
+    pub static ref GRPC_BATCH_HANDLE_TIME: Histogram = register_histogram!(
+        "tikv_server_grpc_batch_handle_time",
+        "handle time of a gRPC batch",
+        exponential_buckets(1e-7f64, 2f64, 20).unwrap()
+    )
+    .unwrap();
     pub static ref GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
