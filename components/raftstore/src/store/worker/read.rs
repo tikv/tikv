@@ -20,7 +20,7 @@ use crate::store::{
     RequestInspector, RequestPolicy,
 };
 use crate::Result;
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::Instant;
@@ -167,7 +167,7 @@ where
     // region id -> ReadDelegate
     delegates: HashMap<u64, Option<ReadDelegate>>,
     // A channel to raftstore.
-    snap: RegionSnapshot<E>,
+    snap: RegionSnapshot<E::Snapshot>,
     last_read_ts: Timespec,
     router: C,
     tag: String,
@@ -178,7 +178,7 @@ impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
         let region = metapb::Region::default();
         let last_read_ts = monotonic_raw_now();
         let snap = RegionSnapshot::from_snapshot(
-            kv_engine.snapshot().into_sync(),
+            Arc::new(kv_engine.snapshot()),
             Arc::new(region),
             last_read_ts,
         );
@@ -201,7 +201,7 @@ where
     C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
-    fn redirect(&self, mut cmd: RaftCommand<E::Snapshot>) {
+    fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
@@ -329,7 +329,7 @@ where
                                 snapshot.set_region(delegate.region.clone());
                                 Some(snapshot)
                             } else {
-                                let snap = self.kv_engine.snapshot().into_sync();
+                                let snap = Arc::new(self.kv_engine.snapshot());
                                 self.snap = RegionSnapshot::from_snapshot(
                                     snap,
                                     delegate.region.clone(),
@@ -395,7 +395,7 @@ where
     }
 
     #[inline]
-    pub fn read(&mut self, ts: Timespec, cmd: RaftCommand<E>) {
+    pub fn read(&mut self, ts: Timespec, cmd: RaftCommand<E::Snapshot>) {
         self.propose_raft_command(ts, cmd);
         self.metrics.maybe_flush();
     }

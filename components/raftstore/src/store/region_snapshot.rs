@@ -39,16 +39,20 @@ where
     pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
         RegionSnapshot::from_snapshot(
             Arc::new(ps.raw_snapshot()),
-            ps.region().clone(),
+            Arc::new(ps.region().clone()),
             Timespec::new(0, 0),
         )
     }
 
     pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region, Timespec::new(0, 0))
+        RegionSnapshot::from_snapshot(
+            Arc::new(db.snapshot()),
+            Arc::new(region),
+            Timespec::new(0, 0),
+        )
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Region, ts: Timespec) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>, ts: Timespec) -> RegionSnapshot<S> {
         RegionSnapshot {
             ts,
             snap,

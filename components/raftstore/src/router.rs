@@ -26,7 +26,12 @@ where
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
-    fn read(&self, _ts: Timespec, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
+    fn read(
+        &self,
+        _ts: Timespec,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
 
@@ -158,7 +163,12 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn read(&self, ts: Timespec, req: RaftCmdRequest, cb: Callback<E>) -> RaftStoreResult<()> {
+    fn read(
+        &self,
+        ts: Timespec,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.read(ts, cmd);

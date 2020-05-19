@@ -4,12 +4,12 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, KvEngines, Peekable, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -3063,7 +3063,7 @@ where
         region: &metapb::Region,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<E> {
+    ) -> ReadResponse<E::Snapshot> {
         if check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
@@ -3080,7 +3080,7 @@ where
 
         let (response, need_snapshot) = Self::execute(engine, msg, region, read_index);
         let snapshot = if need_snapshot {
-            let snapshot = engine.snapshot().into_sync();
+            let snapshot = Arc::new(engine.snapshot());
             Some(RegionSnapshot::from_snapshot(
                 snapshot,
                 Arc::new(region.clone()),
