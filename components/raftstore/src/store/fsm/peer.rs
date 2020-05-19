@@ -1704,7 +1704,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .unwrap()
                     .group
                     .group_id(self.fsm.peer.replication_mode_version, peer.store_id);
-                if None != group_id && group_id != Some(0) {
+                if group_id.unwrap_or(0) != 0 {
                     info!("updating group"; "peer_id" => peer.id, "group_id" => group_id.unwrap());
                     self.fsm
                         .peer
