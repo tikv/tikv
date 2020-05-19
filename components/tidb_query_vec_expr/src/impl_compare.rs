@@ -889,8 +889,8 @@ mod tests {
     }
 
     #[test]
-    fn test_greatest() {
-        let _int_cases = vec![
+    fn test_greatest_int() {
+        let cases = vec![
             (vec![None, None], None),
             (vec![Some(1), Some(1)], Some(1)),
             (vec![Some(1), Some(-1), None], None),
@@ -902,7 +902,18 @@ mod tests {
             (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
         ];
 
-        let _real_cases = vec![
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_real() {
+        let cases = vec![
             (vec![None, None], None),
             (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
             (
@@ -934,27 +945,12 @@ mod tests {
             ),
         ];
 
-        fn test_greatest_int(cases: Vec<(Vec<Option<i64>>, Option<i64>)>) {
-            for (row, expected) in cases {
-                let output = RpnFnScalarEvaluator::new()
-                    .push_params(row)
-                    .evaluate(ScalarFuncSig::GreatestInt)
-                    .unwrap();
-                assert_eq!(output, expected);
-            }
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestReal)
+                .unwrap();
+            assert_eq!(output, expected);
         }
-
-        fn test_greatest_real(cases: Vec<(Vec<Option<Real>>, Option<Real>)>) {
-            for (row, expected) in cases {
-                let output = RpnFnScalarEvaluator::new()
-                    .push_params(row)
-                    .evaluate(ScalarFuncSig::GreatestReal)
-                    .unwrap();
-                assert_eq!(output, expected);
-            }
-        }
-
-        test_greatest_int(_int_cases);
-        test_greatest_real(_real_cases);
     }
 }
