@@ -53,7 +53,7 @@ impl MemAesGcmBackend {
                 ))
             })?;
         if method.as_slice() != MetadataMethod::Aes256Gcm.as_slice() {
-            return Err(Error::WrongMasterKey(box_err!(
+            return Err(Error::Other(box_err!(
                 "encryption method mismatch, expected {:?} vs actual {:?}",
                 MetadataMethod::Aes256Gcm.as_slice(),
                 method
@@ -70,10 +70,12 @@ impl MemAesGcmBackend {
         let tag = content
             .get_metadata()
             .get(MetadataKey::AesGcmTag.as_str())
-            .ok_or_else(|| Error::WrongMasterKey(box_err!("gcm tag not found")))?;
+            .ok_or_else(|| Error::Other(box_err!("gcm tag not found")))?;
         let gcm_tag = AesGcmTag::from(tag.as_slice());
         let ciphertext = content.get_content();
-        let plaintext = AesGcmCrypter::new(key, iv).decrypt(ciphertext, gcm_tag)?;
+        let plaintext = AesGcmCrypter::new(key, iv)
+            .decrypt(ciphertext, gcm_tag)
+            .map_err(|e| Error::WrongMasterKey(box_err!("decrypt in GCM mode failed: {}", e)))?;
         Ok(plaintext)
     }
 }
@@ -81,6 +83,7 @@ impl MemAesGcmBackend {
 #[cfg(test)]
 mod tests {
     use hex::FromHex;
+    use matches::assert_matches;
 
     use super::*;
 
@@ -114,19 +117,56 @@ mod tests {
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
 
-        // Must fail to decrypt due to invalid tag.
-        let mut encrypted_content1 = encrypted_content.clone();
-        encrypted_content1
+        // Must fail is method not found.
+        let mut encrypted_content_missing_method = encrypted_content.clone();
+        encrypted_content_missing_method
+            .mut_metadata()
+            .remove(MetadataKey::Method.as_str());
+        assert_matches!(
+            backend
+                .decrypt_content(&encrypted_content_missing_method)
+                .unwrap_err(),
+            Error::Other(_)
+        );
+
+        // Must fail if method is not aes256-gcm.
+        let mut encrypted_content_invalid_method = encrypted_content.clone();
+        let mut invalid_suffix = b"_invalid".to_vec();
+        encrypted_content_invalid_method
+            .mut_metadata()
+            .get_mut(MetadataKey::Method.as_str())
+            .unwrap()
+            .append(&mut invalid_suffix);
+        assert_matches!(
+            backend
+                .decrypt_content(&encrypted_content_invalid_method)
+                .unwrap_err(),
+            Error::Other(_)
+        );
+
+        // Must fail if tag not found.
+        let mut encrypted_content_missing_tag = encrypted_content.clone();
+        encrypted_content_missing_tag
+            .mut_metadata()
+            .remove(MetadataKey::AesGcmTag.as_str());
+        assert_matches!(
+            backend
+                .decrypt_content(&encrypted_content_missing_tag)
+                .unwrap_err(),
+            Error::Other(_)
+        );
+
+        // Must fail with WrongMasterKey error due to mismatched tag.
+        let mut encrypted_content_mismatch_tag = encrypted_content;
+        encrypted_content_mismatch_tag
             .mut_metadata()
             .get_mut(MetadataKey::AesGcmTag.as_str())
             .unwrap()[0] ^= 0b11111111u8;
-        backend.decrypt_content(&encrypted_content1).unwrap_err();
-
-        // Must tag not found.
-        let mut encrypted_content2 = encrypted_content;
-        encrypted_content2
-            .mut_metadata()
-            .remove(MetadataKey::AesGcmTag.as_str());
-        backend.decrypt_content(&encrypted_content2).unwrap_err();
+        assert_matches!(
+            backend
+                .decrypt_content(&encrypted_content_mismatch_tag)
+                .unwrap_err(),
+            Error::WrongMasterKey(_)
+        );
     }
 }
