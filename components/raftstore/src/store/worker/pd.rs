@@ -28,7 +28,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -695,9 +695,18 @@ where
             .with_label_values(&["available"])
             .set(available as i64);
 
-        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .store_heartbeat(stats)
+            .map_err(|e| {
+                error!("store heartbeat failed"; "err" => ?e);
+            })
+            .map(move |status| {
+                if let Some(status) = status {
+                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                }
+            });
         handle.spawn(f);
     }
 

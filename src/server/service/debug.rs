@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::MiscExt;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -20,8 +20,8 @@ use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
+use security::{check_common_name, SecurityManager};
 use tikv_util::metrics;
-use tikv_util::security::{check_common_name, SecurityManager};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -367,8 +367,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
+                resp.set_rocksdb_kv(box_try!(engines.kv.c().dump_stats()));
+                resp.set_rocksdb_raft(box_try!(engines.raft.c().dump_stats()));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)

@@ -17,6 +17,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::cmp::{Ord, Ordering as CmpOrdering};
@@ -199,6 +200,10 @@ impl<E: KvEngine> RaftRouter<E> {
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
         });
+    }
+
+    fn report_status_update(&self) {
+        self.broadcast_normal(|| PeerMsg::UpdateReplicationMode)
     }
 
     /// Broadcasts resolved result to all regions.
@@ -452,6 +457,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::Start { store } => self.start(store),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
+                StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
             }
         }
     }
@@ -825,7 +831,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 region,
             ));
-            peer.peer.init_commit_group(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut *replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -863,7 +869,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 self.engines.clone(),
                 &region,
             )?;
-            peer.peer.init_commit_group(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut *replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -1246,12 +1252,8 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
-    let (router, system) = batch_system::create_system(
-        cfg.store_pool_size,
-        cfg.store_max_batch_size,
-        store_tx,
-        store_fsm,
-    );
+    let (router, system) =
+        batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
     let raft_router = RaftRouter { router };
     let system = RaftBatchSystem {
         system,
@@ -1549,7 +1551,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             target.clone(),
         )?;
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_commit_group(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
@@ -2110,6 +2112,24 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+    }
+
+    fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
+        let mut state = self.ctx.global_replication_state.lock().unwrap();
+        if state.status.mode == status.mode {
+            if status.get_mode() == ReplicationMode::Majority {
+                return;
+            }
+            let exist_dr = state.status.get_dr_auto_sync();
+            let dr = status.get_dr_auto_sync();
+            if exist_dr.state_id == dr.state_id && exist_dr.state == dr.state {
+                return;
+            }
+        }
+        info!("updating replication mode"; "status" => ?status);
+        state.status = status;
+        drop(state);
+        self.ctx.router.report_status_update()
     }
 }
 

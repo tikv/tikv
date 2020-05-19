@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
@@ -11,6 +11,7 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -54,7 +55,7 @@ pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
-///  - `Read`: a callbak for read only requests including `StatusRequest`,
+///  - `Read`: a callback for read only requests including `StatusRequest`,
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
@@ -253,9 +254,8 @@ pub enum CasualMessage<E: KvEngine> {
     /// Notifies that a new snapshot has been generated.
     SnapshotGenerated,
 
-    /// A test only message, it is useful when we want to access
-    /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+    /// A message to access peer's internal state.
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
 }
 
 impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
@@ -293,7 +293,7 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
             CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
-            CasualMessage::Test(_) => write!(fmt, "Test"),
+            CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
         }
     }
 }
@@ -344,6 +344,8 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Asks region to change replication mode.
+    UpdateReplicationMode,
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -362,6 +364,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
         }
     }
 }
@@ -392,9 +395,11 @@ pub enum StoreMsg {
         store: metapb::Store,
     },
 
-    /// Messge only used for test
+    /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -419,13 +424,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
+            StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
-}
-
-// TODO: remove this enum and utilize the actual message instead.
-#[derive(Debug)]
-pub enum Msg {
-    PeerMsg(PeerMsg<RocksEngine>),
-    StoreMsg(StoreMsg),
 }

@@ -8,7 +8,6 @@ use async_stream::try_stream;
 use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
-use rand::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -390,9 +389,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
@@ -503,9 +500,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool

@@ -1,19 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod engine_metrics;
-pub mod stats;
-
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use self::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
-    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
-    ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
 use crate::{Error, Result};
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
@@ -237,57 +227,6 @@ pub fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-pub(crate) fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
-    let mut cf_used_size = engine
-        .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-        .expect("rocksdb is too old, missing total-sst-files-size property");
-    // For memtable
-    if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
-        cf_used_size += mem_table;
-    }
-    // For blob files
-    if let Some(live_blob) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
-    {
-        cf_used_size += live_blob;
-    }
-    if let Some(obsolete_blob) =
-        engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
-    {
-        cf_used_size += obsolete_blob;
-    }
-
-    cf_used_size
-}
-
-/// Gets engine's compression ratio at given level.
-pub fn get_engine_compression_ratio_at_level(
-    engine: &DB,
-    handle: &CFHandle,
-    level: usize,
-) -> Option<f64> {
-    let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
-    if let Some(v) = engine.get_property_value_cf(handle, &prop) {
-        if let Ok(f) = f64::from_str(&v) {
-            // RocksDB returns -1.0 if the level is empty.
-            if f >= 0.0 {
-                return Some(f);
-            }
-        }
-    }
-    None
-}
-
-/// Gets the number of files at given level of given column family.
-pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
-    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
-    engine.get_property_int_cf(handle, &prop)
-}
-
-/// Gets the number of immutable mem-table of given column family.
-pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
-    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
-}
-
 pub struct FixedSuffixSliceTransform {
     pub suffix_len: usize,
 }
@@ -365,7 +304,7 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
+    use crate::rocks::{ColumnFamilyOptions, DBOptions, DB};
     use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
 
@@ -451,24 +390,5 @@ mod tests {
         let cf_test = db.cf_handle("cf_dynamic_level_bytes").unwrap();
         let tmp_cf_opts = db.get_options_cf(cf_test);
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
-    }
-
-    #[test]
-    fn test_compression_ratio() {
-        let path = Builder::new()
-            .prefix("_util_rocksdb_test_compression_ratio")
-            .tempdir()
-            .unwrap();
-        let path_str = path.path().to_str().unwrap();
-
-        let opts = DBOptions::new();
-        let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
-        let db = new_engine_opt(path_str, opts, vec![cf_opts]).unwrap();
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
-
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_none());
-        db.put_cf(cf, b"a", b"a").unwrap();
-        db.flush_cf(cf, true).unwrap();
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
     }
 }

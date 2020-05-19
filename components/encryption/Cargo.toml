@@ -44,3 +44,4 @@ toml = "0.4"
 rusoto_mock = "0.43.0"
 rust-ini = "0.14.0"
 structopt = "0.3"
+test_util = { path = "../test_util" }
