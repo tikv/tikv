@@ -329,14 +329,16 @@ where
                                 snapshot.set_region(delegate.region.clone());
                                 Some(snapshot)
                             } else {
-                                let snap = Arc::new(self.kv_engine.snapshot());
-                                self.snap = RegionSnapshot::from_snapshot(
-                                    snap,
+                                let snap = RegionSnapshot::from_snapshot(
+                                    Arc::new(self.kv_engine.snapshot()),
                                     delegate.region.clone(),
                                     snapshot_ts,
                                 );
-                                self.last_read_ts = ts;
-                                Some(self.snap.clone())
+                                if ts.sec != 0 {
+                                    self.snap = snap.clone();
+                                    self.last_read_ts = ts;
+                                }
+                                Some(snap)
                             }
                         } else {
                             None
@@ -386,12 +388,6 @@ where
         self.delegates.remove(&region_id);
         // Forward to raftstore.
         self.redirect(cmd);
-    }
-
-    #[inline]
-    pub fn execute_raft_command(&mut self, cmd: RaftCommand<E::Snapshot>) {
-        self.propose_raft_command(Timespec { sec: 0, nsec: 0 }, cmd);
-        self.metrics.maybe_flush();
     }
 
     #[inline]
@@ -707,8 +703,8 @@ mod tests {
 
         // The region is not register yet.
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_no_region, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 1);
+        assert_eq!(reader.metrics.rejected_by_no_region, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -731,9 +727,9 @@ mod tests {
 
         // The applied_index_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 2);
-        assert_eq!(reader.metrics.borrow().rejected_by_appiled_term, 1);
-        assert!(reader.delegates.borrow().get(&1).is_none());
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
+        assert_eq!(reader.metrics.rejected_by_appiled_term, 1);
+        assert!(reader.delegates.get(&1).is_none());
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -744,7 +740,7 @@ mod tests {
         let task =
             RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1;
@@ -760,7 +756,7 @@ mod tests {
         // Wait for expiration.
         thread::sleep(Duration::seconds(1).to_std().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_lease_expire, 1);
+        assert_eq!(reader.metrics.rejected_by_lease_expire, 1);
 
         // Renew lease.
         lease.renew(monotonic_raw_now());
@@ -780,8 +776,8 @@ mod tests {
             })),
         );
         reader.propose_raft_command(None, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_store_id_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
+        assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // metapb::Peer id mismatch.
         let mut cmd_peer_id = cmd.clone();
@@ -801,14 +797,14 @@ mod tests {
             })),
         );
         reader.propose_raft_command(None, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_peer_id_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 4);
+        assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         must_redirect(&mut reader, &rx, cmd_read_quorum);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 5);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
         // Term mismatch.
         let mut cmd_term = cmd.clone();
@@ -822,8 +818,8 @@ mod tests {
             })),
         );
         reader.propose_raft_command(None, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_term_mismatch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 6);
+        assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 6);
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -831,19 +827,19 @@ mod tests {
         let mut cmd_epoch = cmd.clone();
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
-        assert_eq!(reader.metrics.borrow().rejected_by_epoch, 1);
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 7);
+        assert_eq!(reader.metrics.rejected_by_epoch, 1);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 7);
 
         // Expire lease manually, and it can not be renewed.
-        let previous_lease_rejection = reader.metrics.borrow().rejected_by_lease_expire;
+        let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
         lease.expire();
         lease.renew(monotonic_raw_now());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
-            reader.metrics.borrow().rejected_by_lease_expire,
+            reader.metrics.rejected_by_lease_expire,
             previous_lease_rejection + 1
         );
-        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 8);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 8);
 
         // Channel full.
         let task1 = RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::None);
@@ -859,10 +855,10 @@ mod tests {
         reader.propose_raft_command(task_full);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(reader.metrics.borrow().rejected_by_channel_full, 1);
+        assert_eq!(reader.metrics.rejected_by_channel_full, 1);
 
         // Reject by term mismatch in lease.
-        let previous_term_rejection = reader.metrics.borrow().rejected_by_term_mismatch;
+        let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
         let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
         let task = RaftCommand::<RocksSnapshot>::new(
@@ -890,7 +886,7 @@ mod tests {
             cmd9
         );
         assert_eq!(
-            reader.metrics.borrow().rejected_by_term_mismatch,
+            reader.metrics.rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
     }
