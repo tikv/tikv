@@ -33,6 +33,7 @@ use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::metrics::*;
+use crate::service::ConnID;
 use crate::{Error, Result};
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
@@ -98,6 +99,7 @@ pub struct Downstream {
     id: DownstreamID,
     // The reqeust ID set by CDC to identify events corresponding different requests.
     req_id: u64,
+    conn_id: ConnID,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
@@ -110,10 +112,16 @@ impl Downstream {
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
-    pub fn new(peer: String, region_epoch: RegionEpoch, req_id: u64) -> Downstream {
+    pub fn new(
+        peer: String,
+        region_epoch: RegionEpoch,
+        req_id: u64,
+        conn_id: ConnID,
+    ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
             req_id,
+            conn_id,
             peer,
             region_epoch,
             sink: None,
@@ -146,6 +154,10 @@ impl Downstream {
 
     pub fn get_state(&self) -> DownstreamState {
         self.state.clone()
+    }
+
+    pub fn get_conn_id(&self) -> ConnID {
+        self.conn_id
     }
 
     pub fn sink_duplicate_error(&self, region_id: u64) {
@@ -242,6 +254,10 @@ impl Delegate {
                 true,  /* check_ver */
                 true,  /* include_region */
             ) {
+                info!("fail to subscribe downstream";
+                    "region_id" => region.get_id(),
+                    "downstream_id" => ?downstream.get_id(),
+                    "err" => ?e);
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink_event(change_data_error, 0);
@@ -356,8 +372,8 @@ impl Delegate {
             .sink_event(change_data_event, size);
     }
 
-    /// Install a resolver and notify downstreams this region if ready to serve.
-    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Result<()> {
+    /// Install a resolver and return pending downstreams.
+    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Vec<Downstream> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
@@ -365,26 +381,20 @@ impl Delegate {
         );
         // Mark the delegate as initialized.
         self.region = Some(region);
-        if let Some(mut pending) = self.pending.take() {
-            // Re-subscribe pending downstreams.
-            for downstream in pending.take_downstreams() {
-                self.subscribe(downstream);
-            }
-
-            for lock in pending.take_locks() {
-                match lock {
-                    PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
-                    PendingLock::Untrack {
-                        key,
-                        start_ts,
-                        commit_ts,
-                    } => resolver.untrack_lock(start_ts, commit_ts, key),
-                }
+        let mut pending = self.pending.take().unwrap();
+        for lock in pending.take_locks() {
+            match lock {
+                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                PendingLock::Untrack {
+                    key,
+                    start_ts,
+                    commit_ts,
+                } => resolver.untrack_lock(start_ts, commit_ts, key),
             }
         }
         self.resolver = Some(resolver);
         info!("region is ready"; "region_id" => self.region_id);
-        Ok(())
+        pending.take_downstreams()
     }
 
     /// Try advance and broadcast resolved ts.
@@ -756,7 +766,8 @@ mod tests {
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
-        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
+        let mut downstream =
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
@@ -764,7 +775,9 @@ mod tests {
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
+        for downstream in delegate.on_region_ready(resolver, region) {
+            delegate.subscribe(downstream);
+        }
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
@@ -879,7 +892,8 @@ mod tests {
         let (sink, rx) = batch::unbounded(1);
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
-        let mut downstream = Downstream::new(String::new(), region_epoch, request_id);
+        let mut downstream =
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -970,6 +984,6 @@ mod tests {
 
         let mut resolver = Resolver::new(region_id);
         resolver.init();
-        delegate.on_region_ready(resolver, region).unwrap();
+        delegate.on_region_ready(resolver, region);
     }
 }

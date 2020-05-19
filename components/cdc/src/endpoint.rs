@@ -521,15 +521,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.id == observe_id {
-                if let Err(e) = delegate.on_region_ready(resolver, region) {
-                    assert!(delegate.has_failed());
-                    // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region {
-                        region_id,
-                        observe_id: delegate.id,
-                        err: e,
-                    };
-                    self.on_deregister(deregister);
+                for downstream in delegate.on_region_ready(resolver, region) {
+                    let conn_id = downstream.get_conn_id();
+                    if !delegate.subscribe(downstream) {
+                        let conn = self.connections.get_mut(&conn_id).unwrap();
+                        conn.unsubscribe(region_id);
+                    }
                 }
             } else {
                 debug!("stale region ready";
@@ -1049,7 +1046,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1086,7 +1083,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1112,7 +1109,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1147,7 +1144,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         ep.run(Task::Register {
             request: req,
             downstream,
