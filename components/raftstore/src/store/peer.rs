@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
@@ -2785,7 +2785,7 @@ where
         Ok(resp)
     }
 
-    fn execute(
+    pub fn execute(
         engine: &E,
         msg: &RaftCmdRequest,
         region: &metapb::Region,
@@ -2838,17 +2838,6 @@ where
         (response, need_snapshot)
     }
 
-    pub fn execute_with_cache(
-        engine: &E,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-        snap: RegionSnapshot<E>,
-    ) -> ReadResponse<E> {
-        let (mut response, need_snapshot) = Self::execute(engine, msg, region, None);
-        let snapshot = if need_snapshot { Some(snap) } else { None };
-        ReadResponse { response, snapshot }
-    }
-
     pub fn execute_read_index(
         engine: &E,
         msg: &RaftCmdRequest,
@@ -2870,7 +2859,7 @@ where
             }
         }
 
-        let (mut response, need_snapshot) = Self::execute(engine, msg, region, read_index);
+        let (response, need_snapshot) = Self::execute(engine, msg, region, read_index);
         let snapshot = if need_snapshot {
             let snapshot = engine.snapshot().into_sync();
             Some(RegionSnapshot::from_snapshot(

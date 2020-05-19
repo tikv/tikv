@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Response};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -168,6 +168,7 @@ where
     delegates: HashMap<u64, Option<ReadDelegate>>,
     // A channel to raftstore.
     snap: RegionSnapshot<E>,
+    last_read_ts: Timespec,
     router: C,
     tag: String,
 }
@@ -175,14 +176,18 @@ where
 impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<E>) -> Self {
         let region = metapb::Region::default();
-        let now = monotonic_raw_now();
-        let snap =
-            RegionSnapshot::from_snapshot(kv_engine.snapshot().into_sync(), Arc::new(region), now);
+        let last_read_ts = monotonic_raw_now();
+        let snap = RegionSnapshot::from_snapshot(
+            kv_engine.snapshot().into_sync(),
+            Arc::new(region),
+            last_read_ts,
+        );
         LocalReader {
             store_meta,
             kv_engine,
             router,
             snap,
+            last_read_ts,
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: HashMap::default(),
@@ -305,27 +310,41 @@ where
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    if delegate.is_in_leader_lease(ts.clone(), &mut self.metrics) {
+                    let snapshot_ts = if ts == self.last_read_ts {
+                        self.snap.get_ts()
+                    } else {
+                        monotonic_raw_now()
+                    };
+                    if delegate.is_in_leader_lease(snapshot_ts.clone(), &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
-                        let snap = if ts == self.snap.get_ts() {
-                            let mut snapshot = self.snap.clone();
-                            snapshot.set_region(delegate.region.clone());
-                            snapshot
-                        } else {
-                            let snap = self.kv_engine.snapshot().into_sync();
-                            self.snap =
-                                RegionSnapshot::from_snapshot(snap, delegate.region.clone(), ts);
-                            self.snap.clone()
-                        };
-                        let mut resp = ReadExecutor::<E>::execute_with_cache(
+                        let (mut response, need_snapshot) = ReadExecutor::<E>::execute(
                             &self.kv_engine,
                             &cmd.request,
                             delegate.region.as_ref(),
-                            snap,
+                            None,
                         );
+                        let snapshot = if need_snapshot {
+                            if ts == self.last_read_ts {
+                                let mut snapshot = self.snap.clone();
+                                snapshot.set_region(delegate.region.clone());
+                                Some(snapshot)
+                            } else {
+                                let snap = self.kv_engine.snapshot().into_sync();
+                                self.snap = RegionSnapshot::from_snapshot(
+                                    snap,
+                                    delegate.region.clone(),
+                                    snapshot_ts,
+                                );
+                                self.last_read_ts = ts;
+                                Some(self.snap.clone())
+                            }
+                        } else {
+                            None
+                        };
                         // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut resp.response, delegate.term);
-                        cmd.callback.invoke_read(resp);
+                        cmd_resp::bind_term(&mut response, delegate.term);
+                        cmd.callback
+                            .invoke_read(ReadResponse { response, snapshot });
                         self.delegates.insert(region_id, Some(delegate));
                         self.metrics.local_executed_requests += 1;
                         return;
@@ -421,6 +440,7 @@ where
             delegates: HashMap::default(),
             tag: self.tag.clone(),
             snap: self.snap.clone(),
+            last_read_ts: self.last_read_ts,
         }
     }
 }
@@ -598,7 +618,8 @@ mod tests {
             store_id: Cell::new(Some(store_id)),
             router: ch,
             kv_engine: RocksEngine::from_db(Arc::new(db)),
-            delegates: RefCell::new(HashMap::default()),
+            delegates: HashMap::default(),
+            last_read_ts: monotonic_raw_now(),
             metrics: Default::default(),
             tag: "foo".to_owned(),
         };
