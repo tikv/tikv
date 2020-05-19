@@ -5588,7 +5588,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/sticnarf/yatp.git?branch=control-slot#8245e8602a5a46766a40fbe46f7549b4fc03295d"
+source = "git+https://github.com/sticnarf/yatp.git?branch=control-slot#bdfd5ba562de440e44303b8432e0049dbd4d649d"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
