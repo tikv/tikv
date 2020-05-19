@@ -55,7 +55,7 @@ pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
-///  - `Read`: a callbak for read only requests including `StatusRequest`,
+///  - `Read`: a callback for read only requests including `StatusRequest`,
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
@@ -395,7 +395,7 @@ pub enum StoreMsg {
         store: metapb::Store,
     },
 
-    /// Messge only used for test
+    /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
     /// Asks the store to update replication mode.
@@ -427,11 +427,4 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
-}
-
-// TODO: remove this enum and utilize the actual message instead.
-#[derive(Debug)]
-pub enum Msg {
-    PeerMsg(PeerMsg<RocksSnapshot>),
-    StoreMsg(StoreMsg),
 }
