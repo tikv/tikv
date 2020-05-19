@@ -464,7 +464,7 @@ lazy_static! {
 
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_apply_pending_bytes",
-        "The bytes pending in the channel"
+        "The bytes pending in the channel of apply FSMs"
     )
     .unwrap();
 }
