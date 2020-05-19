@@ -400,6 +400,10 @@ impl Fsm for StoreFsm {
     fn is_stopped(&self) -> bool {
         self.store.stopped
     }
+
+    fn tag(&self) -> Option<String> {
+        Some(format!("store {}", self.store.id))
+    }
 }
 
 struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
@@ -1780,6 +1784,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
                     CasualMessage::GcSnap { snaps },
                 ))) => {
+                    if self.ctx.router.is_shutted() {
+                        return Ok(());
+                    }
+
                     // The snapshot exists because MsgAppend has been rejected. So the
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.

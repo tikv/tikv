@@ -9,6 +9,8 @@ extern crate tikv_util;
 extern crate derive_more;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use(fail_point)]
+extern crate fail;
 
 mod batch;
 mod config;

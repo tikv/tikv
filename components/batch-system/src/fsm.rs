@@ -44,6 +44,11 @@ pub trait Fsm {
     {
         None
     }
+
+    /// Tag of the `Fsm`, generally used for debugging and testing.
+    fn tag(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct FsmState<N> {

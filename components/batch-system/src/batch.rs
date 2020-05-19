@@ -237,6 +237,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     handler: Handler,
     max_batch_size: usize,
     reschedule_duration: Duration,
+    name: String,
 }
 
 enum ReschedulePolicy {
@@ -281,6 +282,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             self.handler.begin(max_batch_size);
 
             if batch.control.is_some() {
+                fail_point!(
+                    "peer_2_handle_raftstore_control",
+                    self.name.starts_with("raftstore")
+                        && batch.control.as_mut().unwrap().tag().unwrap() == "store 2",
+                    |_| {}
+                );
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
                     batch.remove_control(&self.router.control_box);
@@ -390,6 +397,7 @@ where
                 handler,
                 max_batch_size: self.max_batch_size,
                 reschedule_duration: self.reschedule_duration,
+                name: format!("{}-{}", name_prefix, i),
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))

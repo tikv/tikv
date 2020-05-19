@@ -360,6 +360,10 @@ impl<E: KvEngine> Fsm for PeerFsm<E> {
         self.stopped
     }
 
+    fn tag(&self) -> Option<String> {
+        Some(format!("peer {}", self.peer_id()))
+    }
+
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
