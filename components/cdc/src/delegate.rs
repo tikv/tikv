@@ -257,6 +257,8 @@ impl Delegate {
                 info!("fail to subscribe downstream";
                     "region_id" => region.get_id(),
                     "downstream_id" => ?downstream.get_id(),
+                    "conn_id" => ?downstream.get_conn_id(),
+                    "req_id" => downstream.req_id,
                     "err" => ?e);
                 let err = Error::Request(e.into());
                 let change_data_error = self.error_event(err);

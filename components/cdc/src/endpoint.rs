@@ -312,10 +312,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
                     }
+                    self.connections
+                        .iter_mut()
+                        .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 }
-                self.connections
-                    .iter_mut()
-                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 // Do not continue to observe the events of the region.
                 let oid = self.observer.unsubscribe_region(region_id, observe_id);
                 assert_eq!(
@@ -372,6 +372,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             downstream.sink_duplicate_error(request.get_region_id());
             error!("duplicate register";
                 "region_id" => region_id,
+                "conn_id" => ?conn_id,
+                "req_id" => request.get_request_id(),
                 "downstream_id" => ?downstream.get_id());
             return;
         }
@@ -379,6 +381,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
+            "req_id" => request.get_request_id(),
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
