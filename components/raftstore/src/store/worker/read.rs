@@ -305,12 +305,19 @@ where
     }
 
     // It can only handle read command.
-    pub fn propose_raft_command(&mut self, ts: Timespec, cmd: RaftCommand<E::Snapshot>) {
+    pub fn propose_raft_command(
+        &mut self,
+        read_id: Option<Timespec>,
+        cmd: RaftCommand<E::Snapshot>,
+    ) {
         let region_id = cmd.request.get_header().get_region_id();
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let snapshot_ts = if ts == self.last_read_ts {
+                    let snapshot_ts = if read_id
+                        .as_ref()
+                        .map_or(false, |ts| *ts == self.last_read_ts)
+                    {
                         self.snap.get_ts()
                     } else {
                         monotonic_raw_now()
@@ -324,7 +331,10 @@ where
                             None,
                         );
                         let snapshot = if need_snapshot {
-                            if ts == self.last_read_ts {
+                            if read_id
+                                .as_ref()
+                                .map_or(false, |ts| *ts == self.last_read_ts)
+                            {
                                 let mut snapshot = self.snap.clone();
                                 snapshot.set_region(delegate.region.clone());
                                 Some(snapshot)
@@ -334,7 +344,7 @@ where
                                     delegate.region.clone(),
                                     snapshot_ts,
                                 );
-                                if ts.sec != 0 {
+                                if let Some(ts) = read_id {
                                     self.snap = snap.clone();
                                     self.last_read_ts = ts;
                                 }
@@ -391,7 +401,7 @@ where
     }
 
     #[inline]
-    pub fn read(&mut self, ts: Timespec, cmd: RaftCommand<E::Snapshot>) {
+    pub fn read(&mut self, ts: Option<Timespec>, cmd: RaftCommand<E::Snapshot>) {
         self.propose_raft_command(ts, cmd);
         self.metrics.maybe_flush();
     }

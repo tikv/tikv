@@ -195,7 +195,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: &Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot_with_cache(ts, ctx, callback);
+        let val = engine.async_snapshot_with_cache(Some(ts), ctx, callback);
         // make engine not cross yield point
         async move {
             val?;

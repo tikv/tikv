@@ -77,7 +77,7 @@ pub trait Engine: Send + Clone + 'static {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
     fn async_snapshot_with_cache(
         &self,
-        _ts: Timespec,
+        _read_id: Option<Timespec>,
         ctx: &Context,
         callback: Callback<Self::Snap>,
     ) -> Result<()> {

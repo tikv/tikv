@@ -189,7 +189,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
 
     fn exec_snapshot(
         &self,
-        ts: Timespec,
+        read_id: Option<Timespec>,
         ctx: &Context,
         req: Request,
         cb: Callback<CmdRes>,
@@ -200,7 +200,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         cmd.set_requests(vec![req].into());
         self.router
             .read(
-                ts,
+                read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, 1);
@@ -360,7 +360,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
 
     fn async_snapshot_with_cache(
         &self,
-        ts: Timespec,
+        read_id: Option<Timespec>,
         ctx: &Context,
         cb: Callback<Self::Snap>,
     ) -> kv::Result<()> {
@@ -369,7 +369,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
         self.exec_snapshot(
-            ts,
+            read_id,
             ctx,
             req,
             Box::new(move |(cb_ctx, res)| match res {
@@ -400,7 +400,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot");
-        self.async_snapshot_with_cache(Timespec { sec: 0, nsec: 0 }, ctx, cb)
+        self.async_snapshot_with_cache(None, ctx, cb)
     }
 
     fn get_properties_cf(

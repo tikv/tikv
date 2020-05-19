@@ -28,7 +28,7 @@ where
     /// Sends Snapshot to local store.
     fn read(
         &self,
-        _ts: Timespec,
+        _read_id: Option<Timespec>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
@@ -165,7 +165,7 @@ where
 
     fn read(
         &self,
-        ts: Timespec,
+        ts: Option<Timespec>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
