@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 
 use tidb_query_codegen::rpn_fn;
 
@@ -225,6 +225,44 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
         }
     }
     Ok(None)
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, |x, y| x.max(y))
+}
+
+#[inline]
+fn do_get_extremum<T, E>(args: &[&Option<T>], chooser: E) -> Result<Option<T>>
+where
+    T: Ord + Copy,
+    E: Fn(T, T) -> T,
+{
+    let first = args[0];
+    match first {
+        None => Ok(None),
+        Some(first_val) => {
+            let mut res = *first_val;
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        return Ok(None);
+                    }
+                    Some(v) => {
+                        res = chooser(res, *v);
+                    }
+                }
+            }
+            Ok(Some(res))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -845,6 +883,72 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(args)
                 .evaluate(ScalarFuncSig::CoalesceInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_int() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(1), Some(1)], Some(1)),
+            (vec![Some(1), Some(-1), None], None),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(2)),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MAX),
+            ),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_real() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (
+                vec![
+                    Real::new(1.0).ok(),
+                    Real::new(-1.0).ok(),
+                    Real::new(-2.0).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(1.0).ok(),
+            ),
+            (
+                vec![
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(f64::MAX).ok(),
+            ),
+            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
+            (
+                vec![
+                    Real::new(f64::INFINITY).ok(),
+                    Real::new(f64::NEG_INFINITY).ok(),
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                ],
+                Real::new(f64::INFINITY).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestReal)
                 .unwrap();
             assert_eq!(output, expected);
         }

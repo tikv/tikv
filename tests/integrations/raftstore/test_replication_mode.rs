@@ -177,3 +177,129 @@ fn test_update_group_id() {
     cluster.must_transfer_leader(right.id, new_peer(3, 5));
     cluster.must_put(b"k4", b"v4");
 }
+
+/// Tests if replication mode is switched successfully.
+#[test]
+fn test_switching_replication_mode() {
+    let mut cluster = prepare_cluster();
+    let region = cluster.get_region(b"k1");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k2", b"v2")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    must_get_none(&cluster.get_engine(1), b"k2");
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async);
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 2);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
+
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+    thread::sleep(Duration::from_millis(100));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k3", b"v3")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    must_get_none(&cluster.get_engine(1), b"k3");
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 3);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
+
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 3);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+/// Ensures hibernate region still works properly when switching replication mode.
+#[test]
+fn test_switching_replication_mode_hibernate() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(1);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(30);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::hours(1);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    pd_client.configure_dr_auto_sync("zone");
+    cluster.create_engines();
+    let r = cluster.bootstrap_conf_change();
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 20;
+    cluster
+        .cfg
+        .server
+        .labels
+        .insert("zone".to_owned(), "ES".to_owned());
+    cluster.run_node(1).unwrap();
+    cluster.run_node(2).unwrap();
+    cluster
+        .cfg
+        .server
+        .labels
+        .insert("zone".to_owned(), "WN".to_owned());
+    cluster.run_node(3).unwrap();
+    cluster.must_put(b"k1", b"v0");
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_learner_peer(3, 3));
+    let state = pd_client.region_replication_status(r);
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v0");
+    // Wait for append response after applying snapshot.
+    thread::sleep(Duration::from_millis(50));
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    // Wait for leader become hibernated.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 2
+            * (cluster.cfg.raft_store.raft_election_timeout_ticks as u32),
+    );
+    cluster.clear_send_filters();
+    // Wait for region heartbeat.
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(r);
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}

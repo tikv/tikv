@@ -7,7 +7,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
 use tidb_query_shared_expr::string::{
-    encoded_size, line_wrap, strip_whitespace, validate_target_len_for_pad,
+    encoded_size, line_wrap, strip_whitespace, trim, validate_target_len_for_pad, TrimDirection,
     BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
 };
 
@@ -156,6 +156,68 @@ pub fn lpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Resu
                     } else {
                         arg[..target_len].to_vec()
                     };
+                    Ok(Some(r))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn lpad_utf8(
+    arg: &Option<Bytes>,
+    len: &Option<Int>,
+    pad: &Option<Bytes>,
+) -> Result<Option<Bytes>> {
+    match (arg, len, pad) {
+        (Some(arg), Some(len), Some(pad)) => {
+            let input = match str::from_utf8(&*arg) {
+                Ok(arg) => arg,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            let pad = match str::from_utf8(&*pad) {
+                Ok(pad) => pad,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            let input_len = input.chars().count();
+            match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
+                None => Ok(None),
+                Some(0) => Ok(Some(b"".to_vec())),
+                Some(target_len) => {
+                    let r = if let Some(remain) = target_len.checked_sub(input_len) {
+                        pad.chars()
+                            .cycle()
+                            .take(remain)
+                            .chain(input.chars())
+                            .collect::<String>()
+                    } else {
+                        input.chars().take(target_len).collect::<String>()
+                    };
+                    Ok(Some(r.into_bytes()))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn rpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match (arg, len, pad) {
+        (Some(arg), Some(len), Some(pad)) => {
+            match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
+                None => Ok(None),
+                Some(0) => Ok(Some(b"".to_vec())),
+                Some(target_len) => {
+                    let r = arg
+                        .iter()
+                        .chain(pad.iter().cycle())
+                        .copied()
+                        .take(target_len)
+                        .collect::<Bytes>();
                     Ok(Some(r))
                 }
             }
@@ -469,6 +531,27 @@ pub fn trim_1_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
             Vec::new()
         }
     }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn trim_3_args(
+    arg: &Option<Bytes>,
+    pat: &Option<Bytes>,
+    direction: &Option<i64>,
+) -> Result<Option<Bytes>> {
+    if let (Some(arg), Some(pat), Some(direction)) = (arg, pat, direction) {
+        match TrimDirection::from_i64(*direction) {
+            Some(d) => {
+                let arg = String::from_utf8_lossy(arg);
+                let pat = String::from_utf8_lossy(pat);
+                Ok(Some(trim(&arg, &pat, d)))
+            }
+            _ => Err(box_err!("invalid direction value: {}", direction)),
+        }
+    } else {
+        Ok(None)
+    }
 }
 
 #[rpn_fn]
@@ -986,9 +1069,53 @@ mod tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
+    fn common_lpad_cases() -> Vec<(Option<Bytes>, Option<Int>, Option<Bytes>, Option<Bytes>)> {
+        vec![
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"?".to_vec()),
+                Some(b"???hi".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"?".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"?".to_vec()),
+                Some(b"".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(-1), Some(b"?".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(5), Some(b"".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"ab".to_vec()),
+                Some(b"abahi".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(6),
+                Some(b"ab".to_vec()),
+                Some(b"ababhi".to_vec()),
+            ),
+        ]
+    }
+
     #[test]
     fn test_lpad() {
-        let cases = vec![
+        let mut cases = vec![
             (
                 Some(b"hello".to_vec()),
                 Some(0),
@@ -1049,6 +1176,7 @@ mod tests {
             (None, Some(-1), Some(b"h".to_vec()), None),
             (None, None, None, None),
         ];
+        cases.append(&mut common_lpad_cases());
 
         for (arg, len, pad, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1056,6 +1184,150 @@ mod tests {
                 .push_param(len)
                 .push_param(pad)
                 .evaluate(ScalarFuncSig::Lpad)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn common_rpad_cases() -> Vec<(Option<Bytes>, Option<Int>, Option<Bytes>, Option<Bytes>)> {
+        vec![
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"?".to_vec()),
+                Some(b"hi???".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"?".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"?".to_vec()),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"ab".to_vec()),
+                Some(b"hiaba".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(6),
+                Some(b"ab".to_vec()),
+                Some(b"hiabab".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(-1), Some(b"?".to_vec()), None),
+            (Some(b"hi".to_vec()), Some(5), Some(b"".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_rpad() {
+        let mut cases = vec![
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(5),
+                Some(b"\x35".to_vec()),
+                Some(b"\x61\x76\x5e\x35\x35".to_vec()),
+            ),
+            (
+                Some(b"\x61\x76\x5e".to_vec()),
+                Some(2),
+                Some(b"\x35".to_vec()),
+                Some(b"\x61\x76".to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(13),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Some(b"abc".to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) + 1),
+                Some(b"aa".to_vec()),
+                None,
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::Rpad)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_lpad_utf8() {
+        let mut cases = vec![
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(3),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(4),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(5),
+                Some("测试".as_bytes().to_vec()),
+                Some("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(6),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(7),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Some("测试".as_bytes().to_vec()),
+                None,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::LpadUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -1869,6 +2141,76 @@ mod tests {
             invalid_utf8_output,
             Some(b"\xF0 Hello \x90 World \x80".to_vec())
         );
+    }
+
+    #[test]
+    fn test_trim_3_args() {
+        let tests = vec![
+            (
+                Some("xxxbarxxx"),
+                Some("x"),
+                Some(TrimDirection::Leading as i64),
+                Some("barxxx"),
+            ),
+            (
+                Some("barxxyz"),
+                Some("xyz"),
+                Some(TrimDirection::Trailing as i64),
+                Some("barx"),
+            ),
+            (
+                Some("xxxbarxxx"),
+                Some("x"),
+                Some(TrimDirection::Both as i64),
+                Some("bar"),
+            ),
+        ];
+        for (arg, pat, direction, exp) in tests {
+            let arg = arg.map(|s| s.as_bytes().to_vec());
+            let pat = pat.map(|s| s.as_bytes().to_vec());
+            let exp = exp.map(|s| s.as_bytes().to_vec());
+
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .push_param(direction)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let invalid_tests = vec![
+            (
+                None,
+                Some(b"x".to_vec()),
+                Some(TrimDirection::Leading as i64),
+                None as Option<Bytes>,
+            ),
+            (
+                Some(b"bar".to_vec()),
+                None,
+                Some(TrimDirection::Leading as i64),
+                None as Option<Bytes>,
+            ),
+        ];
+        for (arg, pat, direction, exp) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .push_param(direction)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test invalid direction value
+        let args = (Some(b"bar".to_vec()), Some(b"b".to_vec()), Some(0 as i64));
+        let got: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
+            .push_param(args.0)
+            .push_param(args.1)
+            .push_param(args.2)
+            .evaluate(ScalarFuncSig::Trim3Args);
+        assert!(got.is_err());
     }
 
     #[test]
