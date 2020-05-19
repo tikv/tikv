@@ -989,39 +989,39 @@ mod tests {
             (vec![None, None], None),
             (
                 vec![
-                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
                     None,
                 ],
                 None,
             ),
             (
                 vec![
-                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
                 ],
-                Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+                Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
             ),
             (
                 vec![
-                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
-                    Some("invalid_time".as_bytes().to_vec()),
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
                 ],
                 None,
             ),
             (
                 vec![
-                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
-                    Some("2012-12-12 12:00:38.12003800000".as_bytes().to_vec()),
-                    Some("2012-12-31 12:00:39.120050".as_bytes().to_vec()),
-                    Some("2018-04-03 00:00:00.000000".as_bytes().to_vec()),
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-12 12:00:38.12003800000".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39.120050".to_owned().to_vec()),
+                    Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
                 ],
-                Some("2018-04-03 00:00:00.000000".as_bytes().to_vec()),
+                Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
             ),
         ];
 
