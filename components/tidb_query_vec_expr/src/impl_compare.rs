@@ -1,12 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::{max, Ordering};
+use std::str::from_utf8;
 
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::Error;
+use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn]
 #[inline]
@@ -237,6 +240,32 @@ pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
 #[inline]
 pub fn greatest_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.max(y))
+}
+
+#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = from_utf8(arg_val).unwrap();
+                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                    Ok(t) => greatest = max(greatest, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|time| time.to_string().into_bytes()))
 }
 
 #[inline]
@@ -949,6 +978,57 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::GreatestReal)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_time() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+                ],
+                Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+                    Some("invalid_time".as_bytes().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some("2012-12-12 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-24 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-31 12:00:39".as_bytes().to_vec()),
+                    Some("2012-12-12 12:00:38.12003800000".as_bytes().to_vec()),
+                    Some("2012-12-31 12:00:39.120050".as_bytes().to_vec()),
+                    Some("2018-04-03 00:00:00.000000".as_bytes().to_vec()),
+                ],
+                Some("2018-04-03 00:00:00.000000".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestTime)
                 .unwrap();
             assert_eq!(output, expected);
         }
