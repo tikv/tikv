@@ -1715,8 +1715,9 @@ impl Default for StorageReadPoolConfig {
 
 impl StorageReadPoolConfig {
     pub fn use_unified_pool(&self) -> bool {
-        // The storage module does not use the unified pool by default.
-        self.use_unified_pool.unwrap_or(false)
+        // The storage module uses the unified pool unless it has customized configurations.
+        self.use_unified_pool
+            .unwrap_or_else(|| *self == Default::default())
     }
 }
 
