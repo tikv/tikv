@@ -293,21 +293,33 @@ where
     }
 }
 
-#[derive(Clone)]
-pub enum Notifier<E>
+pub enum Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Router(RaftRouter<E>),
+    Router(RaftRouter<S>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<E>>),
+    Sender(Sender<PeerMsg<S>>),
 }
 
-impl<E> Notifier<E>
+impl<S> Clone for Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
+    fn clone(&self) -> Self {
+        match self {
+            Notifier::Router(v) => Notifier::Router(v.clone()),
+            #[cfg(test)]
+            Notifier::Sender(v) => Notifier::Sender(v.clone()),
+        }
+    }
+}
+
+impl<S> Notifier<S>
+where
+    S: Snapshot,
+{
+    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -329,10 +341,10 @@ where
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
-    notifier: Notifier<E>,
+    notifier: Notifier<E::Snapshot>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
-    apply_res: Vec<ApplyRes<E>>,
+    apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -366,7 +378,7 @@ where
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter,
-        notifier: Notifier<E>,
+        notifier: Notifier<E::Snapshot>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
@@ -2570,23 +2582,23 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<E>
+pub struct ApplyRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E::Snapshot>>,
+    pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
 }
 
 #[derive(Debug)]
-pub enum TaskRes<E>
+pub enum TaskRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Apply(ApplyRes<E>),
+    Apply(ApplyRes<S>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -3165,7 +3177,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksEngine>,
+    sender: Notifier<RocksSnapshot>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
 }
@@ -3173,7 +3185,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksEngine>,
+        sender: Notifier<RocksSnapshot>,
         router: ApplyRouter,
     ) -> Builder<W> {
         Builder::<W> {
@@ -3483,8 +3495,8 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksEngine> {
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+    ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,

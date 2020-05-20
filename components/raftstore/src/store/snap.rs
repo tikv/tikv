@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -1098,7 +1098,7 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<impl KvEngine>>) {
+fn notify_stats(ch: Option<&RaftRouter<impl EngineSnapshot>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -1110,15 +1110,27 @@ fn notify_stats(ch: Option<&RaftRouter<impl KvEngine>>) {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-#[derive(Clone)]
 pub struct SnapManager<E: KvEngine> {
     core: SnapManagerCore,
-    router: Option<RaftRouter<E>>,
+    router: Option<RaftRouter<E::Snapshot>>,
     max_total_size: u64,
 }
 
+impl<E> Clone for SnapManager<E>
+where
+    E: KvEngine,
+{
+    fn clone(&self) -> Self {
+        SnapManager {
+            core: self.core.clone(),
+            router: self.router.clone(),
+            max_total_size: self.max_total_size,
+        }
+    }
+}
+
 impl<E: KvEngine> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E>>) -> Self {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E::Snapshot>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1483,7 +1495,7 @@ impl SnapManagerBuilder {
     pub fn build<T: Into<String>, E: KvEngine>(
         self,
         path: T,
-        router: Option<RaftRouter<E>>,
+        router: Option<RaftRouter<E::Snapshot>>,
     ) -> SnapManager<E> {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64

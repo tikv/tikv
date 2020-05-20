@@ -9,7 +9,7 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Peekable};
+use engine_traits::{KvEngines, Peekable, Snapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -83,7 +83,7 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<E: KvEngine> {
+pub struct PeerFsm<S: Snapshot> {
     pub peer: Peer,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
@@ -99,8 +99,8 @@ pub struct PeerFsm<E: KvEngine> {
     stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<E>>>,
-    pub receiver: Receiver<PeerMsg<E>>,
+    mailbox: Option<BasicMailbox<PeerFsm<S>>>,
+    pub receiver: Receiver<PeerMsg<S>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
@@ -115,7 +115,7 @@ pub struct BatchRaftCmdRequestBuilder {
     callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
 }
 
-impl<E: KvEngine> Drop for PeerFsm<E> {
+impl<S: Snapshot> Drop for PeerFsm<S> {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -135,9 +135,9 @@ impl<E: KvEngine> Drop for PeerFsm<E> {
     }
 }
 
-pub type SenderFsmPair<E> = (LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>);
+pub type SenderFsmPair<S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<S>>);
 
-impl<E: KvEngine> PeerFsm<E> {
+impl<S: Snapshot> PeerFsm<S> {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
@@ -147,7 +147,7 @@ impl<E: KvEngine> PeerFsm<E> {
         sched: Scheduler<RegionTask<RocksSnapshot>>,
         engines: KvEngines<RocksEngine, RocksEngine>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<E>> {
+    ) -> Result<SenderFsmPair<S>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -195,7 +195,7 @@ impl<E: KvEngine> PeerFsm<E> {
         engines: KvEngines<RocksEngine, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<E>> {
+    ) -> Result<SenderFsmPair<S>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -352,8 +352,8 @@ impl BatchRaftCmdRequestBuilder {
     }
 }
 
-impl<E: KvEngine> Fsm for PeerFsm<E> {
-    type Message = PeerMsg<E>;
+impl<S: Snapshot> Fsm for PeerFsm<S> {
+    type Message = PeerMsg<S>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -381,19 +381,19 @@ impl<E: KvEngine> Fsm for PeerFsm<E> {
 }
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksEngine>,
+    fsm: &'a mut PeerFsm<RocksSnapshot>,
     ctx: &'a mut PollContext<T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksEngine>,
+        fsm: &'a mut PeerFsm<RocksSnapshot>,
         ctx: &'a mut PollContext<T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksSnapshot>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -465,7 +465,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<RocksSnapshot>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -1002,7 +1002,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksEngine>) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksSnapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
