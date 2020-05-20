@@ -53,5 +53,3 @@ pub use self::worker::{
 };
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
-
-pub use self::snap::snap_io::get_decrypter_reader;
