@@ -1030,6 +1030,13 @@ mod tests {
                 ],
                 Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
             ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
         ];
 
         for (row, expected) in cases {
