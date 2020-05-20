@@ -60,7 +60,7 @@ impl RpcClient {
                     };
 
                     // spawn a background future to update PD information periodically
-                    let duration = Duration::from_secs(cfg.update_interval);
+                    let duration = cfg.update_interval.0;
                     let update_loop =
                         loop_fn(Arc::downgrade(&rpc_client.leader_client), move |client| {
                             GLOBAL_TIMER_HANDLE
