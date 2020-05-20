@@ -312,10 +312,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
                     }
+                    self.connections
+                        .iter_mut()
+                        .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 }
-                self.connections
-                    .iter_mut()
-                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 // Do not continue to observe the events of the region.
                 let oid = self.observer.unsubscribe_region(region_id, observe_id);
                 assert_eq!(
@@ -372,6 +372,8 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             downstream.sink_duplicate_error(request.get_region_id());
             error!("duplicate register";
                 "region_id" => region_id,
+                "conn_id" => ?conn_id,
+                "req_id" => request.get_request_id(),
                 "downstream_id" => ?downstream.get_id());
             return;
         }
@@ -379,6 +381,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
+            "req_id" => request.get_request_id(),
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
@@ -521,15 +524,12 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.id == observe_id {
-                if let Err(e) = delegate.on_region_ready(resolver, region) {
-                    assert!(delegate.has_failed());
-                    // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region {
-                        region_id,
-                        observe_id: delegate.id,
-                        err: e,
-                    };
-                    self.on_deregister(deregister);
+                for downstream in delegate.on_region_ready(resolver, region) {
+                    let conn_id = downstream.get_conn_id();
+                    if !delegate.subscribe(downstream) {
+                        let conn = self.connections.get_mut(&conn_id).unwrap();
+                        conn.unsubscribe(region_id);
+                    }
                 }
             } else {
                 debug!("stale region ready";
@@ -1049,7 +1049,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1086,7 +1086,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1112,7 +1112,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1147,7 +1147,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         ep.run(Task::Register {
             request: req,
             downstream,

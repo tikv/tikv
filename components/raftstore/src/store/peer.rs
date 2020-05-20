@@ -375,41 +375,46 @@ impl Peer {
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
         if !self.get_store().region().get_peers().is_empty() {
-            let gb = state.calculate_commit_group(self.get_store().region().get_peers());
+            let version = state.status().get_dr_auto_sync().state_id;
+            let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
             self.raft_group.raft.assign_commit_groups(gb);
         }
         self.replication_sync = false;
-        if state.status.get_mode() == ReplicationMode::Majority {
+        if state.status().get_mode() == ReplicationMode::Majority {
             self.raft_group.raft.enable_group_commit(false);
             self.replication_mode_version = 0;
             self.dr_auto_sync_state = DrAutoSyncState::Async;
             return;
         }
-        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
-        let enable = state.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        self.replication_mode_version = state.status().get_dr_auto_sync().state_id;
+        let enable = state.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
         self.raft_group.raft.enable_group_commit(enable);
-        self.dr_auto_sync_state = state.status.get_dr_auto_sync().get_state();
+        self.dr_auto_sync_state = state.status().get_dr_auto_sync().get_state();
     }
 
     /// Updates replication mode.
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let mut guard = state.lock().unwrap();
-        let enable_group_commit = if guard.status.get_mode() == ReplicationMode::Majority {
+        let enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             self.dr_auto_sync_state = DrAutoSyncState::Async;
             false
         } else {
-            self.dr_auto_sync_state = guard.status.get_dr_auto_sync().get_state();
-            self.replication_mode_version = guard.status.get_dr_auto_sync().state_id;
-            guard.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+            self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
+            self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
+            guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async
         };
         if enable_group_commit {
             let ids = mem::replace(
-                guard.calculate_commit_group(self.region().get_peers()),
+                guard.calculate_commit_group(
+                    self.replication_mode_version,
+                    self.region().get_peers(),
+                ),
                 Vec::with_capacity(self.region().get_peers().len()),
             );
             drop(guard);
+            self.raft_group.raft.clear_commit_group();
             self.raft_group.raft.assign_commit_groups(&ids);
         } else {
             drop(guard);
