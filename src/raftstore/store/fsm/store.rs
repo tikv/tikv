@@ -1151,9 +1151,11 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (router, system) = batch::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
+        cfg.reschedule_count,
         store_tx,
         store_fsm,
     );
+    APPLY_PENDING_BYTES_GAUGE.set(0);
     let system = RaftBatchSystem {
         system,
         workers: None,

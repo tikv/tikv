@@ -223,4 +223,18 @@ lazy_static! {
             "tikv_raftstore_read_index_pending",
             "pending read index count"
         ).unwrap();
+
+    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge =
+        register_int_gauge!(
+            "tikv_apply_pending_bytes",
+            "The bytes pending in the channel"
+        )
+        .unwrap();
+    pub static ref RESCHEDULE_FSM_COUNT: IntCounterVec =
+        register_int_counter_vec!(
+            "batch_system_reschedule_count",
+            "The count of rescheduled fsms",
+            &["tag"]
+        )
+        .unwrap();
 }
