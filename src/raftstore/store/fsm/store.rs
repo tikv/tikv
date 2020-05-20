@@ -3,7 +3,7 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::CompactionJobInfo;
+use engine::rocks::{CompactionJobInfo, PerfContext, PerfLevel};
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -24,6 +24,7 @@ use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::import::SSTImporter;
+use crate::observe_perf_context_type;
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -44,19 +45,22 @@ use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
+use crate::raftstore::store::util::{self, PerfContextStatistics};
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
     SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, SnapshotDeleter,
+    StoreMsg, StoreTick,
 };
 use crate::raftstore::Result;
+use crate::report_perf_context;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -226,6 +230,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
+    pub perf_context_statistics: PerfContextStatistics,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -520,6 +525,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.raft_wb.clear();
             }
         }
+
+        report_perf_context!(
+            self.poll_ctx.perf_context_statistics,
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM
+        );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut batch_pos = 0;
@@ -902,6 +912,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

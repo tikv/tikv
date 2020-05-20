@@ -134,6 +134,7 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = true
+perf-level = 4
 
 [coprocessor]
 split-region-on-table = false

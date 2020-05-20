@@ -7,6 +7,8 @@ use time::Duration as TimeDuration;
 use crate::raftstore::{coprocessor, Result};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
+use engine::rocks::{util::config as rocks_config, PerfLevel};
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -129,6 +131,9 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub region_split_size: ReadableSize,
+
+    #[serde(with = "rocks_config::perf_level_serde")]
+    pub perf_level: PerfLevel,
 }
 
 impl Default for Config {
@@ -197,6 +202,7 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            perf_level: PerfLevel::Disable,
         }
     }
 }

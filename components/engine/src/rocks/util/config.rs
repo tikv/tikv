@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub use crate::rocks::PerfLevel;
 use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,6 +228,15 @@ numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
+}}
+
+numeric_enum_mod! {perf_level_serde PerfLevel {
+    Uninitialized = 0,
+    Disable = 1,
+    EnableCount = 2,
+    EnableTimeExceptForMutex = 3,
+    EnableTime = 4,
+    OutOfBounds = 5,
 }}
 
 #[cfg(test)]
