@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::KvEngine;
+use engine_traits::Snapshot;
 use futures::future::{err, ok};
 use futures::stream::Stream;
 use futures::sync::oneshot;
@@ -91,7 +91,7 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer<E, R> {
+pub struct StatusServer<S, R> {
     thread_pool: ThreadPool,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -99,7 +99,7 @@ pub struct StatusServer<E, R> {
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
     router: R,
-    _engine: PhantomData<E>,
+    _snap: PhantomData<S>,
 }
 
 impl StatusServer<(), ()> {
@@ -140,9 +140,9 @@ impl StatusServer<(), ()> {
     }
 }
 
-impl<E, R> StatusServer<E, R>
+impl<S, R> StatusServer<S, R>
 where
-    E: 'static,
+    S: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -170,7 +170,7 @@ where
             pd_client,
             cfg_controller,
             router,
-            _engine: PhantomData,
+            _snap: PhantomData,
         }
     }
 
@@ -511,10 +511,10 @@ where
     }
 }
 
-impl<E, R> StatusServer<E, R>
+impl<S, R> StatusServer<S, R>
 where
-    E: KvEngine,
-    R: 'static + Send + CasualRouter<E> + Clone,
+    S: Snapshot,
+    R: 'static + Send + CasualRouter<S> + Clone,
 {
     pub fn dump_region_meta(
         req: Request<Body>,
@@ -844,7 +844,7 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::RocksSnapshot;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -854,8 +854,8 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+    impl CasualRouter<RocksSnapshot> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksSnapshot>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
