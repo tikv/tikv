@@ -1826,7 +1826,7 @@ fn main() {
                 .unwrap();
 
             let iv = Iv::from_slice(&file_info.iv).unwrap();
-            let f = File::open(infile).unwrap();
+            let f = File::open(&infile).unwrap();
             let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
             io::copy(&mut reader, &mut outf).unwrap();
