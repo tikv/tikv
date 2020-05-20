@@ -168,10 +168,17 @@ impl StoreTick {
 }
 
 #[derive(Debug)]
-pub enum MergeResultType {
+pub enum MergeResultKind {
+    /// Its target peer applys `CommitMerge` log.
     FromTargetLog,
+    /// Its target peer receives snapshot.
+    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
+    /// Then its target peer will remove this peer data and apply snapshot atomically.
     FromTargetSnapshotStep1,
+    /// In step 2, this peer should destroy its peer fsm.
     FromTargetSnapshotStep2,
+    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
+    /// It happens if and only if its target peer has been removed by conf change.
     Stale,
 }
 
@@ -201,7 +208,7 @@ pub enum SignificantMsg {
         target: metapb::Peer,
         // True means it's a stale merge source.
         // False means it came from target region.
-        result_type: MergeResultType,
+        result_type: MergeResultKind,
     },
     StoreResolved {
         store_id: u64,

@@ -54,7 +54,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, MergeResultType, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
+    util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
     SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -1051,13 +1051,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     );
 
                     let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                    let flag = meta
+                    let is_ready = meta
                         .atomic_snap_regions
                         .get_mut(&target_region_id)
                         .unwrap()
                         .get_mut(&region_id)
                         .unwrap();
-                    *flag = true;
+                    *is_ready = true;
                 }
             }
         }
@@ -1581,9 +1581,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .insert(source_region_id, merge_to_this_peer);
 
             let result_type = if merge_to_this_peer {
-                MergeResultType::FromTargetSnapshotStep1
+                MergeResultKind::FromTargetSnapshotStep1
             } else {
-                MergeResultType::Stale
+                MergeResultKind::Stale
             };
             self.ctx
                 .router
@@ -1653,7 +1653,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
-        // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         // Destroy read delegates.
@@ -1708,7 +1707,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.tag
                 );
             } else {
-                // The order is important! Must be set this flag after clearing region_ranges and regions.
                 let target_region_id = *meta.targets_map.get(&region_id).unwrap();
                 let flag = meta
                     .atomic_snap_regions
@@ -2366,7 +2364,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                 target_region_id: self.fsm.region_id(),
                 target: self.fsm.peer.peer.clone(),
-                result_type: MergeResultType::FromTargetLog,
+                result_type: MergeResultKind::FromTargetLog,
             }),
         ) {
             // TODO: need to remove "are we shutting down", it should panic
@@ -2422,7 +2420,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         target_region_id: u64,
         target: metapb::Peer,
-        result_type: MergeResultType,
+        result_type: MergeResultKind,
     ) {
         let exists = self
             .fsm
@@ -2451,7 +2449,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         match result_type {
-            MergeResultType::FromTargetLog => {
+            MergeResultKind::FromTargetLog => {
                 info!(
                     "merge finished";
                     "region_id" => self.fsm.region_id(),
@@ -2460,7 +2458,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 self.destroy_peer(true);
             }
-            MergeResultType::FromTargetSnapshotStep1 => {
+            MergeResultKind::FromTargetSnapshotStep1 => {
                 info!(
                     "merge finished with target snapshot";
                     "region_id" => self.fsm.region_id(),
@@ -2468,15 +2466,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "target_region_id" => target_region_id,
                 );
                 self.fsm.peer.pending_remove = true;
+                // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
                     ApplyTask::destroy(self.fsm.region_id(), true, true),
                 );
             }
-            MergeResultType::FromTargetSnapshotStep2 => {
+            MergeResultKind::FromTargetSnapshotStep2 => {
                 self.destroy_peer(true);
             }
-            MergeResultType::Stale => {
+            MergeResultKind::Stale => {
                 self.on_stale_merge();
             }
         };
@@ -2487,11 +2486,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
         info!(
-            "successful merge can't be continued, try to gc stale peer.";
+            "successful merge can't be continued, try to gc stale peer";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
+        // It must succeed so here using `unwrap`
         let job = self.fsm.peer.maybe_destroy().unwrap();
         self.handle_destroy_peer(job);
     }
@@ -2521,21 +2521,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "prev_region" => ?prev_region,
         );
 
-        // Remove this region's snapshot region from the pending_snapshot_regions
+        // Remove this region's snapshot region from the `pending_snapshot_regions`
         // The `pending_snapshot_regions` is only used to occupy the key range, so if this
         // peer is added to `region_ranges`, it can be remove from `pending_snapshot_regions`
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Remove its source peers' metadata
-        if let Some(ref destroyed_regions) = apply_result.destroyed_regions {
-            for r in destroyed_regions {
-                let prev = meta.region_ranges.remove(&enc_end_key(&r));
-                assert_eq!(prev, Some(r.get_id()));
-                assert!(meta.regions.remove(&r.get_id()).is_some());
-                let reader = meta.readers.remove(&r.get_id()).unwrap();
-                reader.mark_invalid();
-            }
+        for r in &apply_result.destroyed_regions {
+            let prev = meta.region_ranges.remove(&enc_end_key(&r));
+            assert_eq!(prev, Some(r.get_id()));
+            assert!(meta.regions.remove(&r.get_id()).is_some());
+            let reader = meta.readers.remove(&r.get_id()).unwrap();
+            reader.mark_invalid();
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
         // which are added before applying snapshot
@@ -2577,20 +2575,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let prev = meta.regions.insert(region.get_id(), region);
         assert_eq!(prev, Some(prev_region));
 
-        if let Some(ref destroyed_regions) = apply_result.destroyed_regions {
-            for r in destroyed_regions {
-                self.ctx
-                    .router
-                    .force_send(
-                        r.get_id(),
-                        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                            target_region_id: self.fsm.region_id(),
-                            target: self.fsm.peer.peer.clone(),
-                            result_type: MergeResultType::FromTargetSnapshotStep2,
-                        }),
-                    )
-                    .unwrap();
-            }
+        for r in &apply_result.destroyed_regions {
+            self.ctx
+                .router
+                .force_send(
+                    r.get_id(),
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                        target_region_id: self.fsm.region_id(),
+                        target: self.fsm.peer.peer.clone(),
+                        result_type: MergeResultKind::FromTargetSnapshotStep2,
+                    }),
+                )
+                .unwrap();
         }
     }
 
@@ -3450,9 +3446,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-/// Checks merge target, returns whether the source peer should be destroyed.
-/// It returns true when there is a network isolation which leads to a follower of a merge target
+/// Checks merge target, returns whether the source peer should be destroyed and whether the source peer is
+/// merged to this target peer.
+///
+/// It returns (`can_destroy`, `merge_to_this_peer`).
+///
+/// `can_destroy` is true when there is a network isolation which leads to a follower of a merge target
 /// Region's log falls behind and then receive a snapshot with epoch version after merge.
+///
+/// `merge_to_this_peer` is true when `can_destroy` is true and the source peer is merged to this target peer.
 pub fn maybe_destroy_source(
     meta: &StoreMeta,
     target_region_id: u64,

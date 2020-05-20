@@ -192,7 +192,9 @@ pub struct Peer {
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true when merging, its data in storeMeta will be removed early by the target peer
+    /// If it's true,
+    /// 1. when merging, its data in storeMeta will be removed early by the target peer.
+    /// 2. all read requests must be rejected.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -1229,8 +1231,8 @@ impl Peer {
             // so, wait and do not handle raft ready.
             if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
                 destroy_regions = Some(vec![]);
-                for (source_region_id, flag) in wait_destroy_regions {
-                    if !flag {
+                for (source_region_id, is_ready) in wait_destroy_regions {
+                    if !is_ready {
                         info!(
                             "snapshot range overlaps, wait source destroy finish";
                             "region_id" => self.region_id,
@@ -1244,7 +1246,7 @@ impl Peer {
                     destroy_regions
                         .as_mut()
                         .unwrap()
-                        .push(meta.regions[&source_region_id].clone());
+                        .push(meta.regions[source_region_id].clone());
                 }
             }
         }

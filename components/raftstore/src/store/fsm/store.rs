@@ -58,7 +58,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, MergeResultType, PeerMsg, RaftCommand,
+    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 
@@ -107,9 +107,13 @@ pub struct StoreMeta {
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
-
+    /// `atomic_snap_regions` and `destroyed_region_for_snap` are used for making destroy overlapped regions
+    /// and apply snapshot atomically.
+    /// region_id -> wait_destroy_regions_map(source_region_id -> is_ready)
+    /// A target peer must wait for all source peer to ready before applying snapshot.
     pub atomic_snap_regions: HashMap<u64, HashMap<u64, bool>>,
-
+    /// source_region_id -> need_atomic
+    /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
 }
 
@@ -1501,6 +1505,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if can_destroy {
                 if !merge_to_this_peer {
                     regions_to_destroy.push(exist_region.get_id());
+                } else {
+                    // TODO, it shouldn't happen because all target peer should exist during merging
                 }
                 continue;
             }
@@ -1528,7 +1534,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: region_id,
                         target: target.clone(),
-                        result_type: MergeResultType::Stale,
+                        result_type: MergeResultKind::Stale,
                     }),
                 )
                 .unwrap();

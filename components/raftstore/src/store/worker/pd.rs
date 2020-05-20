@@ -29,7 +29,7 @@ use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{
-    CasualMessage, MergeResultType, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg,
+    CasualMessage, MergeResultKind, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg,
 };
 
 use pd_client::metrics::*;
@@ -1178,7 +1178,7 @@ fn send_merge_fail(
         PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
             target_region_id,
             target,
-            result_type: MergeResultType::Stale,
+            result_type: MergeResultKind::Stale,
         }),
     ) {
         error!(

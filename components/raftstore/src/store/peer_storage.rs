@@ -340,7 +340,7 @@ pub struct ApplySnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
-    pub destroyed_regions: Option<Vec<metapb::Region>>,
+    pub destroyed_regions: Vec<metapb::Region>,
 }
 
 /// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
@@ -354,8 +354,8 @@ pub struct InvokeContext {
     last_term: u64,
     /// The old region is stored here if there is a snapshot.
     pub snap_region: Option<Region>,
-
-    pub destroyed_regions: Option<Vec<metapb::Region>>,
+    /// The regions whose range are overlapped with this region
+    pub destroyed_regions: Vec<metapb::Region>,
 }
 
 impl InvokeContext {
@@ -366,7 +366,7 @@ impl InvokeContext {
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
             snap_region: None,
-            destroyed_regions: None,
+            destroyed_regions: vec![],
         }
     }
 
@@ -1310,8 +1310,8 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
-    // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
-    // a requirement to advance the ready object properly later.
+    /// Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
+    /// a requirement to advance the ready object properly later.
     pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>>(
         &mut self,
         ready_ctx: &mut H,
@@ -1327,9 +1327,12 @@ where
             self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb, &destroy_regions)?;
             fail_point!("raft_after_apply_snap");
 
+            if let Some(regions) = destroy_regions {
+                ctx.destroyed_regions = regions;
+            }
+
             last_index(&ctx.raft_state)
         };
-        ctx.destroyed_regions = destroy_regions;
 
         if ready.must_sync() {
             ready_ctx.set_sync_log(true);
@@ -1350,7 +1353,7 @@ where
         // Save raft state if it has changed or peer has applied a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index != 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
-            if snapshot_index > 0 {
+            if snapshot_index != 0 {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
                 // we write raft state to default rocksdb, with last index set to snap index,
@@ -1393,15 +1396,14 @@ where
                 );
             }
         }
-        if let Some(ref destroyed_regions) = ctx.destroyed_regions {
-            for r in destroyed_regions {
-                if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
-                    error!(
-                        "failed to cleanup data, may leave some dirty data";
-                        "region_id" => r.get_id(),
-                        "err" => ?e,
-                    );
-                }
+
+        for r in &ctx.destroyed_regions {
+            if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+                error!(
+                    "failed to cleanup data, may leave some dirty data";
+                    "region_id" => r.get_id(),
+                    "err" => ?e,
+                );
             }
         }
 
@@ -1412,7 +1414,7 @@ where
         Some(ApplySnapResult {
             prev_region,
             region: self.region().clone(),
-            destroyed_regions: ctx.destroyed_regions.clone(),
+            destroyed_regions: ctx.destroyed_regions,
         })
     }
 }
