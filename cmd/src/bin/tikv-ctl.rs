@@ -8,10 +8,10 @@ extern crate vlog;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
 use std::iter::FromIterator;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -23,12 +23,15 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use encryption::DataKeyManager;
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
 use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -40,7 +43,7 @@ use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, file::calc_crc32, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -63,6 +66,7 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            println!("cfg.security.encryption: {:?}", cfg.security.encryption);
             let key_manager =
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
@@ -1723,6 +1727,24 @@ fn main() {
         .subcommand(
             SubCommand::with_name("cluster")
                 .about("Print the cluster id"),
+        )
+        .subcommand(
+            SubCommand::with_name("decrypt-file")
+                .about("Decrypt an encrypted file")
+                .arg(
+                    Arg::with_name("file")
+                        .long("file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("input file path"),
+                )
+                .arg(
+                    Arg::with_name("out-file")
+                        .long("out-file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("output file path"),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1774,6 +1796,43 @@ fn main() {
         return;
     } else if let Some(decoded) = matches.value_of("encode") {
         v1!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("decrypt-file") {
+        let infile = matches.value_of("file").unwrap();
+        let outfile = matches.value_of("out-file").unwrap();
+        println!("infile: {}, outfile: {}", infile, outfile);
+        let key_manager =
+            DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .unwrap()
+                .unwrap();
+        let infile = Path::new(infile).canonicalize().unwrap();
+        let file_info = key_manager.get_file(infile.to_str().unwrap()).unwrap();
+        println!("file info of {:?}: {:?}", infile, file_info);
+
+        let mthd = encryption_method_from_db_encryption_method(file_info.method);
+        if mthd == EncryptionMethod::Plaintext {
+            println!(
+                "The file is not encrypted, skip to decrypt it into {}",
+                outfile
+            );
+        } else {
+            let mut outf = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(outfile)
+                .unwrap();
+
+            let iv = Iv::from_slice(&file_info.iv).unwrap();
+            let f = File::open(infile).unwrap();
+            let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
+
+            io::copy(&mut reader, &mut outf).unwrap();
+        }
+
+        println!("crc32: {}", calc_crc32(outfile).unwrap());
         return;
     }
 
