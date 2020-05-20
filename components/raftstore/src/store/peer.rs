@@ -4,12 +4,12 @@ use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, Peekable, WriteBatchExt, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -21,12 +21,16 @@ use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
     RaftSnapshotData,
 };
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
+};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
+use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -35,7 +39,9 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
+};
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -260,6 +266,14 @@ pub struct Peer {
 
     /// Time of the last attempt to wake up inactive leader.
     pub bcast_wake_up_time: Option<UtilInstant>,
+    /// Current replication mode version.
+    pub replication_mode_version: u64,
+    /// The required replication state at current version.
+    pub dr_auto_sync_state: DrAutoSyncState,
+    /// A flag that caches sync state. It's set to true when required replication
+    /// state is reached for current region.
+    pub replication_sync: bool,
+
     /// The known newest conf version and its corresponding peer list
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
@@ -342,6 +356,9 @@ impl Peer {
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
+            replication_mode_version: 0,
+            dr_auto_sync_state: DrAutoSyncState::Async,
+            replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
         };
@@ -352,6 +369,55 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    /// Sets commit group to the peer.
+    pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
+        debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        if !self.get_store().region().get_peers().is_empty() {
+            let gb = state.calculate_commit_group(self.get_store().region().get_peers());
+            self.raft_group.raft.assign_commit_groups(gb);
+        }
+        self.replication_sync = false;
+        if state.status.get_mode() == ReplicationMode::Majority {
+            self.raft_group.raft.enable_group_commit(false);
+            self.replication_mode_version = 0;
+            self.dr_auto_sync_state = DrAutoSyncState::Async;
+            return;
+        }
+        self.replication_mode_version = state.status.get_dr_auto_sync().state_id;
+        let enable = state.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        self.raft_group.raft.enable_group_commit(enable);
+        self.dr_auto_sync_state = state.status.get_dr_auto_sync().get_state();
+    }
+
+    /// Updates replication mode.
+    pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
+        self.replication_sync = false;
+        let mut guard = state.lock().unwrap();
+        let enable_group_commit = if guard.status.get_mode() == ReplicationMode::Majority {
+            self.replication_mode_version = 0;
+            self.dr_auto_sync_state = DrAutoSyncState::Async;
+            false
+        } else {
+            self.dr_auto_sync_state = guard.status.get_dr_auto_sync().get_state();
+            self.replication_mode_version = guard.status.get_dr_auto_sync().state_id;
+            guard.status.get_dr_auto_sync().get_state() != DrAutoSyncState::Async
+        };
+        if enable_group_commit {
+            let ids = mem::replace(
+                guard.calculate_commit_group(self.region().get_peers()),
+                Vec::with_capacity(self.region().get_peers().len()),
+            );
+            drop(guard);
+            self.raft_group.raft.assign_commit_groups(&ids);
+        } else {
+            drop(guard);
+        }
+        self.raft_group
+            .raft
+            .enable_group_commit(enable_group_commit);
+        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id);
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -549,7 +615,7 @@ impl Peer {
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
             // Only recent active peer is considered, so that an isolated follower
-            // won't cause a waste of leader's resource.
+            // won't waste leader's resource.
             if *id == self.peer.get_id() || !pr.recent_active {
                 continue;
             }
@@ -565,7 +631,13 @@ impl Peer {
             return res;
         }
         // Unapplied entries can change the configuration of the group.
-        res.up_to_date = self.get_store().applied_index() == last_index;
+        if self.get_store().applied_index() < last_index {
+            return res;
+        }
+        if self.replication_mode_need_catch_up() {
+            return res;
+        }
+        res.up_to_date = true;
         res
     }
 
@@ -1095,6 +1167,16 @@ impl Peer {
     /// that are older than apply index as apply index <= last index <= index of snapshot.
     pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
         self.get_store().last_index() >= index && self.get_store().last_term() >= term
+    }
+
+    /// Checks if leader needs to keep sending logs for follower.
+    ///
+    /// In DrAutoSync mode, if leader goes to sleep before the region is sync,
+    /// PD may wait longer time to reach sync state.
+    pub fn replication_mode_need_catch_up(&self) -> bool {
+        self.replication_mode_version > 0
+            && self.dr_auto_sync_state != DrAutoSyncState::Async
+            && !self.replication_sync
     }
 
     pub fn handle_raft_ready_append<T: Transport, C>(
@@ -1819,8 +1901,7 @@ impl Peer {
                 return Ok(());
             }
         }
-        let promoted_commit_index =
-            progress.maximal_committed_index(self.raft_group.raft.quorum_fn());
+        let promoted_commit_index = progress.maximal_committed_index().0;
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
@@ -2515,6 +2596,47 @@ impl Peer {
         None
     }
 
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+        if self.replication_mode_version == 0 {
+            return None;
+        }
+        let mut status = RegionReplicationStatus::default();
+        status.state_id = self.replication_mode_version;
+        let state = if !self.replication_sync {
+            if self.dr_auto_sync_state != DrAutoSyncState::Async {
+                let res = self.raft_group.raft.check_group_commit_consistent();
+                if Some(true) != res {
+                    let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+                    if self.get_store().applied_index_term() >= self.term() {
+                        for (id, p) in self.raft_group.raft.prs().voters() {
+                            buffer.push((*id, p.commit_group_id, p.matched));
+                        }
+                    };
+                    info!(
+                        "still not reach integrity over label";
+                        "status" => ?res,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.id,
+                        "progress" => ?buffer
+                    );
+                } else {
+                    self.replication_sync = true;
+                }
+                match res {
+                    Some(true) => RegionReplicationState::IntegrityOverLabel,
+                    Some(false) => RegionReplicationState::SimpleMajority,
+                    None => RegionReplicationState::Unknown,
+                }
+            } else {
+                RegionReplicationState::SimpleMajority
+            }
+        } else {
+            RegionReplicationState::IntegrityOverLabel
+        };
+        status.set_state(state);
+        Some(status)
+    }
+
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
@@ -2526,6 +2648,7 @@ impl Peer {
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
+            replication_status: self.region_replication_status(),
         };
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
@@ -2820,7 +2943,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
     engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
+    snapshot: Option<Arc<E::Snapshot>>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -2850,7 +2973,7 @@ where
         if self.snapshot.is_some() {
             return;
         }
-        self.snapshot = Some(self.engine.snapshot().into_sync());
+        self.snapshot = Some(Arc::new(self.engine.snapshot()));
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);

@@ -47,7 +47,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter<RocksEngine>,
+        router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -60,7 +60,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -438,7 +438,7 @@ impl<T: Simulator> Cluster<T> {
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
-    fn bootstrap_region(&mut self) -> Result<()> {
+    pub fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
@@ -467,7 +467,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Return first region id.
-    fn bootstrap_conf_change(&mut self) -> u64 {
+    pub fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
@@ -1226,7 +1226,7 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksSnapshot>| {
                 let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);

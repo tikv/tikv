@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
@@ -293,21 +294,33 @@ where
     }
 }
 
-#[derive(Clone)]
-pub enum Notifier<E>
+pub enum Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Router(RaftRouter<E>),
+    Router(RaftRouter<S>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<E>>),
+    Sender(Sender<PeerMsg<S>>),
 }
 
-impl<E> Notifier<E>
+impl<S> Clone for Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
+    fn clone(&self) -> Self {
+        match self {
+            Notifier::Router(v) => Notifier::Router(v.clone()),
+            #[cfg(test)]
+            Notifier::Sender(v) => Notifier::Sender(v.clone()),
+        }
+    }
+}
+
+impl<S> Notifier<S>
+where
+    S: Snapshot,
+{
+    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -329,10 +342,10 @@ where
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
-    notifier: Notifier<E>,
+    notifier: Notifier<E::Snapshot>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
-    apply_res: Vec<ApplyRes<E>>,
+    apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -350,6 +363,8 @@ where
     use_delete_range: bool,
 
     perf_context_statistics: PerfContextStatistics,
+
+    yield_duration: Duration,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -364,7 +379,7 @@ where
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter,
-        notifier: Notifier<E>,
+        notifier: Notifier<E::Snapshot>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
@@ -388,6 +403,7 @@ where
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            yield_duration: cfg.apply_yield_duration.0,
         }
     }
 
@@ -730,7 +746,8 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written: bool,
+    /// The start time of the current round to execute commands.
+    handle_start: Option<Instant>,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -784,7 +801,7 @@ where
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            written: false,
+            handle_start: None,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -923,10 +940,11 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written {
-                    return ApplyResult::Yield;
+                if let Some(start) = self.handle_start.as_ref() {
+                    if start.elapsed() >= apply_ctx.yield_duration {
+                        return ApplyResult::Yield;
+                    }
                 }
-                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -2514,23 +2532,23 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<E>
+pub struct ApplyRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E::Snapshot>>,
+    pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
 }
 
 #[derive(Debug)]
-pub enum TaskRes<E>
+pub enum TaskRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Apply(ApplyRes<E>),
+    Apply(ApplyRes<S>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -2876,7 +2894,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
-                        apply_ctx.engine.snapshot().into_sync(),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         self.delegate.region.clone(),
                     )),
                 }
@@ -3044,7 +3062,7 @@ where
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written = false;
+        normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
@@ -3108,7 +3126,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksEngine>,
+    sender: Notifier<RocksSnapshot>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
 }
@@ -3116,7 +3134,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksEngine>,
+        sender: Notifier<RocksSnapshot>,
         router: ApplyRouter,
     ) -> Builder<W> {
         Builder::<W> {
@@ -3282,12 +3300,8 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    let (router, system) = batch_system::create_system(
-        cfg.apply_pool_size,
-        cfg.apply_max_batch_size,
-        tx,
-        Box::new(ControlFsm),
-    );
+    let (router, system) =
+        batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
@@ -3297,6 +3311,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
+    use std::thread;
     use std::time::*;
 
     use crate::coprocessor::*;
@@ -3435,8 +3450,8 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksEngine> {
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+    ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -4103,6 +4118,7 @@ mod tests {
             .epoch(0, 3)
             .build();
         // Add a put above to test flush before ingestion.
+        let capture_tx_clone = capture_tx.clone();
         let ingest_ok = EntryBuilder::new(10, 3)
             .ingest_sst(&meta1)
             .epoch(0, 3)
@@ -4124,7 +4140,16 @@ mod tests {
                 11,
                 vec![
                     cb(9, 3, capture_tx.clone()),
-                    cb(10, 3, capture_tx.clone()),
+                    proposal(
+                        false,
+                        10,
+                        3,
+                        Callback::Write(Box::new(move |resp: WriteResponse| {
+                            // Sleep until yield timeout.
+                            thread::sleep(Duration::from_millis(500));
+                            capture_tx_clone.send(resp.response).unwrap();
+                        })),
+                    )
                     cb(11, 3, capture_tx.clone()),
                 ],
             )),
@@ -4139,7 +4164,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // Two continuous writes inside the same region will yield.
+        // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
