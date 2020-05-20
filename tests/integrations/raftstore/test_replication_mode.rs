@@ -15,23 +15,12 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.pd_client.configure_dr_auto_sync("zone");
-    cluster.create_engines();
-    cluster.bootstrap_region().unwrap();
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 10;
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "ES".to_owned());
-    cluster.run_node(1).unwrap();
-    cluster.run_node(2).unwrap();
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "WN".to_owned());
-    cluster.run_node(3).unwrap();
+    cluster.add_label(1, "zone", "ES");
+    cluster.add_label(2, "zone", "ES");
+    cluster.add_label(3, "zone", "WS");
+    cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v0");
     cluster
@@ -134,41 +123,37 @@ fn test_check_conf_change() {
 // Tests if group id is updated when adding new node and applying snapshot.
 #[test]
 fn test_update_group_id() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 2);
     let pd_client = cluster.pd_client.clone();
+    cluster.add_label(1, "zone", "ES");
+    cluster.add_label(2, "zone", "WS");
     pd_client.disable_default_operator();
     pd_client.configure_dr_auto_sync("zone");
-    cluster.create_engines();
-    cluster.bootstrap_conf_change();
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 10;
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "ES".to_owned());
-    cluster.run_node(1).unwrap();
-    cluster.run_node(2).unwrap();
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "WN".to_owned());
-    cluster.run_node(3).unwrap();
+    cluster.run_conf_change();
     cluster.must_put(b"k1", b"v0");
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k0").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
+    // When a node is started, all store information are loaded at once, so we need an extra node
+    // to verify resolve will assign group id.
+    cluster.add_label(3, "zone", "WS");
+    cluster.add_new_engine();
     pd_client.must_add_peer(left.id, new_peer(2, 2));
     pd_client.must_add_peer(left.id, new_learner_peer(3, 3));
     pd_client.must_add_peer(left.id, new_peer(3, 3));
-    cluster.must_transfer_leader(left.id, new_peer(3, 3));
+    // If node 3's group id is not assigned, leader will make commit index as the smallest last
+    // index of all followers.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
     cluster.must_put(b"k11", b"v11");
-    must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     must_get_equal(&cluster.get_engine(1), b"k11", b"v11");
+
     // So both node 1 and node 3 have fully resolved all stores. Further updates to group ID have
     // to be done when applying conf change and snapshot.
+    cluster.clear_send_filters();
     pd_client.must_add_peer(right.id, new_peer(2, 4));
     pd_client.must_add_peer(right.id, new_learner_peer(3, 5));
     pd_client.must_add_peer(right.id, new_peer(3, 5));
@@ -260,23 +245,12 @@ fn test_switching_replication_mode_hibernate() {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     pd_client.configure_dr_auto_sync("zone");
-    cluster.create_engines();
-    let r = cluster.bootstrap_conf_change();
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 20;
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "ES".to_owned());
-    cluster.run_node(1).unwrap();
-    cluster.run_node(2).unwrap();
-    cluster
-        .cfg
-        .server
-        .labels
-        .insert("zone".to_owned(), "WN".to_owned());
-    cluster.run_node(3).unwrap();
+    cluster.add_label(1, "zone", "ES");
+    cluster.add_label(2, "zone", "ES");
+    cluster.add_label(3, "zone", "WS");
+    let r = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v0");
 
     pd_client.must_add_peer(r, new_peer(2, 2));
@@ -301,5 +275,55 @@ fn test_switching_replication_mode_hibernate() {
     thread::sleep(Duration::from_millis(100));
     let state = cluster.pd_client.region_replication_status(r);
     assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+/// Tests if replication mode is switched successfully at runtime.
+#[test]
+fn test_migrate_replication_mode() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    cluster.add_label(1, "zone", "ES");
+    cluster.add_label(2, "zone", "ES");
+    cluster.add_label(3, "zone", "WS");
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    cluster.must_put(b"k1", b"v0");
+    // Non exists label key can't tolerate any node unavailable.
+    cluster.pd_client.configure_dr_auto_sync("host");
+    thread::sleep(Duration::from_millis(100));
+    let region = cluster.get_region(b"k1");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k2", b"v2")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    must_get_none(&cluster.get_engine(1), b"k2");
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::SimpleMajority);
+
+    // Correct label key should resume committing log
+    cluster.pd_client.configure_dr_auto_sync("zone");
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(region.get_id());
+    assert_eq!(state.state_id, 2);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
