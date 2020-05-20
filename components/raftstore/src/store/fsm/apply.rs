@@ -39,7 +39,9 @@ use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
-use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
+use crate::store::peer_storage::{
+    self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
+};
 use crate::store::util::{check_region_epoch, compare_region_epoch};
 use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
 
@@ -60,6 +62,7 @@ use tikv_util::MustConsumeVec;
 use super::metrics::*;
 
 use super::super::RegionTask;
+use std::vec::Drain;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -826,19 +829,18 @@ where
     fn handle_raft_committed_entries<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        mut committed_entries: Vec<Entry>,
+        mut committed_entries_drainer: Drain<Entry>,
     ) {
-        if committed_entries.is_empty() {
+        if committed_entries_drainer.len() == 0 {
             return;
         }
         apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
-        apply_ctx.committed_count += committed_entries.len();
-        let mut drainer = committed_entries.drain(..);
+        apply_ctx.committed_count += committed_entries_drainer.len();
         let mut results = VecDeque::new();
-        while let Some(entry) = drainer.next() {
+        while let Some(entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
@@ -875,11 +877,12 @@ where
                 ApplyResult::Res(res) => results.push_back(res),
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
-                    apply_ctx.committed_count -= drainer.len() + 1;
-                    let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
+                    apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
+                    let mut pending_entries =
+                        Vec::with_capacity(committed_entries_drainer.len() + 1);
                     // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
-                    pending_entries.extend(drainer);
+                    pending_entries.extend(committed_entries_drainer);
                     apply_ctx.finish_for(self, results);
                     self.yield_state = Some(YieldState {
                         pending_entries,
@@ -2290,6 +2293,52 @@ where
     pub committed_index: u64,
     pub committed_term: u64,
     pub cbs: Vec<Proposal<S>>,
+    entries_mem_size: i64,
+}
+
+impl<S: Snapshot> Apply<S> {
+    pub(crate) fn new(
+        peer_id: u64,
+        region_id: u64,
+        term: u64,
+        entries: Vec<Entry>,
+        last_committed_index: u64,
+        committed_index: u64,
+        committed_term: u64,
+        cbs: Vec<Proposal<S>>,
+    ) -> Apply<S> {
+        let entries_mem_size =
+            (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
+        APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
+        Apply {
+            peer_id,
+            region_id,
+            term,
+            entries,
+            last_committed_index,
+            committed_index,
+            committed_term,
+            entries_mem_size,
+            cbs,
+        }
+    }
+}
+
+impl<S: Snapshot> Drop for Apply<S> {
+    fn drop(&mut self) {
+        APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
+    }
+}
+
+fn get_entries_mem_size(entries: &[Entry]) -> i64 {
+    if entries.is_empty() {
+        return 0;
+    }
+    let data_size: i64 = entries
+        .iter()
+        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+        .sum();
+    data_size
 }
 
 #[derive(Default, Clone)]
@@ -2606,7 +2655,7 @@ where
     fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        apply: Apply<E::Snapshot>,
+        mut apply: Apply<E::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -2644,26 +2693,26 @@ where
         self.delegate.apply_state.set_commit_index(cur_state.1);
         self.delegate.apply_state.set_commit_term(cur_state.2);
 
-        self.append_proposal(apply.cbs);
+        self.append_proposal(apply.cbs.drain(..));
         self.delegate
-            .handle_raft_committed_entries(apply_ctx, apply.entries);
+            .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
         if self.delegate.yield_state.is_some() {
             return;
         }
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props: Vec<Proposal<E::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<Proposal<E::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
-        let propose_num = props.len();
+        let propose_num = props_drainer.len();
         if self.delegate.stopped {
-            for p in props {
+            for p in props_drainer {
                 let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
-        for p in props {
+        for p in props_drainer {
             let cmd = PendingCmd::new(p.index, p.term, p.cb);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
@@ -2744,7 +2793,7 @@ where
         }
         if !state.pending_entries.is_empty() {
             self.delegate
-                .handle_raft_committed_entries(ctx, state.pending_entries);
+                .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
             if let Some(ref mut s) = self.delegate.yield_state {
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
@@ -3201,12 +3250,12 @@ impl ApplyRouter {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,
-                Msg::Apply { apply, .. } => {
+                Msg::Apply { mut apply, .. } => {
                     info!(
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in apply.cbs {
+                    for p in apply.cbs.drain(..) {
                         let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
