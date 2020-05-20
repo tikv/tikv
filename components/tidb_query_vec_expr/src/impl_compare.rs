@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{max, Ordering};
+use std::cmp::{max, min, Ordering};
 use std::str;
 
 use tidb_query_codegen::rpn_fn;
@@ -242,6 +242,12 @@ pub fn greatest_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.max(y))
 }
 
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_decimal(args: &[&Option<Decimal>]) -> Result<Option<Decimal>> {
+    do_get_extremum(args, |x, y| x.max(y))
+}
+
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
 pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
@@ -273,6 +279,118 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<O
     }
 
     Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_string(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                greatest = max(greatest, Some(s));
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|greatest_val| greatest_val.to_owned().into_bytes()))
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn least_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn least_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, |x, y| x.min(y))
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn least_decimal(args: &[&Option<Decimal>]) -> Result<Option<Decimal>> {
+    do_get_extremum(args, |x, y| x.min(y))
+}
+
+#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    use tidb_query_datatype::codec::mysql;
+    let mut least = Some(Time::parse_datetime(
+        ctx,
+        "9999-12-31 23:59:59.999999",
+        mysql::MAX_FSP,
+        false,
+    )?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_string(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    let mut least = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                if least == None {
+                    least = Some(s);
+                }
+                least = min(least, Some(s));
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|least_val| least_val.to_owned().into_bytes()))
 }
 
 #[inline]
@@ -925,33 +1043,55 @@ mod tests {
     }
 
     #[test]
-    fn test_greatest_int() {
+    fn test_greatest_and_least_int() {
         let cases = vec![
-            (vec![None, None], None),
-            (vec![Some(1), Some(1)], Some(1)),
-            (vec![Some(1), Some(-1), None], None),
-            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(2)),
+            (vec![None, None], None, None),
+            (vec![Some(1), Some(1)], Some(1), Some(1)),
+            (vec![Some(1), Some(-1), None], None, None),
+            (
+                vec![Some(-2), Some(-1), Some(1), Some(2)],
+                Some(2),
+                Some(-2),
+            ),
             (
                 vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
                 Some(i64::MAX),
+                Some(i64::MIN),
             ),
-            (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(8), Some(0)),
         ];
 
-        for (row, expected) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestInt)
-                .unwrap();
-            assert_eq!(output, expected);
+        for (row, greatest_exp, least_exp) in cases {
+            // Evaluate and test greatest
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::GreatestInt)
+                    .unwrap();
+                assert_eq!(output, greatest_exp);
+            }
+            // Evaluate and test least
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::LeastInt)
+                    .unwrap();
+                assert_eq!(output, least_exp);
+            }
         }
     }
 
     #[test]
-    fn test_greatest_real() {
+    fn test_greatest_and_least_real() {
         let cases = vec![
-            (vec![None, None], None),
-            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (vec![None, None], None, None),
+            (
+                vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None],
+                None,
+                None,
+            ),
             (
                 vec![
                     Real::new(1.0).ok(),
@@ -960,6 +1100,7 @@ mod tests {
                     Real::new(0f64).ok(),
                 ],
                 Real::new(1.0).ok(),
+                Real::new(-2.0).ok(),
             ),
             (
                 vec![
@@ -968,8 +1109,13 @@ mod tests {
                     Real::new(0f64).ok(),
                 ],
                 Real::new(f64::MAX).ok(),
+                Real::new(f64::MIN).ok(),
             ),
-            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
+            (
+                vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()],
+                None,
+                None,
+            ),
             (
                 vec![
                     Real::new(f64::INFINITY).ok(),
@@ -978,28 +1124,90 @@ mod tests {
                     Real::new(f64::MIN).ok(),
                 ],
                 Real::new(f64::INFINITY).ok(),
+                Real::new(f64::NEG_INFINITY).ok(),
             ),
         ];
 
-        for (row, expected) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestReal)
-                .unwrap();
-            assert_eq!(output, expected);
+        for (row, greatest_exp, least_exp) in cases {
+            // Evaluate and test greatest
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::GreatestReal)
+                    .unwrap();
+                assert_eq!(output, greatest_exp);
+            }
+            // Evaluate and test least
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::LeastReal)
+                    .unwrap();
+                assert_eq!(output, least_exp);
+            }
         }
     }
 
     #[test]
-    fn test_greatest_time() {
+    fn test_greatest_and_least_decimal() {
         let cases = vec![
-            (vec![None, None], None),
+            (vec![None, None], None, None),
+            (
+                vec![
+                    "1.0".parse::<Decimal>().ok(),
+                    "-1.0".parse::<Decimal>().ok(),
+                    None,
+                ],
+                None,
+                None,
+            ),
+            (
+                vec![
+                    "1.1".parse::<Decimal>().ok(),
+                    "-1.1".parse::<Decimal>().ok(),
+                    "0.0".parse::<Decimal>().ok(),
+                    "0.000".parse::<Decimal>().ok(),
+                ],
+                "1.1".parse::<Decimal>().ok(),
+                "-1.1".parse::<Decimal>().ok(),
+            ),
+        ];
+
+        for (row, greatest_exp, least_exp) in cases {
+            // Evaluate and test greatest
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::GreatestDecimal)
+                    .unwrap();
+                assert_eq!(output, greatest_exp);
+            }
+            // Evaluate and test least
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::LeastDecimal)
+                    .unwrap();
+                assert_eq!(output, least_exp);
+            }
+        }
+    }
+
+    #[test]
+    fn test_greatest_and_least_time() {
+        let cases = vec![
+            (vec![None, None], None, None),
             (
                 vec![
                     Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
                     Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
                     None,
                 ],
+                None,
                 None,
             ),
             (
@@ -1009,6 +1217,7 @@ mod tests {
                     Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
                 ],
                 Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
             ),
             (
                 vec![
@@ -1017,6 +1226,7 @@ mod tests {
                     Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
                     Some(b"invalid_time".to_owned().to_vec()),
                 ],
+                None,
                 None,
             ),
             (
@@ -1029,6 +1239,7 @@ mod tests {
                     Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
                 ],
                 Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+                Some(b"2012-12-12 12:00:38.120038".to_owned().to_vec()),
             ),
             (
                 vec![
@@ -1036,15 +1247,84 @@ mod tests {
                     Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
                 ],
                 None,
+                None,
             ),
         ];
 
-        for (row, expected) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestTime)
-                .unwrap();
-            assert_eq!(output, expected);
+        for (row, greatest_exp, least_exp) in cases {
+            // Evaluate and test greatest
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::GreatestTime)
+                    .unwrap();
+                assert_eq!(output, greatest_exp);
+            }
+            // Evaluate and test least
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::LeastTime)
+                    .unwrap();
+                assert_eq!(output, least_exp);
+            }
+        }
+    }
+
+    #[test]
+    fn test_greatest_and_least_string() {
+        let cases = vec![
+            (vec![None, None], None, None),
+            (
+                vec![
+                    Some("你好".as_bytes().to_owned()),
+                    Some("你好啊".as_bytes().to_owned()),
+                    None,
+                ],
+                None,
+                None,
+            ),
+            (
+                vec![
+                    Some("你好".as_bytes().to_owned()),
+                    Some("你好啊".as_bytes().to_owned()),
+                    Some(b"nihaoa".to_owned().to_vec()),
+                ],
+                Some("你好啊".as_bytes().to_owned()),
+                Some(b"nihaoa".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some("基萌土豆".as_bytes().to_owned()),
+                    Some(b"JmPotato".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+                None,
+            ),
+        ];
+
+        for (row, greatest_exp, least_exp) in cases {
+            // Evaluate and test greatest
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::GreatestString)
+                    .unwrap();
+                assert_eq!(output, greatest_exp);
+            }
+            // Evaluate and test least
+            {
+                let test_row = row.clone();
+                let output = RpnFnScalarEvaluator::new()
+                    .push_params(test_row)
+                    .evaluate(ScalarFuncSig::LeastString)
+                    .unwrap();
+                assert_eq!(output, least_exp);
+            }
         }
     }
 }
