@@ -2318,8 +2318,8 @@ impl<S: Snapshot> Apply<S> {
             last_committed_index,
             committed_index,
             committed_term,
-            entries_mem_size,
             cbs,
+            entries_mem_size,
         }
     }
 }
