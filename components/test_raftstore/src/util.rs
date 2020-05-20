@@ -21,7 +21,7 @@ use engine::rocks::DB;
 use engine::*;
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{Compat, RocksSnapshot};
 use engine_traits::{Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
@@ -472,7 +472,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    router: RaftRouter<RocksEngine>,
+    router: RaftRouter<RocksSnapshot>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
