@@ -45,6 +45,8 @@ fn test_cdc_basic() {
         }
     });
 
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(200);
     // There must be a delegate.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     scheduler
