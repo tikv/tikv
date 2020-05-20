@@ -16,7 +16,7 @@ use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use txn_types::{Key, TimeStamp, Value};
+use txn_types::{Key, Value, Write};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -82,14 +82,11 @@ impl Modify {
 #[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
-    pub extra_data: Option<Vec<(Key, Option<Value>, TimeStamp)>>,
+    pub extra_data: Option<Vec<(Key, Write)>>,
 }
 
 impl WriteData {
-    pub fn new(
-        modifies: Vec<Modify>,
-        extra_data: Option<Vec<(Key, Option<Value>, TimeStamp)>>,
-    ) -> Self {
+    pub fn new(modifies: Vec<Modify>, extra_data: Option<Vec<(Key, Write)>>) -> Self {
         Self {
             modifies,
             extra_data,

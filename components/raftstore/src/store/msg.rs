@@ -121,6 +121,8 @@ where
     }
 }
 
+pub type Extra = Vec<(Vec<u8>, Vec<u8>)>;
+
 bitflags! {
     pub struct PeerTicks: u8 {
         const RAFT                   = 0b00000001;
@@ -309,14 +311,20 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub extra: Option<Extra>,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+    pub fn new(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        extra: Option<Extra>,
+    ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
+            extra,
             send_time: Instant::now(),
         }
     }

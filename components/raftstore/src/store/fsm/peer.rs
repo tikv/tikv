@@ -2084,7 +2084,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .router
             .force_send(
                 target_id,
-                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
+                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None, None)),
             )
             .map_err(|_| Error::RegionNotFound(target_id))
     }

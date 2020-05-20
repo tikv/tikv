@@ -102,7 +102,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.extra_data = Some(Vec::default());
     }
 
-    pub fn take_extra_data(&mut self) -> Option<Vec<(Key, Option<Value>, TimeStamp)>> {
+    pub fn take_extra_data(&mut self) -> Option<Vec<(Key, Write)>> {
         self.writes.extra_data.take()
     }
 
@@ -549,34 +549,26 @@ impl<S: Snapshot> MvccTxn<S> {
                 match self.extra_read {
                     Some(ExtraRead::Deleted) => {
                         if let MutationType::Delete = mutation_type {
-                            let extra_value = if let Some(value) = $v.short_value {
+                            if let Some(value) = $v.short_value {
                                 Some(value)
                             } else {
                                 self.reader.get(&key, $v.$ts, true).unwrap()
-                            };
-                            self.writes.extra_data.as_mut().unwrap().push((
-                                key.clone(),
-                                extra_value,
-                                $v.$ts,
-                            ));
+                            }
+                        } else {
+                            None
                         }
                     }
                     Some(ExtraRead::Updated) => match mutation_type {
                         MutationType::Delete | MutationType::Put => {
-                            let extra_value = if let Some(value) = $v.short_value {
+                            if let Some(value) = $v.short_value {
                                 Some(value)
                             } else {
                                 self.reader.get(&key, $v.$ts, true).unwrap()
-                            };
-                            self.writes.extra_data.as_mut().unwrap().push((
-                                key.clone(),
-                                extra_value,
-                                $v.$ts,
-                            ));
+                            }
                         }
-                        _ => (),
+                        _ => None,
                     },
-                    _ => (),
+                    _ => None,
                 }
             };
         }
@@ -590,7 +582,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         // Check whether there is a newer version.
         if !skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+            if let Some((commit_ts, mut write)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 // Abort on writes after our start timestamp ...
                 // If exists a commit version whose commit timestamp is larger than or equal to
                 // current start timestamp, we should abort current prewrite, even if the commit
@@ -607,7 +599,10 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                extra_read!(write, start_ts);
+                if let Some(extra_data) = self.writes.extra_data.as_mut() {
+                    write.short_value = extra_read!(write, start_ts);
+                    extra_data.push((key.clone(), write));
+                }
             }
         }
         if should_not_write {
@@ -628,7 +623,12 @@ impl<S: Snapshot> MvccTxn<S> {
                 .into());
             }
             // Otherwise the lock was belong to the same txn, the previous value would be recorded in the lock cf.
-            extra_read!(lock, ts);
+            if let Some(extra_data) = self.writes.extra_data.as_mut() {
+                let mut write = Write::new(WriteType::Put, lock.ts, None);
+                write.short_value = extra_read!(lock, ts);
+                extra_data.push((key.clone(), write));
+            }
+
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());

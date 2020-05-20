@@ -1156,7 +1156,7 @@ fn send_admin_request<E>(
 
     req.set_admin_request(request);
 
-    if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback)) {
+    if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback, None)) {
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,

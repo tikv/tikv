@@ -25,7 +25,7 @@ use crate::storage::kv::{
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{Callback as StoreCallback, Extra, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
 
@@ -213,6 +213,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        extra: Option<Extra>,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -244,8 +245,9 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_with_extra(
                 cmd,
+                extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -277,13 +279,22 @@ impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, mut batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
         let mut reqs = Vec::with_capacity(batch.modifies.len());
+        let extra = if let Some(data) = batch.extra_data.take() {
+            Some(
+                data.into_iter()
+                    .map(|(k, v)| (k.into_encoded(), v.as_ref().to_bytes()))
+                    .collect(),
+            )
+        } else {
+            None
+        };
         for m in batch.modifies {
             let mut req = Request::default();
             match m {
@@ -325,6 +336,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         self.exec_write_requests(
             ctx,
             reqs,
+            extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
