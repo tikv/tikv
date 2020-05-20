@@ -6,10 +6,12 @@ use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use futures::future::{self, err, loop_fn, ok, Loop};
+use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use futures03::compat::Future01CompatExt;
+use futures03::executor::block_on;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -154,52 +156,51 @@ impl LeaderClient {
     }
 
     /// Re-establishes connection with PD leader in synchronized fashion.
-    pub fn reconnect(&self) -> PdFuture<()> {
-        let (try_connect, start) = {
+    pub async fn reconnect(&self) -> Result<()> {
+        let (fut, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
-                return Box::new(ok(()));
+                return Ok(());
             }
 
             let start = Instant::now();
+
             (
                 try_connect_leader(
                     Arc::clone(&inner.env),
                     Arc::clone(&inner.security_mgr),
-                    &inner.members,
+                    inner.members.clone(),
                 ),
                 start,
             )
         };
+        let (client, members) = fut.await?;
 
-        let inner = self.inner.clone();
-        Box::new(try_connect.and_then(move |(client, members)| {
-            {
-                let mut inner = inner.wl();
-                let (tx, rx) = client.region_heartbeat().unwrap();
-                info!("heartbeat sender and receiver are stale, refreshing ...");
+        {
+            let mut inner = self.inner.wl();
+            let (tx, rx) = client.region_heartbeat().unwrap();
+            info!("heartbeat sender and receiver are stale, refreshing ...");
 
-                // Try to cancel an unused heartbeat sender.
-                if let Either::Left(Some(ref mut r)) = inner.hb_sender {
-                    debug!("cancel region heartbeat sender");
-                    r.cancel();
-                }
-                inner.hb_sender = Either::Left(Some(tx));
-                if let Either::Right(ref mut task) = inner.hb_receiver {
-                    task.notify();
-                }
-                inner.hb_receiver = Either::Left(Some(rx));
-                inner.client_stub = client;
-                inner.members = members;
-                inner.last_update = Instant::now();
-                if let Some(ref on_reconnect) = inner.on_reconnect {
-                    on_reconnect();
-                }
+            // Try to cancel an unused heartbeat sender.
+            if let Either::Left(Some(ref mut r)) = inner.hb_sender {
+                debug!("cancel region heartbeat sender");
+                r.cancel();
             }
-            warn!("updating PD client done"; "spend" => ?start.elapsed());
-            ok(())
-        }))
+            inner.hb_sender = Either::Left(Some(tx));
+            if let Either::Right(ref mut task) = inner.hb_receiver {
+                task.notify();
+            }
+            inner.hb_receiver = Either::Left(Some(rx));
+            inner.client_stub = client;
+            inner.members = members;
+            inner.last_update = Instant::now();
+            if let Some(ref on_reconnect) = inner.on_reconnect {
+                on_reconnect();
+            }
+        }
+        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        Ok(())
     }
 }
 
@@ -237,7 +238,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect().wait() {
+        match block_on(self.client.reconnect()) {
             Ok(_) => {
                 self.request_sent = 0;
                 Box::new(ok(self))
@@ -332,7 +333,7 @@ where
             }
             Err(e) => {
                 error!("request failed"; "err" => ?e);
-                if let Err(e) = client.reconnect().wait() {
+                if let Err(e) = block_on(client.reconnect()) {
                     error!("reconnect failed"; "err" => ?e);
                 }
                 err.replace(e);
@@ -358,7 +359,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(Arc::clone(&env), &security_mgr, ep).wait() {
+        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -390,7 +391,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) =
-                try_connect_leader(Arc::clone(&env), security_mgr, &members).wait()?;
+                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -398,150 +399,81 @@ pub fn validate_endpoints(
     }
 }
 
-fn connect(
+async fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
-) -> PdFuture<(PdClientStub, GetMembersResponse)> {
+) -> Result<(PdClientStub, GetMembersResponse)> {
     info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_start_matches("http://")
         .trim_start_matches("https://");
-    let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
-
-    let channel = security_mgr.connect(cb, addr);
+    let channel = {
+        let cb = ChannelBuilder::new(env)
+            .keepalive_time(Duration::from_secs(10))
+            .keepalive_timeout(Duration::from_secs(3));
+        security_mgr.connect(cb, addr)
+    };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-
-    Box::new(
-        client
-            .get_members_async_opt(&GetMembersRequest::default(), option)
-            .unwrap()
-            .then(|r| match r {
-                Ok(resp) => Ok((client, resp)),
-                Err(e) => Err(Error::Grpc(e)),
-            }),
-    )
+    let handler = client
+        .get_members_async_opt(&GetMembersRequest::default(), option)
+        .unwrap();
+    match handler.compat().await {
+        Ok(resp) => Ok((client, resp)),
+        Err(e) => Err(Error::Grpc(e)),
+    }
 }
 
-struct TryConnectCtx {
+pub async fn try_connect_leader(
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
-    members: Vec<Member>,
-    cluster_id: u64,
-    mid: usize,
-    cid: usize,
-}
-
-pub fn try_connect_leader(
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
-    previous: &GetMembersResponse,
-) -> PdFuture<(PdClientStub, GetMembersResponse)> {
-    let previous_leader = previous.get_leader().clone();
-
+    previous: GetMembersResponse,
+) -> Result<(PdClientStub, GetMembersResponse)> {
+    let previous_leader = previous.get_leader();
+    let members = previous.get_members();
+    let cluster_id = previous.get_header().get_cluster_id();
+    let mut resp = None;
     // Try to connect to other members, then the previous leader.
-    let mut members = Vec::with_capacity(previous.get_members().len());
-    for m in previous.get_members() {
-        if *m != previous_leader {
-            members.push(m.clone());
+    'outer: for m in members
+        .iter()
+        .filter(|m| *m != previous_leader)
+        .chain(&[previous_leader.clone()])
+    {
+        for ep in m.get_client_urls() {
+            match connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
+                Ok((_, r)) => {
+                    let new_cluster_id = r.get_header().get_cluster_id();
+                    if new_cluster_id == cluster_id {
+                        resp = Some(r);
+                        break 'outer;
+                    } else {
+                        panic!(
+                            "{} no longer belongs to cluster {}, it is in {}",
+                            ep, cluster_id, new_cluster_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
+                    continue;
+                }
+            }
         }
     }
-    members.push(previous_leader);
 
-    let cluster_id = previous.get_header().get_cluster_id();
-    let ctx = TryConnectCtx {
-        env,
-        security_mgr,
-        members,
-        cluster_id,
-        mid: 0,
-        cid: 0,
-    };
+    // Then try to connect the PD cluster leader.
+    if let Some(resp) = resp {
+        let leader = resp.get_leader().clone();
+        for ep in leader.get_client_urls() {
+            if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
+                info!("connected to PD leader"; "endpoints" => ep);
+                return Ok((client, resp));
+            }
+        }
+    }
 
-    Box::new(
-        loop_fn(ctx, |mut ctx| {
-            if ctx.mid < ctx.members.len() {
-                ctx.cid = 0;
-                future::Either::A(
-                    loop_fn(ctx, |mut ctx| {
-                        if ctx.cid < ctx.members[ctx.mid].get_client_urls().len() {
-                            let ep = ctx.members[ctx.mid].get_client_urls()[ctx.cid].clone();
-                            future::Either::A(
-                                connect(ctx.env.clone(), &ctx.security_mgr, ep.as_str()).then(
-                                    move |r| match r {
-                                        Ok((_, r)) => {
-                                            let new_cluster_id = r.get_header().get_cluster_id();
-                                            if new_cluster_id == ctx.cluster_id {
-                                                ok(Loop::Break((ctx, Some(r))))
-                                            } else {
-                                                panic!(
-                                                    "{} no longer belongs to cluster {}, it is in {}",
-                                                    ep, ctx.cluster_id, new_cluster_id
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("connect failed"; "endpoints" => ep, "err" => ?e);
-                                            ctx.cid += 1;
-                                            ok(Loop::Continue(ctx))
-                                        }
-                                    },
-                                ),
-                            )
-                        } else {
-                            future::Either::B(ok(Loop::Break((ctx, None))))
-                        }
-                    })
-                    .and_then(|(mut ctx, r)| match r {
-                        Some(_) => Ok(Loop::Break((ctx, r))),
-                        None => {
-                            ctx.mid += 1;
-                            Ok(Loop::Continue(ctx))
-                        }
-                    }),
-                )
-            } else {
-                future::Either::B(ok(Loop::Break((ctx, None))))
-            }
-        })
-        .and_then(|(mut ctx, resp)| {
-            match resp {
-                Some(resp) => {
-                    // Then try to connect the PD cluster leader.
-                    ctx.cid = 0;
-                    future::Either::A(loop_fn((ctx, resp),
-                        |(mut ctx, resp)| {
-                            if ctx.cid < resp.get_leader().get_client_urls().len() {
-                                let ep = resp.get_leader().get_client_urls()[ctx.cid].clone();
-                                future::Either::A(
-                                    connect(Arc::clone(&ctx.env), &ctx.security_mgr, ep.as_str())
-                                        .then(move |r| match r {
-                                            Ok((client, _)) => {
-                                                info!("connected to PD leader"; "endpoints" => ep);
-                                                ok(Loop::Break((client, resp)))
-                                            }
-                                            Err(_) => {
-                                                ctx.cid += 1;
-                                                ok(Loop::Continue((ctx, resp)))
-                                            }
-                                        }),
-                                )
-                            } else {
-                                future::Either::B(err(box_err!(
-                                    "failed to connect to {:?}",
-                                    ctx.members
-                                )))
-                            }
-                        },
-                    ))
-                }
-                None => future::Either::B(err(box_err!("failed to connect to {:?}", ctx.members))),
-            }
-        }),
-    )
+    Err(box_err!("failed to connect to {:?}", members))
 }
 
 /// Convert a PD protobuf error to an `Error`.

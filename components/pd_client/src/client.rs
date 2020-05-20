@@ -5,10 +5,12 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{future, Future, Sink, Stream};
+use futures03::compat::{Compat, Future01CompatExt};
+use futures03::executor::block_on;
+use futures03::future::FutureExt;
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -61,33 +63,40 @@ impl RpcClient {
 
                     // spawn a background future to update PD information periodically
                     let duration = cfg.update_interval.0;
-                    let update_loop =
-                        loop_fn(Arc::downgrade(&rpc_client.leader_client), move |client| {
-                            GLOBAL_TIMER_HANDLE
+                    let client = Arc::downgrade(&rpc_client.leader_client);
+                    let update_loop = async move {
+                        loop {
+                            let ok = GLOBAL_TIMER_HANDLE
                                 .delay(Instant::now() + duration)
-                                .then(|_| {
-                                    match client.upgrade() {
-                                        Some(cli) => {
-                                            let req = cli.reconnect();
-                                            future::Either::A(req.then(|r| {
-                                                if r.is_err() {
-                                                    warn!("update PD information failed");
-                                                    // will update later anyway
-                                                }
-                                                Ok(Loop::Continue(client))
-                                            }))
-                                        }
-                                        // if the client has been dropped, we can stop
-                                        None => future::Either::B(ok(Loop::Break(()))),
+                                .compat()
+                                .await
+                                .is_ok();
+
+                            if !ok {
+                                warn!("failed to delay with global timer");
+                                continue;
+                            }
+
+                            match client.upgrade() {
+                                Some(cli) => {
+                                    let req = cli.reconnect().await;
+                                    if req.is_err() {
+                                        warn!("update PD information failed");
+                                        // will update later anyway
                                     }
-                                })
-                        });
+                                }
+                                // if the client has been dropped, we can stop
+                                None => break,
+                            }
+                        }
+                    };
+
                     rpc_client
                         .leader_client
                         .inner
                         .rl()
                         .client_stub
-                        .spawn(update_loop);
+                        .spawn(Compat::new(update_loop.unit_error().boxed()));
 
                     return Ok(rpc_client);
                 }
@@ -116,7 +125,7 @@ impl RpcClient {
 
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
-        self.leader_client.reconnect().wait()
+        block_on(self.leader_client.reconnect())
     }
 
     /// Creates a new call option with default request timeout.
