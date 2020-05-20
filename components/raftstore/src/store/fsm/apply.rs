@@ -70,8 +70,8 @@ const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     pub index: u64,
     pub term: u64,
@@ -79,8 +79,8 @@ where
 }
 
 impl<S> PendingCmd<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
         PendingCmd {
@@ -92,8 +92,8 @@ where
 }
 
 impl<S> Drop for PendingCmd<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn drop(&mut self) {
         if self.cb.is_some() {
@@ -107,8 +107,8 @@ where
 }
 
 impl<S> Debug for PendingCmd<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -124,16 +124,16 @@ where
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
 pub struct PendingCmdQueue<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     normals: VecDeque<PendingCmd<S>>,
     conf_change: Option<PendingCmd<S>>,
 }
 
 impl<S> PendingCmdQueue<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn new() -> PendingCmdQueue<S> {
         PendingCmdQueue {
@@ -267,16 +267,16 @@ impl ExecContext {
 }
 
 struct ApplyCallback<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     region: Region,
     cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
 }
 
 impl<S> ApplyCallback<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn new(region: Region) -> ApplyCallback<S> {
         let cbs = vec![];
@@ -298,8 +298,8 @@ where
 }
 
 pub enum Notifier<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     Router(RaftRouter<S>),
     #[cfg(test)]
@@ -307,8 +307,8 @@ where
 }
 
 impl<S> Clone for Notifier<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn clone(&self) -> Self {
         match self {
@@ -320,8 +320,8 @@ where
 }
 
 impl<S> Notifier<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
         match *self {
@@ -335,9 +335,9 @@ where
 }
 
 struct ApplyContext<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    where
+        E: KvEngine,
+        W: WriteBatch + WriteBatchVecExt<E>,
 {
     tag: String,
     timer: Option<Instant>,
@@ -371,9 +371,9 @@ where
 }
 
 impl<E, W> ApplyContext<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    where
+        E: KvEngine,
+        W: WriteBatch + WriteBatchVecExt<E>,
 {
     pub fn new(
         tag: String,
@@ -687,8 +687,8 @@ struct WaitSourceMergeState {
 }
 
 struct YieldState<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     /// All of the entries that need to continue to be applied after
     /// the source peer has applied its logs.
@@ -700,8 +700,8 @@ where
 }
 
 impl<E> Debug for YieldState<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("YieldState")
@@ -734,8 +734,8 @@ impl Debug for WaitSourceMergeState {
 /// handle the apply task to make the code logic more clear.
 #[derive(Debug)]
 pub struct ApplyDelegate<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     /// The ID of the peer.
     id: u64,
@@ -790,8 +790,8 @@ where
 }
 
 impl<E> ApplyDelegate<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn from_registration(reg: Registration) -> ApplyDelegate<E> {
         ApplyDelegate {
@@ -917,12 +917,12 @@ where
             &keys::apply_state_key(self.region.get_id()),
             &self.apply_state,
         )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to save apply state to write batch, error: {:?}",
-                self.tag, e
-            );
-        });
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save apply state to write batch, error: {:?}",
+                    self.tag, e
+                );
+            });
     }
 
     fn handle_raft_entry_normal<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -1204,8 +1204,8 @@ where
 }
 
 impl<E> ApplyDelegate<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -1341,8 +1341,8 @@ where
 
 // Write commands related.
 impl<E> ApplyDelegate<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
@@ -1534,8 +1534,8 @@ where
 
 // Admin commands related.
 impl<E> ApplyDelegate<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
@@ -1787,8 +1787,8 @@ where
             }
             if split_key
                 <= keys
-                    .back()
-                    .map_or_else(|| derived.get_start_key(), Vec::as_slice)
+                .back()
+                .map_or_else(|| derived.get_start_key(), Vec::as_slice)
             {
                 return Err(box_err!("invalid split request: {:?}", split_reqs));
             }
@@ -1908,12 +1908,12 @@ where
             PeerState::Merging,
             Some(merging_state.clone()),
         )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to save merging state {:?} for region {:?}: {:?}",
-                self.tag, merging_state, region, e
-            )
-        });
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save merging state {:?} for region {:?}: {:?}",
+                    self.tag, merging_state, region, e
+                )
+            });
         fail_point!("apply_after_prepare_merge");
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
@@ -2282,8 +2282,8 @@ pub fn compact_raft_log(
 }
 
 pub struct Apply<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     pub peer_id: u64,
     pub region_id: u64,
@@ -2367,8 +2367,8 @@ impl Registration {
 }
 
 pub struct Proposal<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     pub is_conf_change: bool,
     pub index: u64,
@@ -2430,8 +2430,8 @@ impl GenSnapTask {
         last_applied_state: RaftApplyState,
         region_sched: &Scheduler<RegionTask<E::Snapshot>>,
     ) -> Result<()>
-    where
-        E: KvEngine,
+        where
+            E: KvEngine,
     {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
@@ -2493,8 +2493,8 @@ pub enum ChangeCmd {
 }
 
 pub enum Msg<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     Apply {
         start: Instant,
@@ -2516,8 +2516,8 @@ where
 }
 
 impl<E> Msg<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     pub fn apply(apply: Apply<E::Snapshot>) -> Msg<E> {
         Msg::Apply {
@@ -2539,8 +2539,8 @@ where
 }
 
 impl<E> Debug for Msg<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -2582,8 +2582,8 @@ pub struct ApplyMetrics {
 
 #[derive(Debug)]
 pub struct ApplyRes<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
@@ -2594,8 +2594,8 @@ where
 
 #[derive(Debug)]
 pub enum TaskRes<S>
-where
-    S: Snapshot,
+    where
+        S: Snapshot,
 {
     Apply(ApplyRes<S>),
     Destroy {
@@ -2607,8 +2607,8 @@ where
 }
 
 pub struct ApplyFsm<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     delegate: ApplyDelegate<E>,
     receiver: Receiver<Msg<E>>,
@@ -2616,8 +2616,8 @@ where
 }
 
 impl<E> ApplyFsm<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
@@ -2932,8 +2932,8 @@ where
             &region_epoch,
             &self.delegate.region,
             false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            true, /* check_ver */
+            true, /* include_region */
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
@@ -3004,10 +3004,10 @@ where
                 Some(Msg::Noop) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 Some(Msg::Change {
-                    cmd,
-                    region_epoch,
-                    cb,
-                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
+                         cmd,
+                         region_epoch,
+                         cb,
+                     }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
@@ -3021,8 +3021,8 @@ where
 }
 
 impl<E> Fsm for ApplyFsm<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     type Message = Msg<E>;
 
@@ -3033,24 +3033,24 @@ where
 
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         self.mailbox = Some(mailbox.into_owned());
     }
 
     #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         self.mailbox.take()
     }
 }
 
 impl<E> Drop for ApplyFsm<E>
-where
-    E: KvEngine,
+    where
+        E: KvEngine,
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
@@ -3071,9 +3071,9 @@ impl Fsm for ControlFsm {
 }
 
 pub struct ApplyPoller<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    where
+        E: KvEngine,
+        W: WriteBatch + WriteBatchVecExt<E>,
 {
     msg_buf: Vec<Msg<E>>,
     apply_ctx: ApplyContext<E, W>,
@@ -3082,9 +3082,9 @@ where
 }
 
 impl<E, W> PollHandler<ApplyFsm<E>, ControlFsm> for ApplyPoller<E, W>
-where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    where
+        E: KvEngine,
+        W: WriteBatch + WriteBatchVecExt<E>,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3201,7 +3201,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
-    HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
+HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
 {
     type Handler = ApplyPoller<RocksEngine, W>;
 
@@ -3337,7 +3337,7 @@ impl DerefMut for ApplyBatchSystem {
 }
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
+    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item=&'a Peer>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3392,7 +3392,7 @@ mod tests {
             ALL_CFS,
             None,
         )
-        .unwrap();
+            .unwrap();
         (path, engine)
     }
 
@@ -3458,8 +3458,8 @@ mod tests {
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
-    where
-        F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
+        where
+            F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
     {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule_task(
@@ -3535,7 +3535,7 @@ mod tests {
         committed_index: u64,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply {
+        Apply::new(
             peer_id,
             region_id,
             term,
@@ -3543,8 +3543,7 @@ mod tests {
             last_committed_index,
             committed_index,
             committed_term,
-            cbs,
-        }
+            cbs)
     }
 
     #[test]
