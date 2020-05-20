@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::min;
 use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
@@ -22,14 +21,12 @@ use crate::{Error, Result};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
-const MIN_BACKOFF_DURATION: Duration = Duration::from_secs(60);
 
 struct Dicts {
     file_dict: FileDictionary,
     key_dict: KeyDictionary,
     rotation_period: Duration,
     base: PathBuf,
-    backoff: Option<(SystemTime, Duration)>,
 }
 
 impl Dicts {
@@ -42,7 +39,6 @@ impl Dicts {
             },
             rotation_period,
             base: Path::new(path).to_owned(),
-            backoff: None,
         }
     }
 
@@ -79,7 +75,6 @@ impl Dicts {
                     key_dict,
                     rotation_period,
                     base: base.to_owned(),
-                    backoff: None,
                 }))
             }
             // If neither files are found, encryption was never enabled.
@@ -321,39 +316,6 @@ impl Dicts {
         }
         Err(box_err!("key id collides {} times!", generate_limit))
     }
-
-    fn maybe_rotate_data_key_with_backoff(
-        &mut self,
-        method: EncryptionMethod,
-        master_key: &dyn Backend,
-    ) {
-        let now = SystemTime::now();
-        if let Some((backoff_until, _)) = self.backoff {
-            if now < backoff_until {
-                debug!("backoff from previous data key rotation error";
-                       "backoff_until" => ?backoff_until,
-                       "now" => ?now);
-                return;
-            }
-        }
-        let ret = self.maybe_rotate_data_key(method, master_key);
-        self.backoff = if let Err(e) = ret {
-            // Backoff exponetially from 1 min to rotation_period.
-            let new_backoff_duration = min(
-                match self.backoff {
-                    None => MIN_BACKOFF_DURATION,
-                    Some((_, backoff_duration)) => backoff_duration * 2,
-                },
-                self.rotation_period,
-            );
-            warn!("data key rotation error, backing off";
-                  "error" => ?e,
-                  "backoff_duration" => ?new_backoff_duration);
-            Some((now + new_backoff_duration, new_backoff_duration))
-        } else {
-            None
-        };
-    }
 }
 
 fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
@@ -516,7 +478,7 @@ impl EncryptionKeyManager for DataKeyManager {
     fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let mut dicts = self.dicts.write().unwrap();
         // Rotate data key if necessary.
-        dicts.maybe_rotate_data_key_with_backoff(self.method, self.master_key.as_ref());
+        dicts.maybe_rotate_data_key(self.method, self.master_key.as_ref())?;
         let (_, data_key) = dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = dicts.new_file(fname, self.method)?;
