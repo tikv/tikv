@@ -467,9 +467,9 @@ where
             // `delete_files_in_range` may break current rocksdb snapshots consistency,
             // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
             let use_delete_files = stale_sequence < oldest_sequence;
-            if use_delete_files {
+            if !use_delete_files {
                 SNAP_COUNTER_VEC
-                    .with_label_values(&["overlap", "not_timeout"])
+                    .with_label_values(&["overlap", "not_delete_files"])
                     .inc();
             }
             self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
