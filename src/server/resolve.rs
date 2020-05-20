@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_traits::KvEngine;
+use engine_traits::Snapshot;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
@@ -43,14 +43,14 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient, E: KvEngine> {
+struct Runner<T: PdClient, S: Snapshot> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<E>>,
+    router: Option<RaftRouter<S>>,
 }
 
-impl<T: PdClient, E: KvEngine> Runner<T, E> {
+impl<T: PdClient, S: Snapshot> Runner<T, S> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -76,15 +76,10 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
         let mut s = box_try!(pd_client.get_store(store_id));
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
-        let label_key = &state.status.get_dr_auto_sync().label_key;
-        if state.status.get_mode() == ReplicationMode::DrAutoSync {
-            if state.group.group_id(store_id).is_none() {
-                for l in s.get_labels() {
-                    if l.key == *label_key {
-                        group_id = Some(state.group.register_store(store_id, l.value.clone()));
-                        break;
-                    }
-                }
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
             }
         }
         drop(state);
@@ -106,7 +101,7 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
     }
 }
 
-impl<T: PdClient, E: KvEngine> Runnable<Task> for Runner<T, E> {
+impl<T: PdClient, S: Snapshot> Runnable<Task> for Runner<T, S> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -127,9 +122,9 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, E>(
+pub fn new_resolver<T, S>(
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
+    router: RaftRouter<S>,
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,
@@ -137,7 +132,7 @@ pub fn new_resolver<T, E>(
 )>
 where
     T: PdClient + 'static,
-    E: KvEngine,
+    S: Snapshot,
 {
     let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
@@ -170,7 +165,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use engine_rocks::RocksEngine;
+    use engine_rocks::RocksSnapshot;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use tikv_util::collections::HashMap;
@@ -201,7 +196,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksEngine> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksSnapshot> {
         let client = MockPdClient {
             start: Instant::now(),
             store,

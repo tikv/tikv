@@ -14,8 +14,6 @@ pub use crate::rocks::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptio
 mod errors;
 pub use crate::errors::*;
 
-pub const DATA_KEY_PREFIX_LEN: usize = 1;
-
 #[derive(Clone, Debug)]
 pub struct Engines {
     pub kv: Arc<DB>,
