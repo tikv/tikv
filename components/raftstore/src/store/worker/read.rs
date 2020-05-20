@@ -314,10 +314,11 @@ where
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let snapshot_ts = if read_id
-                        .as_ref()
-                        .map_or(false, |ts| *ts == self.last_read_ts)
-                    {
+                    let use_cache_snapshot = read_id.as_ref().map_or(false, |ts| {
+                        *ts == self.last_read_ts && self.last_read_ts > delegate.last_valid_ts
+                    });
+
+                    let snapshot_ts = if use_cache_snapshot {
                         self.snap.get_ts()
                     } else {
                         monotonic_raw_now()
@@ -331,10 +332,8 @@ where
                             None,
                         );
                         let snapshot = if need_snapshot {
-                            if read_id
-                                .as_ref()
-                                .map_or(false, |ts| *ts == self.last_read_ts)
-                            {
+                            if use_cache_snapshot {
+                                self.metrics.local_executed_cache_requests += 1;
                                 let mut snapshot = self.snap.clone();
                                 snapshot.set_region(delegate.region.clone());
                                 Some(snapshot)
@@ -348,9 +347,11 @@ where
                                     self.snap = snap.clone();
                                     self.last_read_ts = ts;
                                 }
+                                self.metrics.local_executed_requests += 1;
                                 Some(snap)
                             }
                         } else {
+                            self.metrics.local_executed_requests += 1;
                             None
                         };
                         // Leader can read local if and only if it is in lease.
@@ -358,7 +359,6 @@ where
                         cmd.callback
                             .invoke_read(ReadResponse { response, snapshot });
                         self.delegates.insert(region_id, Some(delegate));
-                        self.metrics.local_executed_requests += 1;
                         return;
                     }
                     break;
@@ -487,6 +487,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: i64,
+    local_executed_cache_requests: i64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
     rejected_by_peer_id_mismatch: i64,
@@ -506,6 +507,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
+            local_executed_cache_requests: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -579,6 +581,10 @@ impl ReadMetrics {
                 .channel_full
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
+        }
+        if self.local_executed_cache_requests > 0 {
+            LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_cache_requests);
+            self.local_executed_cache_requests = 0;
         }
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
@@ -729,7 +735,7 @@ mod tests {
                 term: term6,
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
-                last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+                last_valid_ts: Timespec::new(0, 0),
                 invalid: Arc::new(AtomicBool::new(false)),
             };
             meta.readers.insert(1, read_delegate);

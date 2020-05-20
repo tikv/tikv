@@ -110,4 +110,9 @@ lazy_static! {
         "Total number of requests directly executed by local reader."
     )
     .unwrap();
+    pub static ref LOCAL_READ_EXECUTED_CACHE_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_cache_requests",
+        "Total number of requests directly executed by local reader."
+    )
+    .unwrap();
 }
