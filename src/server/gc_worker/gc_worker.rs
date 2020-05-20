@@ -177,7 +177,7 @@ impl<E: Engine> GcRunner<E> {
 
     fn get_snapshot(&self, ctx: &mut Context) -> Result<E::Snap> {
         let timeout = Duration::from_secs(GC_SNAPSHOT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.engine.async_snapshot(ctx, cb), timeout) {
+        match wait_op!(|cb| self.engine.async_snapshot(ctx, None, cb), timeout) {
             Some((cb_ctx, Ok(snapshot))) => {
                 if let Some(term) = cb_ctx.term {
                     ctx.set_term(term);
@@ -930,6 +930,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
+    use tikv_util::threadpool::ThreadReadId;
     use time::Timespec;
     use txn_types::Mutation;
 
@@ -965,13 +966,16 @@ mod tests {
             });
             self.0.async_write(ctx, batch, callback)
         }
+
         fn async_snapshot(
             &self,
             ctx: &Context,
+            read_id: Option<ThreadReadId>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
+                None,
                 Box::new(move |(cb_ctx, r)| {
                     callback((
                         cb_ctx,

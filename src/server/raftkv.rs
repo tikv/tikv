@@ -29,6 +29,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::Instant;
 use time::Timespec;
 
@@ -189,7 +190,7 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
 
     fn exec_snapshot(
         &self,
-        read_id: Option<Timespec>,
+        read_id: Option<ThreadReadId>,
         ctx: &Context,
         req: Request,
         cb: Callback<CmdRes>,
@@ -358,10 +359,10 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot_with_cache(
+    fn async_snapshot(
         &self,
-        read_id: Option<Timespec>,
         ctx: &Context,
+        read_id: Option<ThreadReadId>,
         cb: Callback<Self::Snap>,
     ) -> kv::Result<()> {
         let mut req = Request::default();
@@ -398,9 +399,8 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
-        fail_point!("raftkv_async_snapshot");
-        self.async_snapshot_with_cache(None, ctx, cb)
+    fn release_snapshot(&self) {
+        self.router.release_snapshot_cache();
     }
 
     fn get_properties_cf(

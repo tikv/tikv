@@ -23,6 +23,7 @@ use txn_types::{Key, Value};
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::threadpool::ThreadReadId;
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
@@ -270,7 +271,12 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(
+        &self,
+        _: &Context,
+        _: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));

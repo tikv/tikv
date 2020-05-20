@@ -52,9 +52,8 @@ use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest}
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
-use tikv_util::time::monotonic_raw_now;
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::Instant;
-use time::Timespec;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -191,11 +190,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get a snapshot of `engine`.
     fn snapshot_with_cache(
         engine: &E,
-        ts: Timespec,
+        read_id: ThreadReadId,
         ctx: &Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot_with_cache(Some(ts), ctx, callback);
+        let val = engine.async_snapshot(ctx, Some(read_id), callback);
         // make engine not cross yield point
         async move {
             val?;
@@ -209,7 +208,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get a snapshot of `engine`.
     fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
+        let val = engine.async_snapshot(ctx, None, callback);
         // make engine not cross yield point
         async move {
             val?; // propagate error
@@ -313,16 +312,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let now = monotonic_raw_now();
+                let read_id = ThreadReadId::new();
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
                 let mut snaps = vec![];
                 for req in gets {
                     let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot_with_cache(engine, now, &req.ctx)
+                        Self::snapshot_with_cache(engine, read_id.clone(), &req.ctx)
                     });
                     snaps.push((req, snap));
                 }
+                Self::with_tls_engine(|engine| engine.release_snapshot());
                 for (mut req, snap) in snaps {
                     let start_ts = req.ts.unwrap();
                     let isolation_level = req.ctx.get_isolation_level();

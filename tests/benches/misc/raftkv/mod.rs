@@ -154,7 +154,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
         let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
-        kv.async_snapshot(&ctx, on_finished).unwrap();
+        kv.async_snapshot(&ctx, None, on_finished).unwrap();
     });
 }
 

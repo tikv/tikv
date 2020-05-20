@@ -15,6 +15,7 @@ use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
 };
+use tikv_util::threadpool::ThreadReadId;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -83,7 +84,12 @@ impl Engine for BTreeEngine {
         Ok(())
     }
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
-    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
+    fn async_snapshot(
+        &self,
+        _ctx: &Context,
+        _: Option<ThreadReadId>,
+        cb: EngineCallback<Self::Snap>,
+    ) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
         Ok(())
     }

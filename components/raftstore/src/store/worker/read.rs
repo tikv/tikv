@@ -22,6 +22,7 @@ use crate::store::{
 use crate::Result;
 use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::Instant;
 
@@ -167,27 +168,21 @@ where
     // region id -> ReadDelegate
     delegates: HashMap<u64, Option<ReadDelegate>>,
     // A channel to raftstore.
-    snap: RegionSnapshot<E::Snapshot>,
-    last_read_ts: Timespec,
+    snap_cache: Option<RegionSnapshot<E::Snapshot>>,
+    cache_read_id: ThreadReadId,
     router: C,
     tag: String,
 }
 
 impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<E>) -> Self {
-        let region = metapb::Region::default();
-        let last_read_ts = monotonic_raw_now();
-        let snap = RegionSnapshot::from_snapshot(
-            Arc::new(kv_engine.snapshot()),
-            Arc::new(region),
-            last_read_ts,
-        );
+        let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
             kv_engine,
             router,
-            snap,
-            last_read_ts,
+            snap_cache: None,
+            cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: HashMap::default(),
@@ -307,19 +302,22 @@ where
     // It can only handle read command.
     pub fn propose_raft_command(
         &mut self,
-        read_id: Option<Timespec>,
+        read_id: Option<ThreadReadId>,
         cmd: RaftCommand<E::Snapshot>,
     ) {
         let region_id = cmd.request.get_header().get_region_id();
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let use_cache_snapshot = read_id.as_ref().map_or(false, |ts| {
-                        *ts == self.last_read_ts && self.last_read_ts > delegate.last_valid_ts
-                    });
-
+                    let use_cache_snapshot = read_id
+                        .as_ref()
+                        .map_or(false, |id| *id == self.cache_read_id)
+                        && self
+                            .snap_cache
+                            .as_ref()
+                            .map_or(false, |snap_cache| snap_cache.get_ts() > delegate.last_valid_ts);
                     let snapshot_ts = if use_cache_snapshot {
-                        self.snap.get_ts()
+                        self.snap_cache.as_ref().unwrap().get_ts()
                     } else {
                         monotonic_raw_now()
                     };
@@ -334,18 +332,20 @@ where
                         let snapshot = if need_snapshot {
                             if use_cache_snapshot {
                                 self.metrics.local_executed_cache_requests += 1;
-                                let mut snapshot = self.snap.clone();
-                                snapshot.set_region(delegate.region.clone());
-                                Some(snapshot)
+                                self.snap_cache.as_ref().map(|snap| {
+                                    let mut snapshot = snap.clone();
+                                    snapshot.set_region(delegate.region.clone());
+                                    snapshot
+                                })
                             } else {
                                 let snap = RegionSnapshot::from_snapshot(
                                     Arc::new(self.kv_engine.snapshot()),
                                     delegate.region.clone(),
                                     snapshot_ts,
                                 );
-                                if let Some(ts) = read_id {
-                                    self.snap = snap.clone();
-                                    self.last_read_ts = ts;
+                                if let Some(id) = read_id {
+                                    self.snap_cache = Some(snap.clone());
+                                    self.cache_read_id = id;
                                 }
                                 self.metrics.local_executed_requests += 1;
                                 Some(snap)
@@ -401,9 +401,13 @@ where
     }
 
     #[inline]
-    pub fn read(&mut self, ts: Option<Timespec>, cmd: RaftCommand<E::Snapshot>) {
-        self.propose_raft_command(ts, cmd);
+    pub fn read(&mut self, read_id: Option<ThreadReadId>, cmd: RaftCommand<E::Snapshot>) {
+        self.propose_raft_command(read_id, cmd);
         self.metrics.maybe_flush();
+    }
+
+    pub fn release_snapshot_cache(&mut self) {
+        self.snap_cache.take();
     }
 
     /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
@@ -445,8 +449,8 @@ where
             metrics: Default::default(),
             delegates: HashMap::default(),
             tag: self.tag.clone(),
-            snap: self.snap.clone(),
-            last_read_ts: self.last_read_ts,
+            snap_cache: self.snap_cache.clone(),
+            cache_read_id: ThreadReadId::new(),
         }
     }
 }

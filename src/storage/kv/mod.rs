@@ -26,6 +26,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
+use tikv_util::threadpool::ThreadReadId;
 use time::Timespec;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -74,15 +75,12 @@ pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
-    fn async_snapshot_with_cache(
+    fn async_snapshot(
         &self,
-        _read_id: Option<Timespec>,
         ctx: &Context,
+        read_id: Option<ThreadReadId>,
         callback: Callback<Self::Snap>,
-    ) -> Result<()> {
-        self.async_snapshot(ctx, callback)
-    }
+    ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -92,9 +90,11 @@ pub trait Engine: Send + Clone + 'static {
         }
     }
 
+    fn release_snapshot(&self) {}
+
     fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, None, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }

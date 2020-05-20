@@ -837,7 +837,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
                 for (mut req, id) in requests.into_iter().zip(request_ids) {
                     if let Some(ref mut cmd) = req.cmd {
-                        if reqs.len() > 8 {
+                        if reqs.len() >= 10 {
                             future_batch_get_command(&storage, reqs, batch_commands, tx.clone());
                             batch_commands = Vec::default();
                             reqs = Vec::default();

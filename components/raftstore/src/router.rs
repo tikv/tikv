@@ -12,7 +12,7 @@ use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
-use time::Timespec;
+use tikv_util::threadpool::ThreadReadId;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<E>: Send + Clone
@@ -28,12 +28,14 @@ where
     /// Sends Snapshot to local store.
     fn read(
         &self,
-        _read_id: Option<Timespec>,
+        _read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
+
+    fn release_snapshot_cache(&self) {}
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -165,14 +167,19 @@ where
 
     fn read(
         &self,
-        ts: Option<Timespec>,
+        read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(ts, cmd);
+        local_reader.read(read_id, cmd);
         Ok(())
+    }
+
+    fn release_snapshot_cache(&self) {
+        let mut local_reader = self.local_reader.borrow_mut();
+        local_reader.release_snapshot_cache();
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {

@@ -408,7 +408,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         });
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, cb) {
+            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);

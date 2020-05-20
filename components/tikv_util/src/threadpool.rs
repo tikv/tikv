@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::marker::PhantomData;
@@ -14,6 +15,30 @@ const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 const DEFAULT_THREAD_COUNT: usize = 1;
 const NAP_SECS: u64 = 1;
 const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
+use std::thread::{self, ThreadId};
+
+/// ReadId to judge whether the read requests come from the same GRPC stream.
+#[derive(Eq, PartialEq, Clone)]
+pub struct ThreadReadId {
+    thread_id: ThreadId,
+    sequence: u64,
+}
+
+thread_local!(static READ_SEQUENCE: RefCell<u64> = RefCell::new(0));
+
+impl ThreadReadId {
+    pub fn new() -> ThreadReadId {
+        let sequence = READ_SEQUENCE.with(|s| {
+            let seq = *s.borrow() + 1;
+            *s.borrow_mut() = seq;
+            seq
+        });
+        ThreadReadId {
+            thread_id: thread::current().id(),
+            sequence,
+        }
+    }
+}
 
 pub trait Context: Send {
     fn on_task_started(&mut self) {}
