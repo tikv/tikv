@@ -20,7 +20,7 @@ use txn_types::{Key, Value};
 use super::metrics::*;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -277,19 +277,14 @@ impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(
-        &self,
-        ctx: &Context,
-        modifies: Vec<Modify>,
-        cb: Callback<()>,
-    ) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(modifies.len());
-        for m in modifies {
+        let mut reqs = Vec::with_capacity(batch.modifies.len());
+        for m in batch.modifies {
             let mut req = Request::default();
             match m {
                 Modify::Delete(cf, k) => {

@@ -268,7 +268,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
+    use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
     use crate::storage::types::TxnStatus;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -276,7 +276,9 @@ pub mod tests {
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
-            engine.write(ctx, modifies).unwrap();
+            engine
+                .write(ctx, WriteData::with_modifies(modifies))
+                .unwrap();
         }
     }
 
@@ -661,7 +663,9 @@ pub mod tests {
             )
             .unwrap();
         }
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::with_modifies(txn.into_modifies()))
+            .unwrap();
     }
 
     pub fn must_prewrite_delete<E: Engine>(
@@ -713,7 +717,9 @@ pub mod tests {
             )
             .unwrap();
         }
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::with_modifies(txn.into_modifies()))
+            .unwrap();
     }
 
     pub fn must_prewrite_lock<E: Engine>(
@@ -783,7 +789,9 @@ pub mod tests {
             .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            engine.write(&ctx, modifies).unwrap();
+            engine
+                .write(&ctx, WriteData::with_modifies(modifies))
+                .unwrap();
         }
         res
     }

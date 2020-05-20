@@ -35,7 +35,9 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
-    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
+    kv::{
+        with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify, WriteData,
+    },
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
@@ -614,7 +616,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            modifies,
+            WriteData::with_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
@@ -819,11 +821,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::Put(
+            WriteData::with_modifies(vec![Modify::Put(
                 Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
-            )],
+            )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -846,13 +848,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
-        let requests = pairs
+        let modifies = pairs
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
         self.engine.async_write(
             &ctx,
-            requests,
+            WriteData::with_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
@@ -871,7 +873,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
+            WriteData::with_modifies(vec![Modify::Delete(
+                Self::rawkv_cf(&cf)?,
+                Key::from_encoded(key),
+            )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
@@ -901,7 +906,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(cf, start_key, end_key, false)],
+            WriteData::with_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -925,7 +930,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .collect();
         self.engine.async_write(
             &ctx,
-            requests,
+            WriteData::with_modifies(requests),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();

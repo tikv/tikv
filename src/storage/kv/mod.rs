@@ -16,7 +16,7 @@ use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
+use txn_types::{Key, TimeStamp, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -48,7 +48,7 @@ impl CbContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum ExtraRead {
     Deleted,
     Updated,
@@ -79,13 +79,35 @@ impl Modify {
     }
 }
 
+#[derive(Default)]
+pub struct WriteData {
+    pub modifies: Vec<Modify>,
+    pub extra_data: Option<Vec<(Key, Option<Value>, TimeStamp)>>,
+}
+
+impl WriteData {
+    pub fn new(
+        modifies: Vec<Modify>,
+        extra_data: Option<Vec<(Key, Option<Value>, TimeStamp)>>,
+    ) -> Self {
+        Self {
+            modifies,
+            extra_data,
+        }
+    }
+
+    pub fn with_modifies(modifies: Vec<Modify>) -> Self {
+        Self::new(modifies, None)
+    }
+}
+
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
 
-    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
+    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
 
-    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
@@ -106,7 +128,10 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put(cf, key, value)])
+        self.write(
+            ctx,
+            WriteData::with_modifies(vec![Modify::Put(cf, key, value)]),
+        )
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
@@ -114,7 +139,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(cf, key)])
+        self.write(ctx, WriteData::with_modifies(vec![Modify::Delete(cf, key)]))
     }
 
     fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {

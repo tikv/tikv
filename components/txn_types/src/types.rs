@@ -224,6 +224,15 @@ impl Display for Key {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum MutationType {
+    Put,
+    Delete,
+    Lock,
+    Insert,
+    Other,
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -251,6 +260,16 @@ impl Mutation {
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
             Mutation::CheckNotExists(ref key) => key,
+        }
+    }
+
+    pub fn mutation_type(&self) -> MutationType {
+        match self {
+            Mutation::Put(_) => MutationType::Put,
+            Mutation::Delete(_) => MutationType::Delete,
+            Mutation::Lock(_) => MutationType::Lock,
+            Mutation::Insert(_) => MutationType::Insert,
+            _ => MutationType::Other,
         }
     }
 

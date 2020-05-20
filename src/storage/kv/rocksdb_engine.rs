@@ -24,7 +24,7 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot,
+    Result, ScanMode, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
@@ -261,13 +261,13 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
 impl Engine for RocksEngine {
     type Snap = RocksSnapshot;
 
-    fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
+        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
     }
 

@@ -1,13 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{ExtraRead, Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
+    is_short_value, Key, Lock, LockType, Mutation, MutationType, TimeStamp, Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -41,9 +41,10 @@ pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
-    writes: Vec<Modify>,
+    writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
+    extra_read: Option<ExtraRead>,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -81,8 +82,9 @@ impl<S: Snapshot> MvccTxn<S> {
         MvccTxn {
             reader,
             start_ts,
+            extra_read: None,
             write_size: 0,
-            writes: vec![],
+            writes: WriteData::default(),
             collapse_rollback: true,
         }
     }
@@ -95,8 +97,17 @@ impl<S: Snapshot> MvccTxn<S> {
         self.start_ts = start_ts;
     }
 
+    pub fn set_extra_read(&mut self, extra_read: Option<ExtraRead>) {
+        self.extra_read = extra_read;
+        self.writes.extra_data = Some(Vec::default());
+    }
+
+    pub fn take_extra_data(&mut self) -> Option<Vec<(Key, Option<Value>, TimeStamp)>> {
+        self.writes.extra_data.take()
+    }
+
     pub fn into_modifies(self) -> Vec<Modify> {
-        self.writes
+        self.writes.modifies
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
@@ -112,39 +123,39 @@ impl<S: Snapshot> MvccTxn<S> {
     fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
         Some(released)
     }
 
     fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_write(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
@@ -531,7 +542,44 @@ impl<S: Snapshot> MvccTxn<S> {
         // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
         let should_not_write = mutation.should_not_write();
+        let mutation_type = mutation.mutation_type();
         let (key, value) = mutation.into_key_value();
+        macro_rules! extra_read {
+            ($v: ident, $ts: ident) => {
+                match self.extra_read {
+                    Some(ExtraRead::Deleted) => {
+                        if let MutationType::Delete = mutation_type {
+                            let extra_value = if let Some(value) = $v.short_value {
+                                Some(value)
+                            } else {
+                                self.reader.get(&key, $v.$ts, true).unwrap()
+                            };
+                            self.writes.extra_data.as_mut().unwrap().push((
+                                key.clone(),
+                                extra_value,
+                                $v.$ts,
+                            ));
+                        }
+                    }
+                    Some(ExtraRead::Updated) => match mutation_type {
+                        MutationType::Delete | MutationType::Put => {
+                            let extra_value = if let Some(value) = $v.short_value {
+                                Some(value)
+                            } else {
+                                self.reader.get(&key, $v.$ts, true).unwrap()
+                            };
+                            self.writes.extra_data.as_mut().unwrap().push((
+                                key.clone(),
+                                extra_value,
+                                $v.$ts,
+                            ));
+                        }
+                        _ => (),
+                    },
+                    _ => (),
+                }
+            };
+        }
 
         fail_point!("prewrite", |err| Err(make_txn_error(
             err,
@@ -559,6 +607,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                extra_read!(write, start_ts);
             }
         }
         if should_not_write {
@@ -578,6 +627,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 .into());
             }
+            // Otherwise the lock was belong to the same txn, the previous value would be recorded in the lock cf.
+            extra_read!(lock, ts);
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
