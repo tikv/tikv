@@ -13,7 +13,9 @@ use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{IterOptions, Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey, WriteBatchExt,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -27,13 +29,13 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RocksSnapshot>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -53,10 +55,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
-            )),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.c().snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -259,7 +258,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
 }
 
 impl Engine for RocksEngine {
-    type Snap = RocksSnapshot;
+    type Snap = Arc<RocksSnapshot>;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
@@ -291,7 +290,7 @@ impl Engine for RocksEngine {
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
