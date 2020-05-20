@@ -49,4 +49,8 @@ impl MiscExt for PanicEngine {
     fn exists(path: &str) -> bool {
         panic!()
     }
+
+    fn dump_stats(&self) -> Result<String> {
+        panic!()
+    }
 }

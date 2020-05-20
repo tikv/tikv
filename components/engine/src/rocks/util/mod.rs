@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod stats;
-
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;

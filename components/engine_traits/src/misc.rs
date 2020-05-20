@@ -134,4 +134,9 @@ pub trait MiscExt: Iterable + WriteBatchExt + CFNamesExt {
 
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
+
+    /// Dump stats about the database into a string.
+    ///
+    /// For debugging. The format and content is unspecified.
+    fn dump_stats(&self) -> Result<String>;
 }
