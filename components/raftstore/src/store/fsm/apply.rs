@@ -4149,7 +4149,7 @@ mod tests {
                             thread::sleep(Duration::from_millis(500));
                             capture_tx_clone.send(resp.response).unwrap();
                         })),
-                    )
+                    ),
                     cb(11, 3, capture_tx.clone()),
                 ],
             )),
