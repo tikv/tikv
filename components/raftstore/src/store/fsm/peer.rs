@@ -500,6 +500,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         region_epoch: RegionEpoch,
         cb: Callback<RocksEngine>,
     ) {
+        fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
         let msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
