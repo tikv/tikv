@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::{max, Ordering};
-use std::str::from_utf8;
+use std::str;
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
@@ -249,7 +249,14 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<O
     for arg in args {
         match arg {
             Some(arg_val) => {
-                let s = from_utf8(arg_val).unwrap();
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
                 match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
