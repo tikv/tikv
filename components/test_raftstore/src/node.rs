@@ -13,7 +13,7 @@ use raft::SnapshotStatus;
 
 use super::*;
 use engine::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
@@ -23,7 +23,7 @@ use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::*;
 use raftstore::Result;
-use tikv::config::{ConfigController, ConfigHandler, Module, TiKvConfig};
+use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
@@ -32,8 +32,8 @@ use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
 #[derive(Clone)]
@@ -121,7 +121,8 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
+    #[allow(clippy::type_complexity)]
+    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
 
 impl NodeCluster {
@@ -138,7 +139,10 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
+    pub fn get_node_router(
+        &self,
+        node_id: u64,
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine>> {
         self.trans
             .core
             .lock()
@@ -152,7 +156,11 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
+    #[allow(clippy::type_complexity)]
+    pub fn post_create_coprocessor_host(
+        &mut self,
+        op: Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>,
+    ) {
         self.post_create_coprocessor_host = Some(op)
     }
 
@@ -167,7 +175,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter<RocksEngine>,
+        router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -181,6 +189,7 @@ impl Simulator for NodeCluster {
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
+            Arc::default(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -210,13 +219,13 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir).unwrap())
+            Arc::new(SSTImporter::new(dir, None).unwrap())
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
-        let mut cfg_controller = ConfigController::new(cfg.clone(), Default::default(), false);
+        let cfg_controller = ConfigController::new(cfg.clone());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
@@ -231,19 +240,13 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
         );
 
-        let mut raftstore_cfg = cfg.raft_store.clone();
+        let mut raftstore_cfg = cfg.raft_store;
         raftstore_cfg.validate().unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager(raft_store)),
         );
-        let config_client = ConfigHandler::start(
-            cfg.server.advertise_addr,
-            cfg_controller,
-            pd_worker.scheduler(),
-        )
-        .unwrap();
 
         node.start(
             engines.clone(),
@@ -254,7 +257,7 @@ impl Simulator for NodeCluster {
             coprocessor_host,
             importer,
             split_check_worker,
-            Box::new(config_client) as _,
+            AutoSplitController::default(),
         )?;
         assert!(engines
             .kv
@@ -324,7 +327,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
+        cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         if !self
             .trans
@@ -377,7 +380,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

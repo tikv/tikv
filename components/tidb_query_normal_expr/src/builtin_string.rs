@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -9,42 +8,19 @@ use std::iter;
 
 use hex::{self, FromHex};
 
-use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
+use tidb_query_shared_expr::conv::i64_to_usize;
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, strip_whitespace, trim, validate_target_len_for_pad, TrimDirection,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
+};
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
 const SPACE: u8 = 0o40u8;
-
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
-
-enum TrimDirection {
-    Both = 1,
-    Leading,
-    Trailing,
-}
-
-impl TrimDirection {
-    fn from_i64(i: i64) -> Option<Self> {
-        match i {
-            1 => Some(TrimDirection::Both),
-            2 => Some(TrimDirection::Leading),
-            3 => Some(TrimDirection::Trailing),
-            _ => None,
-        }
-    }
-}
 
 impl ScalarFunc {
     #[inline]
@@ -485,7 +461,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        trim(&s, " ", TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, " ", TrimDirection::Both))))
     }
 
     #[inline]
@@ -496,7 +472,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        trim(&s, &pat, TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, &pat, TrimDirection::Both))))
     }
 
     #[inline]
@@ -509,7 +485,7 @@ impl ScalarFunc {
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let direction = try_opt!(self.children[2].eval_int(ctx, row));
         match TrimDirection::from_i64(direction) {
-            Some(d) => trim(&s, &pat, d),
+            Some(d) => Ok(Some(Cow::Owned(trim(&s, &pat, d)))),
             _ => Err(box_err!("invalid direction value: {}", direction)),
         }
     }
@@ -1027,105 +1003,6 @@ impl ScalarFunc {
     }
 }
 
-// when target_len is 0, return Some(0), means the pad function should return empty string
-// currently there are three conditions it return None, which means pad function should return Null
-//   1. target_len is negative
-//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
-//   3. target_len is greater than length of input string, *and* pad string is empty
-// otherwise return Some(target_len)
-#[inline]
-fn validate_target_len_for_pad(
-    len_unsigned: bool,
-    target_len: i64,
-    input_len: usize,
-    size_of_type: usize,
-    pad_empty: bool,
-) -> Option<usize> {
-    if target_len == 0 {
-        return Some(0);
-    }
-    let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-    if !target_len_positive
-        || target_len.saturating_mul(size_of_type) > tidb_query_datatype::MAX_BLOB_WIDTH as usize
-        || (pad_empty && input_len < target_len)
-    {
-        return None;
-    }
-    Some(target_len)
-}
-
-// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
-//
-// # Examples
-// ```
-// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
-// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
-// assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
-// ```
-#[inline]
-fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
-    if is_unsigned {
-        (i as u64 as usize, true)
-    } else if i >= 0 {
-        (i as usize, true)
-    } else {
-        let i = if i == i64::min_value() {
-            i64::max_value() as usize + 1
-        } else {
-            -i as usize
-        };
-        (i, false)
-    }
-}
-
-#[inline]
-fn strip_whitespace(input: &[u8]) -> Vec<u8> {
-    let mut input_copy = Vec::<u8>::with_capacity(input.len());
-    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
-    input_copy
-}
-
-#[inline]
-fn encoded_size(len: usize) -> Option<usize> {
-    if len == 0 {
-        return Some(0);
-    }
-    // size_without_wrap = (len + (3 - 1)) / 3 * 4
-    // size = size_without_wrap + (size_withou_wrap - 1) / 76
-    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
-        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
-        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
-        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
-}
-
-// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
-// there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
-fn line_wrap(buf: &mut [u8], input_len: usize) {
-    let line_len = BASE64_LINE_WRAP_LENGTH;
-    if input_len <= line_len {
-        return;
-    }
-    let last_line_len = if input_len % line_len == 0 {
-        line_len
-    } else {
-        input_len % line_len
-    };
-    let lines_with_ending = (input_len - 1) / line_len;
-    let line_with_ending_len = line_len + 1;
-    let mut old_start = input_len - last_line_len;
-    let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
-    for _ in 0..lines_with_ending {
-        old_start -= line_len;
-        new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
-        buf[new_start + line_len] = BASE64_LINE_WRAP;
-    }
-}
-
 #[inline]
 fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
@@ -1157,16 +1034,6 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
         positions.push_back(bg);
     }
     s[positions[0]..].to_string()
-}
-
-#[inline]
-fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
-    let r = match direction {
-        TrimDirection::Leading => s.trim_start_matches(pat),
-        TrimDirection::Trailing => s.trim_end_matches(pat),
-        _ => s.trim_start_matches(pat).trim_end_matches(pat),
-    };
-    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]
@@ -3146,36 +3013,6 @@ mod tests {
         for (left, right, exp) in tests {
             let got = eval_func(ScalarFuncSig::Strcmp, &[left, right]).unwrap();
             assert_eq!(got, exp);
-        }
-    }
-
-    #[test]
-    fn test_validate_target_len_for_pad() {
-        let cases = vec![
-            // target_len, input_len, size_of_type, pad_empty, result
-            (0, 10, 1, false, Some(0)),
-            (-1, 10, 1, false, None),
-            (12, 10, 1, true, None),
-            (i64::from(MAX_BLOB_WIDTH) + 1, 10, 1, false, None),
-            (i64::from(MAX_BLOB_WIDTH) / 4 + 1, 10, 4, false, None),
-            (12, 10, 1, false, Some(12)),
-        ];
-        for case in cases {
-            let got = super::validate_target_len_for_pad(false, case.0, case.1, case.2, case.3);
-            assert_eq!(got, case.4);
-        }
-
-        let unsigned_cases = vec![
-            (u64::max_value(), 10, 1, false, None),
-            (u64::max_value(), 10, 4, false, None),
-            (u64::max_value(), 10, 1, true, None),
-            (u64::max_value(), 10, 4, true, None),
-            (12u64, 10, 4, false, Some(12)),
-        ];
-        for case in unsigned_cases {
-            let got =
-                super::validate_target_len_for_pad(true, case.0 as i64, case.1, case.2, case.3);
-            assert_eq!(got, case.4);
         }
     }
 

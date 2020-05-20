@@ -3,12 +3,14 @@
 use std::fs::{rename, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Instant;
 
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
 use crate::master_key::*;
+use crate::metrics::*;
 use crate::Result;
 
 mod header;
@@ -34,6 +36,7 @@ impl<'a> EncryptedFile<'a> {
     /// Read and decrypt the file. Caller need to handle the NotFound io error in case file not
     /// exists.
     pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
+        let start = Instant::now();
         let res = OpenOptions::new()
             .read(true)
             .open(self.base.join(self.name));
@@ -46,6 +49,10 @@ impl<'a> EncryptedFile<'a> {
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
 
+                ENCRYPT_DECRPTION_FILE_HISTOGRAM
+                    .with_label_values(&[self.name, "read"])
+                    .observe(start.elapsed().as_secs_f64());
+
                 Ok(plaintext)
             }
             Err(e) => Err(e.into()),
@@ -53,6 +60,7 @@ impl<'a> EncryptedFile<'a> {
     }
 
     pub fn write(&self, plaintext_content: &[u8], master_key: &dyn Backend) -> Result<()> {
+        let start = Instant::now();
         // Write to a tmp file.
         // TODO what if a tmp file already exists?
         let origin_path = self.base.join(&self.name);
@@ -78,6 +86,10 @@ impl<'a> EncryptedFile<'a> {
         rename(tmp_path, origin_path)?;
         let base_dir = File::open(&self.base)?;
         base_dir.sync_all()?;
+
+        ENCRYPT_DECRPTION_FILE_HISTOGRAM
+            .with_label_values(&[self.name, "write"])
+            .observe(start.elapsed().as_secs_f64());
 
         // TODO GC broken temp files if necessary.
         Ok(())

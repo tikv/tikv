@@ -106,6 +106,19 @@ pub trait Engine: Send + Clone + 'static {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
+
+    fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT, start, end)
+    }
+
+    fn get_properties_cf(
+        &self,
+        _: CfName,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Result<RocksTablePropertiesCollection> {
+        Err(box_err!("no user properties"))
+    }
 }
 
 pub trait Snapshot: Send + Clone {
@@ -120,12 +133,6 @@ pub trait Snapshot: Send + Clone {
         iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
-    fn get_properties(&self) -> Result<RocksTablePropertiesCollection> {
-        self.get_properties_cf(CF_DEFAULT)
-    }
-    fn get_properties_cf(&self, _: CfName) -> Result<RocksTablePropertiesCollection> {
-        Err(box_err!("no user properties"))
-    }
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
@@ -178,21 +185,17 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
-            description("request to underhook engine failed")
             display("{:?}", err)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
         EmptyRequest {
-            description("an empty request")
             display("an empty request")
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("unknown error {:?}", err)
         }
     }
@@ -236,10 +239,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }

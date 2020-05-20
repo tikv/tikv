@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine_traits::CF_WRITE;
-use fail;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
@@ -107,7 +106,6 @@ fn test_pause_split_when_snap_gen_will_split() {
 
     assert_ne!(left, right);
     assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 
     fail::remove(is_generating_snapshot);

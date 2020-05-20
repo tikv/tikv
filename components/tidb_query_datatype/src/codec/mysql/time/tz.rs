@@ -4,7 +4,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::*;
-use chrono_tz;
 
 /// A time zone represented by either offset (i.e. +8) or name (i.e. Asia/Shanghai). In addition,
 /// local time zone is also valid.

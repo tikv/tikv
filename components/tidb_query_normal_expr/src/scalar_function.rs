@@ -214,13 +214,19 @@ impl ScalarFunc {
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
             | ScalarFuncSig::IntIsTrue
+            | ScalarFuncSig::IntIsTrueWithNull
             | ScalarFuncSig::IntIsFalse
-            | ScalarFuncSig::IntIsNull
+            | ScalarFuncSig::IntIsFalseWithNull
             | ScalarFuncSig::RealIsTrue
+            | ScalarFuncSig::RealIsTrueWithNull
             | ScalarFuncSig::RealIsFalse
-            | ScalarFuncSig::RealIsNull
+            | ScalarFuncSig::RealIsFalseWithNull
             | ScalarFuncSig::DecimalIsTrue
+            | ScalarFuncSig::DecimalIsTrueWithNull
             | ScalarFuncSig::DecimalIsFalse
+            | ScalarFuncSig::DecimalIsFalseWithNull
+            | ScalarFuncSig::IntIsNull
+            | ScalarFuncSig::RealIsNull
             | ScalarFuncSig::DecimalIsNull
             | ScalarFuncSig::StringIsNull
             | ScalarFuncSig::TimeIsNull
@@ -290,6 +296,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::Sha1
             | ScalarFuncSig::Md5
+            | ScalarFuncSig::Password
             | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
@@ -303,6 +310,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -657,6 +665,7 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         ToSeconds => to_seconds,
+        TimeToSec => time_to_sec,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -669,15 +678,21 @@ dispatch_call! {
         UnaryNotReal => unary_not_real,
         UnaryNotDecimal => unary_not_decimal,
         UnaryMinusInt => unary_minus_int,
+        IntIsTrue => int_is_true false,
+        IntIsTrueWithNull => int_is_true true,
+        IntIsFalse => int_is_false false,
+        IntIsFalseWithNull => int_is_false true,
+        RealIsTrue => real_is_true false,
+        RealIsTrueWithNull => real_is_true true,
+        RealIsFalse => real_is_false false,
+        RealIsFalseWithNull => real_is_false true,
+        DecimalIsTrue => decimal_is_true false,
+        DecimalIsTrueWithNull => decimal_is_true true,
+        DecimalIsFalse => decimal_is_false false,
+        DecimalIsFalseWithNull => decimal_is_false true,
         IntIsNull => int_is_null,
-        IntIsFalse => int_is_false,
-        IntIsTrue => int_is_true,
-        RealIsTrue => real_is_true,
-        RealIsFalse => real_is_false,
         RealIsNull => real_is_null,
         DecimalIsNull => decimal_is_null,
-        DecimalIsTrue => decimal_is_true,
-        DecimalIsFalse => decimal_is_false,
         StringIsNull => string_is_null,
         TimeIsNull => time_is_null,
         DurationIsNull => duration_is_null,
@@ -885,6 +900,7 @@ dispatch_call! {
         Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
+        Password => password,
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,

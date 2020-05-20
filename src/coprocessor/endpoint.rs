@@ -8,7 +8,6 @@ use async_stream::try_stream;
 use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
-use rand::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -182,9 +181,14 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
+                let tag = if table_scan {
+                    ReqTag::select
+                } else {
+                    ReqTag::index
+                };
 
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -204,6 +208,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
+                        req.get_is_cache_enabled(),
                     );
                     dag::DagHandlerBuilder::new(
                         dag,
@@ -212,6 +217,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
+                        req.get_is_cache_enabled(),
                     )
                     .data_version(data_version)
                     .enable_batch_if_possible(enable_batch_if_possible)
@@ -226,8 +232,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = analyze.get_start_ts_fallback();
                 }
 
+                let tag = if table_scan {
+                    ReqTag::analyze_table
+                } else {
+                    ReqTag::analyze_index
+                };
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -252,8 +263,13 @@ impl<E: Engine> Endpoint<E> {
                     start_ts = checksum.get_start_ts_fallback();
                 }
 
+                let tag = if table_scan {
+                    ReqTag::checksum_table
+                } else {
+                    ReqTag::checksum_index
+                };
                 req_ctx = ReqContext::new(
-                    make_tag(table_scan),
+                    tag,
                     context,
                     ranges.as_slice(),
                     self.max_handle_duration,
@@ -313,6 +329,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<coppb::Response> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
+        tracker.on_scheduled();
         tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -322,6 +339,7 @@ impl<E: Engine> Endpoint<E> {
         }
         .await?;
         // When snapshot is retrieved, deadline may exceed.
+        tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
@@ -371,9 +389,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
@@ -424,6 +440,7 @@ impl<E: Engine> Endpoint<E> {
 
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
+            tracker.on_scheduled();
             tracker.req_ctx.deadline.check()?;
 
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -433,6 +450,7 @@ impl<E: Engine> Endpoint<E> {
             }
             .await?;
             // When snapshot is retrieved, deadline may exceed.
+            tracker.on_snapshot_finished();
             tracker.req_ctx.deadline.check()?;
 
             let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
@@ -482,9 +500,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
@@ -521,14 +537,6 @@ impl<E: Engine> Endpoint<E> {
             .try_flatten() // Stream<Resp, Error>
             .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .compat()
-    }
-}
-
-fn make_tag(is_table_scan: bool) -> &'static str {
-    if is_table_scan {
-        "select"
-    } else {
-        "index"
     }
 }
 
@@ -731,7 +739,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
