@@ -1020,7 +1020,7 @@ impl Write for Snap {
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
             let mut file = self.mgr.limiter.clone().limit(file);
-            if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
+            if file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
