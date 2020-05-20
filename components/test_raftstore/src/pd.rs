@@ -970,10 +970,8 @@ impl TestPdClient {
         if right.get_start_key() != split_key {
             return false;
         }
-
-        assert!(left.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        assert!(right.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        true
+        left.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+            && right.get_region_epoch().get_version() > region.get_region_epoch().get_version()
     }
 
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
@@ -1000,8 +998,13 @@ impl TestPdClient {
         let mut status = ReplicationStatus::default();
         status.set_mode(ReplicationMode::DrAutoSync);
         status.mut_dr_auto_sync().label_key = label_key.to_owned();
-        status.mut_dr_auto_sync().state_id = 1;
-        self.cluster.wl().replication_status = Some(status);
+        let mut cluster = self.cluster.wl();
+        status.mut_dr_auto_sync().state_id = cluster
+            .replication_status
+            .as_ref()
+            .map(|s| s.get_dr_auto_sync().state_id + 1)
+            .unwrap_or(1);
+        cluster.replication_status = Some(status);
     }
 
     pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
