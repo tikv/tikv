@@ -641,14 +641,14 @@ mod tests {
 
         fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.compact_range_cf(cf, None, None);
             }
         }

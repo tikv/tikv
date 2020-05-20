@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::{Error, Result};
+use crate::Result;
 use rocksdb::load_latest_options;
 use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env,
@@ -13,13 +13,6 @@ use rocksdb::{
 
 pub use crate::rocks::CFHandle;
 use engine_traits::CF_DEFAULT;
-
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
-    let handle = db
-        .cf_handle(cf)
-        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
-    Ok(handle)
-}
 
 pub fn open_opt(
     opts: DBOptions,
