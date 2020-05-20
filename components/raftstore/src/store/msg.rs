@@ -3,8 +3,8 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, Snapshot};
+use engine_rocks::RocksSnapshot;
+use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -55,7 +55,7 @@ pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
-///  - `Read`: a callbak for read only requests including `StatusRequest`,
+///  - `Read`: a callback for read only requests including `StatusRequest`,
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
@@ -210,14 +210,14 @@ pub enum SignificantMsg {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<E: KvEngine> {
+pub enum CasualMessage<S: Snapshot> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<S>,
     },
 
     /// Hash result of ComputeHash command.
@@ -255,10 +255,10 @@ pub enum CasualMessage<E: KvEngine> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<S>) + Send + 'static>),
 }
 
-impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
+impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -319,7 +319,7 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<E: KvEngine> {
+pub enum PeerMsg<S: Snapshot> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -327,12 +327,12 @@ pub enum PeerMsg<E: KvEngine> {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<E::Snapshot>),
+    RaftCommand(RaftCommand<S>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<E> },
+    ApplyRes { res: ApplyTaskRes<S> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -341,14 +341,14 @@ pub enum PeerMsg<E: KvEngine> {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<E>),
+    CasualMessage(CasualMessage<S>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
 }
 
-impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
+impl<S: Snapshot> fmt::Debug for PeerMsg<S> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -395,7 +395,7 @@ pub enum StoreMsg {
         store: metapb::Store,
     },
 
-    /// Messge only used for test
+    /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
     /// Asks the store to update replication mode.
@@ -427,11 +427,4 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
         }
     }
-}
-
-// TODO: remove this enum and utilize the actual message instead.
-#[derive(Debug)]
-pub enum Msg {
-    PeerMsg(PeerMsg<RocksEngine>),
-    StoreMsg(StoreMsg),
 }
