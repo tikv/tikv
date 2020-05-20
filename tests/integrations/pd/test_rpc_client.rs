@@ -15,6 +15,7 @@ use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionSt
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use txn_types::TimeStamp;
+use tikv_util::config::ReadableDuration;
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -38,7 +39,7 @@ fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> Rpc
 fn new_client_with_update_interval(
     eps: Vec<(String, u16)>,
     mgr: Option<Arc<SecurityManager>>,
-    interval: u64,
+    interval: ReadableDuration,
 ) -> RpcClient {
     let mut cfg = new_config(eps);
     cfg.update_interval = interval;
@@ -482,7 +483,7 @@ fn test_periodical_update() {
     let eps = server.bind_addrs();
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let client = new_client_with_update_interval(eps, None, 3);
+    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
     let counter1 = Arc::clone(&counter);
     client.handle_reconnect(move || {
         counter1.fetch_add(1, Ordering::SeqCst);
