@@ -358,11 +358,11 @@ fn test_shutdown_when_snap_gc() {
         sleep_ms(10);
     }
 
-    fail::cfg("peer_2_handle_raftstore_control", "pause").unwrap();
+    fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
     std::thread::spawn(|| {
         // Sleep a while to wait snap_gc event to reach batch system.
         sleep_ms(500);
-        fail::cfg("peer_2_handle_raftstore_control", "off").unwrap();
+        fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();
     });
 
     sleep_ms(100);

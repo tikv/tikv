@@ -269,7 +269,6 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more 0.99.3",
- "fail",
  "serde",
  "serde_derive",
  "slog",

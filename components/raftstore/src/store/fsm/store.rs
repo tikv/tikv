@@ -400,10 +400,6 @@ impl Fsm for StoreFsm {
     fn is_stopped(&self) -> bool {
         self.store.stopped
     }
-
-    fn tag(&self) -> Option<String> {
-        Some(format!("store {}", self.store.id))
-    }
 }
 
 struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
@@ -1767,6 +1763,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
+        fail_point!("peer_2_handle_snap_mgr_gc", self.fsm.store.id == 2, |_| Ok(
+            ()
+        ));
         let snap_keys = self.ctx.snap_mgr.list_idle_snap()?;
         if snap_keys.is_empty() {
             return Ok(());
