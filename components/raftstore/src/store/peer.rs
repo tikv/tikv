@@ -1069,11 +1069,11 @@ impl Peer {
         // the snapshot, and send remaining log entries, which may increase committed_index.
         // TODO: add more test
         self.last_applying_idx == self.get_store().applied_index()
-        // Requesting snapshots also triggers apply workers to write
-        // apply states even if there is no pending committed entry.
-        // TODO: Instead of sharing the counter, we should apply snapshots
-        //       in apply workers.
-        && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
+            // Requesting snapshots also triggers apply workers to write
+            // apply states even if there is no pending committed entry.
+            // TODO: Instead of sharing the counter, we should apply snapshots
+            //       in apply workers.
+            && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
     }
 
     #[inline]
@@ -1485,16 +1485,16 @@ impl Peer {
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
                 let cbs = self.proposals.take(committed_index, term);
-                let apply = Apply {
-                    peer_id: self.peer_id(),
-                    region_id: self.region_id,
-                    term: self.term(),
-                    entries: committed_entries,
-                    last_committed_index: self.get_store().committed_index(),
-                    committed_term: term,
+                let apply = Apply::new(
+                    self.peer_id(),
+                    self.region_id,
+                    self.term(),
+                    committed_entries,
+                    self.get_store().committed_index(),
                     committed_index,
+                    term,
                     cbs,
-                };
+                );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
