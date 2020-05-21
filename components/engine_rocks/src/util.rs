@@ -15,6 +15,57 @@ use rocksdb::{CFHandle, DB, SliceTransform};
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
+    let engine =
+        new_engine_raw(path, None, &[CF_DEFAULT], None).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
+
+pub struct RocksCFOptions<'a> {
+    cf: &'a str,
+    options: RocksColumnFamilyOptions,
+}
+
+impl<'a> RocksCFOptions<'a> {
+    pub fn new(cf: &'a str, options: RocksColumnFamilyOptions) -> RocksCFOptions<'a> {
+        RocksCFOptions { cf, options }
+    }
+
+    pub fn into_raw(self) -> CFOptions<'a> {
+        CFOptions::new(self.cf, self.options.into_raw())
+    }
+}
+
+pub fn new_engine(
+    path: &str,
+    db_opts: Option<RocksDBOptions>,
+    cfs: &[&str],
+    opts: Option<Vec<RocksCFOptions<'_>>>,
+) -> Result<RocksEngine> {
+    let db_opts = db_opts.map(RocksDBOptions::into_raw);
+    let opts = opts.map(|o| o.into_iter().map(RocksCFOptions::into_raw).collect());
+    let engine = new_engine_raw(path, db_opts, cfs, opts).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
+
+pub fn new_engine_opt(
+    path: &str,
+    db_opt: RocksDBOptions,
+    cfs_opts: Vec<RocksCFOptions<'_>>,
+) -> Result<RocksEngine> {
+    let db_opt = db_opt.into_raw();
+    let cfs_opts = cfs_opts.into_iter().map(RocksCFOptions::into_raw).collect();
+    let engine =
+        new_engine_opt_raw(path, db_opt, cfs_opts).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
+
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     let handle = db
         .cf_handle(cf)
@@ -22,12 +73,8 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     Ok(handle)
 }
 
-pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
-    let engine =
-        new_engine_raw(path, None, &[CF_DEFAULT], None).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
+pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
+    RocksRange::new(range.start_key, range.end_key)
 }
 
 pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
@@ -85,53 +132,6 @@ pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usi
 /// Gets the number of immutable mem-table of given column family.
 pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
-}
-
-pub struct RocksCFOptions<'a> {
-    cf: &'a str,
-    options: RocksColumnFamilyOptions,
-}
-
-impl<'a> RocksCFOptions<'a> {
-    pub fn new(cf: &'a str, options: RocksColumnFamilyOptions) -> RocksCFOptions<'a> {
-        RocksCFOptions { cf, options }
-    }
-
-    pub fn into_raw(self) -> CFOptions<'a> {
-        CFOptions::new(self.cf, self.options.into_raw())
-    }
-}
-
-pub fn new_engine(
-    path: &str,
-    db_opts: Option<RocksDBOptions>,
-    cfs: &[&str],
-    opts: Option<Vec<RocksCFOptions<'_>>>,
-) -> Result<RocksEngine> {
-    let db_opts = db_opts.map(RocksDBOptions::into_raw);
-    let opts = opts.map(|o| o.into_iter().map(RocksCFOptions::into_raw).collect());
-    let engine = new_engine_raw(path, db_opts, cfs, opts).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
-}
-
-pub fn new_engine_opt(
-    path: &str,
-    db_opt: RocksDBOptions,
-    cfs_opts: Vec<RocksCFOptions<'_>>,
-) -> Result<RocksEngine> {
-    let db_opt = db_opt.into_raw();
-    let cfs_opts = cfs_opts.into_iter().map(RocksCFOptions::into_raw).collect();
-    let engine =
-        new_engine_opt_raw(path, db_opt, cfs_opts).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
-}
-
-pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
-    RocksRange::new(range.start_key, range.end_key)
 }
 
 pub struct FixedSuffixSliceTransform {
