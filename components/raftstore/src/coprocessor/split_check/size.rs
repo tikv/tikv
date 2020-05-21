@@ -106,7 +106,7 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot>, E> SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -120,7 +120,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -389,7 +389,7 @@ pub mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::properties::RangePropertiesCollectorFactory;
-    use engine_rocks::{Compat, RocksEngine};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -409,7 +409,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -441,7 +441,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
