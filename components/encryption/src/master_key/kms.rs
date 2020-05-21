@@ -65,6 +65,8 @@ impl AwsKms {
         Ok(())
     }
 
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
+    // a wrong master key has been used, or other error otherwise.
     fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: ciphertext.to_vec().into(),
@@ -237,11 +239,20 @@ impl KmsBackend {
         Ok(content)
     }
 
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
+    // a wrong master key has been used, or other error otherwise.
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
             // For now, we only support AWS.
             Some(val) if val.as_slice() == AWS_KMS_VENDOR_NAME => (),
-            None => return Err(Error::WrongMasterKey(box_err!("missing KMS vendor"))),
+            None => {
+                return Err(
+                    // If vender is missing in metadata, it could be the encrypted content is invalid
+                    // or corrupted, but it is also possible that the content is encrypted using the
+                    // FileBackend. Return WrongMasterKey anyway.
+                    Error::WrongMasterKey(box_err!("missing KMS vendor")),
+                )
+            }
             other => {
                 return Err(box_err!(
                     "KMS vendor mismatch expect {:?} got {:?}",
