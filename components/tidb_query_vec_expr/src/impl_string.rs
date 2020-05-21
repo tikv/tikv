@@ -36,13 +36,11 @@ pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
         // hex::decode will fail on odd-length content
         // but mysql won't
         // so do some padding
-        let padded_content = if content.len() % 2 == 1 {
-            let mut result = b"0".to_vec();
-            result.extend_from_slice(content);
-            result
-        } else {
-            content.clone()
-        };
+        let mut padded_content = Vec::with_capacity(content.len() / 2 + content.len() % 2);
+        if content.len() % 2 == 1 {
+            padded_content.push(b'0')
+        }
+        padded_content.extend_from_slice(content);
         Ok(hex::decode(padded_content).ok())
     } else {
         Ok(None)
@@ -573,6 +571,7 @@ mod tests {
             (Some(b"41\0".to_vec()), None),
             (Some(b"".to_vec()), Some(b"".to_vec())),
             (Some(b"b".to_vec()), Some(vec![0xb])),
+            (Some(b"a1b".to_vec()), Some(vec![0xa, 0x1b])),
             (None, None),
         ];
         for (arg, expect_output) in cases {
