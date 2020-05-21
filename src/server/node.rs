@@ -12,7 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
-use engine_rocks::{CloneCompat, Compat, RocksEngine};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -42,7 +42,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<RocksSnapshot> + 'static,
 {
     let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
@@ -184,7 +184,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<RocksSnapshot> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -226,31 +226,20 @@ where
     }
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
-        let status = match status {
-            Some(s) => s,
-            None => {
-                info!("no status is returned, using majority mode");
-                return;
-            }
-        };
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
-        let label_key = &status.get_dr_auto_sync().label_key;
-        let mut control = self.state.lock().unwrap();
-        for store in stores {
-            for l in store.get_labels() {
-                if l.key == *label_key {
-                    control
-                        .group
-                        .register_store(store.id, l.value.to_lowercase());
-                    break;
-                }
-            }
+        let mut state = self.state.lock().unwrap();
+        if let Some(s) = status {
+            state.set_status(s);
         }
-        control.status = status;
+        for mut store in stores {
+            state
+                .group
+                .register_store(store.id, store.take_labels().into());
+        }
     }
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
@@ -402,6 +391,7 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
+            self.state.clone(),
         )?;
         Ok(())
     }

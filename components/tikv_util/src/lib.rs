@@ -11,8 +11,6 @@ extern crate futures;
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
@@ -34,7 +32,6 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
-use rand;
 use rand::rngs::ThreadRng;
 
 pub mod buffer_vec;
@@ -51,7 +48,6 @@ pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod security;
 pub mod sys;
 pub mod threadpool;
 pub mod time;

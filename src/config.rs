@@ -22,7 +22,6 @@ use engine::rocks::{
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
     TitanDBOptions,
 };
-use slog;
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
@@ -30,9 +29,8 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use encryption::EncryptionConfig;
 use engine::rocks::util::{
-    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+    CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -41,15 +39,15 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
+use security::SecurityConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
-use tikv_util::security::SecurityConfig;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 
@@ -68,6 +66,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
         (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         (false, CF_WRITE) => (0.15, 0, usize::MAX),
+        (false, CF_VER_DEFAULT) => (0.25, 0, usize::MAX),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
@@ -619,6 +618,11 @@ impl LockCfConfig {
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -679,6 +683,70 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
+cf_config!(VersionCfConfig);
+
+impl Default for VersionCfConfig {
+    fn default() -> VersionCfConfig {
+        VersionCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_VER_DEFAULT) as u64),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: true,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+            ],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            titan: TitanCfConfig::default(),
+        }
+    }
+}
+
+impl VersionCfConfig {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -786,6 +854,8 @@ pub struct DbConfig {
     pub lockcf: LockCfConfig,
     #[config(submodule)]
     pub raftcf: RaftCfConfig,
+    #[config(submodule)]
+    pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
 }
@@ -828,6 +898,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
+            ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
         }
     }
@@ -899,6 +970,7 @@ impl DbConfig {
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -908,6 +980,7 @@ impl DbConfig {
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            CFOptions::new(CF_VER_DEFAULT, self.ver_defaultcf.build_opt(cache)),
         ]
     }
 
@@ -916,6 +989,7 @@ impl DbConfig {
         self.lockcf.validate()?;
         self.writecf.validate()?;
         self.raftcf.validate()?;
+        self.ver_defaultcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
             if self.titan.enabled {
@@ -933,6 +1007,7 @@ impl DbConfig {
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.ver_defaultcf, CF_VER_DEFAULT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
@@ -1221,6 +1296,7 @@ impl DBConfigManger {
             | (DBType::Kv, CF_WRITE)
             | (DBType::Kv, CF_LOCK)
             | (DBType::Kv, CF_RAFT)
+            | (DBType::Kv, CF_VER_DEFAULT)
             | (DBType::Raft, CF_DEFAULT) => Ok(()),
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
@@ -1906,9 +1982,6 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
 
     #[config(skip)]
-    pub encryption: EncryptionConfig,
-
-    #[config(skip)]
     pub import: ImportConfig,
 
     #[config(submodule)]
@@ -1942,7 +2015,6 @@ impl Default for TiKvConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
-            encryption: EncryptionConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
@@ -1980,10 +2052,10 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
-        if db_exist(&kv_db_path) && !db_exist(&self.raft_store.raftdb_path) {
+        if RocksEngine::exists(&kv_db_path) && !RocksEngine::exists(&self.raft_store.raftdb_path) {
             return Err("default rocksdb exist, buf raftdb not exist".into());
         }
-        if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
+        if !RocksEngine::exists(&kv_db_path) && RocksEngine::exists(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
@@ -2262,8 +2334,17 @@ pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub fn write_config<P: AsRef<Path>>(tem_dir: P, path: P, content: &[u8]) -> CfgResult<()> {
-    let tmp_cfg_path = tem_dir.as_ref().join(TMP_CONFIG_FILE);
+pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
+    let tmp_cfg_path = match path.as_ref().parent() {
+        Some(p) => p.join(TMP_CONFIG_FILE),
+        None => {
+            return Err(format!(
+                "failed to get parent path of config file: {}",
+                path.as_ref().display()
+            )
+            .into())
+        }
+    };
     {
         let mut f = fs::File::create(&tmp_cfg_path)?;
         f.write_all(content)?;
@@ -2284,15 +2365,17 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         typed: &ConfigChange,
         value: String,
     ) -> CfgResult<()> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             return match typed.get(&f) {
-                None => Err(format!("unexpect fields: {}", f).into()),
-                Some(ConfigValue::Skip) => Err(format!("config {:?} can not be change", f).into()),
+                None => Err(format!("unexpect fields: {}", field).into()),
+                Some(ConfigValue::Skip) => {
+                    Err(format!("config {} can not be changed", field).into())
+                }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
                         .entry(f)
@@ -2312,7 +2395,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                             }
                         };
                     }
-                    Err(format!("unexpect fields: {:?}", fields).into())
+                    let c: Vec<_> = fields.into_iter().rev().collect();
+                    Err(format!("unexpect fields: {}", c[..].join(".")).into())
                 }
             };
         }
@@ -2347,15 +2431,15 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
-        if let Some(mut f) = fields.pop() {
-            if f == "raftstore" {
-                f = "raft_store".to_owned();
+        if let Some(field) = fields.pop() {
+            let f = if field == "raftstore" {
+                "raft_store".to_owned()
             } else {
-                f = f.replace("-", "_");
-            }
+                field.replace("-", "_")
+            };
             match typed.get(&f) {
                 None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get fields: {}", f).into())
+                    Err(format!("failed to get field: {}", field).into())
                 }
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
@@ -2422,7 +2506,6 @@ impl From<&str> for Module {
             "raftdb" => Module::Raftdb,
             "storage" => Module::Storage,
             "security" => Module::Security,
-            "encryption" => Module::Encryption,
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
@@ -2496,11 +2579,7 @@ impl ConfigController {
             t.write_change(src, change);
             t.finish()
         };
-        write_config(
-            &inner.current.storage.data_dir,
-            &inner.current.cfg_path,
-            &content,
-        )?;
+        write_config(&inner.current.cfg_path, &content)?;
         Ok(())
     }
 
@@ -2531,7 +2610,6 @@ mod tests {
     use engine_traits::DBOptions as DBOptionsTrait;
     use slog::Level;
     use std::sync::Arc;
-    use toml;
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -2577,8 +2655,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s2.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
         // write critical config when exist.
         tikv_cfg.rocksdb.wal_dir = s2.clone();

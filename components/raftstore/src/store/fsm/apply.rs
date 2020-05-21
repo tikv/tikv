@@ -11,13 +11,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-
-use engine_rocks::RocksEngine;
 use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -30,6 +30,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -65,20 +66,20 @@ const WRITE_BATCH_LIMIT: usize = 16;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
-pub struct PendingCmd<E>
+pub struct PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<E>>,
+    pub cb: Option<Callback<S>>,
 }
 
-impl<E> PendingCmd<E>
+impl<S> PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<E>) -> PendingCmd<E> {
+    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
@@ -87,9 +88,9 @@ where
     }
 }
 
-impl<E> Drop for PendingCmd<E>
+impl<S> Drop for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn drop(&mut self) {
         if self.cb.is_some() {
@@ -102,9 +103,9 @@ where
     }
 }
 
-impl<E> Debug for PendingCmd<E>
+impl<S> Debug for PendingCmd<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -119,26 +120,26 @@ where
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<E>
+pub struct PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    normals: VecDeque<PendingCmd<E>>,
-    conf_change: Option<PendingCmd<E>>,
+    normals: VecDeque<PendingCmd<S>>,
+    conf_change: Option<PendingCmd<S>>,
 }
 
-impl<E> PendingCmdQueue<E>
+impl<S> PendingCmdQueue<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new() -> PendingCmdQueue<E> {
+    fn new() -> PendingCmdQueue<S> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<E>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<S>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -153,18 +154,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<E>) {
+    fn append_normal(&mut self, cmd: PendingCmd<S>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<E>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<S>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<E>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -195,10 +196,7 @@ impl Range {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<E>
-where
-    E: KvEngine,
-{
+pub enum ExecResult<S> {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -223,8 +221,7 @@ where
     ComputeHash {
         region: Region,
         index: u64,
-        snap: E::Snapshot,
-        _phantom: PhantomData<E>,
+        snap: S,
     },
     VerifyHash {
         index: u64,
@@ -239,14 +236,11 @@ where
 }
 
 /// The possible returned value when applying logs.
-pub enum ApplyResult<E>
-where
-    E: KvEngine,
-{
+pub enum ApplyResult<S> {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<E>),
+    Res(ExecResult<S>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -269,19 +263,19 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<E>
+struct ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<E>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
 }
 
-impl<E> ApplyCallback<E>
+impl<S> ApplyCallback<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn new(region: Region) -> ApplyCallback<E> {
+    fn new(region: Region) -> ApplyCallback<S> {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
@@ -295,26 +289,38 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<E>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
 
-#[derive(Clone)]
-pub enum Notifier<E>
+pub enum Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Router(RaftRouter<E>),
+    Router(RaftRouter<S>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<E>>),
+    Sender(Sender<PeerMsg<S>>),
 }
 
-impl<E> Notifier<E>
+impl<S> Clone for Notifier<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<E>) {
+    fn clone(&self) -> Self {
+        match self {
+            Notifier::Router(v) => Notifier::Router(v.clone()),
+            #[cfg(test)]
+            Notifier::Sender(v) => Notifier::Sender(v.clone()),
+        }
+    }
+}
+
+impl<S> Notifier<S>
+where
+    S: Snapshot,
+{
+    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -334,12 +340,12 @@ where
     timer: Option<Instant>,
     host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<E>>,
+    region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
-    notifier: Notifier<E>,
+    notifier: Notifier<E::Snapshot>,
     engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E>>,
-    apply_res: Vec<ApplyRes<E>>,
+    cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
+    apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -357,6 +363,8 @@ where
     use_delete_range: bool,
 
     perf_context_statistics: PerfContextStatistics,
+
+    yield_duration: Duration,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -368,10 +376,10 @@ where
         tag: String,
         host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<E>>,
+        region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter,
-        notifier: Notifier<E>,
+        notifier: Notifier<E::Snapshot>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
@@ -395,6 +403,7 @@ where
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            yield_duration: cfg.apply_yield_duration.0,
         }
     }
 
@@ -499,7 +508,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<E>,
-        results: VecDeque<ExecResult<E>>,
+        results: VecDeque<ExecResult<E::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
@@ -574,7 +583,7 @@ where
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl KvEngine>) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl Snapshot>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -585,7 +594,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -596,7 +605,7 @@ fn notify_stale_command(
     region_id: u64,
     peer_id: u64,
     term: u64,
-    mut cmd: PendingCmd<impl KvEngine>,
+    mut cmd: PendingCmd<impl Snapshot>,
 ) {
     info!(
         "command is stale, skip";
@@ -608,7 +617,7 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl KvEngine>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -737,13 +746,14 @@ where
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
-    written: bool,
+    /// The start time of the current round to execute commands.
+    handle_start: Option<Instant>,
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<E>,
+    pending_cmds: PendingCmdQueue<E::Snapshot>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -791,7 +801,7 @@ where
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            written: false,
+            handle_start: None,
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
@@ -916,7 +926,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
         });
@@ -930,10 +940,11 @@ where
 
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-                if self.written {
-                    return ApplyResult::Yield;
+                if let Some(start) = self.handle_start.as_ref() {
+                    if start.elapsed() >= apply_ctx.yield_duration {
+                        return ApplyResult::Yield;
+                    }
                 }
-                self.written = true;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -962,7 +973,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -992,7 +1003,12 @@ where
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<E>> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<E::Snapshot>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -1029,7 +1045,7 @@ where
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyResult<E> {
+    ) -> ApplyResult<E::Snapshot> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1084,7 +1100,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<E>) {
+    ) -> (RaftCmdResponse, ApplyResult<E::Snapshot>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1193,7 +1209,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1209,7 +1225,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1252,7 +1268,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<E>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -1522,7 +1538,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1561,7 +1577,7 @@ where
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        { self.id == 2 && self.region_id() == 1 },
+                        self.id == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -1721,7 +1737,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -1743,10 +1759,10 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!(
             "apply_before_split_1_3",
-            { self.id == 3 && self.region_id() == 1 },
+            self.id == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -1852,7 +1868,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
@@ -1923,12 +1939,12 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
-                    { self.region_id() == 1 && self.id != 4 },
+                    self.region_id() == 1 && self.id != 4,
                     |_| {}
                 );
             };
@@ -2055,7 +2071,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2097,7 +2113,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
@@ -2157,7 +2173,7 @@ where
         &self,
         ctx: &ApplyContext<E, W>,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -2169,7 +2185,6 @@ where
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
                 snap: ctx.engine.snapshot(),
-                _phantom: PhantomData,
             }),
         ))
     }
@@ -2178,7 +2193,7 @@ where
         &self,
         _: &ApplyContext<E, W>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<E>)> {
+    ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
@@ -2263,33 +2278,18 @@ pub fn compact_raft_log(
     Ok(())
 }
 
-pub struct Apply {
+pub struct Apply<S>
+where
+    S: Snapshot,
+{
+    pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
     pub entries: Vec<Entry>,
-    pub last_commit_index: u64,
-    pub commit_index: u64,
-    pub commit_term: u64,
-}
-
-impl Apply {
-    pub fn new(
-        region_id: u64,
-        term: u64,
-        entries: Vec<Entry>,
-        last_commit_index: u64,
-        commit_term: u64,
-        commit_index: u64,
-    ) -> Apply {
-        Apply {
-            region_id,
-            term,
-            entries,
-            last_commit_index,
-            commit_index,
-            commit_term,
-        }
-    }
+    pub last_committed_index: u64,
+    pub committed_index: u64,
+    pub committed_term: u64,
+    pub cbs: Vec<Proposal<S>>,
 }
 
 #[derive(Default, Clone)]
@@ -2317,50 +2317,16 @@ impl Registration {
     }
 }
 
-pub struct Proposal<E>
+pub struct Proposal<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    is_conf_change: bool,
-    index: u64,
-    term: u64,
-    pub cb: Callback<E>,
-}
-
-impl<E> Proposal<E>
-where
-    E: KvEngine,
-{
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<E>) -> Proposal<E> {
-        Proposal {
-            is_conf_change,
-            index,
-            term,
-            cb,
-        }
-    }
-}
-
-pub struct RegionProposal<E>
-where
-    E: KvEngine,
-{
-    pub id: u64,
-    pub region_id: u64,
-    pub props: Vec<Proposal<E>>,
-}
-
-impl<E> RegionProposal<E>
-where
-    E: KvEngine,
-{
-    pub fn new(id: u64, region_id: u64, props: Vec<Proposal<E>>) -> RegionProposal<E> {
-        RegionProposal {
-            id,
-            region_id,
-            props,
-        }
-    }
+    pub is_conf_change: bool,
+    pub index: u64,
+    pub term: u64,
+    pub cb: Callback<S>,
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
 }
 
 pub struct Destroy {
@@ -2413,7 +2379,7 @@ impl GenSnapTask {
         kv_snap: E::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<E>>,
+        region_sched: &Scheduler<RegionTask<E::Snapshot>>,
     ) -> Result<()>
     where
         E: KvEngine,
@@ -2483,10 +2449,9 @@ where
 {
     Apply {
         start: Instant,
-        apply: Apply,
+        apply: Apply<E::Snapshot>,
     },
     Registration(Registration),
-    Proposal(RegionProposal<E>),
     LogsUpToDate(CatchUpLogs),
     Noop,
     Destroy(Destroy),
@@ -2494,7 +2459,7 @@ where
     Change {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -2505,7 +2470,7 @@ impl<E> Msg<E>
 where
     E: KvEngine,
 {
-    pub fn apply(apply: Apply) -> Msg<E> {
+    pub fn apply(apply: Apply<E::Snapshot>) -> Msg<E> {
         Msg::Apply {
             start: Instant::now(),
             apply,
@@ -2531,7 +2496,6 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
-            Msg::Proposal(ref p) => write!(f, "[region {}] {} region proposal", p.region_id, p.id),
             Msg::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -2568,23 +2532,23 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<E>
+pub struct ApplyRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult<E>>,
+    pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
 }
 
 #[derive(Debug)]
-pub enum TaskRes<E>
+pub enum TaskRes<S>
 where
-    E: KvEngine,
+    S: Snapshot,
 {
-    Apply(ApplyRes<E>),
+    Apply(ApplyRes<S>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -2642,7 +2606,7 @@ where
     fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
-        apply: Apply,
+        apply: Apply<E::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -2664,9 +2628,9 @@ where
             self.delegate.apply_state.get_commit_term(),
         );
         let cur_state = (
-            apply.last_commit_index,
-            apply.commit_index,
-            apply.commit_term,
+            apply.last_committed_index,
+            apply.committed_index,
+            apply.committed_term,
         );
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 || prev_state.2 > cur_state.2 {
             panic!(
@@ -2680,6 +2644,7 @@ where
         self.delegate.apply_state.set_commit_index(cur_state.1);
         self.delegate.apply_state.set_commit_term(cur_state.2);
 
+        self.append_proposal(apply.cbs);
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
         if self.delegate.yield_state.is_some() {
@@ -2688,18 +2653,17 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn handle_proposal(&mut self, region_proposal: RegionProposal<E>) {
+    fn append_proposal(&mut self, props: Vec<Proposal<E::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
-        let propose_num = region_proposal.props.len();
-        assert_eq!(self.delegate.id, region_proposal.id);
+        let propose_num = props.len();
         if self.delegate.stopped {
-            for p in region_proposal.props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            for p in props {
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
-        for p in region_proposal.props {
+        for p in props {
             let cmd = PendingCmd::new(p.index, p.term, p.cb);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
@@ -2866,7 +2830,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
+        if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
             apply_ctx.engine.snapshot(),
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
@@ -2894,7 +2858,7 @@ where
         apply_ctx: &mut ApplyContext<E, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E>,
+        cb: Callback<E::Snapshot>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -2929,8 +2893,8 @@ where
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<E>::from_snapshot(
-                        apply_ctx.engine.snapshot().into_sync(),
+                    snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
+                        Arc::new(apply_ctx.engine.snapshot()),
                         self.delegate.region.clone(),
                     )),
                 }
@@ -2985,7 +2949,6 @@ where
                         break;
                     }
                 }
-                Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
                 Some(Msg::Registration(reg)) => self.handle_registration(reg),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
@@ -3099,7 +3062,7 @@ where
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
-        normal.delegate.written = false;
+        normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
@@ -3161,9 +3124,9 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksEngine>>,
+    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksEngine>,
+    sender: Notifier<RocksSnapshot>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
 }
@@ -3171,7 +3134,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksEngine>,
+        sender: Notifier<RocksSnapshot>,
         router: ApplyRouter,
     ) -> Builder<W> {
         Builder::<W> {
@@ -3238,18 +3201,18 @@ impl ApplyRouter {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,
-                Msg::Proposal(props) => {
+                Msg::Apply { apply, .. } => {
                     info!(
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in props.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                        notify_region_removed(props.region_id, props.id, cmd);
+                    for p in apply.cbs {
+                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
+                        notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
                 }
-                Msg::Apply { .. } | Msg::Destroy(_) | Msg::Noop => {
+                Msg::Destroy(_) | Msg::Noop => {
                     info!(
                         "target region is not found, drop messages";
                         "region_id" => region_id
@@ -3337,12 +3300,8 @@ impl ApplyBatchSystem {
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    let (router, system) = batch_system::create_system(
-        cfg.apply_pool_size,
-        cfg.apply_max_batch_size,
-        tx,
-        Box::new(ControlFsm),
-    );
+    let (router, system) =
+        batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
     (ApplyRouter { router }, ApplyBatchSystem { system })
 }
 
@@ -3352,13 +3311,16 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
+    use std::thread;
     use std::time::*;
 
     use crate::coprocessor::*;
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{util::new_engine, RocksEngine, RocksWriteBatch, WRITE_BATCH_MAX_KEYS};
+    use engine_rocks::{
+        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
+    };
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3391,12 +3353,18 @@ mod tests {
         (dir, importer)
     }
 
-    pub fn new_entry(term: u64, index: u64, req: Option<RaftCmdRequest>) -> Entry {
+    pub fn new_entry(term: u64, index: u64, set_data: bool) -> Entry {
         let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
-        if let Some(r) = req {
-            e.set_data(r.write_to_bytes().unwrap())
+        if set_data {
+            let mut cmd = Request::default();
+            cmd.set_cmd_type(CmdType::Put);
+            cmd.mut_put().set_key(b"key".to_vec());
+            cmd.mut_put().set_value(b"value".to_vec());
+            let mut req = RaftCmdRequest::default();
+            req.mut_requests().push(cmd);
+            e.set_data(req.write_to_bytes().unwrap())
         }
         e
     }
@@ -3482,14 +3450,51 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksEngine> {
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+    ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
                 e => panic!("unexpected res {:?}", e),
             },
             e => panic!("unexpected res {:?}", e),
+        }
+    }
+
+    fn proposal<S: Snapshot>(
+        is_conf_change: bool,
+        index: u64,
+        term: u64,
+        cb: Callback<S>,
+    ) -> Proposal<S> {
+        Proposal {
+            is_conf_change,
+            index,
+            term,
+            cb,
+            renew_lease_time: None,
+        }
+    }
+
+    fn apply<S: Snapshot>(
+        peer_id: u64,
+        region_id: u64,
+        term: u64,
+        entries: Vec<Entry>,
+        last_committed_index: u64,
+        committed_term: u64,
+        committed_index: u64,
+        cbs: Vec<Proposal<S>>,
+    ) -> Apply<S> {
+        Apply {
+            peer_id,
+            region_id,
+            term,
+            entries,
+            last_committed_index,
+            committed_index,
+            committed_term,
+            cbs,
         }
     }
 
@@ -3510,7 +3515,7 @@ mod tests {
             region_scheduler,
             sender,
             _phantom: PhantomData,
-            engine: engine.clone(),
+            engine,
             router: router.clone(),
         };
         system.spawn("test-basic".to_owned(), builder);
@@ -3522,19 +3527,18 @@ mod tests {
         reg.term = 4;
         reg.applied_index_term = 5;
         router.schedule_task(2, Msg::Registration(reg.clone()));
-        let reg_ = reg.clone();
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
             assert_eq!(delegate.tag, "[region 2] 1");
-            assert_eq!(delegate.region, reg_.region);
+            assert_eq!(delegate.region, reg.region);
             assert!(!delegate.pending_remove);
-            assert_eq!(delegate.apply_state, reg_.apply_state);
-            assert_eq!(delegate.term, reg_.term);
-            assert_eq!(delegate.applied_index_term, reg_.applied_index_term);
+            assert_eq!(delegate.apply_state, reg.apply_state);
+            assert_eq!(delegate.term, reg.term);
+            assert_eq!(delegate.applied_index_term, reg.applied_index_term);
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = Proposal::new(
+        let p = proposal(
             false,
             1,
             0,
@@ -3542,8 +3546,19 @@ mod tests {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
-        let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        router.schedule_task(1, Msg::Proposal(region_proposal));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                1,
+                1,
+                0,
+                vec![new_entry(0, 1, true)],
+                1,
+                0,
+                1,
+                vec![p],
+            )),
+        );
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
@@ -3551,72 +3566,45 @@ mod tests {
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
-            Proposal::new(false, 2, 0, Callback::None),
-            Proposal::new(
-                true,
-                3,
-                0,
+            proposal(
+                false,
+                4,
+                4,
                 Callback::Write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
+            proposal(false, 4, 5, Callback::None),
         ];
-        let region_proposal = RegionProposal::new(1, 2, pops);
-        router.schedule_task(2, Msg::Proposal(region_proposal));
+        router.schedule_task(
+            2,
+            Msg::apply(apply(1, 2, 11, vec![new_entry(5, 4, true)], 3, 5, 4, pops)),
+        );
+        // proposal with not commit entry should be ignore
         validate(&router, 2, move |delegate| {
-            assert_eq!(
-                delegate.pending_cmds.normals.back().map(|c| c.index),
-                Some(2)
-            );
-            assert_eq!(
-                delegate.pending_cmds.conf_change.as_ref().map(|c| c.index),
-                Some(3)
-            );
+            assert_eq!(delegate.term, 11);
         });
-        assert!(rx.try_recv().is_err());
-
-        let p = Proposal::new(true, 4, 0, Callback::None);
-        let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        router.schedule_task(2, Msg::Proposal(region_proposal));
-        validate(&router, 2, |delegate| {
-            assert_eq!(
-                delegate.pending_cmds.conf_change.as_ref().map(|c| c.index),
-                Some(4)
-            );
-        });
-        assert!(rx.try_recv().is_err());
-        // propose another conf change should mark previous stale.
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
 
-        router.schedule_task(
-            1,
-            Msg::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)], 2, 2, 3)),
-        );
-        // non registered region should be ignored.
-        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
-
-        router.schedule_task(2, Msg::apply(Apply::new(2, 11, vec![], 3, 2, 3)));
-        // empty entries should be ignored.
-        let reg_term = reg.term;
-        validate(&router, 2, move |delegate| {
-            assert_eq!(delegate.term, reg_term);
-        });
-        assert!(rx.try_recv().is_err());
-
-        let apply_state_key = keys::apply_state_key(2);
-        assert!(engine
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-            .unwrap()
-            .is_none());
         // Make sure Apply and Snapshot are in the same batch.
-        let (tx, _) = mpsc::sync_channel(0);
+        let (snap_tx, _) = mpsc::sync_channel(0);
         batch_messages(
             &router,
             2,
             vec![
-                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)], 3, 5, 4)),
-                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
+                Msg::apply(apply(
+                    1,
+                    2,
+                    11,
+                    vec![new_entry(5, 5, false)],
+                    5,
+                    5,
+                    5,
+                    vec![],
+                )),
+                Msg::Snapshot(GenSnapTask::new(2, 0, snap_tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
@@ -3626,6 +3614,7 @@ mod tests {
             },
             e => panic!("unexpected apply result: {:?}", e),
         };
+        let apply_state_key = keys::apply_state_key(2);
         let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
                 .get_msg_cf(CF_RAFT, &apply_state_key)
@@ -3635,7 +3624,7 @@ mod tests {
         };
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state, apply_state);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 4);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 5);
         assert!(apply_res.exec_res.is_empty());
         // empty entry will make applied_index step forward and should write apply state to engine.
         assert_eq!(apply_res.metrics.written_keys, 1);
@@ -3643,7 +3632,7 @@ mod tests {
         validate(&router, 2, |delegate| {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
-            assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
                 delegate.last_sync_apply_index
@@ -3663,7 +3652,7 @@ mod tests {
 
         // Stopped peer should be removed.
         let (resp_tx, resp_rx) = mpsc::channel();
-        let p = Proposal::new(
+        let p = proposal(
             false,
             1,
             0,
@@ -3671,8 +3660,19 @@ mod tests {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
-        let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        router.schedule_task(2, Msg::Proposal(region_proposal));
+        router.schedule_task(
+            2,
+            Msg::apply(apply(
+                1,
+                1,
+                0,
+                vec![new_entry(0, 1, true)],
+                1,
+                0,
+                1,
+                vec![p],
+            )),
+        );
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(
@@ -3683,6 +3683,17 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         system.shutdown();
+    }
+
+    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<S> {
+        proposal(
+            false,
+            idx,
+            term,
+            Callback::Write(Box::new(move |resp: WriteResponse| {
+                tx.send(resp.response).unwrap();
+            })),
+        )
     }
 
     struct EntryBuilder {
@@ -3697,29 +3708,6 @@ mod tests {
             entry.set_index(index);
             entry.set_term(term);
             EntryBuilder { entry, req }
-        }
-
-        fn capture_resp(
-            self,
-            router: &ApplyRouter,
-            id: u64,
-            region_id: u64,
-            tx: Sender<RaftCmdResponse>,
-        ) -> EntryBuilder {
-            // TODO: may need to support conf change.
-            let prop = Proposal::new(
-                false,
-                self.entry.get_index(),
-                self.entry.get_term(),
-                Callback::Write(Box::new(move |resp: WriteResponse| {
-                    tx.send(resp.response).unwrap();
-                })),
-            );
-            router.schedule_task(
-                region_id,
-                Msg::Proposal(RegionProposal::new(id, region_id, vec![prop])),
-            );
-            self
         }
 
         fn epoch(mut self, conf_ver: u64, version: u64) -> EntryBuilder {
@@ -3892,8 +3880,9 @@ mod tests {
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
+        let peer_id = 3;
         let mut reg = Registration::default();
-        reg.id = 3;
+        reg.id = peer_id;
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -3907,9 +3896,20 @@ mod tests {
             .put(b"k2", b"v1")
             .put(b"k3", b"v1")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry], 0, 1, 1)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![put_entry],
+                0,
+                1,
+                1,
+                vec![cb(1, 1, capture_tx.clone())],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 3);
@@ -3929,7 +3929,10 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1, 2, 2)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
+        );
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
@@ -3947,9 +3950,20 @@ mod tests {
         let put_entry = EntryBuilder::new(3, 2)
             .put(b"k2", b"v2")
             .epoch(1, 1)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 2, 2, 3)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry],
+                2,
+                2,
+                3,
+                vec![cb(3, 2, capture_tx.clone())],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
@@ -3960,9 +3974,20 @@ mod tests {
             .put(b"k3", b"v3")
             .put(b"k5", b"v5")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 3, 2, 4)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry],
+                3,
+                2,
+                4,
+                vec![cb(4, 2, capture_tx.clone())],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         let apply_res = fetch_apply_res(&rx);
@@ -3971,17 +3996,25 @@ mod tests {
         // a writebatch should be atomic.
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
 
-        EntryBuilder::new(5, 2)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
-            .build();
         let put_entry = EntryBuilder::new(5, 3)
             .delete(b"k1")
             .delete_cf(CF_LOCK, b"k1")
             .delete_cf(CF_WRITE, b"k1")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![put_entry], 4, 3, 5)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![put_entry],
+                4,
+                3,
+                5,
+                vec![cb(5, 2, capture_tx.clone()), cb(5, 3, capture_tx.clone())],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -3993,12 +4026,20 @@ mod tests {
         assert_eq!(apply_res.metrics.delete_keys_hint, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, -9);
 
-        let delete_entry = EntryBuilder::new(6, 3)
-            .delete(b"k5")
-            .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
-            .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, vec![delete_entry], 5, 3, 6)));
+        let delete_entry = EntryBuilder::new(6, 3).delete(b"k5").epoch(1, 3).build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_entry],
+                5,
+                3,
+                6,
+                vec![cb(6, 3, capture_tx.clone())],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         fetch_apply_res(&rx);
@@ -4006,11 +4047,19 @@ mod tests {
         let delete_range_entry = EntryBuilder::new(7, 3)
             .delete_range(b"", b"")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 6, 3, 7)),
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_range_entry],
+                6,
+                3,
+                7,
+                vec![cb(7, 3, capture_tx.clone())],
+            )),
         );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -4022,11 +4071,19 @@ mod tests {
             .delete_range_cf(CF_LOCK, b"", b"k5")
             .delete_range_cf(CF_WRITE, b"", b"k5")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(1, 3, vec![delete_range_entry], 7, 3, 8)),
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                vec![delete_range_entry],
+                7,
+                3,
+                8,
+                vec![cb(8, 3, capture_tx.clone())],
+            )),
         );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -4057,23 +4114,46 @@ mod tests {
 
         // IngestSst
         let put_ok = EntryBuilder::new(9, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .put(&[sst_range.0], &[sst_range.1])
             .epoch(0, 3)
             .build();
         // Add a put above to test flush before ingestion.
+        let capture_tx_clone = capture_tx.clone();
         let ingest_ok = EntryBuilder::new(10, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
         let ingest_epoch_not_match = EntryBuilder::new(11, 3)
-            .capture_resp(&router, 3, 1, capture_tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
             .build();
         let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
-        router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries, 8, 3, 11)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                3,
+                entries,
+                8,
+                3,
+                11,
+                vec![
+                    cb(9, 3, capture_tx.clone()),
+                    proposal(
+                        false,
+                        10,
+                        3,
+                        Callback::Write(Box::new(move |resp: WriteResponse| {
+                            // Sleep until yield timeout.
+                            thread::sleep(Duration::from_millis(500));
+                            capture_tx_clone.send(resp.response).unwrap();
+                        })),
+                    ),
+                    cb(11, 3, capture_tx.clone()),
+                ],
+            )),
+        );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -4084,29 +4164,32 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // Two continuous writes inside the same region will yield.
+        // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
+        let mut props = vec![];
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
-                .capture_resp(&router, 3, 1, capture_tx.clone())
                 .build();
             entries.push(put_entry);
+            props.push(cb(i as u64 + 12, 3, capture_tx.clone()));
         }
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(
+            Msg::apply(apply(
+                peer_id,
                 1,
                 3,
                 entries,
                 11,
                 3,
                 WRITE_BATCH_MAX_KEYS as u64 + 11,
+                props,
             )),
         );
         for _ in 0..WRITE_BATCH_MAX_KEYS {
@@ -4151,8 +4234,9 @@ mod tests {
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
+        let peer_id = 3;
         let mut reg = Registration::default();
-        reg.id = 3;
+        reg.id = peer_id;
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -4167,7 +4251,10 @@ mod tests {
             .put(b"k3", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry], 0, 1, 1)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![put_entry], 0, 1, 1, vec![])),
+        );
         fetch_apply_res(&rx);
         // It must receive nothing because no region registered.
         cmdbatch_rx
@@ -4188,7 +4275,10 @@ mod tests {
             .put(b"k0", b"v0")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 1, 2, 2)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
+        );
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
         let observe_id = ObserveID::new();
@@ -4201,7 +4291,7 @@ mod tests {
                     region_id: 1,
                     enabled: enabled.clone(),
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::Read(Box::new(|resp: ReadResponse<RocksSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -4216,9 +4306,20 @@ mod tests {
         let put_entry = EntryBuilder::new(3, 2)
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
-            .capture_resp(&router, 3, 1, capture_tx)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 2, 2, 3)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry],
+                2,
+                2,
+                3,
+                vec![cb(3, 2, capture_tx)],
+            )),
+        );
         fetch_apply_res(&rx);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -4236,7 +4337,16 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(Apply::new(1, 2, vec![put_entry1, put_entry2], 3, 2, 5)),
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![put_entry1, put_entry2],
+                3,
+                2,
+                5,
+                vec![],
+            )),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
@@ -4247,7 +4357,10 @@ mod tests {
             .put(b"k2", b"v2")
             .epoch(1, 3)
             .build();
-        router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry], 5, 2, 6)));
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 5, 2, 6, vec![])),
+        );
         // Must not receive new cmd.
         cmdbatch_rx
             .recv_timeout(Duration::from_millis(100))
@@ -4383,8 +4496,9 @@ mod tests {
     fn test_split() {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let peer_id = 3;
         let mut reg = Registration::default();
-        reg.id = 3;
+        reg.id = peer_id;
         reg.term = 1;
         reg.region.set_id(1);
         reg.region.set_end_key(b"k5".to_vec());
@@ -4444,11 +4558,19 @@ mod tests {
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)
                 .epoch(epoch.get_conf_ver(), epoch.get_version())
-                .capture_resp(router, 3, 1, capture_tx.clone())
                 .build();
             router.schedule_task(
                 1,
-                Msg::apply(Apply::new(1, 1, vec![split], index_id - 1, 1, index_id)),
+                Msg::apply(apply(
+                    peer_id,
+                    1,
+                    1,
+                    vec![split],
+                    index_id - 1,
+                    1,
+                    index_id,
+                    vec![cb(index_id, 1, capture_tx.clone())],
+                )),
             );
             index_id += 1;
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -4601,7 +4723,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
         });
         res.unwrap_err();
     }
@@ -4609,7 +4731,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksEngine>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
