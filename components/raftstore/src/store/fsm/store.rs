@@ -40,12 +40,12 @@ use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
+use crate::store::fsm::ApplyNotifier;
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter,
 };
-use crate::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -497,7 +497,6 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
-    pending_proposals: Vec<RegionProposal<RocksSnapshot>>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
@@ -507,13 +506,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if !self.pending_proposals.is_empty() {
-            for prop in self.pending_proposals.drain(..) {
-                self.poll_ctx
-                    .apply_router
-                    .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
-            }
-        }
         if self.poll_ctx.need_flush_trans
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
@@ -631,14 +623,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 }
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPoller<T, C> {
-    fn begin(&mut self, batch_size: usize) {
+    fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        if self.pending_proposals.capacity() == 0 {
-            self.pending_proposals = Vec::with_capacity(batch_size);
-        }
         self.timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context_statistics.start();
@@ -726,7 +715,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready(&mut self.pending_proposals);
+        delegate.collect_ready();
         expected_msg_count
     }
 
@@ -1002,7 +991,6 @@ where
             timer: TiInstant::now_coarse(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
-            pending_proposals: Vec::new(),
             cfg_tracker: self.cfg.clone().tracker(tag),
         }
     }
@@ -2117,18 +2105,18 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
         let mut state = self.ctx.global_replication_state.lock().unwrap();
-        if state.status.mode == status.mode {
+        if state.status().mode == status.mode {
             if status.get_mode() == ReplicationMode::Majority {
                 return;
             }
-            let exist_dr = state.status.get_dr_auto_sync();
+            let exist_dr = state.status().get_dr_auto_sync();
             let dr = status.get_dr_auto_sync();
             if exist_dr.state_id == dr.state_id && exist_dr.state == dr.state {
                 return;
             }
         }
         info!("updating replication mode"; "status" => ?status);
-        state.status = status;
+        state.set_status(status);
         drop(state);
         self.ctx.router.report_status_update()
     }

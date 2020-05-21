@@ -76,15 +76,10 @@ impl<T: PdClient, S: Snapshot> Runner<T, S> {
         let mut s = box_try!(pd_client.get_store(store_id));
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
-        let label_key = &state.status.get_dr_auto_sync().label_key;
-        if state.status.get_mode() == ReplicationMode::DrAutoSync {
-            if state.group.group_id(store_id).is_none() {
-                for l in s.get_labels() {
-                    if l.key == *label_key {
-                        group_id = Some(state.group.register_store(store_id, l.value.clone()));
-                        break;
-                    }
-                }
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
             }
         }
         drop(state);

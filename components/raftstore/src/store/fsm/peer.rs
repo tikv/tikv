@@ -39,7 +39,6 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
-    RegionProposal,
 };
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
@@ -656,6 +655,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         region_epoch: RegionEpoch,
         cb: Callback<RocksSnapshot>,
     ) {
+        fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
         let msg =
             new_read_index_request(region_id, region_epoch.clone(), self.fsm.peer.peer.clone());
@@ -715,10 +715,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             SignificantMsg::StoreResolved { store_id, group_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
-                if state.status.get_mode() != ReplicationMode::DrAutoSync {
+                if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
                 }
-                if state.status.get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                if state.status().get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
                     return;
                 }
                 drop(state);
@@ -785,7 +785,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal<RocksSnapshot>>) {
+    pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -793,9 +793,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
-        if let Some(p) = self.fsm.peer.take_apply_proposals() {
-            proposals.push(p);
-        }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);
@@ -1706,13 +1703,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .lock()
                     .unwrap()
                     .group
-                    .group_id(peer.store_id);
-                if let Some(group_id) = group_id {
+                    .group_id(self.fsm.peer.replication_mode_version, peer.store_id);
+                if group_id.unwrap_or(0) != 0 {
+                    info!("updating group"; "peer_id" => peer.id, "group_id" => group_id.unwrap());
                     self.fsm
                         .peer
                         .raft_group
                         .raft
-                        .assign_commit_groups(&[(peer.id, group_id)]);
+                        .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
                 }
                 if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
@@ -2405,8 +2403,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if prev_region.get_peers() != region.get_peers() {
             let mut state = self.ctx.global_replication_state.lock().unwrap();
-            let gb = state.calculate_commit_group(region.get_peers());
-            self.fsm.peer.raft_group.raft.assign_commit_groups(&gb);
+            let gb = state
+                .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());
+            self.fsm.peer.raft_group.raft.clear_commit_group();
+            self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
