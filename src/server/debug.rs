@@ -789,6 +789,53 @@ impl Debugger {
         ));
         Ok(res)
     }
+
+    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        let db = &self.engines.kv;
+        let mut num_entries = 0;
+        let mut mvcc_properties = MvccProperties::new();
+
+        let start = keys::data_key(start);
+        let end = keys::data_key(end);
+        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+        for (_, v) in collection.iter() {
+            num_entries += v.num_entries();
+            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
+            mvcc_properties.add(&mvcc);
+        }
+
+        let mut res: Vec<(String, String)> = [
+            ("num_files", collection.len() as u64),
+            ("num_entries", num_entries),
+            ("num_deletes", num_entries - mvcc_properties.num_versions),
+            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
+            ("mvcc.num_rows", mvcc_properties.num_rows),
+            ("mvcc.num_puts", mvcc_properties.num_puts),
+            ("mvcc.num_deletes", mvcc_properties.num_deletes),
+            ("mvcc.num_versions", mvcc_properties.num_versions),
+            ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+
+        res.push((
+            "sst_files".to_string(),
+            collection
+                .iter()
+                .map(|(k, _)| {
+                    Path::new(&*k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(&*k)
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+        Ok(res)
+    }
 }
 
 fn recover_mvcc_for_range(
