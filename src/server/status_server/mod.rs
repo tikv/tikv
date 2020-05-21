@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_stream::stream;
 use engine_traits::KvEngine;
 use futures03::compat::Compat01As03;
 use futures03::future::{ok, poll_fn};
@@ -144,7 +145,7 @@ where
     ) -> Result<Self> {
         let thread_pool = Builder::new()
             .threaded_scheduler()
-            .enable_io()
+            .enable_all()
             .core_threads(status_thread_pool_size)
             .thread_name("status-server")
             .on_thread_start(|| {
@@ -597,9 +598,8 @@ where
     pub fn start(&mut self, status_addr: String, security_config: &SecurityConfig) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
-        let incoming = AddrIncoming::bind(&addr)?;
+        let incoming = self.thread_pool.enter(|| AddrIncoming::bind(&addr))?;
         self.addr = Some(incoming.local_addr());
-
         if !security_config.cert_path.is_empty()
             && !security_config.key_path.is_empty()
             && !security_config.ca_path.is_empty()
@@ -608,7 +608,6 @@ where
             acceptor.set_ca_file(&security_config.ca_path)?;
             acceptor.set_certificate_chain_file(&security_config.cert_path)?;
             acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
-
             if !security_config.cert_allowed_cn.is_empty() {
                 let allowed_cn = security_config.cert_allowed_cn.clone();
                 // The verification callback to check if the peer CN is allowed.
@@ -641,9 +640,7 @@ where
                     verify_cb,
                 );
             }
-
             let acceptor = acceptor.build();
-
             let tls_incoming = tls_incoming(acceptor, incoming);
             let server = Server::builder(tls_incoming);
             self.start_serve(server);
@@ -659,31 +656,32 @@ where
 
 fn tls_incoming(
     acceptor: SslAcceptor,
-    incoming: AddrIncoming,
+    mut incoming: AddrIncoming,
 ) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
-    async fn async_tls_incoming(
-        acceptor: SslAcceptor,
-        mut incoming: AddrIncoming,
-    ) -> Option<std::io::Result<SslStream<AddrStream>>> {
-        let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await? {
-            Ok(stream) => stream,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(
-            tokio_openssl::accept(&acceptor, stream)
+    let s = stream! {
+        loop {
+            let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
+                Some(Ok(stream)) => stream,
+                Some(Err(e)) => {
+                    yield Err(e);
+                    continue;
+                }
+                None => break,
+            };
+            yield tokio_openssl::accept(&acceptor, stream)
                 .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error")),
-        )
-    }
-    TlsIncoming(async_tls_incoming(acceptor, incoming))
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error"));
+        }
+    };
+    TlsIncoming(s)
 }
 
 #[pin_project]
-struct TlsIncoming<Fut>(#[pin] Fut);
+struct TlsIncoming<S>(#[pin] S);
 
-impl<Fut> Accept for TlsIncoming<Fut>
+impl<S> Accept for TlsIncoming<S>
 where
-    Fut: Future<Output = Option<std::io::Result<SslStream<AddrStream>>>>,
+    S: Stream<Item = std::io::Result<SslStream<AddrStream>>>,
 {
     type Conn = SslStream<AddrStream>;
     type Error = std::io::Error;
@@ -692,7 +690,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context,
     ) -> Poll<Option<std::io::Result<Self::Conn>>> {
-        self.project().0.poll(cx)
+        self.project().0.poll_next(cx)
     }
 }
 
