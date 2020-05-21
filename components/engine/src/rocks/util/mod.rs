@@ -11,7 +11,6 @@ use rocksdb::{
     DB,
 };
 
-pub use crate::rocks::CFHandle;
 use engine_traits::CF_DEFAULT;
 
 pub struct CFOptions<'a> {
