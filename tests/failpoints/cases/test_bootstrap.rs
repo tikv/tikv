@@ -16,7 +16,7 @@ fn test_bootstrap_half_way_failure(fp: &str) {
     fail::cfg(fp, "return").unwrap();
     cluster.start().unwrap_err();
 
-    let engines = cluster.dbs[0].clone();
+    let engines = cluster.engines[&1].clone();
     let ident = engines
         .kv
         .c()

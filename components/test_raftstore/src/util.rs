@@ -8,6 +8,7 @@ use std::{thread, u64};
 use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{
     ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
@@ -17,6 +18,7 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use encryption::{FileConfig, MasterKeyConfig};
 use engine::rocks::DB;
 use engine::*;
 use engine_rocks::config::BlobRunMode;
@@ -470,7 +472,10 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-pub fn create_test_engine(
+// TODO: This function conflicts with `Cluster::create_engine`.
+// Need to switch to that implementation to handle encryption correctly.
+#[allow(dead_code)]
+fn create_test_engine(
     engines: Option<Engines>,
     router: RaftRouter<RocksSnapshot>,
     cfg: &TiKvConfig,
@@ -590,6 +595,20 @@ pub fn configure_for_enable_titan<T: Simulator>(
 
 pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.rocksdb.titan.enabled = false;
+}
+
+pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let master_key_file = manifest_dir.join("src/master-key.data");
+
+    let cfg = &mut cluster.cfg.security.encryption;
+    cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
+    cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
+    cfg.master_key = MasterKeyConfig::File {
+        config: FileConfig {
+            path: master_key_file.to_str().unwrap().to_owned(),
+        },
+    }
 }
 
 /// Keep putting random kvs until specified size limit is reached.

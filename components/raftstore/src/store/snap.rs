@@ -1135,6 +1135,12 @@ impl<E: KvEngine> SnapManager<E> {
     }
 
     pub fn init(&self) -> io::Result<()> {
+        let enc_enabled = self.core.encryption_key_manager.is_some();
+        info!(
+            "Initializing SnapManager, encryption is enabled: {}",
+            enc_enabled
+        );
+
         // Use write lock so only one thread initialize the directory at a time.
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);
