@@ -1534,7 +1534,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: region_id,
                         target: target.clone(),
-                        result_type: MergeResultKind::Stale,
+                        result: MergeResultKind::Stale,
                     }),
                 )
                 .unwrap();

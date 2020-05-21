@@ -1178,7 +1178,7 @@ fn send_merge_fail(
         PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
             target_region_id,
             target,
-            result_type: MergeResultKind::Stale,
+            result: MergeResultKind::Stale,
         }),
     ) {
         error!(

@@ -206,9 +206,7 @@ pub enum SignificantMsg {
     MergeResult {
         target_region_id: u64,
         target: metapb::Peer,
-        // True means it's a stale merge source.
-        // False means it came from target region.
-        result_type: MergeResultKind,
+        result: MergeResultKind,
     },
     StoreResolved {
         store_id: u64,

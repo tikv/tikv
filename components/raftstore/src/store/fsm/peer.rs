@@ -711,9 +711,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::MergeResult {
                 target_region_id,
                 target,
-                result_type,
+                result,
             } => {
-                self.on_merge_result(target_region_id, target, result_type);
+                self.on_merge_result(target_region_id, target, result);
             }
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
@@ -1580,7 +1580,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             meta.destroyed_region_for_snap
                 .insert(source_region_id, merge_to_this_peer);
 
-            let result_type = if merge_to_this_peer {
+            let result = if merge_to_this_peer {
                 MergeResultKind::FromTargetSnapshotStep1
             } else {
                 MergeResultKind::Stale
@@ -1592,7 +1592,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: self.fsm.region_id(),
                         target: self.fsm.peer.peer.clone(),
-                        result_type,
+                        result,
                     }),
                 )
                 .unwrap();
@@ -2364,7 +2364,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                 target_region_id: self.fsm.region_id(),
                 target: self.fsm.peer.peer.clone(),
-                result_type: MergeResultKind::FromTargetLog,
+                result: MergeResultKind::FromTargetLog,
             }),
         ) {
             // TODO: need to remove "are we shutting down", it should panic
@@ -2420,7 +2420,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         target_region_id: u64,
         target: metapb::Peer,
-        result_type: MergeResultKind,
+        result: MergeResultKind,
     ) {
         let exists = self
             .fsm
@@ -2431,7 +2431,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {:?}",
-                self.fsm.peer.tag, self.fsm.peer.pending_merge_state, target, result_type
+                self.fsm.peer.tag, self.fsm.peer.pending_merge_state, target, result
             );
         }
         // If the merge succeed, all source peers is impossible in apply snapshot state
@@ -2439,16 +2439,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.is_applying_snapshot() {
             panic!(
                 "{} is applying snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
-                self.fsm.peer.tag, target_region_id, target, result_type
+                self.fsm.peer.tag, target_region_id, target, result
             );
         }
         if !self.fsm.peer.is_initialized() {
             panic!(
                 "{} is not initialized on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
-                self.fsm.peer.tag, target_region_id, target, result_type
+                self.fsm.peer.tag, target_region_id, target, result
             );
         }
-        match result_type {
+        match result {
             MergeResultKind::FromTargetLog => {
                 info!(
                     "merge finished";
@@ -2583,7 +2583,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
                         target_region_id: self.fsm.region_id(),
                         target: self.fsm.peer.peer.clone(),
-                        result_type: MergeResultKind::FromTargetSnapshotStep2,
+                        result: MergeResultKind::FromTargetSnapshotStep2,
                     }),
                 )
                 .unwrap();
