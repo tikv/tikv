@@ -1372,15 +1372,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a638959aa96152c7a4cddf50fcb1e3fede0583b27157c26e67d6f99904090dc6"
 
 [[package]]
-name = "futures-locks"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c39a1b6098c88d3c8d26d450f74fcf7595df5b7751f0bb4e2662a0ee122a8aa3"
-dependencies = [
- "futures 0.1.29",
-]
-
-[[package]]
 name = "futures-macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1781,20 +1772,20 @@ dependencies = [
 
 [[package]]
 name = "hyper-openssl"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f52657b5cdb2a8067efd29a02e011b7cf656b473ec8a5c34e86645e85d763006"
+checksum = "ed123fc8c1833f305468df3c3a6a837c34a7ae616567d40a5e3c2bf3cac2e31d"
 dependencies = [
  "antidote",
- "bytes 0.4.12",
- "futures 0.1.29",
- "hyper 0.12.35",
- "lazy_static",
+ "bytes 0.5.3",
+ "http 0.2.0",
+ "hyper 0.13.3",
  "linked_hash_set",
+ "once_cell",
  "openssl",
  "openssl-sys",
- "tokio-io",
- "tokio-openssl 0.3.0",
+ "tokio 0.2.13",
+ "tokio-openssl",
 ]
 
 [[package]]
@@ -4659,12 +4650,12 @@ dependencies = [
  "futures 0.3.4",
  "futures-cpupool",
  "futures-executor",
- "futures-locks",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
- "hyper 0.12.35",
+ "hyper 0.13.3",
  "hyper-openssl",
+ "hyper-tls",
  "into_other",
  "itertools",
  "keys",
@@ -4725,7 +4716,7 @@ dependencies = [
  "tokio-core",
  "tokio-fs",
  "tokio-io",
- "tokio-openssl 0.2.1",
+ "tokio-openssl",
  "tokio-sync",
  "tokio-tcp",
  "tokio-threadpool",
@@ -4920,6 +4911,7 @@ checksum = "0fa5e81d6bc4e67fe889d5783bd2a128ab2e0cfa487e0be16b6a8d177b101616"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
+ "futures-core",
  "iovec",
  "lazy_static",
  "libc",
@@ -5031,24 +5023,12 @@ dependencies = [
 
 [[package]]
 name = "tokio-openssl"
-version = "0.2.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4646ae1fd623393de3d796ea53af75acd02938dd5579544fbd6d236d041978a6"
+checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
- "futures 0.1.29",
  "openssl",
- "tokio-io",
-]
-
-[[package]]
-name = "tokio-openssl"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "771d6246b170ae108d67d9963c23f31a579016c016d73bd4bd7d6ef0252afda7"
-dependencies = [
- "futures 0.1.29",
- "openssl",
- "tokio-io",
+ "tokio 0.2.13",
 ]
 
 [[package]]
