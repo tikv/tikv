@@ -14,16 +14,6 @@ use rocksdb::{
 pub use crate::rocks::CFHandle;
 use engine_traits::CF_DEFAULT;
 
-pub fn open_opt(
-    opts: DBOptions,
-    path: &str,
-    cfs: Vec<&str>,
-    cfs_opts: Vec<ColumnFamilyOptions>,
-) -> Result<DB> {
-    let db = DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())?;
-    Ok(db)
-}
-
 pub struct CFOptions<'a> {
     cf: &'a str,
     options: ColumnFamilyOptions,
