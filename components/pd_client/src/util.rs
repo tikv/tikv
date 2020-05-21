@@ -155,9 +155,9 @@ impl LeaderClient {
         self.inner.rl().members.get_leader().clone()
     }
 
-    /// Re-establishes connection with PD leader in synchronized fashion.
+    /// Re-establishes connection with PD leader in asynchronized fashion.
     pub async fn reconnect(&self) -> Result<()> {
-        let (fut, start) = {
+        let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -175,7 +175,7 @@ impl LeaderClient {
                 start,
             )
         };
-        let (client, members) = fut.await?;
+        let (client, members) = future.await?;
 
         {
             let mut inner = self.inner.wl();
@@ -416,10 +416,12 @@ async fn connect(
     };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    let handler = client
+    let response = client
         .get_members_async_opt(&GetMembersRequest::default(), option)
-        .unwrap();
-    match handler.compat().await {
+        .unwrap()
+        .compat()
+        .await;
+    match response {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
