@@ -165,17 +165,9 @@ impl ReadIndexQueue {
         T: IntoIterator<Item = (Uuid, u64)>,
     {
         for (uuid, index) in states {
-            // Read requests can be out-of-order even on leader.
-            // TODO: it's better to fix it in raft-rs to clear the read queue in `Raft`.
-            let mut potential_ready_idx = self.ready_cnt;
-            while potential_ready_idx < self.reads.len() {
-                if self.reads[potential_ready_idx].id == uuid {
-                    self.reads[potential_ready_idx].read_index = Some(index);
-                    self.ready_cnt = potential_ready_idx + 1;
-                    break;
-                }
-                potential_ready_idx += 1;
-            }
+            assert_eq!(uuid, self.reads[self.ready_cnt].id);
+            self.reads[self.ready_cnt].read_index = Some(index);
+            self.ready_cnt += 1;
         }
     }
 
