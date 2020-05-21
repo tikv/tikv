@@ -299,7 +299,6 @@ where
         }
     }
 
-    // It can only handle read command.
     pub fn propose_raft_command(
         &mut self,
         read_id: Option<ThreadReadId>,
@@ -313,14 +312,17 @@ where
                         .as_ref()
                         .map_or(false, |id| *id == self.cache_read_id)
                         && self.snap_cache.as_ref().map_or(false, |snap_cache| {
-                            snap_cache.get_ts() > delegate.last_valid_ts
+                            /// If this peer became Leader not long ago and just after the cached
+                            /// snapshot was created, this snapshot can not see all data of the peer.
+                            snap_cache.get_ts()
+                                > delegate.last_valid_ts
                         });
                     let snapshot_ts = if use_cache_snapshot {
                         self.snap_cache.as_ref().unwrap().get_ts()
                     } else {
                         monotonic_raw_now()
                     };
-                    if delegate.is_in_leader_lease(snapshot_ts.clone(), &mut self.metrics) {
+                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
                         let (mut response, need_snapshot) = ReadExecutor::<E>::execute(
                             &self.kv_engine,
@@ -399,6 +401,11 @@ where
         self.redirect(cmd);
     }
 
+    /// If read requests are received at the same RPC request, we can create one snapshot for all
+    /// of them and check whether the time when the snapshot was created is in lease. We use
+    /// ThreadReadId to figure out whether this RaftCommand comes from the same RPC request with
+    /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
+    /// by thread_id and a thread_local incremental sequence.
     #[inline]
     pub fn read(&mut self, read_id: Option<ThreadReadId>, cmd: RaftCommand<E::Snapshot>) {
         self.propose_raft_command(read_id, cmd);

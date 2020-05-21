@@ -68,7 +68,7 @@ where
     }
 
     pub fn get_ts(&self) -> Timespec {
-        self.ts.clone()
+        self.ts
     }
 
     #[inline]
@@ -174,7 +174,7 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
-            ts: self.ts.clone(),
+            ts: self.ts,
         }
     }
 }
