@@ -100,9 +100,10 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-
+    pub dbs: Vec<Engines>,
+    key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub engines: HashMap<u64, Engines>,
-    pub key_managers: HashMap<u64, Option<Arc<DataKeyManager>>>,
+    key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
 
     pub sim: Arc<RwLock<T>>,
@@ -123,8 +124,10 @@ impl<T: Simulator> Cluster<T> {
             leaders: HashMap::default(),
             count,
             paths: vec![],
+            dbs: vec![],
+            key_managers: vec![],
             engines: HashMap::default(),
-            key_managers: HashMap::default(),
+            key_managers_map: HashMap::default(),
             labels: HashMap::default(),
             sim,
             pd_client,
@@ -143,7 +146,19 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    fn create_engine(&mut self, node_id: u64) {
+    /// Engines in a just created cluster are not bootstraped, which means they are not associated
+    /// with a `node_id`. Call `Cluster::start` can bootstrap all nodes in the cluster.
+    ///
+    /// However sometimes a node can be bootstrapped externally. This function can be called to
+    /// mark them as bootstrapped in `Cluster`.
+    pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
+        let engines = self.dbs[offset].clone();
+        let key_mgr = self.key_managers[offset].clone();
+        assert!(self.engines.insert(node_id, engines).is_none());
+        assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
+    }
+
+    fn create_engine(&mut self) {
         let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
         let key_manager = DataKeyManager::from_config(
@@ -172,28 +187,43 @@ impl<T: Simulator> Cluster<T> {
                 .unwrap(),
         );
         let engines = Engines::new(engine, raft_engine, cache.is_some());
-
+        self.dbs.push(engines);
         self.paths.push(dir);
-        self.engines.insert(node_id, engines);
-        self.key_managers.insert(node_id, key_manager);
+        self.key_managers.push(key_manager);
     }
 
     pub fn create_engines(&mut self) {
-        for id in 1..=self.count {
-            if !self.engines.contains_key(&(id as u64)) {
-                self.create_engine(id as u64);
-            }
+        for _ in 0..self.count {
+            self.create_engine();
         }
     }
 
     pub fn start(&mut self) -> ServerResult<()> {
-        self.create_engines();
-
+        // Try recover from last shutdown.
         let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
             self.run_node(node_id)?;
         }
 
+        // Try start new nodes.
+        for _ in 0..self.count - self.engines.len() {
+            self.create_engine();
+            let engines = self.dbs.last().unwrap().clone();
+            let key_mgr = self.key_managers.last().unwrap().clone();
+            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+
+            let mut sim = self.sim.wl();
+            let node_id = sim.run_node(
+                0,
+                self.cfg.clone(),
+                engines.clone(),
+                key_mgr.clone(),
+                router,
+                system,
+            )?;
+            self.engines.insert(node_id, engines);
+            self.key_managers_map.insert(node_id, key_mgr);
+        }
         Ok(())
     }
 
@@ -228,7 +258,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
-        let key_mgr = self.key_managers[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
@@ -461,6 +491,13 @@ impl<T: Simulator> Cluster<T> {
     ///
     /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
+        for (i, engines) in self.dbs.iter().enumerate() {
+            let id = i as u64 + 1;
+            self.engines.insert(id, engines.clone());
+            self.key_managers_map
+                .insert(id, self.key_managers[i].clone());
+        }
+
         let mut region = metapb::Region::default();
         region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
@@ -485,6 +522,13 @@ impl<T: Simulator> Cluster<T> {
 
     // Return first region id.
     pub fn bootstrap_conf_change(&mut self) -> u64 {
+        for (i, engines) in self.dbs.iter().enumerate() {
+            let id = i as u64 + 1;
+            self.engines.insert(id, engines.clone());
+            self.key_managers_map
+                .insert(id, self.key_managers[i].clone());
+        }
+
         for (&id, engines) in &self.engines {
             bootstrap_store(&engines.c(), self.id(), id).unwrap();
         }
@@ -526,12 +570,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn add_new_engine(&mut self) -> u64 {
+        self.create_engine();
         self.count += 1;
         let node_id = self.count as u64;
-        self.create_engine(node_id);
 
-        let engines = self.engines[&node_id].clone();
+        let engines = self.dbs.last().unwrap().clone();
         bootstrap_store(&engines.c(), self.id(), node_id).unwrap();
+        self.engines.insert(node_id, engines);
+
+        let key_mgr = self.key_managers.last().unwrap().clone();
+        self.key_managers_map.insert(node_id, key_mgr);
 
         self.run_node(node_id).unwrap();
         node_id
@@ -861,7 +909,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
-        for engines in self.engines.values() {
+        for engines in &self.dbs {
             let handle = engines.kv.cf_handle(cf).unwrap();
             engines.kv.flush_cf(handle, sync).unwrap();
         }
