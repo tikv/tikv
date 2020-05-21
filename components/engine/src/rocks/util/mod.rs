@@ -8,7 +8,7 @@ use crate::Result;
 use rocksdb::load_latest_options;
 use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env,
-    SliceTransform, DB,
+    DB,
 };
 
 pub use crate::rocks::CFHandle;
@@ -205,72 +205,6 @@ pub fn db_exist(path: &str) -> bool {
     // but db has not been created, `DB::list_column_families` fails and we can clean up
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
-}
-
-pub struct FixedSuffixSliceTransform {
-    pub suffix_len: usize,
-}
-
-impl FixedSuffixSliceTransform {
-    pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform { suffix_len }
-    }
-}
-
-impl SliceTransform for FixedSuffixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        let mid = key.len() - self.suffix_len;
-        let (left, _) = key.split_at(mid);
-        left
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.suffix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct FixedPrefixSliceTransform {
-    pub prefix_len: usize,
-}
-
-impl FixedPrefixSliceTransform {
-    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform { prefix_len }
-    }
-}
-
-impl SliceTransform for FixedPrefixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        &key[..self.prefix_len]
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.prefix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct NoopSliceTransform;
-
-impl SliceTransform for NoopSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        key
-    }
-
-    fn in_domain(&mut self, _: &[u8]) -> bool {
-        true
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.

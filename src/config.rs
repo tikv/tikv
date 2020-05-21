@@ -30,7 +30,10 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::{
-    CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+    CFOptions
+};
+use engine_rocks::util::{
+    FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;

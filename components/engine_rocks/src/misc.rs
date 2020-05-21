@@ -132,7 +132,6 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
-    use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
@@ -271,7 +270,7 @@ mod tests {
         cf_opts
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
-                Box::new(rocks::util::FixedSuffixSliceTransform::new(8)),
+                Box::new(crate::util::FixedSuffixSliceTransform::new(8)),
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.

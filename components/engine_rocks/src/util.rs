@@ -11,7 +11,7 @@ use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
 use rocksdb::Range as RocksRange;
-use rocksdb::{CFHandle, DB};
+use rocksdb::{CFHandle, DB, SliceTransform};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -132,4 +132,70 @@ pub fn new_engine_opt(
 
 pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
     RocksRange::new(range.start_key, range.end_key)
+}
+
+pub struct FixedSuffixSliceTransform {
+    pub suffix_len: usize,
+}
+
+impl FixedSuffixSliceTransform {
+    pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
+        FixedSuffixSliceTransform { suffix_len }
+    }
+}
+
+impl SliceTransform for FixedSuffixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        let mid = key.len() - self.suffix_len;
+        let (left, _) = key.split_at(mid);
+        left
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.suffix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
+pub struct FixedPrefixSliceTransform {
+    pub prefix_len: usize,
+}
+
+impl FixedPrefixSliceTransform {
+    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
+        FixedPrefixSliceTransform { prefix_len }
+    }
+}
+
+impl SliceTransform for FixedPrefixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        &key[..self.prefix_len]
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.prefix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
+pub struct NoopSliceTransform;
+
+impl SliceTransform for NoopSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        key
+    }
+
+    fn in_domain(&mut self, _: &[u8]) -> bool {
+        true
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
 }
