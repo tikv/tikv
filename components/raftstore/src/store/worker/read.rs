@@ -312,10 +312,9 @@ where
                     let use_cache_snapshot = read_id
                         .as_ref()
                         .map_or(false, |id| *id == self.cache_read_id)
-                        && self
-                            .snap_cache
-                            .as_ref()
-                            .map_or(false, |snap_cache| snap_cache.get_ts() > delegate.last_valid_ts);
+                        && self.snap_cache.as_ref().map_or(false, |snap_cache| {
+                            snap_cache.get_ts() > delegate.last_valid_ts
+                        });
                     let snapshot_ts = if use_cache_snapshot {
                         self.snap_cache.as_ref().unwrap().get_ts()
                     } else {

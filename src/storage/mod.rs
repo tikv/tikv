@@ -304,7 +304,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command(
         &self,
-        gets: Vec<PointGetCommand>,
+        gets: Vec<GetRequest>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -318,31 +318,29 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut snaps = vec![];
                 for req in gets {
                     let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot_with_cache(engine, read_id.clone(), &req.ctx)
+                        Self::snapshot_with_cache(engine, read_id.clone(), req.get_context())
                     });
                     snaps.push((req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 for (mut req, snap) in snaps {
-                    let start_ts = req.ts.unwrap();
-                    let isolation_level = req.ctx.get_isolation_level();
-                    let fill_cache = !req.ctx.get_not_fill_cache();
-                    let bypass_locks = TsSet::vec_from_u64s(req.ctx.take_resolved_locks());
+                    let key = Key::from_raw(req.get_key());
+                    let mut ctx = req.take_context();
+                    let isolation_level = ctx.get_isolation_level();
+                    let fill_cache = !ctx.get_not_fill_cache();
+                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                     match snap.await {
                         Ok(snapshot) => {
                             let snap_store = SnapshotStore::new(
                                 snapshot,
-                                start_ts,
+                                req.get_version().into(),
                                 isolation_level,
                                 fill_cache,
                                 bypass_locks,
                                 false,
                             );
-                            results.push(
-                                snap_store
-                                    .get(&req.key, &mut statistics)
-                                    .map_err(Error::from),
-                            );
+                            results
+                                .push(snap_store.get(&key, &mut statistics).map_err(Error::from));
                         }
                         Err(e) => {
                             results.push(Err(e));
@@ -626,6 +624,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    fn raw_get_key_value(
+        snapshot: &E::Snap,
+        cf: String,
+        key: Vec<u8>,
+        stats: &mut Statistics,
+    ) -> Result<Option<Vec<u8>>> {
+        let cf = Self::rawkv_cf(&cf)?;
+        // no scan_count for this kind of op.
+
+        let key_len = key.len();
+        let r = snapshot.get_cf(cf, &Key::from_encoded(key))?;
+        if let Some(ref value) = r {
+            stats.data.flow_stats.read_keys = 1;
+            stats.data.flow_stats.read_bytes = key_len + value.len();
+        }
+        Ok(r)
+    }
+
     /// Get the value of a raw key.
     pub fn raw_get(
         &self,
@@ -650,27 +666,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let cf = Self::rawkv_cf(&cf)?;
-                    // no scan_count for this kind of op.
-
-                    let key_len = key.len();
-                    let r = snapshot.get_cf(cf, &Key::from_encoded(key))?;
-                    if let Some(ref value) = r {
-                        let mut stats = Statistics::default();
-                        stats.data.flow_stats.read_keys = 1;
-                        stats.data.flow_stats.read_bytes = key_len + value.len();
-                        tls_collect_read_flow(ctx.get_region_id(), &stats);
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    }
-
+                    let mut stats = Statistics::default();
+                    let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
-
-                    Ok(r)
+                    r
                 }
             },
             priority,
@@ -684,54 +690,56 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get the values of a set of raw keys, return a list of `Result`s.
     pub fn raw_batch_get_command(
         &self,
-        cf: String,
-        gets: Vec<PointGetCommand>,
+        gets: Vec<RawGetRequest>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
-        let ctx = gets[0].ctx.clone();
-        let priority = ctx.get_priority();
+        let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
         let res = self.read_pool.spawn_handle(
             async move {
-                for get in &gets {
-                    if let Ok(key) = get.key.to_owned().into_raw() {
-                        // todo no raw?
-                        tls_collect_qps(
-                            get.ctx.get_region_id(),
-                            get.ctx.get_peer(),
-                            &key,
-                            &key,
-                            false,
-                        );
-                    }
-                }
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
-
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
-                {
-                    let begin_instant = Instant::now_coarse();
-
-                    let cf = Self::rawkv_cf(&cf)?;
-                    let mut results = vec![];
-                    // TODO: optimize using seek.
-                    for get in gets {
-                        results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
-                    }
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.elapsed_secs());
-
-                    Ok(results)
+                let read_id = ThreadReadId::new();
+                let mut results = Vec::default();
+                let mut snaps = vec![];
+                for req in gets {
+                    let snap = Self::with_tls_engine(|engine| {
+                        Self::snapshot_with_cache(engine, read_id.clone(), req.get_context())
+                    });
+                    snaps.push((req, snap));
                 }
+                Self::with_tls_engine(|engine| engine.release_snapshot());
+                let begin_instant = Instant::now_coarse();
+                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(snaps.len() as f64);
+                for (mut req, snap) in snaps {
+                    let ctx = req.take_context();
+                    let cf = req.take_cf();
+                    let key = req.take_key();
+                    match snap.await {
+                        Ok(snapshot) => {
+                            let mut stats = Statistics::default();
+                            results.push(Self::raw_get_key_value(&snapshot, cf, key, &mut stats));
+                            tls_collect_read_flow(ctx.get_region_id(), &stats);
+                        }
+                        Err(e) => {
+                            results.push(Err(e));
+                        }
+                    }
+                }
+
+                SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(begin_instant.elapsed_secs());
+                SCHED_HISTOGRAM_VEC_STATIC
+                    .get(CMD)
+                    .observe(command_duration.elapsed_secs());
+                Ok(results)
             },
             priority,
             thread_rng().next_u64(),
@@ -1254,43 +1262,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 }
 
-/// Get a single value.
-pub struct PointGetCommand {
-    pub ctx: Context,
-    pub key: Key,
-    /// None if this is a raw get, Some if this is a transactional get.
-    pub ts: Option<TimeStamp>,
-}
-
-impl PointGetCommand {
-    pub fn from_get(request: &mut GetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            key: Key::from_raw(request.get_key()),
-            ts: Some(request.get_version().into()),
-        }
-    }
-
-    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            // FIXME: It is weird in semantics because the key in the request is actually in the
-            // raw format. We should fix it when the meaning of type `Key` is well defined.
-            key: Key::from_encoded(request.take_key()),
-            ts: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn from_key_ts(key: Key, ts: Option<TimeStamp>) -> Self {
-        PointGetCommand {
-            ctx: Context::default(),
-            key,
-            ts,
-        }
-    }
-}
-
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     match priority {
         CommandPri::Low => CommandPriority::low,
@@ -1654,8 +1625,8 @@ mod tests {
         );
         let x = storage
             .batch_get_command(vec![
-                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(1.into())),
-                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(1.into())),
+                create_get_request(b"c", 1),
+                create_get_request(b"d", 1),
             ])
             .wait()
             .unwrap();
@@ -2226,6 +2197,13 @@ mod tests {
         );
     }
 
+    fn create_get_request(key: &[u8], start_ts: u64) -> GetRequest {
+        let mut req = GetRequest::default();
+        req.set_key(key.to_owned());
+        req.set_version(start_ts);
+        req
+    }
+
     #[test]
     fn test_batch_get_command() {
         let storage = TestStorageBuilder::new().build().unwrap();
@@ -2247,8 +2225,8 @@ mod tests {
         rx.recv().unwrap();
         let mut x = storage
             .batch_get_command(vec![
-                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(2.into())),
-                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(2.into())),
+                create_get_request(b"c", 2),
+                create_get_request(b"d", 2),
             ])
             .wait()
             .unwrap();
@@ -2280,10 +2258,10 @@ mod tests {
         rx.recv().unwrap();
         let x: Vec<Option<Vec<u8>>> = storage
             .batch_get_command(vec![
-                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(5.into())),
-                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(5.into())),
-                PointGetCommand::from_key_ts(Key::from_raw(b"a"), Some(5.into())),
-                PointGetCommand::from_key_ts(Key::from_raw(b"b"), Some(5.into())),
+                create_get_request(b"c", 5),
+                create_get_request(b"x", 5),
+                create_get_request(b"a", 5),
+                create_get_request(b"b", 5),
             ])
             .wait()
             .unwrap()
@@ -2925,12 +2903,12 @@ mod tests {
             .map(|&(ref k, _)| {
                 let mut req = RawGetRequest::default();
                 req.set_key(k.clone());
-                PointGetCommand::from_raw_get(&mut req)
+                req
             })
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
         let x: Vec<Option<Vec<u8>>> = storage
-            .raw_batch_get_command("".to_string(), cmds)
+            .raw_batch_get_command(cmds)
             .wait()
             .unwrap()
             .into_iter()
@@ -4335,36 +4313,6 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-    }
-
-    #[test]
-    fn test_construct_point_get_command_from_get_request() {
-        let mut context = Context::default();
-        context.set_region_id(1);
-        let raw_key = b"raw_key".to_vec();
-        let version = 10;
-        let mut req = GetRequest::default();
-        req.set_context(context.clone());
-        req.set_key(raw_key.clone());
-        req.set_version(version);
-        let cmd = PointGetCommand::from_get(&mut req);
-        assert_eq!(cmd.ctx, context);
-        assert_eq!(cmd.key, Key::from_raw(&raw_key));
-        assert_eq!(cmd.ts, Some(TimeStamp::new(version)));
-    }
-
-    #[test]
-    fn test_construct_point_get_command_from_raw_get_request() {
-        let mut context = Context::default();
-        context.set_region_id(1);
-        let raw_key = b"raw_key".to_vec();
-        let mut req = RawGetRequest::default();
-        req.set_context(context.clone());
-        req.set_key(raw_key.clone());
-        let cmd = PointGetCommand::from_raw_get(&mut req);
-        assert_eq!(cmd.ctx, context);
-        assert_eq!(cmd.key.into_encoded(), raw_key);
-        assert_eq!(cmd.ts, None);
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {

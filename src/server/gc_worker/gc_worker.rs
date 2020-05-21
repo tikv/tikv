@@ -970,7 +970,7 @@ mod tests {
         fn async_snapshot(
             &self,
             ctx: &Context,
-            read_id: Option<ThreadReadId>,
+            _read_id: Option<ThreadReadId>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             self.0.async_snapshot(
