@@ -1408,6 +1408,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutted() => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
                 "[store {}] [region {}] unexpected redirect error: {:?}",
@@ -1790,13 +1791,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
+                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutted() => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
                     CasualMessage::GcSnap { snaps },
                 ))) => {
-                    if self.ctx.router.is_shutted() {
-                        return Ok(());
-                    }
-
                     // The snapshot exists because MsgAppend has been rejected. So the
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.

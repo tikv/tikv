@@ -239,7 +239,7 @@ where
     /// Try to notify all fsm that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
-        self.shutted.store(true, Ordering::Release);
+        self.shutted.store(true, Ordering::SeqCst);
         unsafe { &mut *self.caches.as_ptr() }.clear();
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.drain() {
