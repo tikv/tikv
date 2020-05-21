@@ -174,8 +174,8 @@ where
     tag: String,
 }
 
-impl<E: KvEngine> LocalReader<RaftRouter<E>, E> {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<E>) -> Self {
+impl<E: KvEngine, C: ProposalRouter<E::Snapshot>> LocalReader<C, E> {
+    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -292,7 +292,10 @@ where
             Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
             // It can not handle other policies.
             Ok(_) => {
-                self.metrics.rejected_by_epoch += delegate.rejected_by_appiled_term;
+                self.metrics.rejected_by_no_lease += delegate.rejected_by_no_lease;
+                self.metrics.rejected_by_appiled_term += delegate.rejected_by_appiled_term;
+                delegate.rejected_by_no_lease = 0;
+                delegate.rejected_by_appiled_term = 0;
                 Ok(None)
             }
             Err(e) => Err(e),
@@ -312,10 +315,9 @@ where
                         .as_ref()
                         .map_or(false, |id| *id == self.cache_read_id)
                         && self.snap_cache.as_ref().map_or(false, |snap_cache| {
-                            /// If this peer became Leader not long ago and just after the cached
-                            /// snapshot was created, this snapshot can not see all data of the peer.
-                            snap_cache.get_ts()
-                                > delegate.last_valid_ts
+                            // If this peer became Leader not long ago and just after the cached
+                            // snapshot was created, this snapshot can not see all data of the peer.
+                            snap_cache.get_ts() > delegate.last_valid_ts
                         });
                     let snapshot_ts = if use_cache_snapshot {
                         self.snap_cache.as_ref().unwrap().get_ts()
@@ -635,16 +637,8 @@ mod tests {
         let db =
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
-        let reader = LocalReader {
-            store_meta,
-            store_id: Cell::new(Some(store_id)),
-            router: ch,
-            kv_engine: RocksEngine::from_db(Arc::new(db)),
-            delegates: HashMap::default(),
-            last_read_ts: monotonic_raw_now(),
-            metrics: Default::default(),
-            tag: "foo".to_owned(),
-        };
+        let mut reader = LocalReader::new(RocksEngine::from_db(Arc::new(db)), store_meta, ch);
+        reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
 
@@ -740,12 +734,14 @@ mod tests {
             let mut meta = store_meta.lock().unwrap();
             let read_delegate = ReadDelegate {
                 tag: String::new(),
-                region: region1.clone(),
+                region: Arc::new(region1.clone()),
                 peer_id: leader2.get_id(),
                 term: term6,
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
+                rejected_by_appiled_term: 0,
+                rejected_by_no_lease: 0,
                 invalid: Arc::new(AtomicBool::new(false)),
             };
             meta.readers.insert(1, read_delegate);
@@ -877,8 +873,8 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task1);
-        reader.propose_raft_command(task_full);
+        reader.propose_raft_command(None, task1);
+        reader.propose_raft_command(None, task_full);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(reader.metrics.rejected_by_channel_full, 1);
