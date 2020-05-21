@@ -1802,35 +1802,44 @@ fn main() {
         let infile = matches.value_of("file").unwrap();
         let outfile = matches.value_of("out-file").unwrap();
         println!("infile: {}, outfile: {}", infile, outfile);
+
         let key_manager =
-            DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
-                .unwrap()
-                .unwrap();
-        let infile = Path::new(infile).canonicalize().unwrap();
-        let file_info = key_manager.get_file(infile.to_str().unwrap()).unwrap();
-        println!("file info of {:?}: {:?}", infile, file_info);
+            match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .expect("DataKeyManager::from_config should success")
+            {
+                Some(mgr) => mgr,
+                None => {
+                    println!("Encryption is disabled");
+                    println!("crc32: {}", calc_crc32(infile).unwrap());
+                    return;
+                }
+            };
+
+        let infile1 = Path::new(infile).canonicalize().unwrap();
+        let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
         let mthd = encryption_method_from_db_encryption_method(file_info.method);
         if mthd == EncryptionMethod::Plaintext {
             println!(
-                "The file is not encrypted, skip to decrypt it into {}",
-                outfile
+                "{} is not encrypted, skip to decrypt it into {}",
+                infile, outfile
             );
-        } else {
-            let mut outf = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(outfile)
-                .unwrap();
-
-            let iv = Iv::from_slice(&file_info.iv).unwrap();
-            let f = File::open(&infile).unwrap();
-            let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
-
-            io::copy(&mut reader, &mut outf).unwrap();
+            println!("crc32: {}", calc_crc32(infile).unwrap());
+            return;
         }
 
+        let mut outf = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(outfile)
+            .unwrap();
+
+        let iv = Iv::from_slice(&file_info.iv).unwrap();
+        let f = File::open(&infile).unwrap();
+        let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
+
+        io::copy(&mut reader, &mut outf).unwrap();
         println!("crc32: {}", calc_crc32(outfile).unwrap());
         return;
     }
