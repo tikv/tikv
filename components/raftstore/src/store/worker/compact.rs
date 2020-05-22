@@ -247,7 +247,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_rocks::util::get_cf_handle;
-    use engine::rocks::util::{new_engine, new_engine_opt, CFOptions};
+    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;

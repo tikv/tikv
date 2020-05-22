@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use engine::rocks;
 use engine_rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
@@ -166,7 +165,7 @@ fn test_delete_files_in_range_for_titan() {
     let shared_block_cache = false;
     let engines = Engines::new(
         Arc::new(
-            rocks::util::new_engine(
+            engine_rocks::raw_util::new_engine(
                 path.path().to_str().unwrap(),
                 Some(kv_db_opts),
                 ALL_CFS,
@@ -175,7 +174,7 @@ fn test_delete_files_in_range_for_titan() {
             .unwrap(),
         ),
         Arc::new(
-            rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+            engine_rocks::raw_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
         ),
         shared_block_cache,

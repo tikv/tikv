@@ -147,7 +147,7 @@ where
 mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
-    use engine::rocks::util::new_engine;
+    use engine_rocks::raw_util::new_engine;
     use engine::rocks::Writable;
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_RAFT};

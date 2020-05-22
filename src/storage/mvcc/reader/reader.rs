@@ -457,9 +457,9 @@ mod tests {
 
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use engine::rocks::util::CFOptions;
+    use engine_rocks::raw_util::CFOptions;
     use engine::rocks::DB;
-    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
@@ -668,7 +668,7 @@ mod tests {
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {

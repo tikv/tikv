@@ -29,7 +29,7 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine::rocks::util::{
+use engine_rocks::raw_util::{
     CFOptions
 };
 use engine_rocks::util::{
@@ -2609,7 +2609,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use engine::rocks::util::new_engine_opt;
+    use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use slog::Level;
     use std::sync::Arc;

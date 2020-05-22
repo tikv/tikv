@@ -717,7 +717,6 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable};
     use engine::Engines;
     use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
@@ -818,12 +817,12 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            rocks::util::CFOptions::new("default", cf_opts.clone()),
-            rocks::util::CFOptions::new("write", cf_opts.clone()),
-            rocks::util::CFOptions::new("lock", cf_opts.clone()),
-            rocks::util::CFOptions::new("raft", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("default", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("write", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("lock", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
+        let raft_cfs_opt = engine_rocks::raw_util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,

@@ -1433,8 +1433,7 @@ mod tests {
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
     use engine_traits::{CFHandleExt, Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1536,7 +1535,7 @@ mod tests {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocks::util::new_engine_opt(
+            engine_rocks::raw_util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![

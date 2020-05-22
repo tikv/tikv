@@ -120,7 +120,6 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use engine::rocks;
     use engine::Engines;
     use engine_rocks::{CloneCompat, Compat};
     use engine_traits::{Peekable, CF_DEFAULT};
@@ -130,7 +129,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
-            rocks::util::new_engine(
+            engine_rocks::raw_util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
                 &[CF_DEFAULT, CF_RAFT],
@@ -139,7 +138,7 @@ mod tests {
             .unwrap(),
         );
         let raft_engine = Arc::new(
-            rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+            engine_rocks::raw_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
         );
         let shared_block_cache = false;

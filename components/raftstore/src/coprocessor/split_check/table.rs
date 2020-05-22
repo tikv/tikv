@@ -233,7 +233,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks::util::new_engine;
+    use engine_rocks::raw_util::new_engine;
     use engine::rocks::Writable;
     use engine_rocks::Compat;
     use engine_traits::ALL_CFS;
