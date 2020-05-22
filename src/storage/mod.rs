@@ -1487,6 +1487,7 @@ mod tests {
     use crate::config::TitanDBConfig;
     use crate::storage::{
         config::BlockCacheConfig,
+        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
