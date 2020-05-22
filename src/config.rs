@@ -1992,6 +1992,10 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
+
+    #[doc(hidden)]
+    #[config(skip)]
+    pub dev_assert: bool,
 }
 
 impl Default for TiKvConfig {
@@ -2019,6 +2023,7 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
+            dev_assert: false,
         }
     }
 }

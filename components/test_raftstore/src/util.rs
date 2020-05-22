@@ -547,7 +547,7 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 pub fn do_not_ensure_all_target_peer_exist<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.ensure_all_target_peer_exist = false;
+    cluster.cfg.raft_store.merge_ensure_all_target_peer_exist = false;
     cluster.pd_client.do_not_ensure_all_target_peer_exist();
 }
 

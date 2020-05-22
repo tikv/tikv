@@ -127,6 +127,8 @@ impl Simulator for ServerCluster {
         router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
+        tikv_util::open_dev_assert();
+
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))

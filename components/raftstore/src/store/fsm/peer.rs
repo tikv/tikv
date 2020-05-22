@@ -31,7 +31,7 @@ use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
-use tikv_util::{escape, is_zero_duration};
+use tikv_util::{dev_assert_is_on, escape, is_zero_duration};
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -1327,8 +1327,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.is_local_merge_target_region_fresher(merge_target)? {
             Ok(true)
         } else {
-            if self.ctx.cfg.ensure_all_target_peer_exist {
-                debug_assert!(
+            if self.ctx.cfg.merge_ensure_all_target_peer_exist {
+                dev_assert!(
                     false,
                     "something is wrong, maybe PD do not ensure all target peers exist before merging"
                 );
@@ -1927,7 +1927,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
-            // Check peer id instead because it may be destroyed by receiving gc msg not applying conf change log.
+            // Check peer id because it may be destroyed by receiving gc msg not applying conf change log.
             if let Some(local_target_peer_id) =
                 util::find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
             {
@@ -2031,8 +2031,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             Ok(true) => Err(box_err!("region {} is destroyed", target_region_id)),
             Ok(false) => {
-                if self.ctx.cfg.ensure_all_target_peer_exist {
-                    debug_assert!(
+                if self.ctx.cfg.merge_ensure_all_target_peer_exist {
+                    dev_assert!(
                         false,
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
@@ -2739,7 +2739,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
-        debug_assert!(!self.fsm.stopped);
+        dev_assert!(!self.fsm.stopped);
         fail_point!("on_raft_gc_log_tick", |_| {});
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the

@@ -48,6 +48,7 @@ use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::dev_assert_is_on;
 use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -1404,7 +1405,7 @@ impl Peer {
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
+            dev_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1512,7 +1513,7 @@ impl Peer {
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
         if !raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(self.get_store().is_applying_snapshot());
+            dev_assert!(self.get_store().is_applying_snapshot());
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
@@ -2072,7 +2073,7 @@ impl Peer {
         }
 
         let read = self.pending_reads.back_mut().unwrap();
-        debug_assert!(read.read_index.is_none());
+        dev_assert!(read.read_index.is_none());
         self.raft_group.read_index(read.id.as_bytes().to_vec());
         debug!(
             "request to get a read index";

@@ -10,6 +10,7 @@ use crate::store::{Callback, Config};
 use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use tikv_util::collections::HashMap;
+use tikv_util::dev_assert_is_on;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
 use time::Timespec;
@@ -263,7 +264,7 @@ impl ReadIndexQueue {
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest) {
-        debug_assert!(read.read_index.is_some());
+        dev_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;

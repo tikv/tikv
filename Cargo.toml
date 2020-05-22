@@ -234,7 +234,7 @@ codegen-units = 4
 lto = false
 incremental = true
 panic = 'unwind'
-debug-assertions = true
+debug-assertions = false
 overflow-checks = false
 rpath = false
 

@@ -218,6 +218,10 @@ impl TiKVServer {
             info!("panic-when-unexpected-key-or-data is on");
             tikv_util::set_panic_when_unexpected_key_or_data(true);
         }
+        if config.dev_assert {
+            info!("dev-assert is on");
+            tikv_util::open_dev_assert();
+        }
 
         config.write_into_metrics();
 

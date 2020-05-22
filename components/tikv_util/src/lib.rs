@@ -109,6 +109,18 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
     Ok(())
 }
 
+static DEV_ASSERT: AtomicBool = AtomicBool::new(false);
+
+pub fn dev_assert_is_on() -> bool {
+    DEV_ASSERT.load(Ordering::SeqCst)
+}
+
+pub fn open_dev_assert() {
+    if !dev_assert_is_on() {
+        DEV_ASSERT.store(true, Ordering::SeqCst);
+    }
+}
+
 pub const NO_LIMIT: u64 = u64::MAX;
 
 pub trait AssertClone: Clone {}
