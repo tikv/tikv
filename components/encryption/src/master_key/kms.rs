@@ -251,7 +251,7 @@ impl KmsBackend {
                     // or corrupted, but it is also possible that the content is encrypted using the
                     // FileBackend. Return WrongMasterKey anyway.
                     Error::WrongMasterKey(box_err!("missing KMS vendor")),
-                )
+                );
             }
             other => {
                 return Err(box_err!(
