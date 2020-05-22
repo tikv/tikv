@@ -1531,9 +1531,9 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine_rocks::raw_util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
     use engine::Engines;
+    use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1867,8 +1867,9 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db =
-            Arc::new(engine_rocks::raw_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
+        let dst_db = Arc::new(
+            engine_rocks::raw_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap(),
+        );
         let options = ApplyOptions {
             db: dst_db.c().clone(),
             region,

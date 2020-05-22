@@ -29,14 +29,12 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::raw_util::{
-    CFOptions
-};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
+use engine_rocks::properties::MvccPropertiesCollectorFactory;
+use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
-use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::{
     RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,

@@ -8,13 +8,13 @@ use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
+use rocksdb::rocksdb::supported_compression;
 use rocksdb::DBCompressionType;
 use rocksdb::DBIterator;
 use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
 use rocksdb::DB;
 use rocksdb::{ColumnFamilyOptions, SstFileReader};
 use rocksdb::{Env, EnvOptions, SequentialFile, SstFileWriter};
-use rocksdb::rocksdb::supported_compression;
 use std::rc::Rc;
 use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since

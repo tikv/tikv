@@ -34,12 +34,22 @@ impl Transport for MockTransport {
 
 fn create_tmp_engine(dir: &TempDir) -> Engines {
     let db = Arc::new(
-        engine_rocks::raw_util::new_engine(dir.path().join("db").to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap(),
+        engine_rocks::raw_util::new_engine(
+            dir.path().join("db").to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+        )
+        .unwrap(),
     );
     let raft_db = Arc::new(
-        engine_rocks::raw_util::new_engine(dir.path().join("raft").to_str().unwrap(), None, &[], None)
-            .unwrap(),
+        engine_rocks::raw_util::new_engine(
+            dir.path().join("raft").to_str().unwrap(),
+            None,
+            &[],
+            None,
+        )
+        .unwrap(),
     );
     let shared_block_cache = false;
     Engines::new(db, raft_db, shared_block_cache)

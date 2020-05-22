@@ -577,7 +577,8 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
-            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                .unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,

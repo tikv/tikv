@@ -3,15 +3,15 @@
 use crate::cf_options::RocksColumnFamilyOptions;
 use crate::db_options::RocksDBOptions;
 use crate::engine::RocksEngine;
-use crate::rocks_metrics_defs::*;
 use crate::raw_util::new_engine as new_engine_raw;
 use crate::raw_util::new_engine_opt as new_engine_opt_raw;
 use crate::raw_util::CFOptions;
+use crate::rocks_metrics_defs::*;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
 use rocksdb::Range as RocksRange;
-use rocksdb::{CFHandle, DB, SliceTransform};
+use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
 

@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine::{DB};
+use engine::DB;
 use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},

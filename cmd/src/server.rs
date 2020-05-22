@@ -352,9 +352,12 @@ impl TiKVServer {
         let db_path = self
             .store_path
             .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine =
-            engine_rocks::raw_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-                .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let engines = engine::Engines::new(
             Arc::new(kv_engine),

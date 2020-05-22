@@ -138,8 +138,13 @@ mod tests {
             .unwrap(),
         );
         let raft_engine = Arc::new(
-            engine_rocks::raw_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
+            engine_rocks::raw_util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
         );
         let shared_block_cache = false;
         let engines = Engines::new(

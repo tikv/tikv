@@ -72,7 +72,8 @@ fn new_debug_executor(
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_db = engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db =
+                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
                 let db_path = PathBuf::from(format!("{}/../raft", kv_path))
@@ -84,7 +85,8 @@ fn new_debug_executor(
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
             let raft_db =
-                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
+                    .unwrap();
 
             Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),

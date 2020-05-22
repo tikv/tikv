@@ -253,12 +253,12 @@ mod tests {
     use super::super::size::tests::must_split_at;
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine_rocks::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
@@ -424,7 +424,8 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -470,7 +471,8 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();

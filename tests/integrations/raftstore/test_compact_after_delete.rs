@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::util::get_cf_handle;
 use engine::rocks::Range;
+use engine_rocks::util::get_cf_handle;
 use engine_traits::CF_WRITE;
 use keys::{data_key, DATA_MAX_KEY};
 use std::sync::mpsc;

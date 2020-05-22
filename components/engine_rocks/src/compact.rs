@@ -104,8 +104,8 @@ impl CompactExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::Compat;
     use crate::raw_util::{new_engine, CFOptions};
+    use crate::Compat;
     use engine_traits::CompactExt;
     use rocksdb::{ColumnFamilyOptions, Writable};
     use std::sync::Arc;

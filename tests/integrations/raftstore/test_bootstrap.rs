@@ -44,11 +44,13 @@ fn test_node_bootstrap_with_prepared_data() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine = Arc::new(
-        engine_rocks::raw_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+        engine_rocks::raw_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+        engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
+            .unwrap(),
     );
     let shared_block_cache = false;
     let engines = Engines::new(

@@ -11,10 +11,7 @@ use std::sync::Arc;
 
 use engine_traits::Result;
 use rocksdb::load_latest_options;
-use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env,
-    DB,
-};
+use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
 
 use engine_traits::CF_DEFAULT;
 
@@ -209,8 +206,8 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use engine_traits::CF_DEFAULT;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempfile::Builder;
 
     #[test]

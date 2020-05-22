@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use engine_rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
+use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
@@ -174,8 +174,13 @@ fn test_delete_files_in_range_for_titan() {
             .unwrap(),
         ),
         Arc::new(
-            engine_rocks::raw_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
+            engine_rocks::raw_util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
         ),
         shared_block_cache,
     );

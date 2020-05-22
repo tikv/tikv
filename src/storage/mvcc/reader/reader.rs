@@ -457,10 +457,10 @@ mod tests {
 
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use engine_rocks::raw_util::CFOptions;
     use engine::rocks::DB;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
+    use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
