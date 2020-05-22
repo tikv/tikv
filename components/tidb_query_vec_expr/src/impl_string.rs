@@ -38,7 +38,7 @@ pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
         // hex::decode will fail on odd-length content
         // but mysql won't
         // so do some padding
-        let mut padded_content = Vec::with_capacity(content.len() / 2 + content.len() % 2);
+        let mut padded_content = Vec::with_capacity(content.len() + content.len() % 2);
         if content.len() % 2 == 1 {
             padded_content.push(b'0')
         }
