@@ -15,9 +15,29 @@ pub struct StoreGroup {
     stores: HashMap<u64, u64>,
     label_key: String,
     version: u64,
+    dirty: bool,
 }
 
 impl StoreGroup {
+    /// Backs store labels.
+    ///
+    /// When using majority mode, labels still need to be backup for future
+    /// usage. Should only call it in majority mode.
+    pub fn backup_store_labels(&mut self, store: &mut metapb::Store) {
+        if self
+            .labels
+            .get(&store.id)
+            .map_or(false, |l| store.get_labels() == &**l)
+        {
+            return;
+        }
+
+        let labels = store.take_labels();
+        info!("backup store labels"; "store_id" => store.id, "labels" => ?labels);
+        self.labels.insert(store.id, labels.into());
+        self.dirty = true;
+    }
+
     /// Registers the store with given label value.
     ///
     /// # Panics
@@ -28,7 +48,7 @@ impl StoreGroup {
         store_id: u64,
         labels: Vec<metapb::StoreLabel>,
     ) -> Option<u64> {
-        info!("associated {} {:?}", store_id, labels);
+        info!("associated store labels"; "store_id" => store_id, "labels" => ?labels);
         let key = &self.label_key;
         match self.stores.entry(store_id) {
             HashMapEntry::Occupied(o) => {
@@ -90,9 +110,10 @@ impl StoreGroup {
         if status.get_mode() == ReplicationMode::Majority {
             return;
         }
-        if status.get_dr_auto_sync().label_key == self.label_key {
+        if status.get_dr_auto_sync().label_key == self.label_key && !self.dirty {
             return;
         }
+        self.dirty = false;
         let state_id = status.get_dr_auto_sync().state_id;
         if state_id <= self.version {
             // It should be checked by caller.
@@ -158,12 +179,20 @@ mod tests {
     use crate::store::util::new_peer;
     use kvproto::metapb;
     use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+    use std::panic;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
         let mut label = metapb::StoreLabel::default();
         label.key = key.to_owned();
         label.value = value.to_owned();
         label
+    }
+
+    fn new_store(id: u64, labels: Vec<metapb::StoreLabel>) -> metapb::Store {
+        let mut store = metapb::Store::default();
+        store.id = id;
+        store.set_labels(labels.into());
+        store
     }
 
     fn new_status(state_id: u64, key: &str) -> ReplicationStatus {
@@ -223,5 +252,66 @@ mod tests {
         state.set_status(status);
         let gb = state.calculate_commit_group(4, &[new_peer(1, 1), new_peer(2, 2), new_peer(3, 3)]);
         assert_eq!(*gb, vec![(3, 2)]);
+    }
+
+    fn validate_state(state: &GlobalReplicationState, version: u64, expected: &[u64]) {
+        for (i, exp) in expected.iter().enumerate() {
+            let exp = if *exp != 0 { Some(*exp) } else { None };
+            assert_eq!(exp, state.group.group_id(version, i as u64 + 1), "{}", i);
+        }
+    }
+
+    #[test]
+    fn test_backup_store_labels() {
+        let mut state = GlobalReplicationState::default();
+        let label1 = new_label("zone", "label 1");
+        let mut store = new_store(1, vec![label1.clone()]);
+        state.group.backup_store_labels(&mut store);
+        let label2 = new_label("zone", "label 2");
+        store = new_store(2, vec![label2.clone()]);
+        state.group.backup_store_labels(&mut store);
+        let label3 = new_label("host", "label 3");
+        let label4 = new_label("host", "label 4");
+        store = new_store(3, vec![label1.clone(), label3.clone()]);
+        state.group.backup_store_labels(&mut store);
+        store = new_store(4, vec![label2.clone(), label4.clone()]);
+        state.group.backup_store_labels(&mut store);
+        for i in 1..=4 {
+            assert_eq!(None, state.group.group_id(0, i));
+        }
+        let mut status = new_status(1, "zone");
+        state.group.recalculate(&status);
+        let mut expected = vec![2, 1, 2, 1];
+        validate_state(&state, 1, &expected);
+
+        // Backup store will not assign id immediately.
+        store = new_store(5, vec![label2.clone(), label4.clone()]);
+        state.group.backup_store_labels(&mut store);
+        assert_eq!(None, state.group.group_id(0, 5));
+        status = new_status(2, "zone");
+        state.group.recalculate(&status);
+        // Even though key is not changed, the backup store should be recalculated.
+        expected.push(1);
+        validate_state(&state, 2, &expected);
+
+        status = new_status(3, "host");
+        state.group.recalculate(&status);
+        expected = vec![0, 0, 2, 1, 1];
+        validate_state(&state, 3, &expected);
+
+        // If a store has no group id, it can still updates the labels.
+        assert_eq!(
+            Some(1),
+            state
+                .group
+                .register_store(1, vec![label1.clone(), label4.clone()])
+        );
+        // But a calculated group id can't be changed.
+        let res = panic_hook::recover_safe(move || {
+            state
+                .group
+                .register_store(1, vec![label1.clone(), label3.clone()])
+        });
+        assert!(res.is_err(), "existing group id can't be changed.");
     }
 }
