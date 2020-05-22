@@ -1333,6 +1333,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "something is wrong, maybe PD do not ensure all target peers exist before merging"
                 );
             }
+            error!(
+                "something is wrong, maybe PD do not ensure all target peers exist before merging"
+            );
             Ok(false)
         }
     }
@@ -1927,7 +1930,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
-            // Check peer id because it may be destroyed by receiving gc msg not applying conf change log.
+            // Check peer id because it may be destroyed by receiving gc msg rather than applying conf change log.
             if let Some(local_target_peer_id) =
                 util::find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
             {
@@ -2037,6 +2040,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
                 }
+                error!("something is wrong, maybe PD do not ensure all target peers exist before merging");
                 Ok(false)
             }
         }
