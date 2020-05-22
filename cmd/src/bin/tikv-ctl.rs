@@ -1801,7 +1801,7 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("decrypt-file") {
         let infile = matches.value_of("file").unwrap();
         let outfile = matches.value_of("out-file").unwrap();
-        println!("infile: {}, outfile: {}", infile, outfile);
+        v1!("infile: {}, outfile: {}", infile, outfile);
 
         let key_manager =
             match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
@@ -1809,8 +1809,8 @@ fn main() {
             {
                 Some(mgr) => mgr,
                 None => {
-                    println!("Encryption is disabled");
-                    println!("crc32: {}", calc_crc32(infile).unwrap());
+                    v1!("Encryption is disabled");
+                    v1!("crc32: {}", calc_crc32(infile).unwrap());
                     return;
                 }
             };
@@ -1820,11 +1820,12 @@ fn main() {
 
         let mthd = encryption_method_from_db_encryption_method(file_info.method);
         if mthd == EncryptionMethod::Plaintext {
-            println!(
+            v1!(
                 "{} is not encrypted, skip to decrypt it into {}",
-                infile, outfile
+                infile,
+                outfile
             );
-            println!("crc32: {}", calc_crc32(infile).unwrap());
+            v1!("crc32: {}", calc_crc32(infile).unwrap());
             return;
         }
 
@@ -1840,7 +1841,7 @@ fn main() {
         let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
 
         io::copy(&mut reader, &mut outf).unwrap();
-        println!("crc32: {}", calc_crc32(outfile).unwrap());
+        v1!("crc32: {}", calc_crc32(outfile).unwrap());
         return;
     }
 
