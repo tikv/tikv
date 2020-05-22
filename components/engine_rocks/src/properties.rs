@@ -624,8 +624,7 @@ mod tests {
     use test::Bencher;
 
     use crate::compat::Compat;
-    use engine::rocks;
-    use engine::rocks::util::CFOptions;
+    use crate::raw_util::CFOptions;
     use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
@@ -803,7 +802,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = ["a", "b", "c"];
         for &key in &cases {

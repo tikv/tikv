@@ -93,9 +93,8 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().sync_wal()?)
     }
 
-    #[allow(deprecated)]
     fn exists(path: &str) -> bool {
-        engine::rocks::util::db_exist(path)
+        crate::raw_util::db_exist(path)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -132,7 +131,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use crate::raw_util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
     use std::sync::Arc;
