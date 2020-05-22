@@ -65,6 +65,8 @@ impl AwsKms {
         Ok(())
     }
 
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
+    // a wrong master key has been used, or other error otherwise.
     fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: ciphertext.to_vec().into(),
@@ -237,10 +239,20 @@ impl KmsBackend {
         Ok(content)
     }
 
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
+    // a wrong master key has been used, or other error otherwise.
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
             // For now, we only support AWS.
             Some(val) if val.as_slice() == AWS_KMS_VENDOR_NAME => (),
+            None => {
+                return Err(
+                    // If vender is missing in metadata, it could be the encrypted content is invalid
+                    // or corrupted, but it is also possible that the content is encrypted using the
+                    // FileBackend. Return WrongMasterKey anyway.
+                    Error::WrongMasterKey(box_err!("missing KMS vendor")),
+                );
+            }
             other => {
                 return Err(box_err!(
                     "KMS vendor mismatch expect {:?} got {:?}",
@@ -278,6 +290,7 @@ impl Backend for KmsBackend {
 mod tests {
     use super::*;
     use hex::FromHex;
+    use matches::assert_matches;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
 
@@ -411,15 +424,33 @@ mod tests {
         vendor_not_found
             .metadata
             .remove(MetadataKey::KmsVendor.as_str());
-        backend.decrypt_content(&vendor_not_found).unwrap_err();
+        assert_matches!(
+            backend.decrypt_content(&vendor_not_found).unwrap_err(),
+            Error::WrongMasterKey(_)
+        );
+
+        let mut invalid_vendor = encrypted_content.clone();
+        let mut invalid_suffix = b"_invalid".to_vec();
+        invalid_vendor
+            .metadata
+            .get_mut(MetadataKey::KmsVendor.as_str())
+            .unwrap()
+            .append(&mut invalid_suffix);
+        assert_matches!(
+            backend.decrypt_content(&invalid_vendor).unwrap_err(),
+            Error::Other(_)
+        );
 
         let mut ciphertext_key_not_found = encrypted_content;
         ciphertext_key_not_found
             .metadata
             .remove(MetadataKey::KmsCiphertextKey.as_str());
-        backend
-            .decrypt_content(&ciphertext_key_not_found)
-            .unwrap_err();
+        assert_matches!(
+            backend
+                .decrypt_content(&ciphertext_key_not_found)
+                .unwrap_err(),
+            Error::Other(_)
+        );
     }
 
     #[test]
