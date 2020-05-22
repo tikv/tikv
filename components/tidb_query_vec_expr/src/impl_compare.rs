@@ -268,7 +268,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<O
                     Err(_) => {
                         return ctx
                             .handle_invalid_time_error(Error::invalid_time_format(&s))
-                            .map(|_| Ok(None))?;
+                            .map(|_| Ok(Some(s.to_owned().into_bytes())))?;
                     }
                 }
             }
@@ -351,7 +351,7 @@ pub fn least_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Opti
                     Err(_) => {
                         return ctx
                             .handle_invalid_time_error(Error::invalid_time_format(&s))
-                            .map(|_| Ok(None))?;
+                            .map(|_| Ok(Some(s.to_owned().into_bytes())))?;
                     }
                 }
             }

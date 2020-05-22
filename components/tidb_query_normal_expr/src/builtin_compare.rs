@@ -197,7 +197,7 @@ impl ScalarFunc {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
                     } else {
-                        return Ok(None);
+                        return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
                     }
                 }
             }
@@ -245,7 +245,7 @@ impl ScalarFunc {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
-                    _ => return Ok(None),
+                    _ => return Ok(Some(Cow::Owned(s.to_string().into_bytes()))),
                 },
             }
         }
