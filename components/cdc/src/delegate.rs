@@ -626,7 +626,7 @@ impl Delegate {
                 }
                 "" | "default" => {
                     let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
-                    let row = rows.entry(key.to_raw().unwrap()).or_default();
+                    let row = rows.entry(key.into_raw().unwrap()).or_default();
                     decode_default(put.take_value(), row);
                     total_size += row.value.len();
                 }
@@ -703,7 +703,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     };
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
-    row.key = key.truncate_ts().unwrap().to_raw().unwrap();
+    row.key = key.truncate_ts().unwrap().into_raw().unwrap();
     row.op_type = op_type.into();
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
@@ -729,7 +729,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     };
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
-    row.key = key.to_raw().unwrap();
+    row.key = key.into_raw().unwrap();
     row.op_type = op_type.into();
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
