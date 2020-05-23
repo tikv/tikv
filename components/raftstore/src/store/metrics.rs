@@ -205,21 +205,21 @@ lazy_static! {
     pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
-            "Bucketed histogram of peer commits logs duration",
+            "Bucketed histogram of peer commits logs duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
-            "Bucketed histogram of peer applying log duration",
+            "Bucketed histogram of peer applying log duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_wait_time_duration_secs",
-            "Bucketed histogram of apply task wait time duration",
+            "Bucketed histogram of apply task wait time duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
@@ -269,7 +269,7 @@ lazy_static! {
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_raft_process_duration_secs",
-            "Bucketed histogram of peer processing raft duration",
+            "Bucketed histogram of peer processing raft duration.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
@@ -277,7 +277,7 @@ lazy_static! {
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_propose_log_size",
-            "Bucketed histogram of peer proposing log size",
+            "Bucketed histogram of peer proposing log size.",
             vec![256.0, 512.0, 1024.0, 4096.0, 65536.0, 262144.0, 524288.0, 1048576.0,
                     2097152.0, 4194304.0, 8388608.0, 16777216.0]
         ).unwrap();
@@ -294,7 +294,7 @@ lazy_static! {
     pub static ref REGION_MAX_LOG_LAG: Histogram =
         register_histogram!(
             "tikv_raftstore_log_lag",
-            "Bucketed histogram of log lag in a region",
+            "Bucketed histogram of log lag in a region.",
             vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
                     512.0, 1024.0, 5120.0, 10240.0]
         ).unwrap();
@@ -302,7 +302,7 @@ lazy_static! {
     pub static ref REQUEST_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_request_wait_time_duration_secs",
-            "Bucketed histogram of request wait time duration",
+            "Bucketed histogram of request wait time duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
@@ -321,7 +321,7 @@ lazy_static! {
     pub static ref COMPACTION_RELATED_REGION_COUNT: HistogramVec =
         register_histogram_vec!(
             "compaction_related_region_count",
-            "Associated number of regions for each compaction job",
+            "Associated number of regions for each compaction job.",
             &["output_level"],
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
@@ -329,7 +329,7 @@ lazy_static! {
     pub static ref COMPACTION_DECLINED_BYTES: HistogramVec =
         register_histogram_vec!(
             "compaction_declined_bytes",
-            "total bytes declined for each compaction job",
+            "Total bytes declined for each compaction job.",
             &["output_level"],
             exponential_buckets(1024.0, 2.0, 30).unwrap()
         ).unwrap();
@@ -337,7 +337,7 @@ lazy_static! {
     pub static ref SNAPSHOT_CF_KV_COUNT_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",
-            "Total number of kv in each cf file of snapshot",
+            "Total number of kv in each cf file of snapshot.",
             &["type"],
             exponential_buckets(100.0, 2.0, 20).unwrap()
         ).unwrap();
@@ -347,7 +347,7 @@ lazy_static! {
     pub static ref SNAPSHOT_CF_SIZE_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_size",
-            "Total size of each cf file of snapshot",
+            "Total size of each cf file of snapshot.",
             &["type"],
             exponential_buckets(1024.0, 2.0, 31).unwrap()
         ).unwrap();
@@ -363,21 +363,21 @@ lazy_static! {
     pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_kv_count",
-            "Total number of kv in snapshot",
+            "Total number of kv in snapshot".,
             exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
         ).unwrap();
 
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_size",
-            "Size of snapshot",
+            "Size of snapshot.",
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
     pub static ref RAFT_ENTRY_FETCHES_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_entry_fetches",
-            "Total number of raft entry fetches",
+            "Total number of raft entry fetches.",
             &["type"]
         ).unwrap();
     pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
@@ -386,13 +386,13 @@ lazy_static! {
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",
-            "Total number of leader missed region"
+            "Total number of leader missed region."
         ).unwrap();
 
     pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(
             "tikv_snapshot_ingest_sst_duration_seconds",
-            "Bucketed histogram of rocksdb ingestion durations",
+            "Bucketed histogram of rocksdb ingestion durations.",
             exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
 
@@ -418,20 +418,20 @@ lazy_static! {
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(
             "tikv_raftstore_read_index_pending_duration",
-            "Duration of pending read index",
+            "Duration of pending read index.",
             exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_read_index_pending",
-            "Pending read index count"
+            "Pending read index count."
         ).unwrap();
 
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_apply_perf_context_time_duration_secs",
-            "Bucketed histogram of request wait time duration",
+            "Bucketed histogram of request wait time duration.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
@@ -439,7 +439,7 @@ lazy_static! {
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_store_perf_context_time_duration_secs",
-            "Bucketed histogram of request wait time duration",
+            "Bucketed histogram of request wait time duration.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
@@ -453,18 +453,26 @@ lazy_static! {
     pub static ref READ_QPS_TOPN: GaugeVec =
         register_gauge_vec!(
             "tikv_read_qps_topn",
-            "collect topN of read qps",
+            "Collect topN of read qps.",
         &["order"]
         ).unwrap();
 
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
-        "Total memory size of raft entries caches"
+        "Total memory size of raft entries caches."
         ).unwrap();
 
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_apply_pending_bytes",
-        "The bytes pending in the channel of apply FSMs"
+        "The bytes pending in the channel of apply FSMs."
     )
     .unwrap();
+
+
+    pub static ref FSM_RECEIVEED_MESSAGES_COUNTER: IntCounter = register_int_counter!(
+            "tikv_raftstore_fsm_message_total",
+            "The total number of messages received by fsm."
+    )
+    .unwrap();
+
 }
