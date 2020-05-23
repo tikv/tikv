@@ -13,7 +13,6 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::fsm::RaftRouter;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
     cmd_resp, Peer, ProposalRouter, RaftCommand, ReadExecutor, ReadResponse, RegionSnapshot,

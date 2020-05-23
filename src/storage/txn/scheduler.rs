@@ -48,6 +48,7 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
+use tikv_util::threadpool::ThreadReadId;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -327,8 +328,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
-        self.on_receive_new_cmd(cmd, callback);
+    pub fn run_cmd(&self, cmd: Command, batch_id: Option<ThreadReadId>, callback: StorageCallback) {
+        // write flow control
+        if cmd.need_flow_control() && self.inner.too_busy() {
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
+            callback.execute(ProcessResult::Failed {
+                err: StorageError::from(StorageErrorInner::SchedTooBusy),
+            });
+            return;
+        }
+        self.schedule_command(cmd, batch_id, callback);
     }
 }
 
@@ -359,13 +368,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
+    fn schedule_command(
+        &self,
+        cmd: Command,
+        batch_id: Option<ThreadReadId>,
+        callback: StorageCallback,
+    ) {
         let cid = self.inner.gen_id();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
-        let task = Task::new(cid, cmd);
+        let task = Task::new(cid, batch_id, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
         self.try_to_wake_up(cid);
@@ -383,24 +397,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCallback) {
-        // write flow control
-        if cmd.need_flow_control() && self.inner.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            callback.execute(ProcessResult::Failed {
-                err: StorageError::from(StorageErrorInner::SchedTooBusy),
-            });
-            return;
-        }
-        self.schedule_command(cmd, callback);
-    }
-
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
-        let task = self.inner.dequeue_task(cid);
+        let mut task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
+        let batch_id = task.batch_id.take();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
@@ -408,7 +411,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         });
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
+            if let Err(e) = engine.async_snapshot(&ctx, batch_id, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
@@ -453,7 +456,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap());
+            self.schedule_command(cmd, None, tctx.cb.unwrap());
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -492,7 +495,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb);
+                self.schedule_command(cmd, None, cb);
             } else {
                 cb.execute(pr);
             }

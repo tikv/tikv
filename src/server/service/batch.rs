@@ -9,20 +9,28 @@ use crate::storage::{
 use futures::Future;
 use kvproto::kvrpcpb::*;
 use tikv_util::mpsc::batch::Sender;
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::{duration_to_sec, Instant};
 
-#[derive(Default)]
 pub struct ReqBatcher {
+    batch_id: ThreadReadId,
     gets: Vec<GetRequest>,
     raw_gets: Vec<RawGetRequest>,
-    /// TODO: batch lock request
-    // locks: Vec<PessimisticLockRequest>,
     get_ids: Vec<u64>,
     raw_get_ids: Vec<u64>,
-    // lock_ids: Vec<u64>,
 }
 
 impl ReqBatcher {
+    pub fn new() -> ReqBatcher {
+        ReqBatcher {
+            batch_id: ThreadReadId::new(),
+            gets: vec![],
+            raw_gets: vec![],
+            get_ids: vec![],
+            raw_get_ids: vec![],
+        }
+    }
+
     pub fn can_batch_get(&self, req: &GetRequest) -> bool {
         req.get_context().get_priority() == CommandPri::Normal
     }
@@ -56,6 +64,10 @@ impl ReqBatcher {
             let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
         }
+    }
+
+    pub fn get_batch_id(&self) -> ThreadReadId {
+        self.batch_id.clone()
     }
 
     pub fn commit<E: Engine, L: LockManager>(

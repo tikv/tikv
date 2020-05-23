@@ -1244,6 +1244,7 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
+                    None,
                     Box::new(move |res| tx.send(res).unwrap()),
                 )
                 .unwrap();

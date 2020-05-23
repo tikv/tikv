@@ -47,6 +47,7 @@ fn test_scheduler_leader_change_twice() {
                 TimeStamp::default(),
                 ctx0,
             ),
+            None,
             Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
             }),
@@ -218,6 +219,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            None,
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![None]),
@@ -239,6 +241,7 @@ fn test_pipelined_pessimistic_lock() {
                 11.into(),
                 Context::default(),
             ),
+            None,
             expect_ok_callback(tx.clone(), 0),
         )
         .unwrap();
@@ -246,6 +249,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::Commit::new(vec![key.clone()], 10.into(), 20.into(), Context::default()),
+            None,
             expect_ok_callback(tx.clone(), 0),
         )
         .unwrap();
@@ -256,6 +260,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            None,
             expect_fail_callback(tx.clone(), 0, |_| ()),
         )
         .unwrap();
@@ -268,6 +273,7 @@ fn test_pipelined_pessimistic_lock() {
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                None,
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
                     PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -291,6 +297,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            None,
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -312,6 +319,7 @@ fn test_pipelined_pessimistic_lock() {
                 60,
                 true,
             ),
+            None,
             expect_pessimistic_lock_res_callback(
                 tx,
                 PessimisticLockRes::Values(vec![Some(val), None]),
