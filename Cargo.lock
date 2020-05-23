@@ -3956,6 +3956,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
  "tokio-sync",
  "txn_types",
  "uuid",
