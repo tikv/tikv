@@ -118,7 +118,7 @@ pub trait ArgDef: std::fmt::Debug {}
 ///
 /// For example, if an RPN function foo(Int, Real, Decimal) is applied to input of a scalar of
 /// integer, a vector of reals and a vector of decimals, the constructed `ArgDef` will be
-/// `Arg<ScalarArg<Int>, Arg<VectorValue<Real>, Arg<VectorValue<Decimal>, Null>>>`. `Null`
+/// `Arg<ScalarArg<Int>, <Arg<VectorValue<Real>, Arg<VectorValue<Decimal>, Null>>>`. `Null`
 /// indicates the end of the argument list.
 #[derive(Debug)]
 pub struct Arg<A: RpnFnArg, Rem: ArgDef> {
