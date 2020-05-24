@@ -33,6 +33,24 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(content) = arg {
+        // hex::decode will fail on odd-length content
+        // but mysql won't
+        // so do some padding
+        let mut padded_content = Vec::with_capacity(content.len() + content.len() % 2);
+        if content.len() % 2 == 1 {
+            padded_content.push(b'0')
+        }
+        padded_content.extend_from_slice(content);
+        Ok(hex::decode(padded_content).ok())
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
 }
@@ -643,6 +661,35 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
+    #[test]
+    fn test_unhex() {
+        let cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"GG".to_vec()), None),
+            (
+                hex_str_arg(&Some(b"string".to_vec())).unwrap(),
+                Some(b"string".to_vec()),
+            ),
+            (
+                hex_str_arg(&Some(b"1267".to_vec())).unwrap(),
+                Some(b"1267".to_vec()),
+            ),
+            (Some(b"41\0".to_vec()), None),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"b".to_vec()), Some(vec![0xb])),
+            (Some(b"a1b".to_vec()), Some(vec![0xa, 0x1b])),
+            (None, None),
+        ];
+        for (arg, expect_output) in cases {
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
