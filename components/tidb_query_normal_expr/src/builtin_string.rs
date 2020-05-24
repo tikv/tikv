@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::i64;
 use std::iter;
 
+use bstr::ByteVec;
 use hex::{self, FromHex};
 
 use tidb_query_datatype::prelude::*;
@@ -1000,6 +1001,45 @@ impl ScalarFunc {
             .position(|str_in_set| str_in_set == s)
             .map(|p| p as i64 + 1)
             .or(Some(0)))
+    }
+
+    #[inline]
+    pub fn insert_utf8<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let mut length = try_opt!(self.children[2].eval_int(ctx, row));
+        let newstr = try_opt!(self.children[3].eval_string_and_decode(ctx, row));
+        let input_length = s.chars().count() as i64;
+
+        if pos < 1 || pos > input_length {
+            return Ok(Some(Cow::Owned(s.as_bytes().to_vec())));
+        }
+
+        if length > input_length - pos + 1 || length < 0 {
+            length = input_length - pos + 1
+        }
+
+        let mut inserted = Vec::new();
+        inserted.extend_from_slice(
+            s.chars()
+                .take(pos as usize - 1)
+                .collect::<String>()
+                .into_bytes()
+                .as_vec(),
+        );
+        inserted.extend_from_slice(&newstr.as_bytes());
+        inserted.extend_from_slice(
+            &s.chars()
+                .skip(pos as usize + length as usize - 1)
+                .collect::<String>()
+                .into_bytes()
+                .as_vec(),
+        );
+        Ok(Some(Cow::Owned(inserted)))
     }
 }
 
@@ -3555,6 +3595,71 @@ mod tests {
         for (s, sl, exp) in null_cases {
             let got = eval_func(ScalarFuncSig::FindInSet, &[s, sl]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_insert_utf8() {
+        let cases = vec![
+            ("我叫小雨呀", 3, 2, "王雨叶", "我叫王雨叶呀"),
+            ("我叫小雨呀", -1, 2, "王雨叶", "我叫小雨呀"),
+            ("我叫小雨呀", 3, 100, "王雨叶", "我叫王雨叶"),
+            ("我叫小雨呀", 3, -1, "王雨叶", "我叫王雨叶"),
+            ("我叫小雨呀", 3, 1, "王雨叶", "我叫王雨叶雨呀"),
+        ];
+
+        for (input_s, pos, length, newstr, input_expected) in cases {
+            let s = Datum::Bytes(input_s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let length = Datum::I64(length);
+            let newstr = Datum::Bytes(newstr.as_bytes().to_vec());
+            let expected = Datum::Bytes(input_expected.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::InsertUtf8, &[s, pos, length, newstr]).unwrap();
+            assert_eq!(got, expected)
+        }
+
+        let null_cases = vec![
+            (
+                Datum::Null,
+                Datum::I64(3),
+                Datum::I64(100),
+                Datum::Bytes("王雨叶".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("我叫小雨呀".as_bytes().to_vec()),
+                Datum::Null,
+                Datum::I64(4),
+                Datum::Bytes("王雨叶".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("我叫小雨呀".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Null,
+                Datum::Bytes("王雨叶".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("我叫小雨呀".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::I64(4),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes("我叫小雨呀".as_bytes().to_vec()),
+                Datum::I64(-1),
+                Datum::Null,
+                Datum::Bytes("王雨叶".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("我叫小雨呀".as_bytes().to_vec()),
+                Datum::I64(-1),
+                Datum::I64(2),
+                Datum::Null,
+            ),
+        ];
+
+        for (s, pos, length, newstr) in null_cases {
+            let got = eval_func(ScalarFuncSig::InsertUtf8, &[s, pos, length, newstr]).unwrap();
+            assert_eq!(got, Datum::Null);
         }
     }
 }

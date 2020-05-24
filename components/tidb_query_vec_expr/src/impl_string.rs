@@ -618,6 +618,50 @@ pub fn from_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn insert_utf8(
+    s: &Option<Bytes>,
+    pos: &Option<Int>,
+    length: &Option<Int>,
+    newstr: &Option<Bytes>,
+) -> Result<Option<Bytes>> {
+    Ok(match (s, pos, length, newstr) {
+        (Some(s), Some(pos), Some(length), Some(newstr)) => {
+            let s = String::from_utf8_lossy(s);
+            let pos = *pos;
+            let mut length = *length;
+            let newstr = String::from_utf8_lossy(newstr);
+            let input_length = s.len() as i64;
+
+            if pos < 1 || pos > input_length {
+                return Ok(Some(s.as_bytes().to_vec()));
+            }
+
+            if length > input_length - pos + 1 || length < 0 {
+                length = input_length - pos + 1
+            }
+
+            let mut inserted = Vec::new();
+            inserted.extend_from_slice(
+                s.chars()
+                    .take(pos as usize - 1)
+                    .collect::<String>()
+                    .as_bytes(),
+            );
+            inserted.extend_from_slice(&newstr.as_bytes());
+            inserted.extend_from_slice(
+                &s.chars()
+                    .skip(pos as usize + length as usize - 1)
+                    .collect::<String>()
+                    .as_bytes(),
+            );
+            Some(inserted)
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2375,5 +2419,80 @@ mod tests {
             .evaluate(ScalarFuncSig::FromBase64)
             .unwrap();
         assert_eq!(invalid_base64_output, Some(b"".to_vec()));
+    }
+
+    #[test]
+    fn test_insert_utf8() {
+        let tests = vec![
+            ("我叫小雨呀", 3, 2, "王雨叶", "我叫王雨叶呀"),
+            ("我叫小雨呀", -1, 2, "王雨叶", "我叫小雨呀"),
+            ("我叫小雨呀", 3, 100, "王雨叶", "我叫王雨叶"),
+            ("我叫小雨呀", 3, -1, "王雨叶", "我叫王雨叶"),
+            ("我叫小雨呀", 3, 1, "王雨叶", "我叫王雨叶雨呀"),
+        ];
+        for (s, pos, length, newstr, expected) in tests {
+            let s = Some(s.to_string().into_bytes());
+            let pos = Some(pos);
+            let length = Some(length);
+            let newstr = Some(newstr.to_string().into_bytes());
+            let expected = Some(expected.to_string().into_bytes());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(pos)
+                .push_param(length)
+                .push_param(newstr)
+                .evaluate::<Bytes>(ScalarFuncSig::InsertUtf8)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        let null_tests = vec![
+            (
+                None,
+                Some(3),
+                Some(100),
+                Some("王雨叶".to_string().into_bytes()),
+            ),
+            (
+                Some("我叫小雨呀".to_string().into_bytes()),
+                None,
+                Some(4),
+                Some("王雨叶".to_string().into_bytes()),
+            ),
+            (
+                Some("我叫小雨呀".to_string().into_bytes()),
+                Some(3),
+                None,
+                Some("王雨叶".to_string().into_bytes()),
+            ),
+            (
+                Some("我叫小雨呀".to_string().into_bytes()),
+                Some(3),
+                Some(4),
+                None,
+            ),
+            (
+                Some("我叫小雨呀".to_string().into_bytes()),
+                Some(-1),
+                None,
+                Some("王雨叶".to_string().into_bytes()),
+            ),
+            (
+                Some("我叫小雨呀".to_string().into_bytes()),
+                Some(-1),
+                Some(4),
+                None,
+            ),
+        ];
+        for (s, pos, length, newstr) in null_tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(pos)
+                .push_param(length)
+                .push_param(newstr)
+                .evaluate::<Bytes>(ScalarFuncSig::InsertUtf8)
+                .unwrap();
+            assert_eq!(output, None);
+        }
     }
 }
