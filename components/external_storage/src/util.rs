@@ -5,6 +5,7 @@ use super::READ_BUF_SIZE;
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
+use rand::{thread_rng, Rng};
 use std::{
     future::Future,
     io, iter,
@@ -92,7 +93,8 @@ pub trait RetryError {
 /// Retries a future execution.
 ///
 /// This method implements truncated exponential back-off retry strategies outlined in
-/// https://docs.aws.amazon.com/general/latest/gr/api-retries.html.
+/// https://docs.aws.amazon.com/general/latest/gr/api-retries.html and
+/// https://cloud.google.com/storage/docs/exponential-backoff
 /// Since rusoto does not have transparent auto-retry (https://github.com/rusoto/rusoto/issues/234),
 /// we need to implement this manually.
 pub async fn retry<G, T, F, E>(mut action: G) -> Result<T, E>
@@ -101,16 +103,17 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    const MAX_RETRY_DELAY: Duration = Duration::from_secs(1);
+    const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
     const MAX_RETRY_TIMES: usize = 4;
-    let mut retry_wait_dur = Duration::from_millis(100);
+    let mut retry_wait_dur = Duration::from_secs(1);
     let mut result = Err(E::PLACEHOLDER);
 
     for _ in 0..MAX_RETRY_TIMES {
         result = action().await;
         if let Err(e) = &result {
             if e.is_retryable() {
-                delay_for(retry_wait_dur).await;
+                delay_for(retry_wait_dur + Duration::from_millis(thread_rng().gen_range(0, 1000)))
+                    .await;
                 retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
                 continue;
             }
