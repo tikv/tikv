@@ -18,7 +18,7 @@ use rusoto_util::new_client;
 
 use super::{
     util::{block_on_external_io, error_stream, retry, RetryError},
-    ExternalStorage, READ_BUF_SIZE,
+    ExternalStorage,
 };
 use kvproto::backup::S3 as Config;
 
@@ -106,6 +106,10 @@ struct S3Uploader<'client> {
     parts: Vec<CompletedPart>,
 }
 
+/// Specifies the minimum size to use multi-part upload.
+/// AWS S3 requires each part to be at least 5 MiB.
+const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
+
 impl<'client> S3Uploader<'client> {
     /// Creates a new uploader with a given target location and upload configuration.
     fn new(client: &'client S3Client, config: &Config, key: String) -> Self {
@@ -136,7 +140,7 @@ impl<'client> S3Uploader<'client> {
         reader: &mut (dyn AsyncRead + Unpin),
         est_len: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if est_len <= READ_BUF_SIZE as u64 {
+        if est_len <= MINIMUM_PART_SIZE as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -146,7 +150,7 @@ impl<'client> S3Uploader<'client> {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry(|| self.begin()).await?;
             let upload_res = async {
-                let mut buf = vec![0; READ_BUF_SIZE];
+                let mut buf = vec![0; MINIMUM_PART_SIZE];
                 let mut part_number = 1;
                 loop {
                     let data_size = reader.read(&mut buf).await?;
