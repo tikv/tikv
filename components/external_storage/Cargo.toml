@@ -16,7 +16,8 @@ futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-reqwest = { version = "0.10.4", features = ["stream"] }
+hyper = "0.13.3"
+hyper-tls = "0.4.1"
 rand = "0.7"
 rusoto_core = "0.43.0"
 rusoto_s3 = "0.43.0"
