@@ -12,7 +12,9 @@ use std::{
     pin::Pin,
     sync::Mutex,
     task::{Context, Poll},
+    time::Duration,
 };
+use tokio::{runtime::Builder, time::delay_for};
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
@@ -69,11 +71,51 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
     // we need a Tokio runtime rather than futures_executor::block_on because
     // Tokio futures require Tokio executor.
-    tokio::runtime::Builder::new()
+    Builder::new()
         .basic_scheduler()
         .enable_io()
         .enable_time()
         .build()
         .expect("failed to create Tokio runtime")
         .block_on(f)
+}
+
+/// Trait for errors which can be retried inside [`retry()`].
+pub trait RetryError {
+    /// A placeholder to indicate an uninitialized error.
+    const PLACEHOLDER: Self;
+
+    /// Returns whether this error can be retried.
+    fn is_retryable(&self) -> bool;
+}
+
+/// Retries a future execution.
+///
+/// This method implements truncated exponential back-off retry strategies outlined in
+/// https://docs.aws.amazon.com/general/latest/gr/api-retries.html.
+/// Since rusoto does not have transparent auto-retry (https://github.com/rusoto/rusoto/issues/234),
+/// we need to implement this manually.
+pub async fn retry<G, T, F, E>(mut action: G) -> Result<T, E>
+where
+    G: FnMut() -> F,
+    F: Future<Output = Result<T, E>>,
+    E: RetryError,
+{
+    const MAX_RETRY_DELAY: Duration = Duration::from_secs(1);
+    const MAX_RETRY_TIMES: usize = 4;
+    let mut retry_wait_dur = Duration::from_millis(100);
+    let mut result = Err(E::PLACEHOLDER);
+
+    for _ in 0..MAX_RETRY_TIMES {
+        result = action().await;
+        if let Err(e) = &result {
+            if e.is_retryable() {
+                delay_for(retry_wait_dur).await;
+                retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
+                continue;
+            }
+        }
+    }
+
+    result
 }
