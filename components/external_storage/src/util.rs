@@ -118,6 +118,7 @@ where
                 continue;
             }
         }
+        break;
     }
 
     result
