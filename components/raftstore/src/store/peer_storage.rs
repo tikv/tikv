@@ -1281,6 +1281,10 @@ where
             region_id: self.get_region_id(),
             status,
         };
+
+        // Don't schedule the snapshot to region worker.
+        fail_point!("skip_schedule_applying_snapshot", |_| {});
+
         // TODO: gracefully remove region instead.
         if let Err(e) = self.region_sched.schedule(task) {
             info!(
