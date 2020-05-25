@@ -18,17 +18,11 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-<<<<<<< HEAD
+use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::DB;
 use engine::*;
-=======
-use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
-use engine::rocks::DB;
-use engine::*;
-use engine_rocks::config::BlobRunMode;
 use engine_rocks::encryption::get_env;
->>>>>>> 83ccb38... snapshot: encrypt lock cf correctly in receiving (#7885)
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Iterable, Peekable};
@@ -480,13 +474,8 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 }
 
 pub fn create_test_engine(
-<<<<<<< HEAD
-    engines: Option<Engines>,
-    router: RaftRouter<RocksEngine>,
-=======
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksSnapshot>>,
->>>>>>> 83ccb38... snapshot: encrypt lock cf correctly in receiving (#7885)
+    router: Option<RaftRouter<RocksEngine>>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<Arc<DataKeyManager>>, TempDir) {
     let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();

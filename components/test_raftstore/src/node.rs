@@ -169,12 +169,8 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
-<<<<<<< HEAD
-        router: RaftRouter<RocksEngine>,
-=======
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
->>>>>>> 83ccb38... snapshot: encrypt lock cf correctly in receiving (#7885)
+        router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));

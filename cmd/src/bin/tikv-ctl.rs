@@ -29,12 +29,8 @@ use encryption::{
 use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
-<<<<<<< HEAD
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys;
-=======
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
->>>>>>> 83ccb38... snapshot: encrypt lock cf correctly in receiving (#7885)
+use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
