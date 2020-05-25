@@ -304,7 +304,7 @@ fn test_read_index_out_of_order() {
     let filter = Box::new(
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Recv)
-            .msg_type(MessageType::MsgHeartbeatResponse)
+            .msg_type(MessageType::MsgHeartbeatResponse),
     );
     cluster.sim.wl().add_recv_filter(1, filter);
 
