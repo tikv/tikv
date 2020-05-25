@@ -1972,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0f5ffe4596777255953000469d6e2a1b9b84d991"
+source = "git+https://github.com/pingcap/kvproto.git#6a4d5c264a8bb3d3dbd1d3346d195f163659b16c"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2625,6 +2625,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",

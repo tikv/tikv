@@ -93,6 +93,11 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().sync_wal()?)
     }
 
+    #[allow(deprecated)]
+    fn exists(path: &str) -> bool {
+        engine::rocks::util::db_exist(path)
+    }
+
     fn dump_stats(&self) -> Result<String> {
         const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
         const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";

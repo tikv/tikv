@@ -231,7 +231,7 @@ impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK>,
+    R: CasualRouter<EK::Snapshot>,
 {
     /// Generates the snapshot of the Region.
     fn generate_snap(
@@ -569,7 +569,7 @@ impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK>,
+    R: CasualRouter<EK::Snapshot>,
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
@@ -630,7 +630,7 @@ impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    R: CasualRouter<EK::Snapshot> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
@@ -695,7 +695,7 @@ impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, 
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
+    R: CasualRouter<EK::Snapshot> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
