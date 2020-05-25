@@ -1,11 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io;
 use std::sync::atomic::Ordering;
+<<<<<<< HEAD
 use std::sync::{mpsc, Arc};
 use std::thread;
+=======
+use std::sync::{mpsc, Arc, Mutex};
+>>>>>>> 7544b66... raftstore: don't gc snapshot files when shutting down (#7877)
 use std::time::*;
+use std::{fs, io, thread};
 
 use fail;
 use raft::eraftpb::MessageType;
@@ -274,4 +277,48 @@ fn test_destroy_peer_on_pending_snapshot() {
     fail::remove(apply_snapshot_fp);
     // After peer 5 has applied snapshot, data should be got.
     must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
+}
+
+#[test]
+fn test_shutdown_when_snap_gc() {
+    let mut cluster = new_node_cluster(0, 2);
+    // So that batch system can handle a snap_gc event before shutting down.
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // Only save a snapshot on peer 2, but do not apply it really.
+    fail::cfg("skip_schedule_applying_snapshot", "return").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // Snapshot directory on store 2 shouldn't be empty.
+    let snap_dir = cluster.get_snap_dir(2);
+    for i in 0..=100 {
+        if i == 100 {
+            panic!("store 2 snap dir must not be empty");
+        }
+        let dir = fs::read_dir(&snap_dir).unwrap();
+        if dir.count() > 0 {
+            break;
+        }
+        sleep_ms(10);
+    }
+
+    fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
+    std::thread::spawn(|| {
+        // Sleep a while to wait snap_gc event to reach batch system.
+        sleep_ms(500);
+        fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();
+    });
+
+    sleep_ms(100);
+    cluster.stop_node(2);
+
+    let snap_dir = cluster.get_snap_dir(2);
+    let dir = fs::read_dir(&snap_dir).unwrap();
+    if dir.count() == 0 {
+        panic!("store 2 snap dir must not be empty");
+    }
 }
