@@ -2025,7 +2025,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
@@ -2342,7 +2341,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
