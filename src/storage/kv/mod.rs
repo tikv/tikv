@@ -334,7 +334,7 @@ pub fn snapshot<E: Engine>(
 
 pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
     let bt = backtrace::Backtrace::new();
-    error!("async snapshot callback is dropped"; "backtrace" => ?bt);
+    warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
     let mut err = ErrorHeader::default();
     err.set_message("async snapshot callback is dropped".to_string());
     (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
