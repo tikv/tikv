@@ -27,12 +27,8 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
-<<<<<<< HEAD
 use prometheus::HistogramTimer;
-use tikv_util::{collections::HashMap, time::Instant};
-=======
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
->>>>>>> b15ea3b... *: call the dropped callback of async snapshot with error (#7903)
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{drop_snapshot_callback, with_tls_engine, Engine, Result as EngineResult};

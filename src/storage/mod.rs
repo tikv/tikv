@@ -1342,8 +1342,6 @@ mod tests {
         })
     }
 
-<<<<<<< HEAD
-=======
     pub fn expect_pessimistic_lock_res_callback(
         done: Sender<i32>,
         pessimistic_lock_res: PessimisticLockRes,
@@ -1427,7 +1425,6 @@ mod tests {
     use tikv_util::config::ReadableSize;
     use txn_types::Mutation;
 
->>>>>>> b15ea3b... *: call the dropped callback of async snapshot with error (#7903)
     #[test]
     fn test_get_put() {
         let storage = TestStorageBuilder::new().build().unwrap();
