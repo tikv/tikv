@@ -305,16 +305,18 @@ fn test_read_index_out_of_order() {
         RegionPacketFilter::new(1, 1)
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgHeartbeatResponse)
-            .when(Arc::new(AtomicBool::new(true))),
     );
     cluster.sim.wl().add_recv_filter(1, filter);
 
+    // Can't get read resonse because heartbeat responses are blocked.
     let r1 = cluster.get_region(b"k1");
-    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
-    assert!(resp.recv_timeout(Duration::from_secs(2)).is_err());
+    let resp1 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
+    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
 
     pd_client.must_remove_peer(rid, new_peer(2, 2));
-    cluster.sim.wl().clear_recv_filters(1);
-    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
-    assert!(resp.recv_timeout(Duration::from_secs(2)).is_ok());
+
+    // After peer 2 is removed, we can get 2 read responses.
+    let resp2 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
+    assert!(resp2.recv_timeout(Duration::from_secs(1)).is_ok());
+    assert!(resp1.recv_timeout(Duration::from_secs(1)).is_ok());
 }
