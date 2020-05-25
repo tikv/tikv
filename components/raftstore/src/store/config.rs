@@ -164,7 +164,7 @@ pub struct Config {
     // Only used for test
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[config(hidden)]
     pub merge_ensure_all_target_peer_exist: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,

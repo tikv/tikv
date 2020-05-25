@@ -1950,6 +1950,10 @@ pub struct TiKvConfig {
     #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
+    #[doc(hidden)]
+    #[config(hidden)]
+    pub dev_assert: bool,
+
     #[config(skip)]
     pub readpool: ReadPoolConfig,
 
@@ -1992,10 +1996,6 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub split: SplitConfig,
-
-    #[doc(hidden)]
-    #[config(skip)]
-    pub dev_assert: bool,
 }
 
 impl Default for TiKvConfig {
@@ -2009,6 +2009,7 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
+            dev_assert: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2023,7 +2024,6 @@ impl Default for TiKvConfig {
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
-            dev_assert: false,
         }
     }
 }

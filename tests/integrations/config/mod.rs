@@ -631,6 +631,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
     };
     value.panic_when_unexpected_key_or_data = true;
+    value.dev_assert = true;
     value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,
