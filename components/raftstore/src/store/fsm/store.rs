@@ -1395,7 +1395,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
-            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shut() => return Ok(()),
+            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
                 "[store {}] [region {}] unexpected redirect error: {:?}",
@@ -1778,7 +1778,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
-                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shut() => Ok(()),
+                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
                     CasualMessage::GcSnap { snaps },
                 ))) => {

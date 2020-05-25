@@ -36,8 +36,8 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     pub(crate) normal_scheduler: Ns,
     control_scheduler: Cs,
 
-    // Indicates the router is shut down or not.
-    shut: Arc<AtomicBool>,
+    // Indicates the router is shutdown down or not.
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<N, C, Ns, Cs> Router<N, C, Ns, Cs>
@@ -58,13 +58,13 @@ where
             control_box,
             normal_scheduler,
             control_scheduler,
-            shut: Arc::new(AtomicBool::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// The `Router` has been already shut or not.
-    pub fn is_shut(&self) -> bool {
-        self.shut.load(Ordering::Acquire)
+    /// The `Router` has been already shutdown or not.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
     }
 
     /// A helper function that tries to unify a common access pattern to
@@ -239,7 +239,7 @@ where
     /// Try to notify all fsm that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
-        self.shut.store(true, Ordering::SeqCst);
+        self.shutdown.store(true, Ordering::SeqCst);
         unsafe { &mut *self.caches.as_ptr() }.clear();
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.drain() {
@@ -273,7 +273,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
             // for now.
             normal_scheduler: self.normal_scheduler.clone(),
             control_scheduler: self.control_scheduler.clone(),
-            shut: self.shut.clone(),
+            shutdown: self.shutdown.clone(),
         }
     }
 }
