@@ -911,7 +911,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // or the node is shutting down. So it's OK to not to clean up
                 // registry.
                 if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    info!(
+                    debug!(
                         "failed to schedule peer tick";
                         "region_id" => region_id,
                         "peer_id" => peer_id,

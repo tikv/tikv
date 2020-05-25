@@ -2625,6 +2625,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
