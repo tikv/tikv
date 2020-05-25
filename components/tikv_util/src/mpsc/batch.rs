@@ -342,11 +342,10 @@ mod tests {
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = CpuPool::new(1);
-        pool.spawn(rx.for_each(move |_| {
+        let _res = pool.spawn(rx.for_each(move |_| {
             msg_counter1.fetch_add(1, Ordering::AcqRel);
             Ok(())
-        }))
-        .forget();
+        }));
 
         // Wait until the receiver is suspended.
         loop {
@@ -385,7 +384,7 @@ mod tests {
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
         let pool = CpuPool::new(1);
-        pool.spawn(
+        let _res = pool.spawn(
             rx.select(stream::poll_fn(move || -> Poll<Option<Vec<u64>>, ()> {
                 nty.send(()).unwrap();
                 Ok(Async::Ready(None))
@@ -396,8 +395,7 @@ mod tests {
                 msg_counter_spawned.fetch_add(len, Ordering::AcqRel);
                 Ok(())
             }),
-        )
-        .forget();
+        );
 
         // Wait until the receiver has been polled in the spawned thread.
         polled.recv().unwrap();
