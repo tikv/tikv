@@ -2173,7 +2173,12 @@ impl TiKvConfig {
             // new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
-
+        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored.",
+                "raft_store.clean_stale_peer_delay",
+            );
+        }
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
