@@ -285,7 +285,7 @@ mod tests {
         validate_state(&state, 1, &expected);
 
         // Backup store will not assign id immediately.
-        store = new_store(5, vec![label2.clone(), label4.clone()]);
+        store = new_store(5, vec![label2, label4.clone()]);
         state.group.backup_store_labels(&mut store);
         assert_eq!(None, state.group.group_id(0, 5));
         status = new_status(2, "zone");
@@ -302,9 +302,7 @@ mod tests {
         // If a store has no group id, it can still updates the labels.
         assert_eq!(
             Some(1),
-            state
-                .group
-                .register_store(1, vec![label1.clone(), label4.clone()])
+            state.group.register_store(1, vec![label1.clone(), label4])
         );
         // But a calculated group id can't be changed.
         let res = panic_hook::recover_safe(move || {
