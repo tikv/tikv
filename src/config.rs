@@ -30,7 +30,7 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::{
-    db_exist, CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
+    CFOptions, FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -2052,10 +2052,10 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
-        if db_exist(&kv_db_path) && !db_exist(&self.raft_store.raftdb_path) {
+        if RocksEngine::exists(&kv_db_path) && !RocksEngine::exists(&self.raft_store.raftdb_path) {
             return Err("default rocksdb exist, buf raftdb not exist".into());
         }
-        if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
+        if !RocksEngine::exists(&kv_db_path) && RocksEngine::exists(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
@@ -2173,7 +2173,12 @@ impl TiKvConfig {
             // new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
-
+        if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored.",
+                "raft_store.clean_stale_peer_delay",
+            );
+        }
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.

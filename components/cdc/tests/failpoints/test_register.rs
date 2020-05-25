@@ -302,3 +302,58 @@ fn test_merge() {
     target_wrap.as_ref().replace(None);
     suite.stop();
 }
+
+#[test]
+fn test_deregister_pending_downstream() {
+    let mut suite = TestSuite::new(1);
+
+    let build_resolver_fp = "before_schedule_resolver_ready";
+    fail::cfg(build_resolver_fp, "pause").unwrap();
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (req_tx1, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx1 = req_tx1
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    // Sleep for a while to make sure the region has been subscribed
+    sleep_ms(200);
+
+    let raft_capture_fp = "raft_on_capture_change";
+    fail::cfg(raft_capture_fp, "pause").unwrap();
+
+    // Conn 2
+    let (req_tx2, resp_rx2) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    req.set_region_epoch(RegionEpoch::default());
+    let req_tx2 = req_tx2
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+    let _resp_rx1 = event_feed_wrap.as_ref().replace(Some(resp_rx2));
+    // Sleep for a while to make sure the region has been subscribed
+    sleep_ms(200);
+    fail::remove(build_resolver_fp);
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    let _req_tx2 = req_tx2.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_epoch_not_match(), "{:?}", err);
+        }
+        _ => panic!("unknown event"),
+    }
+    fail::remove(raft_capture_fp);
+
+    event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}

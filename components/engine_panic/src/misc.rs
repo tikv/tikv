@@ -45,4 +45,20 @@ impl MiscExt for PanicEngine {
     fn sync_wal(&self) -> Result<()> {
         panic!()
     }
+
+    fn exists(path: &str) -> bool {
+        panic!()
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        panic!()
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        panic!()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        panic!()
+    }
 }
