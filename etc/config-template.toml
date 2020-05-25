@@ -317,9 +317,6 @@
 ## Interval (s) to check Region whether the data are consistent.
 # consistency-check-interval = 0
 
-## Delay time before deleting a stale peer.
-# clean-stale-peer-delay = "10m"
-
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
 
