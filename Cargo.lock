@@ -4385,6 +4385,7 @@ version = "4.0.0-rc.2"
 dependencies = [
  "async-stream",
  "async-trait",
+ "backtrace",
  "batch-system",
  "bitflags",
  "byteorder",
