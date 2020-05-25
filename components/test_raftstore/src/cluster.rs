@@ -30,6 +30,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;
+use tikv_util::threadpool::ThreadReadId;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -70,6 +71,35 @@ pub trait Simulator {
         let node_id = request.get_header().get_peer().get_store_id();
         self.call_command_on_node(node_id, request, timeout)
     }
+
+    fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
+        let (cb, rx) = make_cb(&request);
+        match self.async_read(node_id, batch_id, request, cb) {
+            Ok(()) => {}
+            Err(e) => {
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(e.into());
+                return Ok(resp);
+            }
+        }
+        rx.recv_timeout(timeout)
+            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()>;
+
     fn call_command_on_node(
         &self,
         node_id: u64,
@@ -266,6 +296,21 @@ impl<T: Simulator> Cluster<T> {
         {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
+    }
+
+    pub fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self.sim.rl().read(batch_id, request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
             }
             a => a,

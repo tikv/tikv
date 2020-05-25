@@ -29,6 +29,7 @@ use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
@@ -350,6 +351,35 @@ impl Simulator for NodeCluster {
             .cloned()
             .unwrap();
         router.send_command(request, cb)
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        if !self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .contains_key(&node_id)
+        {
+            return Err(box_err!("missing sender for store {}", node_id));
+        }
+        let router = self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .get(&node_id)
+            .cloned()
+            .unwrap();
+        router.read(batch_id, request, cb)
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

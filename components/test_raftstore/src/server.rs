@@ -40,6 +40,7 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::threadpool::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
@@ -378,6 +379,20 @@ impl Simulator for ServerCluster {
             Some(meta) => meta.sim_router.clone(),
         };
         router.send_command(request, cb)
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        let router = match self.metas.get(&node_id) {
+            None => return Err(box_err!("missing sender for store {}", node_id)),
+            Some(meta) => meta.sim_router.clone(),
+        };
+        router.read(batch_id, request, cb)
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

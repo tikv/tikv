@@ -371,7 +371,7 @@ pub fn read_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.call_command(request, timeout)
+    cluster.read(None, request, timeout)
 }
 
 pub fn async_read_on_peer<T: Simulator>(
@@ -396,7 +396,7 @@ pub fn async_read_on_peer<T: Simulator>(
     cluster
         .sim
         .wl()
-        .async_command_on_node(node_id, request, cb)
+        .async_read(node_id, None, request, cb)
         .unwrap();
     rx
 }
@@ -415,7 +415,7 @@ pub fn read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.call_command(request, timeout)
+    cluster.read(None, request, timeout)
 }
 
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
