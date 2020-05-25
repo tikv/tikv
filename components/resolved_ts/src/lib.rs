@@ -240,7 +240,10 @@ impl Resolver {
         self.resolved_ts
     }
 
-    pub fn locks_before_ts(&self, ts: TimeStamp) -> Vec<(TimeStamp, Vec<u8>)> {
+    /// Gets information of unfinished transactions whose `min_commit_ts` is before the given ts.
+    ///
+    /// Returns a vector of (start_ts, primary key) pairs.
+    pub fn txn_before_ts(&self, ts: TimeStamp) -> Vec<(TimeStamp, Vec<u8>)> {
         self.txn_min_commit_ts
             .range(..ts)
             .map(|(_, start_ts)| start_ts)
@@ -358,6 +361,95 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_get_txn_before_ts() {
+        // Each case is represented with a vector of (start_ts, min_commit_ts, key, primary) tuple,
+        // a ts to be used to invoke txn_before_ts, and the expected result.
+        struct Case {
+            locks: Vec<(u64, u64, &'static [u8], &'static [u8])>,
+            ts: u64,
+            expected_result: Vec<(u64, &'static [u8])>,
+        }
+        let cases = vec![
+            Case {
+                locks: vec![],
+                ts: 10,
+                expected_result: vec![],
+            },
+            Case {
+                locks: vec![(10, 10, b"a", b"a"), (11, 11, b"c", b"d")],
+                ts: 12,
+                expected_result: vec![(10, b"a"), (11, b"b")],
+            },
+            Case {
+                locks: vec![
+                    (10, 15, b"a", b"a"),
+                    (11, 11, b"c", b"d"),
+                    (12, 13, b"e", b"f"),
+                ],
+                ts: 14,
+                expected_result: vec![(11, b"d"), (13, b"f")],
+            },
+            Case {
+                locks: vec![
+                    (10, 0, b"a", b"b"),
+                    (10, 20, b"b", b"b"),
+                    (10, 0, b"c", b"b"),
+                    (12, 18, b"e", b"e"),
+                    (13, 18, b"f", b"f"),
+                    (14, 18, b"g", b"g"),
+                ],
+                ts: 22,
+                expected_result: vec![(10, b"b"), (12, b"e"), (13, b"f"), (14, b"g")],
+            },
+            Case {
+                locks: vec![
+                    (10, 0, b"a", b"b"),
+                    (10, 20, b"b", b"b"),
+                    (10, 0, b"c", b"b"),
+                    (12, 18, b"e", b"e"),
+                    (13, 18, b"f", b"f"),
+                    (14, 18, b"g", b"g"),
+                ],
+                ts: 17,
+                expected_result: vec![],
+            },
+            Case {
+                locks: vec![
+                    (10, 0, b"a", b"a"),
+                    (11, 0, b"b", b"b"),
+                    (12, 0, b"c", b"c"),
+                ],
+                ts: 11,
+                expected_result: vec![(10, b"a")],
+            },
+        ];
+
+        for (i, case) in cases.iter().enumerate() {
+            let mut resolver = Resolver::new(1);
+            resolver.init();
+            for (start_ts, min_commit_ts, key, primary) in &case.locks {
+                resolver.track_lock(
+                    start_ts.into(),
+                    min_commit_ts.into(),
+                    key.to_vec(),
+                    primary.to_vec(),
+                );
+            }
+            let result = resolver.txn_before_ts(case.ts.into());
+            let result_len = result.len();
+            let result = result.into_iter().collect::<HashSet<_>>();
+            // No duplicated items in the result.
+            assert_eq!(result.len(), result_len);
+            let expect = case
+                .expected_result
+                .iter()
+                .map(|(start_ts, primary)| (TimeStamp::from(start_ts), primary.to_vec()))
+                .collect::<HashSet<_>>();
+            assert_eq!(result, expect, "case {}", i);
         }
     }
 }
