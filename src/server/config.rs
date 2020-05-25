@@ -31,13 +31,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
-<<<<<<< HEAD
-=======
-const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
-
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
->>>>>>> 4d39c5e... raft client: make grpc message size limit configurable (#7816)
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
