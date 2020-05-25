@@ -4638,6 +4638,7 @@ version = "4.1.0-alpha"
 dependencies = [
  "async-stream",
  "async-trait",
+ "backtrace",
  "batch-system",
  "bitflags",
  "byteorder",
