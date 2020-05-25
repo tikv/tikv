@@ -11,6 +11,7 @@ pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
+pub const ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE: &str = "rocksdb.oldest-snapshot-sequence";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
