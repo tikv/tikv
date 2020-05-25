@@ -4139,6 +4139,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine",
  "engine_rocks",
  "engine_traits",
