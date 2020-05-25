@@ -2966,8 +2966,13 @@ dependencies = [
 
 [[package]]
 name = "raft"
+<<<<<<< HEAD
 version = "0.4.3"
 source = "git+https://github.com/tikv/raft-rs?rev=9782199fa6318f94bf0974129664d974b03f8f11#9782199fa6318f94bf0974129664d974b03f8f11"
+=======
+version = "0.6.0-alpha"
+source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+>>>>>>> 51481d6... raftstore: tolerate out-of-order read states from raft ready (#7772)
 dependencies = [
  "fxhash",
  "log 0.4.8",
@@ -2977,6 +2982,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "raft"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2988,6 +2994,11 @@ name = "rand"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
+=======
+name = "raft-proto"
+version = "0.6.0-alpha"
+source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+>>>>>>> 51481d6... raftstore: tolerate out-of-order read states from raft ready (#7772)
 dependencies = [
  "libc",
 ]
