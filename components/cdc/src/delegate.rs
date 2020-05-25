@@ -199,6 +199,8 @@ enum PendingLock {
     Track {
         key: Vec<u8>,
         start_ts: TimeStamp,
+        min_commit_ts: TimeStamp,
+        primary: Vec<u8>,
     },
     Untrack {
         key: Vec<u8>,
@@ -386,7 +388,12 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         for lock in pending.take_locks() {
             match lock {
-                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                PendingLock::Track {
+                    key,
+                    start_ts,
+                    min_commit_ts,
+                    primary,
+                } => resolver.track_lock(start_ts, min_commit_ts, key, primary),
                 PendingLock::Untrack {
                     key,
                     start_ts,
@@ -469,7 +476,8 @@ impl Delegate {
             match entry {
                 Some(TxnEntry::Prewrite { default, lock }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, &lock.1, &mut row);
+                    let mut parsed_lock = Lock::parse(&lock.1).unwrap();
+                    let skip = lock_to_row(lock.0, &mut parsed_lock, &mut row);
                     if skip {
                         continue;
                     }
@@ -591,7 +599,8 @@ impl Delegate {
                 }
                 "lock" => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(put.take_key(), put.get_value(), &mut row);
+                    let mut lock = Lock::parse(put.get_value()).unwrap();
+                    let skip = lock_to_row(put.take_key(), &mut lock, &mut row);
                     if skip {
                         continue;
                     }
@@ -608,7 +617,13 @@ impl Delegate {
                     // we must track inflight txns.
                     match self.resolver {
                         Some(ref mut resolver) => {
-                            resolver.track_lock(row.start_ts.into(), row.key.clone())
+                            // TODO: Set proper min_commit_ts
+                            resolver.track_lock(
+                                row.start_ts.into(),
+                                TimeStamp::zero(),
+                                row.key.clone(),
+                                lock.primary,
+                            )
                         }
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");
@@ -616,6 +631,8 @@ impl Delegate {
                             pending.locks.push(PendingLock::Track {
                                 key: row.key.clone(),
                                 start_ts: row.start_ts.into(),
+                                min_commit_ts: TimeStamp::zero(),
+                                primary: lock.primary,
                             });
                             pending.pending_bytes += row.key.len();
                             CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
@@ -713,8 +730,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
-    let lock = Lock::parse(value).unwrap();
+fn lock_to_row(key: Vec<u8>, lock: &mut Lock, row: &mut EventRow) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
@@ -732,7 +748,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.key = key.into_raw().unwrap();
     row.op_type = op_type.into();
     set_event_row_type(row, EventLogType::Prewrite);
-    if let Some(value) = lock.short_value {
+    if let Some(value) = lock.short_value.take() {
         row.value = value;
     }
 

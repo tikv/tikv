@@ -763,7 +763,9 @@ impl Initializer {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
-                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key),
+                        LockType::Put | LockType::Delete => {
+                            resolver.track_lock(lock.ts, lock.min_commit_ts, key, lock.primary)
+                        }
                         _ => (),
                     };
                 }
@@ -875,7 +877,8 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
-    use std::collections::BTreeMap;
+    use resolved_ts::TrackedTxn;
+    use std::collections::HashMap;
     use std::fmt::Display;
     use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
@@ -884,7 +887,6 @@ mod tests {
     use tikv::storage::kv::Engine;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::TestEngineBuilder;
-    use tikv_util::collections::HashSet;
     use tikv_util::mpsc::batch;
     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
 
@@ -944,7 +946,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
+        let mut expected_locks = HashMap::<TimeStamp, TrackedTxn>::new();
 
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -957,7 +959,15 @@ mod tests {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&engine, k, v, k, ts);
-            expected_locks.entry(ts).or_default().insert(k.to_vec());
+            expected_locks
+                .entry(ts)
+                .or_insert_with(|| TrackedTxn {
+                    min_commit_ts: ts,
+                    primary: k.to_vec(),
+                    locked_keys: Default::default(),
+                })
+                .locked_keys
+                .insert(k.to_vec());
         }
 
         let region = Region::default();
