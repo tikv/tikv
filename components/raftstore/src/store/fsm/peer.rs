@@ -1908,7 +1908,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     /// Check if merge target region in kv engine is fresher than target region.
     /// It should be called when target region is not in region map in memory.
-    /// If everything is ok, the answer should always be true. So if not, error log will be printed.
+    /// If everything is ok, the answer should always be true because PD should ensure all target peers exist.
+    /// So if not, error log will be printed and return false.
     fn is_local_merge_target_region_fresher(&self, target_region: &metapb::Region) -> Result<bool> {
         let target_region_id = target_region.get_id();
         let target_peer_id = util::find_peer(target_region, self.ctx.store_id())
@@ -1928,8 +1929,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ) {
                 return Ok(true);
             }
-            // The local target region epoch is staler than target region's.
-            // Check peer id because it may be destroyed by receiving gc msg rather than applying conf change log.
+            // The local target region epoch is not fresher than target region's.
+            // In the case where the peer is destroyed by receiving gc msg rather than applying conf change,
+            // the epoch may staler but it's legal, so check peer id to assure that.
             if let Some(local_target_peer_id) =
                 util::find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
             {
