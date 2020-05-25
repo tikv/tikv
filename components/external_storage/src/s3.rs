@@ -77,7 +77,9 @@ impl S3Storage {
 }
 
 impl<E> RetryError for RusotoError<E> {
-    const PLACEHOLDER: Self = Self::Blocking;
+    fn placeholder() -> Self {
+        Self::Blocking
+    }
 
     fn is_retryable(&self) -> bool {
         match self {

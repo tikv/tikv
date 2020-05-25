@@ -83,8 +83,9 @@ pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
 
 /// Trait for errors which can be retried inside [`retry()`].
 pub trait RetryError {
-    /// A placeholder to indicate an uninitialized error.
-    const PLACEHOLDER: Self;
+    /// Returns a placeholder to indicate an uninitialized error. This function exists only to
+    /// satisfy safety, there is no meaning attached to the returned value.
+    fn placeholder() -> Self;
 
     /// Returns whether this error can be retried.
     fn is_retryable(&self) -> bool;
@@ -106,7 +107,7 @@ where
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
     const MAX_RETRY_TIMES: usize = 4;
     let mut retry_wait_dur = Duration::from_secs(1);
-    let mut result = Err(E::PLACEHOLDER);
+    let mut result = Err(E::placeholder());
 
     for _ in 0..MAX_RETRY_TIMES {
         result = action().await;
