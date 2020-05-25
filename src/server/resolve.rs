@@ -70,6 +70,23 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
+<<<<<<< HEAD
+=======
+        let mut group_id = None;
+        let mut state = self.state.lock().unwrap();
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
+            }
+        } else {
+            state.group.backup_store_labels(&mut s);
+        }
+        drop(state);
+        if let (Some(group_id), Some(router)) = (group_id, &self.router) {
+            router.report_resolved(store_id, group_id);
+        }
+>>>>>>> ddaca23... raftstore/replication: always cache store labels (#7910)
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER
                 .with_label_values(&["tombstone"])
