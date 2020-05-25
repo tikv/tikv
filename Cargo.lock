@@ -2927,7 +2927,11 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
+=======
+source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+>>>>>>> 51481d6... raftstore: tolerate out-of-order read states from raft ready (#7772)
 dependencies = [
  "fxhash",
  "getset",
@@ -2941,7 +2945,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/raft-rs#b9891b673573fad77ebcf9bbe0969cf945841926"
+=======
+source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+>>>>>>> 51481d6... raftstore: tolerate out-of-order read states from raft ready (#7772)
 dependencies = [
  "lazy_static",
  "prost",
