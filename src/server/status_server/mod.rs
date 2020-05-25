@@ -1173,4 +1173,47 @@ mod tests {
         }
         status_server.stop();
     }
+
+    #[cfg(feature = "mem-profiling")]
+    #[test]
+    fn test_pprof_heap_service() {
+        let mut status_server =
+            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/heap?seconds=1")
+            .build()
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(uri).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_pprof_profile_service() {
+        let mut status_server =
+            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/profile?seconds=1&frequency=99")
+            .build()
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(uri).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        status_server.stop();
+    }
 }
