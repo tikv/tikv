@@ -1830,8 +1830,7 @@ impl Peer {
                 return Ok(());
             }
         }
-        let promoted_commit_index =
-            progress.maximal_committed_index(self.raft_group.raft.quorum_fn());
+        let promoted_commit_index = progress.maximal_committed_index();
         if promoted_commit_index >= self.get_store().truncated_index() {
             return Ok(());
         }
