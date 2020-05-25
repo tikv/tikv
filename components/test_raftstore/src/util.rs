@@ -519,10 +519,8 @@ pub fn create_test_engine(
     raft_db_opt.set_env(env);
 
     let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = Arc::new(
-        rocks::util::new_engine_opt(raft_path.to_str().unwrap(), raft_db_opt, raft_cfs_opt)
-            .unwrap(),
-    );
+    let raft_engine =
+        Arc::new(rocks::util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap());
 
     let engines = Engines::new(engine, raft_engine, cache.is_some());
     (engines, key_manager, dir)

@@ -12,12 +12,10 @@ use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
 use raft::eraftpb::ConfChangeType;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 
 use encryption::DataKeyManager;
-use engine::rocks;
 use engine::{Engines, DB};
-use engine_rocks::encryption::get_env;
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_RAFT};
 use pd_client::PdClient;
@@ -27,7 +25,6 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
