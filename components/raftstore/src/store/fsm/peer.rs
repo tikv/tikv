@@ -2175,7 +2175,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "err" => %e,
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
-                    self.ctx.need_flush_trans = true;
                     self.fsm.peer.send_want_rollback_merge(
                         self.fsm
                             .peer
@@ -2183,7 +2182,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             .as_ref()
                             .unwrap()
                             .get_commit(),
-                        &mut self.ctx.trans,
+                        &mut self.ctx,
                     );
                 }
             }

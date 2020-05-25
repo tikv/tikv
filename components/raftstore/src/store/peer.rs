@@ -2810,7 +2810,11 @@ impl Peer {
         }
     }
 
-    pub fn send_want_rollback_merge<T: Transport>(&self, premerge_commit: u64, trans: &mut T) {
+    pub fn send_want_rollback_merge<T: Transport, C>(
+        &self,
+        premerge_commit: u64,
+        ctx: &mut PollContext<T, C>,
+    ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         send_msg.set_from_peer(self.peer.clone());
@@ -2831,7 +2835,7 @@ impl Peer {
         let extra_msg = send_msg.mut_extra_msg();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             error!(
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
@@ -2840,6 +2844,8 @@ impl Peer {
                 "target_store_id" => to_peer.get_store_id(),
                 "err" => ?e
             );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 }
