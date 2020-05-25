@@ -18,10 +18,11 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use encryption::{FileConfig, MasterKeyConfig};
+use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine::rocks::DB;
 use engine::*;
 use engine_rocks::config::BlobRunMode;
+use engine_rocks::encryption::get_env;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksSnapshot};
 use engine_traits::{Iterable, Peekable};
@@ -472,49 +473,59 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-// TODO: This function conflicts with `Cluster::create_engine`.
-// Need to switch to that implementation to handle encryption correctly.
-#[allow(dead_code)]
-fn create_test_engine(
-    engines: Option<Engines>,
-    router: RaftRouter<RocksSnapshot>,
+pub fn create_test_engine(
+    // TODO: pass it in for all cases.
+    router: Option<RaftRouter<RocksSnapshot>>,
     cfg: &TiKvConfig,
-) -> (Engines, Option<TempDir>) {
-    // Create engine
-    let mut path = None;
-    let engines = match engines {
-        Some(e) => e,
-        None => {
-            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
-            let mut kv_db_opt = cfg.rocksdb.build_opt();
-            let router = Mutex::new(router);
-            let cmpacted_handler = Box::new(move |event| {
-                router
-                    .lock()
-                    .unwrap()
-                    .send_control(StoreMsg::CompactedEvent(event))
-                    .unwrap();
-            });
-            kv_db_opt.add_event_listener(CompactionListener::new(
-                cmpacted_handler,
-                Some(dummpy_filter),
-            ));
-            let cache = cfg.storage.block_cache.build_shared_cache();
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_path = path.as_ref().unwrap().path().join(DEFAULT_ROCKSDB_SUB_DIR);
-            let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
-                    .unwrap(),
-            );
-            let raft_path = path.as_ref().unwrap().path().join("raft");
-            let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
-            Engines::new(engine, raft_engine, cache.is_some())
-        }
-    };
-    (engines, path)
+) -> (Engines, Option<Arc<DataKeyManager>>, TempDir) {
+    let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let key_manager =
+        DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
+            .unwrap()
+            .map(|key_manager| Arc::new(key_manager));
+
+    let env = get_env(key_manager.clone(), None).unwrap();
+    let cache = cfg.storage.block_cache.build_shared_cache();
+
+    let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
+    let kv_path_str = kv_path.to_str().unwrap();
+
+    let mut kv_db_opt = cfg.rocksdb.build_opt();
+    kv_db_opt.set_env(env.clone());
+
+    if let Some(router) = router {
+        let router = Mutex::new(router);
+        let cmpacted_handler = Box::new(move |event| {
+            router
+                .lock()
+                .unwrap()
+                .send_control(StoreMsg::CompactedEvent(event))
+                .unwrap();
+        });
+        kv_db_opt.add_event_listener(CompactionListener::new(
+            cmpacted_handler,
+            Some(dummpy_filter),
+        ));
+    }
+
+    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+
+    let engine = Arc::new(rocks::util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap());
+
+    let raft_path = dir.path().join("raft");
+    let raft_path_str = raft_path.to_str().unwrap();
+
+    let mut raft_db_opt = cfg.raftdb.build_opt();
+    raft_db_opt.set_env(env);
+
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+    let raft_engine = Arc::new(
+        rocks::util::new_engine_opt(raft_path.to_str().unwrap(), raft_db_opt, raft_cfs_opt)
+            .unwrap(),
+    );
+
+    let engines = Engines::new(engine, raft_engine, cache.is_some());
+    (engines, key_manager, dir)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

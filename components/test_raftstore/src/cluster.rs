@@ -158,43 +158,16 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
     }
 
-    fn create_engine(&mut self) {
-        let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
-
-        let key_manager = DataKeyManager::from_config(
-            &self.cfg.security.encryption,
-            dir.path().to_str().unwrap(),
-        )
-        .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
-        let env = get_env(key_manager.clone(), None).unwrap();
-
-        let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-        let cache = self.cfg.storage.block_cache.build_shared_cache();
-        let mut kv_db_opt = self.cfg.rocksdb.build_opt();
-        kv_db_opt.set_env(env.clone());
-        let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
-        let engine = Arc::new(
-            rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt).unwrap(),
-        );
-
-        let raft_path = dir.path().join("raft");
-        let mut raft_db_opt = self.cfg.raftdb.build_opt();
-        raft_db_opt.set_env(env);
-        let raft_cfs_opt = self.cfg.raftdb.build_cf_opts(&cache);
-        let raft_engine = Arc::new(
-            rocks::util::new_engine_opt(raft_path.to_str().unwrap(), raft_db_opt, raft_cfs_opt)
-                .unwrap(),
-        );
-        let engines = Engines::new(engine, raft_engine, cache.is_some());
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksSnapshot>>) {
+        let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
         self.dbs.push(engines);
-        self.paths.push(dir);
         self.key_managers.push(key_manager);
+        self.paths.push(dir);
     }
 
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            self.create_engine();
+            self.create_engine(None);
         }
     }
 
@@ -207,10 +180,11 @@ impl<T: Simulator> Cluster<T> {
 
         // Try start new nodes.
         for _ in 0..self.count - self.engines.len() {
-            self.create_engine();
+            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            self.create_engine(Some(router.clone()));
+
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
@@ -570,7 +544,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn add_new_engine(&mut self) -> u64 {
-        self.create_engine();
+        self.create_engine(None);
         self.count += 1;
         let node_id = self.count as u64;
 
