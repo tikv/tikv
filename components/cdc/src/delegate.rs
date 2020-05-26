@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "prost-codec")]
@@ -21,8 +21,9 @@ use kvproto::cdcpb::{
 use kvproto::errorpb;
 use tikv::storage::mvcc::ScannerBuilder;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{IterOptions, Iterable, Iterator, KvEngine, Snapshot, CF_DEFAULT, CF_WRITE};
+use crossbeam::atomic::AtomicCell;
+use engine_rocks::RocksEngine;
+use engine_traits::{Iterable, KvEngine, Snapshot, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -52,46 +53,16 @@ impl DownstreamID {
     }
 }
 
-#[derive(Clone)]
-pub struct DownstreamState(Arc<AtomicU8>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DownstreamState {
+    Uninitialized,
+    Normal,
+    Stopped,
+}
 
-impl DownstreamState {
-    const UNINITIALIZED: u8 = 0;
-    const NORMAL: u8 = 1;
-    const STOPPED: u8 = 2;
-
-    pub fn new() -> Self {
-        DownstreamState(Arc::new(AtomicU8::new(Self::UNINITIALIZED)))
-    }
-
-    pub fn is_normal(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::NORMAL
-    }
-
-    pub fn is_stopped(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::STOPPED
-    }
-
-    pub fn is_uninitialized(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::UNINITIALIZED
-    }
-
-    pub fn set_normal(&self) {
-        self.0.store(Self::NORMAL, Ordering::SeqCst);
-    }
-
-    pub fn set_stopped(&self) {
-        self.0.store(Self::STOPPED, Ordering::SeqCst);
-    }
-
-    pub fn set_uninitialized(&self) {
-        self.0.store(Self::UNINITIALIZED, Ordering::SeqCst);
-    }
-
-    pub fn uninitialized_to_normal(&self) -> bool {
-        self.0
-            .compare_and_swap(Self::UNINITIALIZED, Self::NORMAL, Ordering::SeqCst)
-            == Self::UNINITIALIZED
+impl Default for DownstreamState {
+    fn default() -> Self {
+        Self::Uninitialized
     }
 }
 
@@ -106,7 +77,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
-    state: DownstreamState,
+    state: Arc<AtomicCell<DownstreamState>>,
 }
 
 impl Downstream {
@@ -121,7 +92,7 @@ impl Downstream {
             peer,
             region_epoch,
             sink: None,
-            state: DownstreamState::new(),
+            state: Arc::new(AtomicCell::new(DownstreamState::default())),
         }
     }
 
@@ -148,7 +119,7 @@ impl Downstream {
         self.id
     }
 
-    pub fn get_state(&self) -> DownstreamState {
+    pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
     }
 
@@ -282,7 +253,7 @@ impl Delegate {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
-                d.state.set_stopped();
+                d.state.store(DownstreamState::Stopped);
             }
             d.id != id
         });
@@ -334,8 +305,8 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
-        for downstream in &self.downstreams {
-            downstream.state.set_stopped();
+        for d in &self.downstreams {
+            d.state.store(DownstreamState::Stopped);
         }
         self.broadcast(change_data_err, 0, false);
     }
@@ -349,7 +320,7 @@ impl Delegate {
             change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
-            if normal_only && !downstreams[i].state.is_normal() {
+            if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
             downstreams[i].sink_event(change_data_event.clone(), size);

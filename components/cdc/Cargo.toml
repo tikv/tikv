@@ -34,6 +34,7 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
+crossbeam = "0.7.2"
 hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }

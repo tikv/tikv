@@ -273,7 +273,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(&self, ctx: &Context, mut batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));

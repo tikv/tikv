@@ -468,6 +468,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine",
  "engine_rocks",
  "engine_traits",

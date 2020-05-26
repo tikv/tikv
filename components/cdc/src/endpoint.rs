@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
 use kvproto::cdcpb::*;
@@ -120,7 +121,7 @@ pub enum Task {
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
         downstream_id: DownstreamID,
-        downstream_state: DownstreamState,
+        downstream_state: Arc<AtomicCell<DownstreamState>>,
         cb: InitCallback,
     },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -649,7 +650,7 @@ struct Initializer {
     region_id: u64,
     observe_id: ObserveID,
     downstream_id: DownstreamID,
-    downstream_state: DownstreamState,
+    downstream_state: Arc<AtomicCell<DownstreamState>>,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
@@ -708,7 +709,7 @@ impl Initializer {
             .unwrap();
         let mut done = false;
         while !done {
-            if !self.downstream_state.is_normal() {
+            if self.downstream_state.load() != DownstreamState::Normal {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
@@ -859,7 +860,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
                 cb,
             } => {
                 debug!("downstream was initialized"; "downstream_id" => ?downstream_id);
-                downstream_state.uninitialized_to_normal();
+                downstream_state
+                    .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
             Task::Validate(region_id, validate) => {
