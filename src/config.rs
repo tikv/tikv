@@ -1636,7 +1636,8 @@ macro_rules! readpool_config {
 
             #[test]
             fn test_validate() {
-                let cfg = $struct_name::default();
+                let mut cfg = $struct_name::default();
+                cfg.adjust_use_unified_pool();
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
@@ -1772,7 +1773,7 @@ impl CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
@@ -1798,6 +1799,18 @@ impl ReadPoolConfig {
         self.storage.validate()?;
         self.coprocessor.validate()?;
         Ok(())
+    }
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> Self {
+        let mut cfg = ReadPoolConfig {
+            unified: Default::default(),
+            storage: Default::default(),
+            coprocessor: Default::default(),
+        };
+        cfg.adjust_use_unified_pool();
+        cfg
     }
 }
 
@@ -1871,11 +1884,12 @@ mod readpool_tests {
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
-        let cfg = ReadPoolConfig {
+        let mut cfg = ReadPoolConfig {
             unified,
             storage,
             coprocessor,
         };
+        cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_err());
     }
