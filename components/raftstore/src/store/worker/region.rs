@@ -28,7 +28,6 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
-use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -104,7 +103,10 @@ struct StalePeerInfo {
     // below are stored as a value in PendingDeleteRanges
     pub region_id: u64,
     pub end_key: Vec<u8>,
-    pub timeout: time::Instant,
+    // Once the oldest snapshot sequence exceeds this, it ensures that no one is
+    // reading on this peer anymore. So we can safely call `delete_files_in_range`
+    // , which may break the consistency of snapshot, of this peer range.
+    pub stale_sequence: u64,
 }
 
 /// A structure records all ranges to be deleted with some delay.
@@ -120,7 +122,7 @@ impl PendingDeleteRanges {
         &self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
@@ -130,6 +132,7 @@ impl PendingDeleteRanges {
                     peer_info.region_id,
                     s_key.clone(),
                     peer_info.end_key.clone(),
+                    peer_info.stale_sequence,
                 ));
             }
         }
@@ -143,6 +146,7 @@ impl PendingDeleteRanges {
                 peer_info.region_id,
                 s_key.clone(),
                 peer_info.end_key.clone(),
+                peer_info.stale_sequence,
             ));
         }
         ranges
@@ -153,10 +157,10 @@ impl PendingDeleteRanges {
         &mut self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _) in &ranges {
+        for &(_, ref s_key, _, _) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -172,7 +176,7 @@ impl PendingDeleteRanges {
     /// Inserts a new range waiting to be deleted.
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
-    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
+    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
@@ -184,20 +188,23 @@ impl PendingDeleteRanges {
         let info = StalePeerInfo {
             region_id,
             end_key: end_key.to_owned(),
-            timeout,
+            stale_sequence,
         };
         self.ranges.insert(start_key.to_owned(), info);
     }
 
-    /// Gets all timeout ranges info.
-    pub fn timeout_ranges<'a>(
-        &'a self,
-        now: time::Instant,
-    ) -> impl Iterator<Item = (u64, Vec<u8>, Vec<u8>)> + 'a {
+    /// Gets all stale ranges info.
+    pub fn stale_ranges(&self, oldest_sequence: u64) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
         self.ranges
             .iter()
-            .filter(move |&(_, info)| info.timeout <= now)
-            .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
+            .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
+            .map(|(start_key, info)| {
+                (
+                    info.region_id,
+                    start_key.as_slice(),
+                    info.end_key.as_slice(),
+                )
+            })
     }
 
     pub fn len(&self) -> usize {
@@ -215,7 +222,6 @@ where
     batch_size: usize,
     mgr: SnapManager<EK>,
     use_delete_range: bool,
-    clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     router: R,
@@ -449,23 +455,29 @@ where
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-        let use_delete_files = false;
-        for (region_id, s_key, e_key) in overlap_ranges {
+        if overlap_ranges.is_empty() {
+            return;
+        }
+        let oldest_sequence = self
+            .engines
+            .kv
+            .get_oldest_snapshot_sequence_number()
+            .unwrap_or(u64::MAX);
+        for (region_id, s_key, e_key, stale_sequence) in overlap_ranges {
+            // `delete_files_in_range` may break current rocksdb snapshots consistency,
+            // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
+            let use_delete_files = stale_sequence < oldest_sequence;
+            if !use_delete_files {
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["overlap", "not_delete_files"])
+                    .inc();
+            }
             self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
         }
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(
-        &mut self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> bool {
-        if self.clean_stale_peer_delay.as_secs() == 0 {
-            return false;
-        }
-
+    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
         self.cleanup_overlap_ranges(start_key, end_key);
 
         info!(
@@ -474,33 +486,39 @@ where
             "start_key" => log_wrappers::Key(start_key),
             "end_key" => log_wrappers::Key(end_key),
         );
-        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-        self.pending_delete_ranges
-            .insert(region_id, start_key, end_key, timeout);
-        true
+
+        self.pending_delete_ranges.insert(
+            region_id,
+            start_key,
+            end_key,
+            self.engines.kv.get_latest_sequence_number(),
+        );
     }
 
-    /// Cleans up timeouted ranges.
-    fn clean_timeout_ranges(&mut self) {
+    /// Cleans up stale ranges.
+    fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-        let now = time::Instant::now();
+        let oldest_sequence = self
+            .engines
+            .kv
+            .get_oldest_snapshot_sequence_number()
+            .unwrap_or(u64::MAX);
         let mut cleaned_range_keys = vec![];
         {
-            let use_delete_files = true;
-            for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
+            let now = Instant::now();
+            for (region_id, start_key, end_key) in
+                self.pending_delete_ranges.stale_ranges(oldest_sequence)
+            {
                 self.cleanup_range(
-                    region_id,
-                    start_key.as_slice(),
-                    end_key.as_slice(),
-                    use_delete_files,
+                    region_id, start_key, end_key, true, /* use_delete_files */
                 );
-                cleaned_range_keys.push(start_key);
+                cleaned_range_keys.push(start_key.to_vec());
                 let elapsed = now.elapsed();
                 if elapsed >= CLEANUP_MAX_DURATION {
                     let len = cleaned_range_keys.len();
                     let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean timeout ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
+                    info!("clean stale ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
                     break;
                 }
             }
@@ -558,7 +576,6 @@ where
         mgr: SnapManager<EK>,
         batch_size: usize,
         use_delete_range: bool,
-        clean_stale_peer_delay: Duration,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         router: R,
     ) -> Runner<EK, ER, R> {
@@ -572,7 +589,6 @@ where
                 mgr,
                 batch_size,
                 use_delete_range,
-                clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
                 coprocessor_host,
                 router,
@@ -640,7 +656,7 @@ where
                 });
             }
             task @ Task::Apply { .. } => {
-                // to makes sure appling snapshots in order.
+                // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
@@ -655,14 +671,11 @@ where
             } => {
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-                if !self
-                    .ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key)
-                {
-                    self.ctx.cleanup_range(
-                        region_id, &start_key, &end_key, false, /* use_delete_files */
-                    );
-                }
+                self.ctx
+                    .insert_pending_delete_range(region_id, &start_key, &end_key);
+
+                // try to delete stale ranges if there are any
+                self.ctx.clean_stale_ranges();
             }
         }
     }
@@ -694,7 +707,7 @@ where
                 );
             }
             Event::CheckStalePeer => {
-                self.ctx.clean_timeout_ranges();
+                self.ctx.clean_stale_ranges();
                 timer.add_task(
                     Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
                     Event::CheckStalePeer,
@@ -726,7 +739,6 @@ mod tests {
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
-    use tikv_util::time;
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
 
@@ -739,73 +751,125 @@ mod tests {
         id: u64,
         s: &str,
         e: &str,
-        timeout: time::Instant,
+        stale_sequence: u64,
     ) {
-        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), timeout);
+        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), stale_sequence);
     }
 
     #[test]
+    #[allow(clippy::string_lit_as_bytes)]
     fn test_pending_delete_ranges() {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
-        let delay = Duration::from_millis(100);
         let id = 0;
 
-        let timeout = time::Instant::now() + delay;
-        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout);
-        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout);
-        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout);
+        let timeout1 = 10;
+        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout1);
         assert_eq!(pending_delete_ranges.len(), 5);
-
-        thread::sleep(delay / 2);
 
         //  a____c    f____i    m____n    p____t    x____z
         //              g___________________q
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
-        let timeout = time::Instant::now() + delay;
+        let timeout2 = 12;
         let overlap_ranges =
             pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
             overlap_ranges,
             [
-                (id + 1, b"f".to_vec(), b"i".to_vec()),
-                (id, b"m".to_vec(), b"n".to_vec()),
-                (id + 1, b"p".to_vec(), b"t".to_vec()),
+                (id + 1, b"f".to_vec(), b"i".to_vec(), timeout1),
+                (id, b"m".to_vec(), b"n".to_vec(), timeout1),
+                (id + 1, b"p".to_vec(), b"t".to_vec(), timeout1),
             ]
         );
         assert_eq!(pending_delete_ranges.len(), 2);
-        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout);
+        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout2);
         assert_eq!(pending_delete_ranges.len(), 3);
 
-        thread::sleep(delay / 2);
-
         // at t1, [a, c) and [x, z) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(
-            ranges,
-            [
-                (id, b"a".to_vec(), b"c".to_vec()),
-                (id, b"x".to_vec(), b"z".to_vec()),
-            ]
-        );
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 11;
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
+            assert_eq!(
+                ranges,
+                [
+                    (id, "a".as_bytes(), "c".as_bytes()),
+                    (id, "x".as_bytes(), "z".as_bytes()),
+                ]
+            );
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 1);
         }
-        assert_eq!(pending_delete_ranges.len(), 1);
-
-        thread::sleep(delay / 2);
 
         // at t2, [g, q) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 14;
+            let ranges: Vec<_> = pending_delete_ranges.stale_ranges(now).collect();
+            assert_eq!(ranges, [(id + 2, "g".as_bytes(), "q".as_bytes())]);
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 0);
         }
-        assert_eq!(pending_delete_ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_stale_peer() {
+        let temp_dir = Builder::new().prefix("test_stale_peer").tempdir().unwrap();
+        let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
+
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mut worker = Worker::new("region-worker");
+        let sched = worker.scheduler();
+        let shared_block_cache = false;
+        let engines = Engines::new(
+            Arc::clone(&engine.kv),
+            Arc::clone(&engine.raft),
+            shared_block_cache,
+        );
+        let (router, _) = mpsc::sync_channel(1);
+        let runner = RegionRunner::new(
+            engines.c(),
+            mgr,
+            0,
+            true,
+            CoprocessorHost::<RocksEngine>::default(),
+            router,
+        );
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
+        worker.start_with_timer(runner, timer).unwrap();
+
+        engine.kv.put(b"k1", b"v1").unwrap();
+        let snap = engine.kv.snapshot();
+        engine.kv.put(b"k2", b"v2").unwrap();
+
+        sched
+            .schedule(Task::Destroy {
+                region_id: 1,
+                start_key: b"k1".to_vec(),
+                end_key: b"k2".to_vec(),
+            })
+            .unwrap();
+        drop(snap);
+
+        thread::sleep(Duration::from_millis(100));
+        assert!(engine.kv.get(b"k1").unwrap().is_none());
+        assert_eq!(engine.kv.get(b"k2").unwrap().unwrap(), b"v2");
     }
 
     #[test]
@@ -864,7 +928,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
