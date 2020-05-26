@@ -96,6 +96,7 @@ pub struct StatusServer<S, R> {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
+    advertise_addr: Option<String>,
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
     router: R,
@@ -167,6 +168,7 @@ where
             tx,
             rx: Some(rx),
             addr: None,
+            advertise_addr: None,
             pd_client,
             cfg_controller,
             router,
@@ -427,7 +429,7 @@ where
         )
     }
 
-    pub fn stop(self) {
+    pub fn stop(mut self) {
         // unregister the status address to pd
         self.unregister_addr();
         let _ = self.tx.send(());
@@ -444,7 +446,7 @@ where
         self.addr.unwrap()
     }
 
-    fn register_addr(&self, status_addr: String) {
+    fn register_addr(&mut self, status_addr: String) {
         if self.pd_client.is_none() {
             return;
         }
@@ -453,7 +455,7 @@ where
         let json = {
             let mut body = std::collections::HashMap::new();
             body.insert("component".to_owned(), COMPONENT.to_owned());
-            body.insert("addr".to_owned(), status_addr);
+            body.insert("addr".to_owned(), status_addr.clone());
             serde_json::to_string(&body).unwrap()
         };
         for _ in 0..COMPONENT_REQUEST_RETRY {
@@ -466,7 +468,10 @@ where
                     .body(json.clone())
                     .send();
                 match res {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => {
+                        self.advertise_addr = Some(status_addr);
+                        return;
+                    }
                     Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
                     Err(e) => error!("failed to register addr to pd"; "error" => ?e),
                 }
@@ -482,11 +487,11 @@ where
         );
     }
 
-    fn unregister_addr(&self) {
-        if self.pd_client.is_none() {
+    fn unregister_addr(&mut self) {
+        if self.pd_client.is_none() || self.advertise_addr.is_none() {
             return;
         }
-        let status_addr = format!("{}", self.listening_addr());
+        let status_addr = format!("{}", self.advertise_addr.as_ref().unwrap());
         let pd_client = self.pd_client.as_ref().unwrap();
         let client = Client::new();
         for _ in 0..COMPONENT_REQUEST_RETRY {
@@ -494,7 +499,10 @@ where
                 let mut url = url::Url::parse(pd_addr).unwrap();
                 url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
                 match client.delete(url.as_str()).send() {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
+                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => {
+                        self.advertise_addr = None;
+                        return;
+                    }
                     Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
                     Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
                 }
@@ -655,7 +663,12 @@ where
         self.thread_pool.spawn(graceful);
     }
 
-    pub fn start(&mut self, status_addr: String, security_config: &SecurityConfig) -> Result<()> {
+    pub fn start(
+        &mut self,
+        status_addr: String,
+        advertise_status_addr: String,
+        security_config: &SecurityConfig,
+    ) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
         let tcp_listener = TcpListener::bind(&addr)?;
@@ -724,8 +737,8 @@ where
             let server = Server::builder(tcp_stream);
             self.start_serve(server);
         }
-        // register the status address to pd
-        self.register_addr(status_addr);
+        // register the advertise status address to pd
+        self.register_addr(advertise_status_addr);
         Ok(())
     }
 }
@@ -863,7 +876,8 @@ mod tests {
     #[test]
     fn test_status_service() {
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -908,7 +922,8 @@ mod tests {
     #[test]
     fn test_config_endpoint() {
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1117,7 +1132,8 @@ mod tests {
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1178,10 +1194,8 @@ mod tests {
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start(
-            "127.0.0.1:0".to_string(),
-            &new_security_cfg(Some(allowed_cn)),
-        );
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &new_security_cfg(Some(allowed_cn)));
 
         let mut connector = HttpConnector::new(1);
         connector.enforce_http(false);
