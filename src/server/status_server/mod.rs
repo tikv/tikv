@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use super::Result;
 use crate::config::ConfigController;
+use configuration::Configuration;
 use pd_client::RpcClient;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
@@ -268,9 +269,34 @@ where
     }
 
     fn get_config(
+        req: Request<Body>,
         cfg_controller: &ConfigController,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let res = match serde_json::to_string(&cfg_controller.get_current()) {
+        let mut full = false;
+        if let Some(query) = req.uri().query() {
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+            full = match query_pairs.get("full") {
+                Some(val) => match val.parse() {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return Box::new(ok(StatusServer::err_response(
+                            StatusCode::BAD_REQUEST,
+                            err.to_string(),
+                        )));
+                    }
+                },
+                None => false,
+            };
+        }
+        let encode_res = if full {
+            // Get all config
+            serde_json::to_string(&cfg_controller.get_current())
+        } else {
+            // Filter hidden config
+            serde_json::to_string(&cfg_controller.get_current().get_encoder())
+        };
+        let res = match encode_res {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
@@ -446,7 +472,7 @@ where
         self.addr.unwrap()
     }
 
-    fn register_addr(&mut self, status_addr: String) {
+    fn register_addr(&mut self, advertise_addr: String) {
         if self.pd_client.is_none() {
             return;
         }
@@ -455,7 +481,7 @@ where
         let json = {
             let mut body = std::collections::HashMap::new();
             body.insert("component".to_owned(), COMPONENT.to_owned());
-            body.insert("addr".to_owned(), status_addr.clone());
+            body.insert("addr".to_owned(), advertise_addr.clone());
             serde_json::to_string(&body).unwrap()
         };
         for _ in 0..COMPONENT_REQUEST_RETRY {
@@ -469,7 +495,7 @@ where
                     .send();
                 match res {
                     Ok(resp) if resp.status() == reqwest::StatusCode::OK => {
-                        self.advertise_addr = Some(status_addr);
+                        self.advertise_addr = Some(advertise_addr);
                         return;
                     }
                     Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
@@ -491,13 +517,15 @@ where
         if self.pd_client.is_none() || self.advertise_addr.is_none() {
             return;
         }
-        let status_addr = format!("{}", self.advertise_addr.as_ref().unwrap());
+        let advertise_addr = self.advertise_addr.as_ref().unwrap().to_owned();
         let pd_client = self.pd_client.as_ref().unwrap();
         let client = Client::new();
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
                 let mut url = url::Url::parse(pd_addr).unwrap();
-                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
+                url.set_path(
+                    format!("pd/api/v1/component/{}/{}", COMPONENT, advertise_addr).as_str(),
+                );
                 match client.delete(url.as_str()).send() {
                     Ok(resp) if resp.status() == reqwest::StatusCode::OK => {
                         self.advertise_addr = None;
@@ -640,7 +668,7 @@ where
                         (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                         (Method::GET, "/status") => Box::new(ok(Response::default())),
                         (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                        (Method::GET, "/config") => Self::get_config(&cfg_controller),
+                        (Method::GET, "/config") => Self::get_config(req, &cfg_controller),
                         (Method::POST, "/config") => {
                             Self::update_config(cfg_controller.clone(), req)
                         }
