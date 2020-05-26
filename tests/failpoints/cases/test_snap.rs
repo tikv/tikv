@@ -1,12 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::Ordering;
-<<<<<<< HEAD
-use std::sync::{mpsc, Arc};
-use std::thread;
-=======
 use std::sync::{mpsc, Arc, Mutex};
->>>>>>> 7544b66... raftstore: don't gc snapshot files when shutting down (#7877)
 use std::time::*;
 use std::{fs, io, thread};
 
@@ -283,7 +278,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 fn test_shutdown_when_snap_gc() {
     let mut cluster = new_node_cluster(0, 2);
     // So that batch system can handle a snap_gc event before shutting down.
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_max_batch_size = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -307,7 +302,7 @@ fn test_shutdown_when_snap_gc() {
     }
 
     fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
-    std::thread::spawn(|| {
+    thread::spawn(|| {
         // Sleep a while to wait snap_gc event to reach batch system.
         sleep_ms(500);
         fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();
