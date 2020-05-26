@@ -535,7 +535,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        self.cleanup(key, 0)
+        self.cleanup(key, 0, false)
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
@@ -544,7 +544,7 @@ impl<S: Snapshot> MvccTxn<S> {
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
+    pub fn cleanup(&mut self, key: Key, current_ts: u64, is_cleanup: bool) -> Result<bool> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
@@ -552,6 +552,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
+                    if lock.ttl == 0 {
+                        info!(
+                            "cleanup or rollback meet lock with ttl = 0";
+                            "start_ts" => self.start_ts,
+                            "key" => %key,
+                            "primary" => %lock.primary,
+                            "is_cleanup" => is_cleanup,
+                            "current_ts" => current_ts,
+                        );
+                    }
                     return Err(Error::KeyIsLocked(
                         lock.clone().into_lock_info(key.into_raw()?),
                     ));
@@ -575,6 +585,7 @@ impl<S: Snapshot> MvccTxn<S> {
                                 "key" => %key,
                                 "start_ts" => self.start_ts,
                                 "commit_ts" => ts,
+                                "is_cleanup" => is_cleanup,
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }
