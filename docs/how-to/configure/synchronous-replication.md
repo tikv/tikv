@@ -48,7 +48,7 @@ After the cluster becomes `sync`, it won't become `async` unless the number of d
 
 ## How to change replication mode manually
 
-You can use `pd-ctl` to change a cluster from `asynchronous` to `synchronous`. Currently, TiKV can't support any of following command online. So after changing the configuration, you need to restart all TiKV instances to make it apply the changes correctly.
+You can use `pd-ctl` to change a cluster from `asynchronous` to `synchronous`.
 
 ```bash
 >> config set replication-mode dr-auto-sync
