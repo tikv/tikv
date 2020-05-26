@@ -987,7 +987,8 @@ mod tests {
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1119,7 +1120,8 @@ mod tests {
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
         let mut status_server = StatusServer::new(1, None, ConfigController::default(), MockRouter);
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
