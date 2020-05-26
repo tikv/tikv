@@ -1972,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/cdc-aware-min-commit-ts#3bf060512e5ed32e8e80be49c3d26d2e7832eee3"
+source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/cdc-aware-min-commit-ts#c6b1755e93827c3b0dcca18828bc9d01b88be4e1"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2929,12 +2929,13 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f3ca050cd02aa2ee07f8e227871ebe8c12cf076ff7c6bf82fdd41dc81af874"
+checksum = "ac02aa83d15bd961f35678bce16ce59ec59262d8e3542dfd7c7ba5fdf9c41222"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
+ "proc-macro2 1.0.9",
  "prost-build",
  "protobuf",
  "protobuf-codegen",
