@@ -885,6 +885,7 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use configuration::Configuration;
     use engine_rocks::RocksSnapshot;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
@@ -970,7 +971,7 @@ mod tests {
                     let v = body.to_vec();
                     let resp_json = String::from_utf8_lossy(&v).to_string();
                     let cfg = TiKvConfig::default();
-                    serde_json::to_string(&cfg)
+                    serde_json::to_string(&cfg.get_encoder())
                         .map(|cfg_json| {
                             assert_eq!(resp_json, cfg_json);
                         })
