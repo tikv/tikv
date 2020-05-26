@@ -751,10 +751,18 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbKeySize => {
+        HistType::DbWriteWalTime => {
+            engine_histogram_metrics!(
+                STORE_ENGINE_WRITE_WAL_TIME_VEC,
+                "write_wal_micros",
+                name,
+                value
+            );
+        }
+        HistType::TitanKeySize => {
             engine_histogram_metrics!(STORE_ENGINE_BLOB_KEY_SIZE_VEC, "blob_key_size", name, value);
         }
-        HistType::BlobDbValueSize => {
+        HistType::TitanValueSize => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_VALUE_SIZE_VEC,
                 "blob_value_size",
@@ -762,7 +770,15 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbSeekMicros => {
+        HistType::TitanGetMicros => {
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_GET_MICROS_VEC,
+                "blob_get_micros",
+                name,
+                value
+            );
+        }
+        HistType::TitanSeekMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_SEEK_MICROS_VEC,
                 "blob_seek_micros",
@@ -770,7 +786,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbNextMicros => {
+        HistType::TitanNextMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_NEXT_MICROS_VEC,
                 "blob_next_micros",
@@ -778,7 +794,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbPrevMicros => {
+        HistType::TitanPrevMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_PREV_MICROS_VEC,
                 "blob_prev_micros",
@@ -786,7 +802,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbBlobFileWriteMicros => {
+        HistType::TitanBlobFileWriteMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_FILE_WRITE_MICROS_VEC,
                 "blob_file_write_micros",
@@ -794,7 +810,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbBlobFileReadMicros => {
+        HistType::TitanBlobFileReadMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_FILE_READ_MICROS_VEC,
                 "blob_file_read_micros",
@@ -802,7 +818,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbBlobFileSyncMicros => {
+        HistType::TitanBlobFileSyncMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_FILE_SYNC_MICROS_VEC,
                 "blob_file_sync_micros",
@@ -810,7 +826,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::BlobDbGcMicros => {
+        HistType::TitanGcMicros => {
             engine_histogram_metrics!(
                 STORE_ENGINE_BLOB_GC_MICROS_VEC,
                 "blob_gc_micros",
@@ -818,10 +834,26 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::DbWriteWalTime => {
+        HistType::TitanGcInputFileSize => {
             engine_histogram_metrics!(
-                STORE_ENGINE_WRITE_WAL_TIME_VEC,
-                "write_wal_micros",
+                STORE_ENGINE_GC_INPUT_BLOB_FILE_SIZE_VEC,
+                "blob_gc_input_file",
+                name,
+                value
+            );
+        }
+        HistType::TitanGcOutputFileSize => {
+            engine_histogram_metrics!(
+                STORE_ENGINE_GC_OUTPUT_BLOB_FILE_SIZE_VEC,
+                "blob_gc_output_file",
+                name,
+                value
+            );
+        }
+        HistType::TitanIterTouchBlobFileCount => {
+            engine_histogram_metrics!(
+                STORE_ENGINE_ITER_TOUCH_BLOB_FILE_COUNT_VEC,
+                "blob_iter_touch_blob_file_count",
                 name,
                 value
             );
