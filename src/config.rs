@@ -1565,8 +1565,16 @@ macro_rules! readpool_config {
             }
 
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-                if self.use_unified_pool() {
-                    return Ok(());
+                match self.use_unified_pool {
+                    Some(true) => return Ok(()),
+                    Some(false) => {}
+                    None => {
+                        return Err(format!(
+                            "readpool.{}.use-unified-pool should be set",
+                            $display_name
+                        )
+                        .into())
+                    }
                 }
                 if self.high_concurrency == 0 {
                     return Err(format!(
@@ -1714,9 +1722,12 @@ impl Default for StorageReadPoolConfig {
 }
 
 impl StorageReadPoolConfig {
-    pub fn use_unified_pool(&self) -> bool {
-        // The storage module does not use the unified pool by default.
-        self.use_unified_pool.unwrap_or(false)
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The storage module does not use the unified pool by default.
+            warn!("readpool.storage.use-unified-pool is not set, set to false by default");
+            self.use_unified_pool = Some(false);
+        }
     }
 }
 
@@ -1747,10 +1758,17 @@ impl Default for CoprReadPoolConfig {
 }
 
 impl CoprReadPoolConfig {
-    pub fn use_unified_pool(&self) -> bool {
-        // The coprocessor module uses the unified pool unless it has customized configurations.
-        self.use_unified_pool
-            .unwrap_or_else(|| *self == Default::default())
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The coprocessor module uses the unified pool unless it has customized configurations.
+            if *self == Default::default() {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to true by default");
+                self.use_unified_pool = Some(true);
+            } else {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to false because there are other customized configurations");
+                self.use_unified_pool = Some(false);
+            }
+        }
     }
 }
 
@@ -1765,7 +1783,12 @@ pub struct ReadPoolConfig {
 
 impl ReadPoolConfig {
     pub fn is_unified_pool_enabled(&self) -> bool {
-        self.storage.use_unified_pool() || self.coprocessor.use_unified_pool()
+        self.storage.use_unified_pool.unwrap() || self.coprocessor.use_unified_pool.unwrap()
+    }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        self.storage.adjust_use_unified_pool();
+        self.coprocessor.adjust_use_unified_pool();
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -1858,36 +1881,16 @@ mod readpool_tests {
     }
 
     #[test]
-    fn test_is_unified() {
-        let storage = StorageReadPoolConfig::default();
-        assert!(!storage.use_unified_pool());
-        let coprocessor = CoprReadPoolConfig::default();
-        assert!(coprocessor.use_unified_pool());
-
-        let mut cfg = ReadPoolConfig {
-            storage,
-            coprocessor,
-            ..Default::default()
-        };
-        assert!(cfg.is_unified_pool_enabled());
-
-        cfg.coprocessor.use_unified_pool = Some(false);
-        assert!(!cfg.is_unified_pool_enabled());
-    }
-
-    #[test]
     fn test_partially_unified() {
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(false),
             low_concurrency: 0,
             ..Default::default()
         };
-        assert!(!storage.use_unified_pool());
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(true),
             ..Default::default()
         };
-        assert!(coprocessor.use_unified_pool());
         let mut cfg = ReadPoolConfig {
             storage,
             coprocessor,
@@ -1902,13 +1905,11 @@ mod readpool_tests {
             use_unified_pool: Some(true),
             ..Default::default()
         };
-        assert!(storage.use_unified_pool());
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
             low_concurrency: 0,
             ..Default::default()
         };
-        assert!(!coprocessor.use_unified_pool());
         let mut cfg = ReadPoolConfig {
             storage,
             coprocessor,
@@ -2191,6 +2192,8 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
         }
+
+        self.readpool.adjust_use_unified_pool();
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -2960,5 +2963,38 @@ mod tests {
             cfg.validate().unwrap();
             assert_eq!(c, cfg);
         }
+    }
+
+    #[test]
+    fn test_readpool_compatible_adjust_config() {
+        let content = r#"
+        [readpool.unified]
+        max-thread-count = 1
+        [readpool.storage]
+        [readpool.coprocessor]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        let mut expected = TiKvConfig::default();
+        expected.readpool.unified.max_thread_count = 1;
+        expected.readpool.storage.use_unified_pool = Some(false);
+        expected.readpool.coprocessor.use_unified_pool = Some(true);
+        assert_eq!(cfg, expected);
+
+        let content = r#"
+        [readpool.unified]
+        max-thread-count = 1
+        [readpool.storage]
+        stack-size = "10MB"
+        [readpool.coprocessor]
+        normal-concurrency = 1
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.compatible_adjust();
+        let mut expected = TiKvConfig::default();
+        expected.readpool.unified.max_thread_count = 1;
+        expected.readpool.storage.use_unified_pool = Some(false);
+        expected.readpool.coprocessor.use_unified_pool = Some(false);
+        assert_eq!(cfg, expected);
     }
 }
