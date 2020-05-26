@@ -19,12 +19,16 @@ use kvproto::cdcpb::{
     EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
+use tikv::storage::mvcc::ScannerBuilder;
 
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{IterOptions, Iterable, Iterator, KvEngine, Snapshot, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
+use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
@@ -411,7 +415,12 @@ impl Delegate {
         Some(resolved_ts)
     }
 
-    pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
+    pub fn on_batch(
+        &mut self,
+        batch: CmdBatch,
+        extra_map: &mut HashMap<Vec<u8>, Vec<u8>>,
+        kv_engine: &RocksEngine,
+    ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
             return Ok(());
@@ -424,7 +433,7 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into());
+                    self.sink_data(index, request.requests.into(), extra_map, kv_engine);
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -457,7 +466,8 @@ impl Delegate {
             match entry {
                 Some(TxnEntry::Prewrite { default, lock }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, &lock.1, &mut row);
+                    let l = Lock::parse(&lock.1).unwrap();
+                    let skip = decode_lock(lock.0, l, &mut row);
                     if skip {
                         continue;
                     }
@@ -522,7 +532,13 @@ impl Delegate {
         }
     }
 
-    fn sink_data(&mut self, index: u64, requests: Vec<Request>) {
+    fn sink_data(
+        &mut self,
+        index: u64,
+        requests: Vec<Request>,
+        extra_map: &mut HashMap<Vec<u8>, Vec<u8>>,
+        kv_engine: &RocksEngine,
+    ) {
         let mut rows = HashMap::default();
         let mut total_size = 0;
         for mut req in requests {
@@ -579,7 +595,28 @@ impl Delegate {
                 }
                 "lock" => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(put.take_key(), put.get_value(), &mut row);
+                    let lock = Lock::parse(put.get_value()).unwrap();
+                    let key = put.take_key();
+
+                    // if let LockType::Delete = lock.lock_type {
+                    //     match extra_map.remove(&key) {
+                    //         Some(value) => row.previous_value = value,
+                    //         None => {
+                    //             // If the previous value wasn't in extra values, try to read it.
+                    //             let snap = RegionSnapshot::from_snapshot(
+                    //                 kv_engine.snapshot().into_sync(),
+                    //                 Region::default(),
+                    //             );
+                    //             let mut scanner = ScannerBuilder::new(snap, lock.ts, true)
+                    //                 .range(, None)
+                    //                 .build_delta_scanner(lock.ts)
+                    //                 .unwrap();
+                    //         }
+                    //     }
+                    // }
+
+                    let lock_type = lock.lock_type;
+                    let skip = decode_lock(put.take_key(), lock, &mut row);
                     if skip {
                         continue;
                     }
@@ -701,8 +738,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
-    let lock = Lock::parse(value).unwrap();
+fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,

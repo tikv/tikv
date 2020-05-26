@@ -5,12 +5,12 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
-use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, ExtraRead, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, ExtraRead, Result as EngineResult, ScanMode, Snapshot,
-    Statistics, WriteData,
+    with_tls_engine, CbContext, Engine, Result as EngineResult, ScanMode, Snapshot, Statistics,
+    WriteData,
 };
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
@@ -232,7 +232,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         engine: &E,
         snapshot: E::Snap,
         task: Task,
-        extra_read: Option<ExtraRead>,
+        extra_read: ExtraRead,
     ) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
@@ -540,7 +540,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
     lock_mgr: Option<L>,
-    extra_read: Option<ExtraRead>,
+    extra_read: ExtraRead,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
@@ -607,7 +607,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let extra_data = txn.take_extra_data();
+                let extra_data = txn.take_extra();
                 let write_data = WriteData::new(txn.into_modifies(), extra_data);
                 (pr, write_data, rows, cmd.ctx, None)
             } else {

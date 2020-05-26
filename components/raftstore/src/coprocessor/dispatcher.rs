@@ -468,10 +468,27 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_flush_apply()
+    pub fn on_flush_apply(&self, extras: Vec<Extra>) {
+        assert!(
+            !self.registry.cmd_observers.is_empty(),
+            "CmdObserver is not registered"
+        );
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
+                .observer
+                .inner()
+                .on_flush_apply(extras.clone())
         }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_flush_apply(extras)
     }
 
     pub fn shutdown(&self) {
@@ -683,7 +700,7 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), query_resp),
         );
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply();
+        host.on_flush_apply(Vec::default());
         assert_all!(&[&ob.called], &[91]);
     }
 

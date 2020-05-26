@@ -15,8 +15,9 @@ use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value, Write};
+use kvproto::kvrpcpb::{Context, ExtraRead};
+use tikv_util::collections::HashMap;
+use txn_types::{Key, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -36,22 +37,16 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
-    pub extra_read: Option<ExtraRead>,
+    pub extra_read: ExtraRead,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
         CbContext {
             term: None,
-            extra_read: None,
+            extra_read: ExtraRead::Noop,
         }
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum ExtraRead {
-    Deleted,
-    Updated,
 }
 
 #[derive(Debug)]
@@ -82,15 +77,12 @@ impl Modify {
 #[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
-    pub extra_data: Option<Vec<(Key, Write)>>,
+    pub extra: Option<HashMap<Key, Value>>,
 }
 
 impl WriteData {
-    pub fn new(modifies: Vec<Modify>, extra_data: Option<Vec<(Key, Write)>>) -> Self {
-        Self {
-            modifies,
-            extra_data,
-        }
+    pub fn new(modifies: Vec<Modify>, extra: Option<HashMap<Key, Value>>) -> Self {
+        Self { modifies, extra }
     }
 
     pub fn with_modifies(modifies: Vec<Modify>) -> Self {

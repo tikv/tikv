@@ -3,9 +3,11 @@
 use std::fmt;
 use std::time::Instant;
 
+use engine_rocks::CompactedEvent;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraRead;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -13,16 +15,15 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use tikv_util::collections::HashMap;
+use tikv_util::escape;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
-use crate::store::worker::ExtraReadOption;
 use crate::store::SnapKey;
-use engine_rocks::CompactedEvent;
-use tikv_util::escape;
 
 use super::RegionSnapshot;
 
@@ -30,7 +31,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
-    pub extra_read_option: Option<ExtraReadOption>,
+    pub extra_read: ExtraRead,
 }
 
 #[derive(Debug)]
@@ -49,7 +50,7 @@ where
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
-            extra_read_option: self.extra_read_option.clone(),
+            extra_read: self.extra_read.clone(),
         }
     }
 }
@@ -82,7 +83,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
-                    extra_read_option: None,
+                    extra_read: ExtraRead::Noop,
                 };
                 read(resp);
             }
@@ -121,7 +122,7 @@ where
     }
 }
 
-pub type Extra = Vec<(Vec<u8>, Vec<u8>)>;
+pub type Extra = HashMap<Vec<u8>, Vec<u8>>;
 
 bitflags! {
     pub struct PeerTicks: u8 {

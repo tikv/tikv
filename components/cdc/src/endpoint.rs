@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -11,8 +11,8 @@ use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID};
-use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
+use raftstore::store::{Callback, Extra, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -99,6 +99,7 @@ pub enum Task {
     },
     MultiBatch {
         multi: Vec<CmdBatch>,
+        extras: Vec<Extra>,
     },
     MinTS {
         region_id: u64,
@@ -155,9 +156,10 @@ impl fmt::Debug for Task {
                 .field("type", &"open_conn")
                 .field("conn_id", &conn.get_id())
                 .finish(),
-            Task::MultiBatch { multi } => de
+            Task::MultiBatch { multi, extras } => de
                 .field("type", &"multibatch")
                 .field("multibatch", &multi.len())
+                .field("extras", &extras.len())
                 .finish(),
             Task::MinTS {
                 ref region_id,
@@ -212,6 +214,8 @@ pub struct Endpoint<T> {
     min_ts_interval: Duration,
     scan_batch_size: usize,
     tso_worker: ThreadPool,
+    store_meta: Arc<Mutex<StoreMeta>>,
+    kv_engine: RocksEngine,
 
     workers: ThreadPool,
 
@@ -225,6 +229,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         scheduler: Scheduler<Task>,
         raft_router: T,
         observer: CdcObserver,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        kv_engine: RocksEngine,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
@@ -238,6 +244,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             workers,
             raft_router,
             observer,
+            store_meta,
+            kv_engine,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(1),
             min_resolved_ts: TimeStamp::max(),
@@ -434,6 +442,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 region_id,
             }
         };
+        match self.store_meta.lock().unwrap().readers.get(&region_id) {
+            Some(reader) => reader.extra_read.store(request.extra_read),
+            None => panic!("unreachable"),
+        }
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
@@ -479,7 +491,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }));
     }
 
-    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
+    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, extras: Vec<Extra>) {
+        let mut extra_map = HashMap::default();
+        extras.into_iter().for_each(|extra| {
+            extra.into_iter().for_each(|(key, value)| {
+                extra_map.insert(key, value);
+            });
+        });
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -488,7 +506,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch) {
+                if let Err(e) = delegate.on_batch(batch, &mut extra_map, &self.kv_engine) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -685,6 +703,7 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
+            .hint_min_ts(Some(self.checkpoint_ts))
             .build_delta_scanner(self.checkpoint_ts)
             .unwrap();
         let mut done = false;
@@ -831,7 +850,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
             } => {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
-            Task::MultiBatch { multi } => self.on_multi_batch(multi),
+            Task::MultiBatch { multi, extras } => self.on_multi_batch(multi, extras),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::InitDownstream {

@@ -1,14 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{ExtraRead, Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
-use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
 use std::fmt;
+use tikv_util::collections::HashMap;
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, TimeStamp, Value, Write, WriteType,
 };
+
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
+use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
+use crate::storage::types::TxnStatus;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -44,7 +46,7 @@ pub struct MvccTxn<S: Snapshot> {
     writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
-    extra_read: Option<ExtraRead>,
+    extra_read: ExtraRead,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -82,7 +84,7 @@ impl<S: Snapshot> MvccTxn<S> {
         MvccTxn {
             reader,
             start_ts,
-            extra_read: None,
+            extra_read: ExtraRead::Noop,
             write_size: 0,
             writes: WriteData::default(),
             collapse_rollback: true,
@@ -97,13 +99,17 @@ impl<S: Snapshot> MvccTxn<S> {
         self.start_ts = start_ts;
     }
 
-    pub fn set_extra_read(&mut self, extra_read: Option<ExtraRead>) {
+    pub fn set_extra_read(&mut self, extra_read: ExtraRead) {
         self.extra_read = extra_read;
-        self.writes.extra_data = Some(Vec::default());
+        if let ExtraRead::Noop = extra_read {
+            self.writes.extra = None;
+        } else {
+            self.writes.extra = Some(HashMap::default());
+        }
     }
 
-    pub fn take_extra_data(&mut self) -> Option<Vec<(Key, Write)>> {
-        self.writes.extra_data.take()
+    pub fn take_extra(&mut self) -> Option<HashMap<Key, Value>> {
+        self.writes.extra.take()
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
@@ -544,34 +550,25 @@ impl<S: Snapshot> MvccTxn<S> {
         let should_not_write = mutation.should_not_write();
         let mutation_type = mutation.mutation_type();
         let (key, value) = mutation.into_key_value();
-        macro_rules! extra_read {
-            ($v: ident, $ts: ident) => {
-                match self.extra_read {
-                    Some(ExtraRead::Deleted) => {
-                        if let MutationType::Delete = mutation_type {
-                            if let Some(value) = $v.short_value {
-                                Some(value)
-                            } else {
-                                self.reader.get(&key, $v.$ts, true).unwrap()
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    Some(ExtraRead::Updated) => match mutation_type {
-                        MutationType::Delete | MutationType::Put => {
-                            if let Some(value) = $v.short_value {
-                                Some(value)
-                            } else {
-                                self.reader.get(&key, $v.$ts, true).unwrap()
-                            }
-                        }
-                        _ => None,
-                    },
-                    _ => None,
+        macro_rules! maybe_read_extra {
+            ($short_value: expr, $start_ts: expr) => {
+                if (self.extra_read == ExtraRead::Deleted && mutation_type == MutationType::Delete)
+                    || (self.extra_read == ExtraRead::Updated
+                        && (mutation_type == MutationType::Delete
+                            || mutation_type == MutationType::Put))
+                {
+                    let value = if let Some(value) = $short_value {
+                        Some(value)
+                    } else {
+                        self.reader.get(&key, $start_ts, true).unwrap()
+                    };
+                    self.writes.extra.as_mut().unwrap().insert(
+                        key.clone().append_ts($start_ts),
+                        value.unwrap_or_else(Vec::default),
+                    );
                 }
             };
-        }
+        };
 
         fail_point!("prewrite", |err| Err(make_txn_error(
             err,
@@ -582,7 +579,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         // Check whether there is a newer version.
         if !skip_constraint_check {
-            if let Some((commit_ts, mut write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
                 // Abort on writes after our start timestamp ...
                 // If exists a commit version whose commit timestamp is larger than or equal to
                 // current start timestamp, we should abort current prewrite, even if the commit
@@ -599,10 +596,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                if let Some(extra_data) = self.writes.extra_data.as_mut() {
-                    write.short_value = extra_read!(write, start_ts);
-                    extra_data.push((key.clone(), write));
-                }
+                maybe_read_extra!(write.short_value, write.start_ts);
             }
         }
         if should_not_write {
@@ -613,6 +607,10 @@ impl<S: Snapshot> MvccTxn<S> {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
+
+            // Otherwise the lock was belong to the same txn, the previous value would be recorded in the lock cf.
+            maybe_read_extra!(lock.short_value, lock.ts);
+
             // TODO: remove it in future
             if lock.lock_type == LockType::Pessimistic {
                 return Err(ErrorInner::LockTypeNotMatch {
@@ -621,12 +619,6 @@ impl<S: Snapshot> MvccTxn<S> {
                     pessimistic: true,
                 }
                 .into());
-            }
-            // Otherwise the lock was belong to the same txn, the previous value would be recorded in the lock cf.
-            if let Some(extra_data) = self.writes.extra_data.as_mut() {
-                let mut write = Write::new(WriteType::Put, lock.ts, None);
-                write.short_value = extra_read!(lock, ts);
-                extra_data.push((key.clone(), write));
             }
 
             // Duplicated command. No need to overwrite the lock and data.

@@ -20,6 +20,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraRead;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -35,7 +36,7 @@ use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
+use crate::store::msg::{Callback, Extra, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::store::util::{check_region_epoch, compare_region_epoch};
@@ -71,16 +72,18 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Option<Callback<S>>,
+    pub extra: Option<Extra>,
 }
 
 impl<S> PendingCmd<S>
 where
     S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
+    fn new(index: u64, term: u64, cb: Callback<S>, extra: Option<Extra>) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
+            extra,
             cb: Some(cb),
         }
     }
@@ -331,6 +334,7 @@ where
     notifier: Notifier<E>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
+    extras: MustConsumeVec<Extra>,
     apply_res: Vec<ApplyRes<E>>,
     exec_ctx: Option<ExecContext>,
 
@@ -377,6 +381,7 @@ where
             notifier,
             kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
+            extras: MustConsumeVec::new("extra key/value of cmds"),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -451,6 +456,8 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
+        use std::mem;
+
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
@@ -479,7 +486,7 @@ where
             self.kv_wb_last_keys = 0;
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply();
+        self.host.on_flush_apply(mem::take(&mut self.extras));
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -984,27 +991,27 @@ where
         }
     }
 
-    fn find_cb(
+    fn find_pending(
         &mut self,
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> Option<Callback<E::Snapshot>> {
+    ) -> (Option<Callback<E::Snapshot>>, Option<Extra>) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
-                    return Some(cmd.cb.take().unwrap());
+                    return (Some(cmd.cb.take().unwrap()), cmd.extra.take());
                 } else {
                     notify_stale_command(region_id, peer_id, self.term, cmd);
                 }
             }
-            return None;
+            return (None, None);
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
             if head.term == term {
                 if head.index == index {
-                    return Some(head.cb.take().unwrap());
+                    return (Some(head.cb.take().unwrap()), head.extra.take());
                 } else {
                     panic!(
                         "{} unexpected callback at term {}, found index {}, expected {}",
@@ -1017,7 +1024,7 @@ where
                 notify_stale_command(region_id, peer_id, self.term, head);
             }
         }
-        None
+        (None, None)
     }
 
     fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -1054,16 +1061,20 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_cb(index, term, is_conf_change);
+        let (cmd_cb, cmd_extra) = self.find_pending(index, term, is_conf_change);
+
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
+            match cmd_extra {
+                Some(extra) => apply_ctx.extras.push(extra),
+                None => (),
+            }
             apply_ctx
                 .host
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
-
         exec_result
     }
 
@@ -2321,18 +2332,26 @@ where
     index: u64,
     term: u64,
     pub cb: Callback<S>,
+    extra: Option<Extra>,
 }
 
 impl<S> Proposal<S>
 where
     S: Snapshot,
 {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<S>) -> Proposal<S> {
+    pub fn new(
+        is_conf_change: bool,
+        index: u64,
+        term: u64,
+        cb: Callback<S>,
+        extra: Option<Extra>,
+    ) -> Proposal<S> {
         Proposal {
             is_conf_change,
             index,
             term,
             cb,
+            extra,
         }
     }
 }
@@ -2690,13 +2709,13 @@ where
         assert_eq!(self.delegate.id, region_proposal.id);
         if self.delegate.stopped {
             for p in region_proposal.props {
-                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in region_proposal.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            let cmd = PendingCmd::new(p.index, p.term, p.cb, p.extra);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -2929,7 +2948,7 @@ where
                         apply_ctx.engine.snapshot().into_sync(),
                         self.delegate.region.clone(),
                     )),
-                    extra_read_option: None,
+                    extra_read: ExtraRead::Noop,
                 }
             }
             Err(e) => {
@@ -2937,7 +2956,7 @@ where
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    extra_read_option: None,
+                    extra_read: ExtraRead::Noop,
                 });
                 return;
             }
@@ -3242,7 +3261,7 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in props.props {
-                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
+                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.extra);
                         notify_region_removed(props.region_id, props.id, cmd);
                     }
                     return;
@@ -3284,7 +3303,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
-                        extra_read_option: None,
+                        extra_read: ExtraRead::Noop,
                     };
                     cb.invoke_read(resp);
                     return;
@@ -3854,7 +3873,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self) {
+        fn on_flush_apply(&self, extras: Vec<Extra>) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {

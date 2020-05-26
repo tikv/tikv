@@ -149,13 +149,7 @@ fn on_read_result(
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
     let mut cb_ctx = new_ctx(&read_resp.response);
-    if let Some(ref extra_read_option) = read_resp.extra_read_option {
-        if extra_read_option.read_deleted() {
-            cb_ctx.extra_read = Some(kv::ExtraRead::Deleted)
-        } else if extra_read_option.read_updated() {
-            cb_ctx.extra_read = Some(kv::ExtraRead::Updated)
-        }
-    }
+    cb_ctx.extra_read = read_resp.extra_read;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
@@ -286,15 +280,9 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         }
 
         let mut reqs = Vec::with_capacity(batch.modifies.len());
-        let extra = if let Some(data) = batch.extra_data.take() {
-            Some(
-                data.into_iter()
-                    .map(|(k, v)| (k.into_encoded(), v.as_ref().to_bytes()))
-                    .collect(),
-            )
-        } else {
-            None
-        };
+        let extra = batch
+            .extra
+            .map(|e| e.into_iter().map(|(k, v)| (k.into_encoded(), v)).collect());
         for m in batch.modifies {
             let mut req = Request::default();
             match m {

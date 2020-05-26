@@ -36,6 +36,7 @@ failpoints = ["tikv/failpoints"]
 [dependencies]
 hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
+engine_traits = { path = "../engine_traits" }
 failure = "0.1"
 futures = "0.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }

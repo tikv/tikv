@@ -8,8 +8,10 @@ use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use kvproto::kvrpcpb::ExtraRead;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -42,7 +44,7 @@ use crate::store::fsm::{
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
+    Callback, Config, Extra, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
 };
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
@@ -268,6 +270,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+
+    pub extra_read: Arc<AtomicCell<ExtraRead>>,
 }
 
 impl Peer {
@@ -352,6 +356,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            extra_read: Arc::new(AtomicCell::new(ExtraRead::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1772,6 +1777,7 @@ impl Peer {
         cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        extra: Option<Extra>,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1819,7 +1825,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(ctx, meta, is_conf_change, cb);
+                self.post_propose(ctx, meta, is_conf_change, cb, extra);
                 true
             }
         }
@@ -1831,6 +1837,7 @@ impl Peer {
         mut meta: ProposalMeta,
         is_conf_change: bool,
         cb: Callback<RocksSnapshot>,
+        extra: Option<Extra>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -1839,7 +1846,7 @@ impl Peer {
         meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
-            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb, extra);
             self.apply_proposals.push(p);
         }
 
@@ -2200,7 +2207,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(poll_ctx, meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None, None);
             }
         }
 
@@ -2550,9 +2557,7 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
-        let meta = ctx.store_meta.lock().unwrap();
-        let reader = meta.readers.get(&self.region_id).unwrap();
-        resp.extra_read_option = Some(reader.extra_read_option.clone());
+        resp.extra_read = self.extra_read.load();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3056,7 +3061,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    extra_read_option: None,
+                    extra_read: ExtraRead::Noop,
                 };
             }
         }
@@ -3078,7 +3083,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
-                            extra_read_option: None,
+                            extra_read: ExtraRead::Noop,
                         };
                     }
                 },
@@ -3121,7 +3126,7 @@ where
         ReadResponse {
             response,
             snapshot,
-            extra_read_option: None,
+            extra_read: ExtraRead::Noop,
         }
     }
 }
