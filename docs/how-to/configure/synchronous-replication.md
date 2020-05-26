@@ -8,13 +8,13 @@ category: how-to
 
 This section describes how to configure synchronous replication in dual data centers.
 
-One of the data centers is primary, and the other is dr. When a region has odd number of replicas, primary will have more. When dr is down for more than configured time, replication will be changed to be asynchronous and primary will serve requests by its own. Asynchronous replication is used by default.
+One of the data centers is primary, and the other is dr. When a region has odd number of replicas, primary will be placed more replicas. When dr is down for more than configured time, replication will be changed to be asynchronous and primary will serve requests by its own. Asynchronous replication is used by default.
 
 Note this is still an experimental feature.
 
 ## How to enable synchronous replication
 
-Replication mode is controlled by PD. You can use following example configuration to setup a cluster with synchronous replication from scratch:
+Replication mode is controlled by PD. You can use following example PD configuration to setup a cluster with synchronous replication from scratch:
 
 ```toml
 [replication-mode]
