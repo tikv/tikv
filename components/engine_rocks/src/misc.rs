@@ -93,6 +93,11 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().sync_wal()?)
     }
 
+    #[allow(deprecated)]
+    fn exists(path: &str) -> bool {
+        engine::rocks::util::db_exist(path)
+    }
+
     fn dump_stats(&self) -> Result<String> {
         const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
         const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
@@ -119,6 +124,21 @@ impl MiscExt for RocksEngine {
         }
 
         Ok(box_try!(String::from_utf8(s)))
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        match self
+            .as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
     }
 }
 
