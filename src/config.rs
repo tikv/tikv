@@ -1636,8 +1636,10 @@ macro_rules! readpool_config {
 
             #[test]
             fn test_validate() {
-                let mut cfg = $struct_name::default();
-                cfg.adjust_use_unified_pool();
+                let cfg = $struct_name {
+                    use_unified_pool: Some(false),
+                    ..Default::default()
+                };
                 assert!(cfg.validate().is_ok());
 
                 let mut invalid_cfg = cfg.clone();
@@ -1882,7 +1884,10 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(storage.validate().is_ok());
-        let coprocessor = CoprReadPoolConfig::default();
+        let coprocessor = CoprReadPoolConfig {
+            use_unified_pool: Some(true),
+            ..Default::default()
+        };
         assert!(coprocessor.validate().is_ok());
         let mut cfg = ReadPoolConfig {
             unified,
@@ -2982,22 +2987,15 @@ mod tests {
     #[test]
     fn test_readpool_compatible_adjust_config() {
         let content = r#"
-        [readpool.unified]
-        max-thread-count = 1
         [readpool.storage]
         [readpool.coprocessor]
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
-        let mut expected = TiKvConfig::default();
-        expected.readpool.unified.max_thread_count = 1;
-        expected.readpool.storage.use_unified_pool = Some(false);
-        expected.readpool.coprocessor.use_unified_pool = Some(true);
-        assert_eq!(cfg, expected);
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
 
         let content = r#"
-        [readpool.unified]
-        max-thread-count = 1
         [readpool.storage]
         stack-size = "10MB"
         [readpool.coprocessor]
@@ -3005,10 +3003,7 @@ mod tests {
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
-        let mut expected = TiKvConfig::default();
-        expected.readpool.unified.max_thread_count = 1;
-        expected.readpool.storage.use_unified_pool = Some(false);
-        expected.readpool.coprocessor.use_unified_pool = Some(false);
-        assert_eq!(cfg, expected);
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
+        assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
     }
 }
