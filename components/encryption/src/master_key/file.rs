@@ -122,7 +122,7 @@ mod tests {
             .unwrap()[0] ^= 0b11111111u8;
         assert_matches!(
             backend.decrypt(&encrypted_content1).unwrap_err(),
-            Error::Crypter(_)
+            Error::WrongMasterKey(_)
         );
 
         // Must checksum not found
@@ -132,7 +132,7 @@ mod tests {
             .remove(MetadataKey::AesGcmTag.as_str());
         assert_matches!(
             backend.decrypt(&encrypted_content2).unwrap_err(),
-            Error::WrongMasterKey(_)
+            Error::Other(_)
         );
     }
 }

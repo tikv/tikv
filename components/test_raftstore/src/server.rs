@@ -14,14 +14,18 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use super::*;
+use encryption::DataKeyManager;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::{AutoSplitController, Callback, LocalReader, SnapManager, SplitCheckRunner};
+use raftstore::store::{
+    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+};
 use raftstore::Result;
+use security::SecurityManager;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -39,7 +43,6 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
-use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
@@ -53,7 +56,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksEngine>,
+    raw_router: RaftRouter<RocksSnapshot>,
     raw_apply_router: ApplyRouter,
     worker: Worker<ResolveTask>,
 }
@@ -124,7 +127,8 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: Engines,
-        router: RaftRouter<RocksEngine>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -220,8 +224,11 @@ impl Simulator for ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
 
         // Create pd client, snapshot manager, server.
-        let (worker, resolver, state) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
+        let (worker, resolver, state) =
+            resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .encryption_key_manager(key_manager)
+            .build(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
@@ -419,7 +426,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

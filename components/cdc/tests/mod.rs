@@ -26,9 +26,9 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
+use security::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
-use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;

@@ -1,21 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
+use std::{cmp, io};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_traits::KvEngine;
-use fs2;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -28,7 +28,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -103,6 +103,7 @@ where
         written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
+        replication_status: Option<RegionReplicationStatus>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -214,12 +215,14 @@ where
             Task::Heartbeat {
                 ref region,
                 ref peer,
+                ref replication_status,
                 ..
             } => write!(
                 f,
-                "heartbeat for region {:?}, leader {}",
+                "heartbeat for region {:?}, leader {}, replication status {:?}",
                 region,
-                peer.get_id()
+                peer.get_id(),
+                replication_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -292,8 +295,8 @@ where
             timer: None,
             sender: None,
             thread_info_interval: interval,
-            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
-            collect_interval: DEFAULT_COLLECT_INTERVAL,
+            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
+            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
         }
     }
 
@@ -303,6 +306,10 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
+        if self.collect_interval < DEFAULT_COLLECT_INTERVAL {
+            info!("it seems we are running tests, skip stats monitoring.");
+            return Ok(());
+        }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
         let collect_interval = self.collect_interval;
         if self.thread_info_interval < self.collect_interval {
@@ -406,7 +413,7 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
+    router: RaftRouter<E::Snapshot>,
     db: E,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -431,7 +438,7 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<E>,
+        router: RaftRouter<E::Snapshot>,
         db: E,
         scheduler: Scheduler<Task<E>>,
         store_heartbeat_interval: Duration,
@@ -589,6 +596,7 @@ where
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -605,7 +613,7 @@ where
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -689,9 +697,18 @@ where
             .with_label_values(&["available"])
             .set(available as i64);
 
-        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .store_heartbeat(stats)
+            .map_err(|e| {
+                error!("store heartbeat failed"; "err" => ?e);
+            })
+            .map(move |status| {
+                if let Some(status) = status {
+                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                }
+            });
         handle.spawn(f);
     }
 
@@ -979,6 +996,7 @@ where
                 written_keys,
                 approximate_size,
                 approximate_keys,
+                replication_status,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region, 0).unwrap_or_default()
@@ -1034,6 +1052,7 @@ where
                         approximate_keys,
                         last_report_ts,
                     },
+                    replication_status,
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
@@ -1118,15 +1137,15 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<E>(
-    router: &RaftRouter<E>,
+fn send_admin_request<S>(
+    router: &RaftRouter<S>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<E::Snapshot>,
+    callback: Callback<S>,
 ) where
-    E: KvEngine,
+    S: Snapshot,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1147,7 +1166,7 @@ fn send_admin_request<E>(
 
 /// Sends merge fail message to gc merge source.
 fn send_merge_fail(
-    router: &RaftRouter<impl KvEngine>,
+    router: &RaftRouter<impl Snapshot>,
     source_region_id: u64,
     target: metapb::Peer,
 ) {
@@ -1168,7 +1187,7 @@ fn send_merge_fail(
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter<impl KvEngine>,
+    router: &RaftRouter<impl Snapshot>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

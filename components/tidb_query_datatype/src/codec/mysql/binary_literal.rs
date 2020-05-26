@@ -3,8 +3,6 @@
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use std::string::ToString;
 
-use hex;
-
 use crate::codec::error::Error;
 use crate::codec::Result;
 use crate::expr::EvalContext;

@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
-use engine_rocks::RocksEngine;
-use fail;
+use engine_rocks::{Compat, RocksSnapshot};
+use engine_traits::MiscExt;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -21,10 +20,8 @@ use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::Callback;
+use security::{check_common_name, SecurityManager};
 use tikv_util::metrics;
-use tikv_util::security::{check_common_name, SecurityManager};
-
-use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -48,14 +45,14 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter<RocksEngine>> {
+pub struct Service<T: RaftStoreRouter<RocksSnapshot>> {
     pool: CpuPool,
     debugger: Debugger,
     raft_router: T,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
+impl<T: RaftStoreRouter<RocksSnapshot>> Service<T> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
         engines: Engines,
@@ -91,7 +88,7 @@ impl<T: RaftStoreRouter<RocksEngine>> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
+impl<T: RaftStoreRouter<RocksSnapshot> + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
@@ -370,8 +367,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
+                resp.set_rocksdb_kv(box_try!(engines.kv.c().dump_stats()));
+                resp.set_rocksdb_raft(box_try!(engines.raft.c().dump_stats()));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)
@@ -506,7 +503,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<T> {
     }
 }
 
-fn region_detail<T: RaftStoreRouter<RocksEngine>>(
+fn region_detail<T: RaftStoreRouter<RocksSnapshot>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
@@ -544,7 +541,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
         })
 }
 
-fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
+fn consistency_check<T: RaftStoreRouter<RocksSnapshot>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
 ) -> impl Future<Item = (), Error = Error> {

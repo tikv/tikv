@@ -7,7 +7,7 @@ use futures::StreamExt;
 use futures_01::{future::Future, sink::Sink, stream::Stream};
 use grpcio::{self, *};
 use kvproto::backup::*;
-use tikv_util::security::{check_common_name, SecurityManager};
+use security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
 use super::Task;
@@ -97,9 +97,9 @@ mod tests {
     use super::*;
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
+    use security::*;
     use tikv::storage::mvcc::tests::*;
     use tikv_util::mpsc::Receiver;
-    use tikv_util::security::*;
     use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {

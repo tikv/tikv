@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine::rocks;
-use engine_rocks::{CloneCompat, RocksEngine};
+use engine_rocks::{CloneCompat, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -17,8 +17,8 @@ use tikv::import::SSTImporter;
 
 use engine::Engines;
 use engine_traits::ALL_CFS;
-use pd_client::PdClient;
 use tempfile::TempDir;
+use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
 
@@ -32,9 +32,6 @@ impl Transport for MockTransport {
         unimplemented!()
     }
 }
-
-struct MockPdClient;
-impl PdClient for MockPdClient {}
 
 fn create_tmp_engine(dir: &TempDir) -> Engines {
     let db = Arc::new(
@@ -54,7 +51,7 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksEngine>,
+    RaftRouter<RocksSnapshot>,
     ApplyRouter,
     RaftBatchSystem,
 ) {
@@ -94,7 +91,7 @@ fn start_raftstore(
             cfg_track,
             engines.c(),
             MockTransport,
-            Arc::new(MockPdClient),
+            Arc::new(TestPdClient::new(0, true)),
             snap_mgr,
             pd_worker,
             store_meta,
@@ -102,12 +99,13 @@ fn start_raftstore(
             importer,
             Worker::new("split"),
             AutoSplitController::default(),
+            Arc::default(),
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksEngine>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksSnapshot>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

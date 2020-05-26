@@ -515,7 +515,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn update_statistics_metrics(&mut self) {
-        let stats = mem::replace(&mut self.stats, Statistics::default());
+        let stats = mem::take(&mut self.stats);
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
@@ -1188,9 +1188,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),

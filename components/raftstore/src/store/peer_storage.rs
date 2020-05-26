@@ -96,9 +96,11 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
 
-#[derive(Default)]
+pub const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
+
 struct EntryCache {
     cache: VecDeque<Entry>,
+    mem_size_change: i64,
 }
 
 impl EntryCache {
@@ -158,15 +160,27 @@ impl EntryCache {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
                 if self.cache.front().unwrap().get_index() >= first_index {
+                    self.update_mem_size_change_before_clear();
                     self.cache.clear();
                 } else {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    self.mem_size_change -= self
+                        .cache
+                        .iter()
+                        .skip(left)
+                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                        .sum::<i64>();
                     self.cache.truncate(left);
                 }
                 if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
                     && self.cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
+                    let old_capacity = self.cache.capacity();
                     self.cache.shrink_to_fit();
+                    self.mem_size_change += self.get_cache_vec_mem_size_change(
+                        self.cache.capacity() as i64,
+                        old_capacity as i64,
+                    )
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -178,15 +192,26 @@ impl EntryCache {
         let mut start_idx = 0;
         if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
             if len < self.cache.len() {
-                self.cache.drain(..len);
+                let mut drained_cache_entries_size = 0;
+                self.cache.drain(..len).for_each(|e| {
+                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                });
+                self.mem_size_change -= drained_cache_entries_size;
             } else {
                 start_idx = len - self.cache.len();
+                self.update_mem_size_change_before_clear();
                 self.cache.clear();
             }
         }
+        let old_capacity = self.cache.capacity();
+        let mut entries_mem_size = 0;
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
+            entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }
+        self.mem_size_change += self
+            .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
+            + entries_mem_size;
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -194,22 +219,77 @@ impl EntryCache {
         if cache_first_idx > idx {
             return;
         }
+        let mut drained_cache_entries_size = 0;
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if necessary.
         self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+            .for_each(|e| {
+                drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+            });
+        self.mem_size_change -= drained_cache_entries_size;
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
+            let old_capacity = self.cache.capacity();
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
+            self.mem_size_change += self
+                .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
         }
+    }
+
+    fn update_mem_size_change_before_clear(&mut self) {
+        self.mem_size_change -= self
+            .cache
+            .iter()
+            .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+            .sum::<i64>();
+    }
+
+    fn get_cache_vec_mem_size_change(&self, new_capacity: i64, old_capacity: i64) -> i64 {
+        ENTRY_MEM_SIZE as i64 * (new_capacity - old_capacity)
+    }
+
+    fn get_total_mem_size(&self) -> i64 {
+        let data_size: usize = self
+            .cache
+            .iter()
+            .map(|e| e.data.capacity() + e.context.capacity())
+            .sum();
+        (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
+    }
+
+    fn flush_mem_size_change(&mut self) {
+        if self.mem_size_change == 0 {
+            return;
+        }
+        RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
+        self.mem_size_change = 0;
     }
 
     #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+}
+
+impl Default for EntryCache {
+    fn default() -> Self {
+        let cache = VecDeque::default();
+        RAFT_ENTRIES_CACHES_GAUGE.add((ENTRY_MEM_SIZE * cache.capacity()) as i64);
+        EntryCache {
+            cache,
+            mem_size_change: 0,
+        }
+    }
+}
+
+impl Drop for EntryCache {
+    fn drop(&mut self) {
+        self.flush_mem_size_change();
+        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
     }
 }
 
@@ -979,6 +1059,7 @@ where
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
         self.stats.flush();
+        self.cache.flush_mem_size_change();
     }
 
     // Apply the peer with given snapshot.
@@ -1200,6 +1281,10 @@ where
             region_id: self.get_region_id(),
             status,
         };
+
+        // Don't schedule the snapshot to region worker.
+        fail_point!("skip_schedule_applying_snapshot", |_| {});
+
         // TODO: gracefully remove region instead.
         if let Err(e) = self.region_sched.schedule(task) {
             info!(
@@ -1940,7 +2025,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
@@ -2257,7 +2341,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
