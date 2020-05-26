@@ -304,7 +304,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command(
         &self,
-        gets: Vec<GetRequest>,
+        requests: Vec<GetRequest>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -316,7 +316,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
                 let mut snaps = vec![];
-                for req in gets {
+                for req in requests {
                     let snap = Self::with_tls_engine(|engine| {
                         Self::snapshot_with_cache(engine, read_id.clone(), req.get_context())
                     });

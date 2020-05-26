@@ -39,6 +39,18 @@ fn test_txn_store_get_with_type_lock() {
 }
 
 #[test]
+fn test_txn_store_batch_get_command() {
+    let store = AssertionStorage::default();
+    // not exist
+    store.get_none(b"a", 10);
+    store.get_none(b"b", 10);
+    // after put
+    store.put_ok(b"a", b"x", 5, 10);
+    store.put_ok(b"b", b"x", 5, 10);
+    store.batch_get_command_ok(&[b"a", b"b", b"c"], 10, vec![b"x", b"x", b""]);
+}
+
+#[test]
 fn test_txn_store_delete() {
     let store = AssertionStorage::default();
     store.put_ok(b"x", b"x5-10", 5, 10);
