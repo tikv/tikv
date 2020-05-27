@@ -153,6 +153,13 @@ impl Tracker {
         self.exec_details(self.item_process_time)
     }
 
+    /// Get ExecDetail according to previous collected metrics.
+    /// TiDB asks for ExecDetail to be printed in its log.
+    pub fn get_exec_details(&self) -> kvrpcpb::ExecDetails {
+        assert_eq!(self.current_stage, TrackerState::ItemFinished);
+        self.exec_details(self.total_process_time)
+    }
+
     fn exec_details(&self, measure: Duration) -> kvrpcpb::ExecDetails {
         let mut exec_details = kvrpcpb::ExecDetails::default();
         if self.req_ctx.context.get_handle_time() {
@@ -176,13 +183,6 @@ impl Tracker {
         self.req_time = Instant::now_coarse() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
-    }
-
-    /// Get ExecDetail according to previous collected metrics.
-    /// TiDB asks for ExecDetail to be printed in its log.
-    pub fn get_exec_details(&self) -> kvrpcpb::ExecDetails {
-        assert_eq!(self.current_stage, TrackerState::Tracked);
-        self.exec_details(self.total_process_time)
     }
 
     fn track(&mut self) {
