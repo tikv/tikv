@@ -51,3 +51,4 @@ tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
+encryption = { path = "../encryption" }
