@@ -585,6 +585,9 @@ mod tests {
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
 
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
@@ -610,10 +613,41 @@ mod tests {
         }
     }
 
+    async fn yield_now() {
+        struct YieldNow {
+            yielded: bool,
+        }
+
+        impl std::future::Future for YieldNow {
+            type Output = ();
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.yielded {
+                    return Poll::Ready(());
+                }
+
+                self.yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+
+        YieldNow { yielded: false }.await
+    }
+
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            // To simulate the situation in read life, we run the task for one second
+            // every time, then yield.
+            let times = self.handle_duration_millis / 1_000;
+            let last_duration = self.handle_duration_millis % 1_000;
+            for _ in 0..times {
+                thread::sleep(Duration::from_millis(1_000));
+                yield_now().await;
+            }
+            thread::sleep(Duration::from_millis(last_duration));
+
             self.result.take().unwrap()
         }
     }
