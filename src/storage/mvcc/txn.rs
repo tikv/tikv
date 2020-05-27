@@ -557,7 +557,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             "cleanup or rollback meet lock with ttl = 0";
                             "start_ts" => self.start_ts,
                             "key" => %key,
-                            "primary" => %lock.primary,
+                            "primary" => %Key::from_encoded_slice(&lock.primary),
                             "is_cleanup" => is_cleanup,
                             "current_ts" => current_ts,
                         );
