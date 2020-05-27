@@ -1722,7 +1722,7 @@ impl StorageReadPoolConfig {
     pub fn adjust_use_unified_pool(&mut self) {
         if self.use_unified_pool.is_none() {
             // The storage module does not use the unified pool by default.
-            warn!("readpool.storage.use-unified-pool is not set, set to false by default");
+            info!("readpool.storage.use-unified-pool is not set, set to false by default");
             self.use_unified_pool = Some(false);
         }
     }

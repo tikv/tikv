@@ -711,7 +711,7 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
     let content = r#"
         [readpool.storage]
         normal-concurrency = 1
-        
+
         [readpool.coprocessor]
         normal-concurrency = 1
     "#;
