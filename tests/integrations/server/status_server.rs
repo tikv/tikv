@@ -45,7 +45,7 @@ fn test_region_meta_endpoint() {
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
     let mut status_server =
-        StatusServer::new(1, None, ConfigController::default(), router.unwrap());
+        StatusServer::new(1, None, ConfigController::default(), router.unwrap()).unwrap();
     assert!(status_server
         .start("127.0.0.1:0".to_string(), &SecurityConfig::default())
         .is_ok());
