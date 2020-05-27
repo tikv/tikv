@@ -1565,16 +1565,8 @@ macro_rules! readpool_config {
             }
 
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-                match self.use_unified_pool {
-                    Some(true) => return Ok(()),
-                    Some(false) => {}
-                    None => {
-                        return Err(format!(
-                            "readpool.{}.use-unified-pool should be set",
-                            $display_name
-                        )
-                        .into())
-                    }
+                if self.use_unified_pool() {
+                    return Ok(());
                 }
                 if self.high_concurrency == 0 {
                     return Err(format!(
@@ -1725,6 +1717,11 @@ impl Default for StorageReadPoolConfig {
 }
 
 impl StorageReadPoolConfig {
+    pub fn use_unified_pool(&self) -> bool {
+        // The storage module does not use the unified pool by default.
+        self.use_unified_pool.unwrap_or(false)
+    }
+
     pub fn adjust_use_unified_pool(&mut self) {
         if self.use_unified_pool.is_none() {
             // The storage module does not use the unified pool by default.
@@ -1761,6 +1758,12 @@ impl Default for CoprReadPoolConfig {
 }
 
 impl CoprReadPoolConfig {
+    pub fn use_unified_pool(&self) -> bool {
+        // The coprocessor module uses the unified pool unless it has customized configurations.
+        self.use_unified_pool
+            .unwrap_or_else(|| *self == Default::default())
+    }
+
     pub fn adjust_use_unified_pool(&mut self) {
         if self.use_unified_pool.is_none() {
             // The coprocessor module uses the unified pool unless it has customized configurations.
@@ -1775,7 +1778,7 @@ impl CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Default, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
@@ -1786,7 +1789,7 @@ pub struct ReadPoolConfig {
 
 impl ReadPoolConfig {
     pub fn is_unified_pool_enabled(&self) -> bool {
-        self.storage.use_unified_pool.unwrap() || self.coprocessor.use_unified_pool.unwrap()
+        self.storage.use_unified_pool() || self.coprocessor.use_unified_pool()
     }
 
     pub fn adjust_use_unified_pool(&mut self) {
@@ -1801,18 +1804,6 @@ impl ReadPoolConfig {
         self.storage.validate()?;
         self.coprocessor.validate()?;
         Ok(())
-    }
-}
-
-impl Default for ReadPoolConfig {
-    fn default() -> Self {
-        let mut cfg = ReadPoolConfig {
-            unified: Default::default(),
-            storage: Default::default(),
-            coprocessor: Default::default(),
-        };
-        cfg.adjust_use_unified_pool();
-        cfg
     }
 }
 
