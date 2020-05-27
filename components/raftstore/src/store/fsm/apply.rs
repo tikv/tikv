@@ -3057,7 +3057,7 @@ where
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
         if self.message_count > 0 {
-            APPLY_FSM_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
+            APPLY_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
         }
     }
 }

@@ -134,7 +134,7 @@ impl<S: Snapshot> Drop for PeerFsm<S> {
             callback.invoke_with_response(resp);
         }
         if self.message_count > 0 {
-            PEER_FSM_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
+            PEER_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
         }
     }
 }
