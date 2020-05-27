@@ -457,7 +457,7 @@ where
             delegates: HashMap::default(),
             tag: self.tag.clone(),
             snap_cache: self.snap_cache.clone(),
-            cache_read_id: ThreadReadId::new(),
+            cache_read_id: self.cache_read_id.clone(),
         }
     }
 }

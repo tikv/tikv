@@ -17,6 +17,7 @@ use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -359,7 +360,7 @@ impl Simulator for NodeCluster {
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
-    ) -> Result<()> {
+    ) {
         if !self
             .trans
             .core
@@ -368,18 +369,15 @@ impl Simulator for NodeCluster {
             .routers
             .contains_key(&node_id)
         {
-            return Err(box_err!("missing sender for store {}", node_id));
+            let mut resp = RaftCmdResponse::default();
+            let e: RaftError = box_err!("missing sender for store {}", node_id);
+            resp.mut_header().set_error(e.into());
+            cb.invoke_with_response(resp);
+            return;
         }
-        let router = self
-            .trans
-            .core
-            .lock()
-            .unwrap()
-            .routers
-            .get(&node_id)
-            .cloned()
-            .unwrap();
-        router.read(batch_id, request, cb)
+        let mut guard = self.trans.core.lock().unwrap();
+        let router = guard.routers.get_mut(&node_id).unwrap();
+        router.read(batch_id, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

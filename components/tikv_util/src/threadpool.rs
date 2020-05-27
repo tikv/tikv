@@ -18,7 +18,7 @@ const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 use std::thread::{self, ThreadId};
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub struct ThreadReadId {
     thread_id: ThreadId,
     sequence: u64,

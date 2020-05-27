@@ -389,7 +389,7 @@ pub fn async_read_on_peer<T: Simulator>(
     read_quorum: bool,
     replica_read: bool,
 ) -> mpsc::Receiver<RaftCmdResponse> {
-    let node_id = peer.get_id();
+    let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -400,22 +400,20 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_replica_read(replica_read);
     let (tx, rx) = mpsc::sync_channel(1);
     let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster
-        .sim
-        .wl()
-        .async_read(node_id, None, request, cb)
-        .unwrap();
+    cluster.sim.wl().async_read(node_id, None, request, cb);
     rx
 }
 
-pub fn async_batch_read_on_peer<T: Simulator>(
+pub fn batch_read_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
     requests: Vec<(metapb::Peer, metapb::Region)>,
-) -> mpsc::Receiver<ReadResponse<RocksSnapshot>> {
+) -> Vec<ReadResponse<RocksSnapshot>> {
     let batch_id = Some(ThreadReadId::new());
-    let (tx, rx) = mpsc::sync_channel(requests.len());
-    requests.into_iter().map(|(peer, region)| {
-        let node_id = peer.get_id();
+    let (tx, rx) = mpsc::sync_channel(3);
+    let mut results = vec![];
+    let mut len = 0;
+    for (peer, region) in requests {
+        let node_id = peer.get_store_id();
         let mut request = new_request(
             region.get_id(),
             region.get_region_epoch().clone(),
@@ -424,14 +422,20 @@ pub fn async_batch_read_on_peer<T: Simulator>(
         );
         request.mut_header().set_peer(peer);
         let t = tx.clone();
-        let cb = Callback::Read(Box::new(move |resp| drop(t.send(resp))));
+        let cb = Callback::Read(Box::new(move |resp| {
+            t.send((len, resp)).unwrap();
+        }));
         cluster
             .sim
             .wl()
-            .async_read(node_id, batch_id.clone(), request, cb)
-            .unwrap();
-    });
-    rx
+            .async_read(node_id, batch_id.clone(), request, cb);
+        len += 1;
+    }
+    while results.len() < len {
+        results.push(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    }
+    results.sort_by_key(|resp| resp.0);
+    results.into_iter().map(|resp| resp.1).collect()
 }
 
 pub fn read_index_on_peer<T: Simulator>(

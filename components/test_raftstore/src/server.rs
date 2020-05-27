@@ -17,6 +17,7 @@ use super::*;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
@@ -387,12 +388,18 @@ impl Simulator for ServerCluster {
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
-    ) -> Result<()> {
-        let router = match self.metas.get(&node_id) {
-            None => return Err(box_err!("missing sender for store {}", node_id)),
-            Some(meta) => meta.sim_router.clone(),
+    ) {
+        match self.metas.get(&node_id) {
+            None => {
+                let e: RaftError = box_err!("missing sender for store {}", node_id);
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(e.into());
+                cb.invoke_with_response(resp);
+            }
+            Some(meta) => {
+                meta.sim_router.read(batch_id, request, cb).unwrap();
+            }
         };
-        router.read(batch_id, request, cb)
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

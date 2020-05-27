@@ -80,14 +80,7 @@ pub trait Simulator {
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let (cb, rx) = make_cb(&request);
-        match self.async_read(node_id, batch_id, request, cb) {
-            Ok(()) => {}
-            Err(e) => {
-                let mut resp = RaftCmdResponse::default();
-                resp.mut_header().set_error(e.into());
-                return Ok(resp);
-            }
-        }
+        self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
@@ -98,7 +91,7 @@ pub trait Simulator {
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
-    ) -> Result<()>;
+    );
 
     fn call_command_on_node(
         &self,
@@ -322,7 +315,21 @@ impl<T: Simulator> Cluster<T> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.rl().call_command(request.clone(), timeout) {
+        let mut is_read = false;
+        for req in request.get_requests() {
+            match req.get_cmd_type() {
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => {
+                    is_read = true;
+                }
+                _ => (),
+            }
+        }
+        let ret = if is_read {
+            self.sim.rl().read(None, request.clone(), timeout)
+        } else {
+            self.sim.rl().call_command(request.clone(), timeout)
+        };
+        match ret {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
                 Err(e)

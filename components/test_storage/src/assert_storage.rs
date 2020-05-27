@@ -240,7 +240,7 @@ impl<E: Engine> AssertionStorage<E> {
             .collect();
         let expect: Vec<Option<Vec<u8>>> = expect
             .into_iter()
-            .map(|x| if x.len() > 0 { Some(x.to_vec()) } else { None })
+            .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
             .collect();
         assert_eq!(result, expect);
     }
