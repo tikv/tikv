@@ -470,13 +470,13 @@ lazy_static! {
 
     pub static ref PEER_FSM_RECEIVED_MESSAGES_COUNTER: IntCounter = register_int_counter!(
             "tikv_raftstore_peer_fsm_message_total",
-            "The total number of messages received by peer fsm."
+            "The total number of messages received by peer FSMs."
     )
     .unwrap();
 
     pub static ref APPLY_FSM_RECEIVED_MESSAGES_COUNTER: IntCounter = register_int_counter!(
             "tikv_raftstore_apply_fsm_message_total",
-            "The total number of messages received by apply fsm."
+            "The total number of messages received by apply FSMs."
     )
     .unwrap();
 }
