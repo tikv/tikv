@@ -150,11 +150,22 @@ impl Tracker {
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
         assert_eq!(self.current_stage, TrackerState::ItemFinished);
-        let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
+        self.exec_details(self.item_process_time)
+    }
+
+    /// Get ExecDetail according to previous collected metrics.
+    /// TiDB asks for ExecDetail to be printed in its log.
+    pub fn get_exec_details(&self) -> kvrpcpb::ExecDetails {
+        assert_eq!(self.current_stage, TrackerState::AllItemFinished);
+        self.exec_details(self.total_process_time)
+    }
+
+    fn exec_details(&self, measure: Duration) -> kvrpcpb::ExecDetails {
+        let is_slow_query = time::duration_to_sec(measure) > SLOW_QUERY_LOWER_BOUND;
         let mut exec_details = kvrpcpb::ExecDetails::default();
         if self.req_ctx.context.get_handle_time() || is_slow_query {
             let mut handle = kvrpcpb::HandleTime::default();
-            handle.set_process_ms((time::duration_to_sec(self.item_process_time) * 1000.0) as i64);
+            handle.set_process_ms((time::duration_to_sec(measure) * 1000.0) as i64);
             handle.set_wait_ms((time::duration_to_sec(self.wait_time) * 1000.0) as i64);
             exec_details.set_handle_time(handle);
         }
