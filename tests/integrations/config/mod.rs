@@ -686,11 +686,11 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
 
 #[test]
 fn test_serde_default_config() {
-    let mut cfg: TiKvConfig = toml::from_str("").unwrap();
+    let cfg: TiKvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TiKvConfig::default());
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
-    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    let cfg: TiKvConfig = toml::from_str(&content).unwrap();
     assert_eq!(cfg, TiKvConfig::default());
 }
 
