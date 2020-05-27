@@ -354,7 +354,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let exec_details = tracker.get_exec_details();
         tracker.on_finish_all_items();
-        
+
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
