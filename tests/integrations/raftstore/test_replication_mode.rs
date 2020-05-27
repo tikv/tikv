@@ -327,3 +327,38 @@ fn test_migrate_replication_mode() {
     assert_eq!(state.state_id, 2);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
+
+/// Tests if labels are loaded correctly after rolling start.
+#[test]
+fn test_loading_label_after_rolling_start() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    cluster.create_engines();
+    let r = cluster.bootstrap_conf_change();
+    cluster.add_label(1, "zone", "ES");
+    cluster.run_node(1).unwrap();
+    cluster.add_label(2, "zone", "ES");
+    cluster.run_node(2).unwrap();
+    cluster.add_label(3, "zone", "WS");
+    cluster.run_node(3).unwrap();
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    cluster.must_transfer_leader(r, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    cluster.must_put(b"k2", b"v2");
+    // Non exists label key can't tolerate any node unavailable.
+    cluster.pd_client.configure_dr_auto_sync("zone");
+    thread::sleep(Duration::from_millis(100));
+    cluster.must_put(b"k3", b"v3");
+    thread::sleep(Duration::from_millis(100));
+    let state = cluster.pd_client.region_replication_status(r);
+    assert_eq!(state.state_id, 1);
+    assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
