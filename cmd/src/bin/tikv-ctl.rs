@@ -1676,6 +1676,7 @@ fn main() {
                         .long("start")
                         .required(true)
                         .takes_value(true)
+                        .default_value("")
                         .help("hex start key"),
                 )
                 .arg(
@@ -1683,6 +1684,7 @@ fn main() {
                         .long("end")
                         .required(true)
                         .takes_value(true)
+                        .default_value("")
                         .help("hex end key"),
                 ),
         )
