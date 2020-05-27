@@ -980,8 +980,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.peer.mut_store().flush_cache_metrics();
 
-        // Keep ticking if there are still pending read requests.
+        // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
+            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout()) ||
             !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
         {
             self.register_raft_base_tick();
