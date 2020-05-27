@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod stats;
-
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -113,6 +111,7 @@ fn adjust_dynamic_level_bytes(
     }
 }
 
+#[allow(deprecated)]
 pub fn new_engine_opt(
     path: &str,
     mut db_opt: DBOptions,
@@ -217,6 +216,8 @@ pub fn new_engine_opt(
     Ok(db)
 }
 
+// Temporarily deprecated until it is moved directly into engine_rocks
+#[deprecated = "use RocksEngine::exists"]
 pub fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {

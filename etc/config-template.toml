@@ -317,9 +317,6 @@
 ## Interval (s) to check Region whether the data are consistent.
 # consistency-check-interval = 0
 
-## Delay time before deleting a stale peer.
-# clean-stale-peer-delay = "10m"
-
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
 
@@ -827,13 +824,13 @@
 ##     type = "file"
 ##     path = "/path/to/master/key/file"
 ##
-[security.encryption.master-key]
+# [security.encryption.master-key]
 # type = "plaintext"
 
 ## Specifies the old master key when rotating master key. Same config format as master-key.
 ## The key is only access once during TiKV startup, after that TiKV do not need access to the key.
 ## And it is okay to leave the stale previous-master-key config after master key rotation.
-[security.encryption.previous-master-key]
+# [security.encryption.previous-master-key]
 # type = "plaintext"
 
 [import]

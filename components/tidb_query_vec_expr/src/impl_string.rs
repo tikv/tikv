@@ -33,6 +33,24 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(content) = arg {
+        // hex::decode will fail on odd-length content
+        // but mysql won't
+        // so do some padding
+        let mut padded_content = Vec::with_capacity(content.len() + content.len() % 2);
+        if content.len() % 2 == 1 {
+            padded_content.push(b'0')
+        }
+        padded_content.extend_from_slice(content);
+        Ok(hex::decode(padded_content).ok())
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
 }
@@ -140,6 +158,45 @@ pub fn lpad(arg: &Option<Bytes>, len: &Option<Int>, pad: &Option<Bytes>) -> Resu
                         arg[..target_len].to_vec()
                     };
                     Ok(Some(r))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn lpad_utf8(
+    arg: &Option<Bytes>,
+    len: &Option<Int>,
+    pad: &Option<Bytes>,
+) -> Result<Option<Bytes>> {
+    match (arg, len, pad) {
+        (Some(arg), Some(len), Some(pad)) => {
+            let input = match str::from_utf8(&*arg) {
+                Ok(arg) => arg,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            let pad = match str::from_utf8(&*pad) {
+                Ok(pad) => pad,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            let input_len = input.chars().count();
+            match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
+                None => Ok(None),
+                Some(0) => Ok(Some(b"".to_vec())),
+                Some(target_len) => {
+                    let r = if let Some(remain) = target_len.checked_sub(input_len) {
+                        pad.chars()
+                            .cycle()
+                            .take(remain)
+                            .chain(input.chars())
+                            .collect::<String>()
+                    } else {
+                        input.chars().take(target_len).collect::<String>()
+                    };
+                    Ok(Some(r.into_bytes()))
                 }
             }
         }
@@ -604,6 +661,35 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
+    #[test]
+    fn test_unhex() {
+        let cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"GG".to_vec()), None),
+            (
+                hex_str_arg(&Some(b"string".to_vec())).unwrap(),
+                Some(b"string".to_vec()),
+            ),
+            (
+                hex_str_arg(&Some(b"1267".to_vec())).unwrap(),
+                Some(b"1267".to_vec()),
+            ),
+            (Some(b"41\0".to_vec()), None),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"b".to_vec()), Some(vec![0xb])),
+            (Some(b"a1b".to_vec()), Some(vec![0xa, 0x1b])),
+            (None, None),
+        ];
+        for (arg, expect_output) in cases {
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
@@ -989,9 +1075,53 @@ mod tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
+    fn common_lpad_cases() -> Vec<(Option<Bytes>, Option<Int>, Option<Bytes>, Option<Bytes>)> {
+        vec![
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"?".to_vec()),
+                Some(b"???hi".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"?".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(0),
+                Some(b"?".to_vec()),
+                Some(b"".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(-1), Some(b"?".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(1),
+                Some(b"".to_vec()),
+                Some(b"h".to_vec()),
+            ),
+            (Some(b"hi".to_vec()), Some(5), Some(b"".to_vec()), None),
+            (
+                Some(b"hi".to_vec()),
+                Some(5),
+                Some(b"ab".to_vec()),
+                Some(b"abahi".to_vec()),
+            ),
+            (
+                Some(b"hi".to_vec()),
+                Some(6),
+                Some(b"ab".to_vec()),
+                Some(b"ababhi".to_vec()),
+            ),
+        ]
+    }
+
     #[test]
     fn test_lpad() {
-        let cases = vec![
+        let mut cases = vec![
             (
                 Some(b"hello".to_vec()),
                 Some(0),
@@ -1052,6 +1182,7 @@ mod tests {
             (None, Some(-1), Some(b"h".to_vec()), None),
             (None, None, None, None),
         ];
+        cases.append(&mut common_lpad_cases());
 
         for (arg, len, pad, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1150,6 +1281,59 @@ mod tests {
                 .push_param(len)
                 .push_param(pad)
                 .evaluate(ScalarFuncSig::Rpad)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_lpad_utf8() {
+        let mut cases = vec![
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(3),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(4),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(5),
+                Some("测试".as_bytes().to_vec()),
+                Some("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(6),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(7),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Some("测试".as_bytes().to_vec()),
+                None,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::LpadUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
