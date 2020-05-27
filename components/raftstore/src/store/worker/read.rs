@@ -15,8 +15,8 @@ use time::Timespec;
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
-    cmd_resp, Peer, ProposalRouter, RaftCommand, ReadExecutor, ReadResponse, RegionSnapshot,
-    RequestInspector, RequestPolicy,
+    cmd_resp, execute_read_request, Peer, ProposalRouter, RaftCommand, ReadResponse,
+    RegionSnapshot, RequestInspector, RequestPolicy,
 };
 use crate::Result;
 use engine_traits::KvEngine;
@@ -325,7 +325,7 @@ where
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
-                        let (mut response, need_snapshot) = ReadExecutor::<E>::execute(
+                        let (mut response, need_snapshot) = execute_read_request(
                             &self.kv_engine,
                             &cmd.request,
                             delegate.region.as_ref(),

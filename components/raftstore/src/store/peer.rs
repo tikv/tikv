@@ -2544,7 +2544,7 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<RocksSnapshot> {
-        let mut resp = ReadExecutor::execute_read_index(
+        let mut resp = execute_read_index(
             &ctx.engines.kv,
             &req,
             self.region(),
@@ -2953,144 +2953,133 @@ impl RequestInspector for Peer {
     }
 }
 
-#[derive(Debug)]
-pub struct ReadExecutor<E: KvEngine> {
-    check_epoch: bool,
-    engine: E,
-    snapshot: Option<Arc<E::Snapshot>>,
-    snapshot_time: Option<Timespec>,
-    need_snapshot_time: bool,
-}
+fn execute_get<E: KvEngine>(
+    engine: &E,
+    req: &Request,
+    region: &metapb::Region,
+) -> Result<Response> {
+    // TODO: the get_get looks weird, maybe we should figure out a better name later.
+    let key = req.get_get().get_key();
+    // region key range has no data prefix, so we must use origin key to check.
+    util::check_key_in_region(key, region)?;
 
-impl<E> ReadExecutor<E>
-where
-    E: KvEngine,
-{
-    fn do_get(engine: &E, req: &Request, region: &metapb::Region) -> Result<Response> {
-        // TODO: the get_get looks weird, maybe we should figure out a better name later.
-        let key = req.get_get().get_key();
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, region)?;
-
-        let mut resp = Response::default();
-        let res = if !req.get_get().get_cf().is_empty() {
-            let cf = req.get_get().get_cf();
-            // TODO: check whether cf exists or not.
-            engine
-                .get_value_cf(cf, &keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {} with cf {}: {:?}",
-                        region.get_id(),
-                        hex::encode_upper(key),
-                        cf,
-                        e
-                    )
-                })
-        } else {
-            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+    let mut resp = Response::default();
+    let res = if !req.get_get().get_cf().is_empty() {
+        let cf = req.get_get().get_cf();
+        engine
+            .get_value_cf(cf, &keys::data_key(key))
+            .unwrap_or_else(|e| {
                 panic!(
-                    "[region {}] failed to get {}: {:?}",
+                    "[region {}] failed to get {} with cf {}: {:?}",
                     region.get_id(),
                     hex::encode_upper(key),
+                    cf,
                     e
                 )
             })
-        };
-        if let Some(res) = res {
-            resp.mut_get().set_value(res.to_vec());
-        }
-
-        Ok(resp)
+    } else {
+        engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+            panic!(
+                "[region {}] failed to get {}: {:?}",
+                region.get_id(),
+                hex::encode_upper(key),
+                e
+            )
+        })
+    };
+    if let Some(res) = res {
+        resp.mut_get().set_value(res.to_vec());
     }
 
-    pub fn execute(
-        engine: &E,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-        read_index: Option<u64>,
-    ) -> (RaftCmdResponse, bool) {
-        let mut need_snapshot = false;
-        let requests = msg.get_requests();
-        let mut responses = Vec::with_capacity(requests.len());
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Get => match Self::do_get(engine, req, region) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!(
-                            "failed to execute get command";
-                            "region_id" => region.get_id(),
-                            "err" => ?e,
-                        );
-                        return (cmd_resp::new_error(e), false);
-                    }
-                },
-                CmdType::Snap => {
-                    need_snapshot = true;
-                    raft_cmdpb::Response::default()
-                }
-                CmdType::ReadIndex => {
-                    let mut resp = raft_cmdpb::Response::default();
-                    if let Some(read_index) = read_index {
-                        let mut res = ReadIndexResponse::default();
-                        res.set_read_index(read_index);
-                        resp.set_read_index(res);
-                    } else {
-                        panic!("[region {}] can not get readindex", region.get_id());
-                    }
-                    resp
-                }
-                CmdType::Prewrite
-                | CmdType::Put
-                | CmdType::Delete
-                | CmdType::DeleteRange
-                | CmdType::IngestSst
-                | CmdType::Invalid => unreachable!(),
-            };
-            resp.set_cmd_type(cmd_type);
-            responses.push(resp);
-        }
-        let mut response = RaftCmdResponse::default();
-        response.set_responses(responses.into());
-        (response, need_snapshot)
-    }
+    Ok(resp)
+}
 
-    pub fn execute_read_index(
-        engine: &E,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-        check_epoch: bool,
-        read_index: Option<u64>,
-    ) -> ReadResponse<E::Snapshot> {
-        if check_epoch {
-            if let Err(e) = check_region_epoch(msg, region, true) {
-                debug!(
-                    "epoch not match";
-                    "region_id" => region.get_id(),
-                    "err" => ?e,
-                );
-                return ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                };
+pub fn execute_read_request<E: KvEngine>(
+    engine: &E,
+    msg: &RaftCmdRequest,
+    region: &metapb::Region,
+    read_index: Option<u64>,
+) -> (RaftCmdResponse, bool) {
+    let mut need_snapshot = false;
+    let requests = msg.get_requests();
+    let mut responses = Vec::with_capacity(requests.len());
+    for req in requests {
+        let cmd_type = req.get_cmd_type();
+        let mut resp = match cmd_type {
+            CmdType::Get => match execute_get(engine, req, region) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!(
+                        "failed to execute get command";
+                        "region_id" => region.get_id(),
+                        "err" => ?e,
+                    );
+                    return (cmd_resp::new_error(e), false);
+                }
+            },
+            CmdType::Snap => {
+                need_snapshot = true;
+                raft_cmdpb::Response::default()
             }
-        }
-
-        let (response, need_snapshot) = Self::execute(engine, msg, region, read_index);
-        let snapshot = if need_snapshot {
-            let snapshot = Arc::new(engine.snapshot());
-            Some(RegionSnapshot::from_snapshot(
-                snapshot,
-                Arc::new(region.clone()),
-                Timespec::new(0, 0),
-            ))
-        } else {
-            None
+            CmdType::ReadIndex => {
+                let mut resp = raft_cmdpb::Response::default();
+                if let Some(read_index) = read_index {
+                    let mut res = ReadIndexResponse::default();
+                    res.set_read_index(read_index);
+                    resp.set_read_index(res);
+                } else {
+                    panic!("[region {}] can not get readindex", region.get_id());
+                }
+                resp
+            }
+            CmdType::Prewrite
+            | CmdType::Put
+            | CmdType::Delete
+            | CmdType::DeleteRange
+            | CmdType::IngestSst
+            | CmdType::Invalid => unreachable!(),
         };
-        ReadResponse { response, snapshot }
+        resp.set_cmd_type(cmd_type);
+        responses.push(resp);
     }
+    let mut response = RaftCmdResponse::default();
+    response.set_responses(responses.into());
+    (response, need_snapshot)
+}
+
+fn execute_read_index<E: KvEngine>(
+    engine: &E,
+    msg: &RaftCmdRequest,
+    region: &metapb::Region,
+    check_epoch: bool,
+    read_index: Option<u64>,
+) -> ReadResponse<E::Snapshot> {
+    if check_epoch {
+        if let Err(e) = check_region_epoch(msg, region, true) {
+            debug!(
+                "epoch not match";
+                "region_id" => region.get_id(),
+                "err" => ?e,
+            );
+            return ReadResponse {
+                response: cmd_resp::new_error(e),
+                snapshot: None,
+            };
+        }
+    }
+
+    let (response, need_snapshot) = execute_read_request(engine, msg, region, read_index);
+    let snapshot = if need_snapshot {
+        let snapshot = Arc::new(engine.snapshot());
+        Some(RegionSnapshot::from_snapshot(
+            snapshot,
+            Arc::new(region.clone()),
+            Timespec::new(0, 0),
+        ))
+    } else {
+        None
+    };
+    ReadResponse { response, snapshot }
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
