@@ -695,6 +695,30 @@ fn test_serde_default_config() {
 }
 
 #[test]
+fn test_readpool_default_config() {
+    let content = r#"	
+        [readpool.unified]	
+        max-thread-count = 1	
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let mut expected = TiKvConfig::default();
+    expected.readpool.unified.max_thread_count = 1;
+    assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_do_not_use_unified_readpool_with_legacy_config() {
+    let content = r#"	
+        [readpool.storage]	
+        normal-concurrency = 1	
+        [readpool.coprocessor]	
+        normal-concurrency = 1	
+    "#;
+    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    assert!(!cfg.readpool.is_unified_pool_enabled());
+}
+
+#[test]
 fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
