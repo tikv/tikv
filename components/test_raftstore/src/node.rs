@@ -181,8 +181,6 @@ impl Simulator for NodeCluster {
         router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
-        tikv_util::open_dev_assert();
-
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
 

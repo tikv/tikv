@@ -1950,10 +1950,6 @@ pub struct TiKvConfig {
     #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
-    #[doc(hidden)]
-    #[config(hidden)]
-    pub dev_assert: bool,
-
     #[config(skip)]
     pub readpool: ReadPoolConfig,
 
@@ -2009,7 +2005,6 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
-            dev_assert: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),

@@ -192,7 +192,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        merge_ensure_all_target_peer_exist: true,
+        dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
     };
@@ -631,7 +631,6 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
     };
     value.panic_when_unexpected_key_or_data = true;
-    value.dev_assert = true;
     value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,

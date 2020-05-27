@@ -158,11 +158,9 @@ pub struct Config {
     pub hibernate_regions: bool,
     #[config(hidden)]
     pub early_apply: bool,
-    // Only used for test
     #[doc(hidden)]
-    #[serde(skip_serializing)]
     #[config(hidden)]
-    pub merge_ensure_all_target_peer_exist: bool,
+    pub dev_assert: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
@@ -246,7 +244,7 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             early_apply: true,
-            merge_ensure_all_target_peer_exist: true,
+            dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
             // They are preserved for compatibility check.

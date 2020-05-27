@@ -46,7 +46,6 @@ use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::dev_assert_is_on;
 use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -904,7 +903,7 @@ impl Peer {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<T, C>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -936,7 +935,9 @@ impl Peer {
                         );
                     }
                 } else {
-                    dev_assert!(false, "{} failed to get peer {} from cache", self.tag, id);
+                    if ctx.cfg.dev_assert {
+                        assert!(false, "{} failed to get peer {} from cache", self.tag, id);
+                    }
                     error!("{} failed to get peer {} from cache", self.tag, id);
                 }
             }
@@ -1413,7 +1414,7 @@ impl Peer {
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if raft::is_empty_snap(ready.snapshot()) {
-            dev_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
+            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1520,7 +1521,7 @@ impl Peer {
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
         if !raft::is_empty_snap(ready.snapshot()) {
-            dev_assert!(self.get_store().is_applying_snapshot());
+            debug_assert!(self.get_store().is_applying_snapshot());
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
@@ -2066,7 +2067,7 @@ impl Peer {
         }
 
         let read = self.pending_reads.back_mut().unwrap();
-        dev_assert!(read.read_index.is_none());
+        debug_assert!(read.read_index.is_none());
         self.raft_group.read_index(read.id.as_bytes().to_vec());
         debug!(
             "request to get a read index";
@@ -2652,7 +2653,7 @@ impl Peer {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
-            pending_peers: self.collect_pending_peers(),
+            pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,

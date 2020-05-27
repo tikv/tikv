@@ -202,16 +202,6 @@ macro_rules! safe_panic {
     });
 }
 
-/// A development assert works if DEV_ASSERT is true.
-///
-/// It is used for some situations that assert is overkill in production environment
-/// but it's necessary to find some bugs in development environment.
-/// `debug_assert` is useless because we often use release version in our test.
-#[macro_export]
-macro_rules! dev_assert {
-    ($($arg:tt)*) => ( if dev_assert_is_on() { assert!($($arg)*); } )
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error;
