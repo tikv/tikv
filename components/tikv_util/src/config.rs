@@ -1304,7 +1304,7 @@ mod tests {
         );
 
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_err());
+        assert!(canonicalize_path(&path2).is_ok());
         ensure_dir_exist(&path2).unwrap();
         let res_path2 = canonicalize_path(&path2).unwrap();
         assert_eq!(
