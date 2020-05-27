@@ -2,6 +2,16 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.0] - 2020-05-27
++ Bug Fixes
+  + Fix the issue of backup fails with DefaultNotFound error. [#7937](https://github.com/tikv/tikv/pull/7937)
+  + Tolerate out-of-order read states from raft ready. [#7930](https://github.com/tikv/tikv/pull/7930)
+  + Handles the case when the callback is dropped by mistake when getting snapshot. [#7921](https://github.com/tikv/tikv/pull/7921)
+  + Fix the issue that `ascii_bin` and `latin1_bin` is not supported by TiKV for new collation framework. [#7919](https://github.com/tikv/tikv/pull/7919)
+  + Don't clean snapshot files when shutting down. [#7927](https://github.com/tikv/tikv/pull/7927)
+  + Encryption: fix master key not being able to rotate. [#7898](https://github.com/tikv/tikv/pull/7898)
+  + Encryption: fix snapshot apply failure caused lock CF snapshot file not being encrypted on received. [#7922](https://github.com/tikv/tikv/pull/7922)
+
 ## [4.0.0-rc.2] - 2020-05-15
 + Compatibility Changes
   + Move the encryption-related configuration to the security-related configuration, which means changing `[encryption]` in the TiKV configuration file to `[security.encryption]` [#7810](https://github.com/tikv/tikv/pull/7810)
