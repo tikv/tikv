@@ -2613,6 +2613,7 @@ where
     delegate: ApplyDelegate<E>,
     receiver: Receiver<Msg<E>>,
     mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
+    message_count: i64,
 }
 
 impl<E> ApplyFsm<E>
@@ -2633,6 +2634,7 @@ where
                 delegate,
                 receiver: rx,
                 mailbox: None,
+                message_count: 0,
             }),
         )
     }
@@ -3054,6 +3056,9 @@ where
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
+        if self.message_count > 0 {
+            APPLY_FSM_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
+        }
     }
 }
 
@@ -3135,7 +3140,10 @@ where
         }
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => self.msg_buf.push(msg),
+                Ok(msg) => {
+                    normal.message_count += 1;
+                    self.msg_buf.push(msg)
+                }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
