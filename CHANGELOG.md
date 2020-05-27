@@ -2,6 +2,28 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.0-ga] - 2020-05-25
++ Compatibility Changes
+  + Move config of encryption to under security config, i.e. [encryption] becomes [security.encryption] in tikv config. [#7800](https://github.com/tikv/tikv/pull/7800)
+  + Disable `server.request_batch_enable_cross_command ` and enable `raftdb.allow_concurrent_memtable_write` by default [#7835](https://github.com/tikv/tikv/pull/7835)
++ New Features
+  + Enable ALPN protocol for TiKV [#7819](https://github.com/tikv/tikv/pull/7819)
+  + Improve write performance for batch-insert request. [#7718](https://github.com/tikv/tikv/pull/7718)
+  + Allow using the task ID provided by the client as the identifier used by the unified read pool to avoid unexpected priority lowered by another task in the same transaction . [#7814](https://github.com/tikv/tikv/pull/7814)
++ Bug Fixes
+  + Fix the issue of backup fails with DefaultNotFound error. [#7937](https://github.com/tikv/tikv/pull/7937)
+  + Fix bug where tikv-ctl does not support relative path [#7936](https://github.com/tikv/tikv/pull/7936)
+  + Fix the issue of backup fails with DefaultNotFound error. [#7935](https://github.com/tikv/tikv/pull/7935)
+  + Tolerate out-of-order read states from raft ready [#7930](https://github.com/tikv/tikv/pull/7930)
+  + Fix the issue that `ascii_bin` and `latin1_bin` is not supported by TiKV for new collation framework. [#7919](https://github.com/tikv/tikv/pull/7919)
+  + Fix snapshot ingestion error when encryption is enabled. [#7806](https://github.com/tikv/tikv/pull/7806)
+  + Fix "Invalid cross-device link" error when trying to rewrite config file [#7795](https://github.com/tikv/tikv/pull/7795)
+  + Fixed an undefined behaviour in Coprocessor. [#7730](https://github.com/tikv/tikv/pull/7730)
+  + Handles the case when the callback is dropped by mistake when getting snapshot. [#7903](https://github.com/tikv/tikv/pull/7903)
+  + Encryption: fix snapshot apply failure caused lock CF snapshot file not being encrypted on received. [#7885](https://github.com/tikv/tikv/pull/7885)
+  + Encryption: fix master key not being able to rotate. [#7883](https://github.com/tikv/tikv/pull/7883)
+  + Reject handling any request on a destroyed peer. [#7492](https://github.com/tikv/tikv/pull/7492)
+
 ## [4.0.0-rc.2] - 2020-05-15
 + Compatibility Changes
   + Move the encryption-related configuration to the security-related configuration, which means changing `[encryption]` in the TiKV configuration file to `[security.encryption]` [#7810](https://github.com/tikv/tikv/pull/7810)
