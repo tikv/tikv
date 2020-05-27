@@ -8,10 +8,10 @@ extern crate vlog;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
 use std::iter::FromIterator;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -23,12 +23,15 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use encryption::DataKeyManager;
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
 use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -37,10 +40,10 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
+use security::{SecurityConfig, SecurityManager};
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::security::{SecurityConfig, SecurityManager};
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, file::calc_crc32, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -63,23 +66,29 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+            let key_manager =
+                DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .unwrap()
+                    .map(|key_manager| Arc::new(key_manager));
             let env = get_env(key_manager, None).unwrap();
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+            let kv_path = kv_path.to_str().unwrap();
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
-                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
-                    .canonicalize()
-                    .unwrap();
-                String::from(db_path.to_str().unwrap())
-            });
+            let mut raft_path = raft_db
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            raft_path = PathBuf::from(raft_path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .map(ToString::to_string)
+                .unwrap();
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
@@ -1722,6 +1731,24 @@ fn main() {
         .subcommand(
             SubCommand::with_name("cluster")
                 .about("Print the cluster id"),
+        )
+        .subcommand(
+            SubCommand::with_name("decrypt-file")
+                .about("Decrypt an encrypted file")
+                .arg(
+                    Arg::with_name("file")
+                        .long("file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("input file path"),
+                )
+                .arg(
+                    Arg::with_name("out-file")
+                        .long("out-file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("output file path"),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1773,6 +1800,53 @@ fn main() {
         return;
     } else if let Some(decoded) = matches.value_of("encode") {
         v1!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("decrypt-file") {
+        let infile = matches.value_of("file").unwrap();
+        let outfile = matches.value_of("out-file").unwrap();
+        v1!("infile: {}, outfile: {}", infile, outfile);
+
+        let key_manager =
+            match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .expect("DataKeyManager::from_config should success")
+            {
+                Some(mgr) => mgr,
+                None => {
+                    v1!("Encryption is disabled");
+                    v1!("crc32: {}", calc_crc32(infile).unwrap());
+                    return;
+                }
+            };
+
+        let infile1 = Path::new(infile).canonicalize().unwrap();
+        let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
+
+        let mthd = encryption_method_from_db_encryption_method(file_info.method);
+        if mthd == EncryptionMethod::Plaintext {
+            v1!(
+                "{} is not encrypted, skip to decrypt it into {}",
+                infile,
+                outfile
+            );
+            v1!("crc32: {}", calc_crc32(infile).unwrap());
+            return;
+        }
+
+        let mut outf = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(outfile)
+            .unwrap();
+
+        let iv = Iv::from_slice(&file_info.iv).unwrap();
+        let f = File::open(&infile).unwrap();
+        let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
+
+        io::copy(&mut reader, &mut outf).unwrap();
+        v1!("crc32: {}", calc_crc32(outfile).unwrap());
         return;
     }
 
@@ -2238,7 +2312,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let key_manager = DataKeyManager::from_config(&cfg.encryption, &cfg.storage.data_dir)
+    let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(|key_manager| Arc::new(key_manager));
     let env = get_env(key_manager, None).unwrap();

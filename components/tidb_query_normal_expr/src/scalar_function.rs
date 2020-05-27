@@ -296,6 +296,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::Sha1
             | ScalarFuncSig::Md5
+            | ScalarFuncSig::Password
             | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
@@ -309,6 +310,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -664,6 +666,7 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         ToSeconds => to_seconds,
+        TimeToSec => time_to_sec,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -899,6 +902,7 @@ dispatch_call! {
         Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
+        Password => password,
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,

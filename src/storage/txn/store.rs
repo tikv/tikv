@@ -325,6 +325,13 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
+        let (min_ts, max_ts) = if after_ts == TimeStamp::new(0) {
+            // Do not set min_ts and max_ts as it wants to read all versions.
+            (None, None)
+        } else {
+            // Scan ts in (after_ts, start_ts].
+            (Some(after_ts.next()), Some(self.start_ts))
+        };
         let scanner =
             ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
                 .range(lower_bound, upper_bound)
@@ -332,8 +339,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(Some(after_ts.next()))
-                .hint_max_ts(Some(self.start_ts))
+                .hint_min_ts(min_ts)
+                .hint_max_ts(max_ts)
                 .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
@@ -570,6 +577,7 @@ mod tests {
     use engine_traits::CfName;
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
+    use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -578,7 +586,7 @@ mod tests {
 
     struct TestStore {
         keys: Vec<String>,
-        snapshot: RocksSnapshot,
+        snapshot: Arc<RocksSnapshot>,
         ctx: Context,
         engine: RocksEngine,
     }
@@ -640,7 +648,7 @@ mod tests {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        fn store(&self) -> SnapshotStore<RocksSnapshot> {
+        fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {
             SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS.next(),
