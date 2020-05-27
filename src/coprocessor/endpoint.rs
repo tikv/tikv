@@ -353,7 +353,7 @@ impl<E: Engine> Endpoint<E> {
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
         tracker.on_finish_all_items();
-        
+
         let exec_details = tracker.get_exec_details();
         let mut resp = match result {
             Ok(resp) => {
