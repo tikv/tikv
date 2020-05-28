@@ -568,6 +568,13 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
 
                 let is_pessimistic_txn = lock.for_update_ts != 0;
+                if is_cleanup {
+                    info!(
+                        "cleanup rollbacked expired lock ";
+                        "key" => %key,
+                        "lock" => ?lock,
+                    );
+                }
                 self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
@@ -576,6 +583,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
+                            if is_cleanup {
+                                info!(
+                                    "cleanup found rollback write record";
+                                    "key" => %key,
+                                    "start_ts" => ts,
+                                );
+                            }
                             MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                             Ok(false)
                         } else {
@@ -596,6 +610,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         // collapse previous rollback if exist.
                         if self.collapse_rollback {
                             self.collapse_prev_rollback(key.clone())?;
+                        }
+
+                        if is_cleanup {
+                            info!("cleanup found nothing"; "key" => %key, "start_ts" => self.start_ts);
                         }
 
                         // Insert a Rollback to Write CF in case that a stale prewrite command
