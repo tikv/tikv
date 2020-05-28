@@ -308,11 +308,12 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             set_status_metrics(GcManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
-            set_status_metrics(GcManagerState::Working);
-            self.gc_a_round()?;
-            if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
-                on_finished();
-            }
+            // Don't need to run GC any more.
+            // set_status_metrics(GcManagerState::Working);
+            // self.gc_a_round()?;
+            // if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
+            //     on_finished();
+            // }
         }
     }
 
