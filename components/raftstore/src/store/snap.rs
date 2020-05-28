@@ -1020,7 +1020,7 @@ impl Write for Snap {
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
             let mut file = self.mgr.limiter.clone().limit(file);
-            if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
+            if file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
@@ -1135,6 +1135,12 @@ impl<E: KvEngine> SnapManager<E> {
     }
 
     pub fn init(&self) -> io::Result<()> {
+        let enc_enabled = self.core.encryption_key_manager.is_some();
+        info!(
+            "Initializing SnapManager, encryption is enabled: {}",
+            enc_enabled
+        );
+
         // Use write lock so only one thread initialize the directory at a time.
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);

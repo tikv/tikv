@@ -20,4 +20,5 @@ mod import;
 mod pd;
 mod raftstore;
 mod server;
+mod server_encryption;
 mod storage;

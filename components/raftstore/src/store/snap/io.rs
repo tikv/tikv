@@ -80,20 +80,19 @@ where
         Ok(true)
     }));
 
-    let mut file = if !should_encrypt {
-        file.unwrap()
-    } else {
-        encrypted_file.unwrap().finalize()
-    };
-
     if stats.key_count > 0 {
-        // use an empty byte array to indicate that cf reaches an end.
-        box_try!(file.encode_compact_bytes(b""));
+        box_try!(BytesEncoder::encode_compact_bytes(&mut writer, b""));
+        let file = if !should_encrypt {
+            file.unwrap()
+        } else {
+            encrypted_file.unwrap().finalize()
+        };
         box_try!(file.sync_all());
     } else {
         drop(file);
         box_try!(fs::remove_file(path));
     }
+
     Ok(stats)
 }
 
