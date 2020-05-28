@@ -88,7 +88,7 @@ pub fn delete_all_in_range_cf(
         while it.valid()? {
             if writer.is_none() {
                 data.push(it.key().to_vec());
-                if data.len() >= DELETE_KEYS_SST_LIMIT {
+                if data.len() >= DELETE_KEYS_SST_LIMIT && cf != CF_LOCK {
                     let mut s = DefaultHasher::new();
                     start_key.hash(&mut s);
                     let name = s.finish().to_string();
