@@ -84,8 +84,8 @@ make_auto_flush_static_metric! {
         write_done_by_self,
         write_timeout,
         write_with_wal,
-        cache_hit,
-        cache_miss,
+        blob_cache_hit,
+        blob_cache_miss,
         no_need,
         remain,
         discardable,
@@ -528,13 +528,13 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         TickerType::TitanBlobCacheHit => {
             STORE_ENGINE_BLOB_CACHE_EFFICIENCY
                 .get(name_enum)
-                .cache_hit
+                .blob_cache_hit
                 .inc_by(v);
         }
         TickerType::TitanBlobCacheMiss => {
             STORE_ENGINE_BLOB_CACHE_EFFICIENCY
                 .get(name_enum)
-                .cache_miss
+                .blob_cache_miss
                 .inc_by(v);
         }
         TickerType::TitanGcNoNeed => {
