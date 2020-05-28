@@ -65,6 +65,7 @@ make_auto_flush_static_metric! {
         no_file_closes,
         no_file_errors,
         no_file_opens,
+        number_blob_get,
         number_blob_next,
         number_blob_prev,
         number_blob_seek,
@@ -434,6 +435,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_READ_AMP_FLOW
                 .get(name_enum)
                 .read_amp_total_read_bytes
+                .inc_by(v);
+        }
+        TickerType::TitanNumGet => {
+            STORE_ENGINE_BLOB_LOCATE
+                .get(name_enum)
+                .number_blob_get
                 .inc_by(v);
         }
         TickerType::TitanNumSeek => {
@@ -948,6 +955,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             // Num files at levels
             if let Some(v) = crate::util::get_cf_num_files_at_level(engine, handle, level) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
+                    .with_label_values(&[name, cf, &level.to_string()])
+                    .set(v as i64);
+            }
+
+            // Titan Num blob files at levels
+            if let Some(v) = crate::util::get_cf_num_blob_files_at_level(engine, handle, level) {
+                STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
                     .set(v as i64);
             }
