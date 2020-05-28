@@ -415,6 +415,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     /// If safe point updates again at some time, it will still try to GC all regions with the
     /// latest safe point. If safe point always updates before `gc_a_round` finishes, `gc_a_round`
     /// may never stop, but it doesn't matter.
+    #[allow(dead_code)]
     fn gc_a_round(&mut self) -> GcManagerResult<()> {
         let mut need_rewind = false;
         // Represents where we should stop doing GC. `None` means the very end of the TiKV.

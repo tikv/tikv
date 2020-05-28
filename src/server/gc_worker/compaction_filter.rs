@@ -316,7 +316,7 @@ pub mod tests {
         let key = Key::from_raw(b"key")
             .append_ts(TimeStamp::from(110))
             .into_encoded();
-        let x = raw_engine.get_value_cf(CF_WRITE, &key);
-        assert_eq!(x, Ok(None));
+        let x = raw_engine.get_value_cf(CF_WRITE, &key).unwrap();
+        assert!(x.is_none());
     }
 }
