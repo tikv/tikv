@@ -161,6 +161,7 @@ impl Drop for WriteCompactionFilter {
                 }
 
                 self.delete_write_key(key);
+                self.deleted += 1;
                 valid = iter.next().unwrap();
             }
         }
@@ -242,20 +243,80 @@ impl CompactionFilter for WriteCompactionFilter {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::kv::RocksEngine as StorageRocksEngine;
+    use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
+    use crate::storage::mvcc::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CompactExt, SyncMutable};
+    use engine_traits::{CompactExt, Peekable, SyncMutable};
+    use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = RocksEngine::from_db(engine.get_rocksdb());
-
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.put_cf("write", b"k1", b"v1").unwrap();
+        do_gc_by_compact(&engine, None, None, safe_point);
+    }
 
+    fn do_gc_by_compact(
+        engine: &RocksEngine,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        safe_point: u64,
+    ) {
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
         init_compaction_filter(engine.clone(), safe_point, cfg);
-        engine.compact_range("write", None, None, false, 1).unwrap();
+        engine.compact_range("write", start, end, false, 1).unwrap();
+    }
+
+    fn rocksdb_level_file_counts(engine: &RocksEngine, cf: &str) -> Vec<usize> {
+        let cf_handle = get_cf_handle(engine.as_inner(), cf).unwrap();
+        let metadata = engine.as_inner().get_column_family_meta_data(cf_handle);
+        let mut res = Vec::with_capacity(7);
+        for level_meta in metadata.get_levels() {
+            res.push(level_meta.get_files().len());
+        }
+        res
+    }
+
+    // There could be some versions which are not included in one compaction. This case tests that
+    // those data can be cleared correctly by WriteCompactionFilter.
+    #[test]
+    fn test_compaction_filter_tail_data() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = RocksEngine::from_db(engine.get_rocksdb());
+
+        let split_key = Key::from_raw(b"key")
+            .append_ts(TimeStamp::from(135))
+            .into_encoded();
+
+        must_prewrite_put(&engine, b"key", b"value", b"key", 100);
+        must_commit(&engine, b"key", 100, 110);
+        do_gc_by_compact(&raw_engine, None, None, 50);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
+
+        must_prewrite_put(&engine, b"key", b"value", b"key", 120);
+        must_commit(&engine, b"key", 120, 130);
+        must_prewrite_delete(&engine, b"key", b"key", 140);
+        must_commit(&engine, b"key", 140, 140);
+        do_gc_by_compact(&raw_engine, None, Some(&split_key), 50);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 2);
+
+        // Put more key/value pairs so that 1 file in L0 and 1 file in L6 can be merged.
+        must_prewrite_put(&engine, b"kex", b"value", b"kex", 100);
+        must_commit(&engine, b"kex", 100, 110);
+
+        do_gc_by_compact(&raw_engine, None, Some(&split_key), 200);
+
+        // There are still 2 files in L6 because the SST contains key_110 is not touched.
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 2);
+
+        // Although the SST files is not involved in the last compaction,
+        // all versions of "key" should be cleared.
+        let key = Key::from_raw(b"key")
+            .append_ts(TimeStamp::from(110))
+            .into_encoded();
+        let x = raw_engine.get_value_cf(CF_WRITE, &key);
+        assert_eq!(x, Ok(None));
     }
 }
