@@ -638,8 +638,8 @@ mod tests {
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            // To simulate the `BatchExecutorsRunner`, we run the task for one millisecond
-            // every time, then yield.
+            // To simulate the execution of `BatchExecutorsRunner`, we run the task 
+            // for one millisecond (MAX_TIME_SLICE) every time, then yield.
             for _ in 0..self.handle_duration_millis {
                 thread::sleep(Duration::from_millis(1));
                 yield_now().await;
