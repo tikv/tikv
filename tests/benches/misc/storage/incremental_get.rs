@@ -1,74 +1,61 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use test::{black_box, Bencher};
+use tikv::storage::{Statistics, Store};
 
-use engine_rocks::RocksSnapshot;
-use kvproto::kvrpcpb::{Context, IsolationLevel};
-use std::sync::Arc;
-use test_storage::SyncTestStorageBuilder;
-use tidb_query_datatype::codec::table;
-use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
-use txn_types::{Key, Mutation};
-
-fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
-    let mut mutations = Vec::new();
-    let mut keys = Vec::new();
-    for i in 0..30000 {
-        let user_key = table::encode_row_key(5, i);
-        let user_value = vec![b'x'; 60];
-        let key = Key::from_raw(&user_key);
-        let mutation = Mutation::Put((key.clone(), user_value));
-        mutations.push(mutation);
-        keys.push(key);
-    }
-
-    let pk = table::encode_row_key(5, 0);
-
-    store
-        .prewrite(Context::default(), mutations, pk, 1)
-        .unwrap();
-    store.commit(Context::default(), keys, 1, 2).unwrap();
-
-    let engine = store.get_engine();
-    let db = engine.get_rocksdb();
-    db.compact_range_cf(db.cf_handle("write").unwrap(), None, None);
-    db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
-    db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
-
-    let snapshot = engine.snapshot(&Context::default()).unwrap();
-    let store = SnapshotStore::new(
-        snapshot,
-        10.into(),
-        IsolationLevel::Si,
-        true,
-        Default::default(),
-        false,
-    );
-
-    // Keys are given in order, and are far away from each other to simulate a normal table lookup
-    // scenario.
-    let mut get_keys = Vec::new();
-    for i in (0..30000).step_by(30) {
-        get_keys.push(Key::from_raw(&table::encode_row_key(5, i)));
-    }
-    (store, get_keys)
-}
-
+/// Point get 500 adjacent keys in a 30000 key space (value size = 64).
 #[bench]
-fn bench_table_lookup_mvcc_get(b: &mut Bencher) {
-    let (store, keys) = table_lookup_gen_data();
+fn bench_get_near(b: &mut Bencher) {
+    let s = super::prepare_table_data(30000, 64);
+    let keys = super::prepare_get_keys(500, 1);
+    let store = super::new_snapshot_store(&s);
     b.iter(|| {
+        let store = black_box(&store);
         let mut stats = Statistics::default();
-        for key in &keys {
+        for key in black_box(&keys) {
             black_box(store.get(key, &mut stats).unwrap());
         }
     });
 }
 
+/// Point get (incremental) 500 adjacent keys in a 30000 key space (value size = 64).
 #[bench]
-fn bench_table_lookup_mvcc_incremental_get(b: &mut Bencher) {
-    let (mut store, keys) = table_lookup_gen_data();
+fn bench_incremental_get_near(b: &mut Bencher) {
+    let s = super::prepare_table_data(30000, 64);
+    let keys = super::prepare_get_keys(500, 1);
+    let mut store = super::new_snapshot_store(&s);
     b.iter(|| {
-        for key in &keys {
+        let store = black_box(&mut store);
+        for key in black_box(&keys) {
+            black_box(store.incremental_get(key).unwrap());
+        }
+    })
+}
+
+/// Point get 500 non-adjacent keys in a 30000 key space (value size = 64).
+#[bench]
+fn bench_get_far(b: &mut Bencher) {
+    let s = super::prepare_table_data(30000, 64);
+    let keys = super::prepare_get_keys(500, 32);
+    let store = super::new_snapshot_store(&s);
+    b.iter(|| {
+        let store = black_box(&store);
+        let mut stats = Statistics::default();
+        for key in black_box(&keys) {
+            black_box(store.get(key, &mut stats).unwrap());
+        }
+    });
+}
+
+/// Point get (incremental) 500 non-adjacent keys in a 30000 key space (value size = 64).
+#[bench]
+fn bench_incremental_get_far(b: &mut Bencher) {
+    let s = super::prepare_table_data(30000, 64);
+    let keys = super::prepare_get_keys(500, 32);
+    let mut store = super::new_snapshot_store(&s);
+    b.iter(|| {
+        let store = black_box(&mut store);
+        for key in black_box(&keys) {
             black_box(store.incremental_get(key).unwrap());
         }
     })
