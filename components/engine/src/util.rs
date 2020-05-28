@@ -11,10 +11,10 @@ use crate::CF_LOCK;
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::time::time_now_sec;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::time::time_now_sec;
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -88,7 +88,7 @@ pub fn delete_all_in_range_cf(
         while it.valid()? {
             if writer.is_none() {
                 data.push(it.key().to_vec());
-                if data.len() >= DELETE_KEYS_SST_LIMIT && cf != CF_LOCK {
+                if data.len() >= DELETE_KEYS_SST_LIMIT {
                     let mut s = DefaultHasher::new();
                     start_key.hash(&mut s);
                     let name = s.finish().to_string();
@@ -110,7 +110,7 @@ pub fn delete_all_in_range_cf(
         if data.len() > 0 {
             let wb = WriteBatch::new();
             for key in data.iter() {
-                wb.delete(key);
+                wb.delete(key)?;
                 if wb.data_size() > MAX_DELETE_BATCH_SIZE {
                     db.write(&wb)?;
                     wb.clear();
@@ -124,6 +124,9 @@ pub fn delete_all_in_range_cf(
             let f = w.finish()?;
             let mut ingest_opt = IngestExternalFileOptions::new();
             ingest_opt.move_files(true);
+            info!("ingest one deleted sst"; "cf"=>cf,
+                "start_key" => hex::encode_upper(start_key),
+                "end_key" => hex::encode_upper(end_key));
             db.ingest_external_file_cf(handle, &ingest_opt, &[f.file_path().to_str().unwrap()])?;
         }
     }
