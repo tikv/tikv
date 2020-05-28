@@ -731,40 +731,54 @@ impl Debugger {
 
     pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
-        dump_properties(&self.engines.kv, region_state.get_region())
+        let region = region_state.get_region();
+        let start = keys::enc_start_key(region);
+        let end = keys::enc_end_key(region);
+
+        let mut res = dump_mvcc_properties(&self.engines.kv, &start, &end)?;
+
+        let middle_key = match box_try!(get_region_approximate_middle(self.engines.kv.c(), region))
+        {
+            Some(data_key) => {
+                let mut key = keys::origin_key(&data_key);
+                box_try!(bytes::decode_bytes(&mut key, false))
+            }
+            None => Vec::new(),
+        };
+
+        // Middle key of the range.
+        res.push((
+            "middle_key_by_approximate_size".to_owned(),
+            hex::encode(&middle_key),
+        ));
+
+        Ok(res)
     }
 
     pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut region = Region::default();
         region.set_start_key(start.to_owned());
         region.set_end_key(end.to_owned());
-        dump_properties(&self.engines.kv, &region)
+        dump_mvcc_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )
     }
 }
 
-fn dump_properties(db: &Arc<DB>, region: &Region) -> Result<Vec<(String, String)>> {
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-
+fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
-    let mut mvcc_properties = MvccProperties::new();
 
     let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let num_files = collection.len();
+
+    let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
         let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
-
-    let num_files = collection.len();
-
-    let middle_key = match box_try!(get_region_approximate_middle(db.c(), region)) {
-        Some(data_key) => {
-            let mut key = keys::origin_key(&data_key);
-            box_try!(bytes::decode_bytes(&mut key, false))
-        }
-        None => Vec::new(),
-    };
 
     let sst_files = collection
         .iter()
@@ -795,12 +809,6 @@ fn dump_properties(db: &Arc<DB>, region: &Region) -> Result<Vec<(String, String)
     let num_deletes = num_entries - mvcc_properties.num_versions;
     res.push(("num_entries".to_owned(), num_entries.to_string()));
     res.push(("num_deletes".to_owned(), num_deletes.to_string()));
-
-    // Middle key of the range.
-    res.push((
-        "middle_key_by_approximate_size".to_owned(),
-        hex::encode(&middle_key),
-    ));
 
     // count and list of files.
     res.push(("num_files".to_owned(), num_files.to_string()));
