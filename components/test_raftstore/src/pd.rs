@@ -135,7 +135,7 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    if cluster.merge_ensure_all_target_peer_exist {
+                    if cluster.check_merge_target_integrity {
                         let mut all_exist = true;
                         for peer in region.get_peers() {
                             if cluster.pending_peers.contains_key(&peer.get_id()) {
@@ -251,7 +251,7 @@ struct Cluster {
     region_replication_status: HashMap<u64, RegionReplicationStatus>,
 
     // for merging
-    pub merge_ensure_all_target_peer_exist: bool,
+    pub check_merge_target_integrity: bool,
 }
 
 impl Cluster {
@@ -282,7 +282,7 @@ impl Cluster {
             gc_safe_point: 0,
             replication_status: None,
             region_replication_status: HashMap::default(),
-            merge_ensure_all_target_peer_exist: true,
+            check_merge_target_integrity: true,
         }
     }
 
@@ -1081,7 +1081,7 @@ impl TestPdClient {
     }
 
     pub fn do_not_ensure_all_target_peer_exist(&self) {
-        self.cluster.wl().merge_ensure_all_target_peer_exist = false;
+        self.cluster.wl().check_merge_target_integrity = false;
     }
 }
 

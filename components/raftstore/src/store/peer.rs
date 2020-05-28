@@ -936,7 +936,7 @@ impl Peer {
                     }
                 } else {
                     if ctx.cfg.dev_assert {
-                        assert!(false, "{} failed to get peer {} from cache", self.tag, id);
+                        panic!("{} failed to get peer {} from cache", self.tag, id);
                     }
                     error!("{} failed to get peer {} from cache", self.tag, id);
                 }

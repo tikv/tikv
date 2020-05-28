@@ -1326,8 +1326,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             Ok(true)
         } else {
             if self.ctx.cfg.dev_assert {
-                assert!(
-                    false,
+                panic!(
                     "something is wrong, maybe PD do not ensure all target peers exist before merging"
                 );
             }
@@ -2036,8 +2035,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             Ok(true) => Err(box_err!("region {} is destroyed", target_region_id)),
             Ok(false) => {
                 if self.ctx.cfg.dev_assert {
-                    assert!(
-                        false,
+                    panic!(
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
                 }
