@@ -14,7 +14,7 @@ use engine::rocks::{
 use engine_rocks::RocksEngine;
 use engine_rocks::RocksWriteBatch;
 use engine_traits::{Mutable, WriteBatch, CF_WRITE};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 
@@ -78,6 +78,7 @@ struct WriteCompactionFilter {
 
     write_batch: RocksWriteBatch,
     delete_key_prefix: Vec<u8>,
+    delete_key_ts: u64,
     key_prefix: Vec<u8>,
     remove_older: bool,
 
@@ -97,6 +98,7 @@ impl WriteCompactionFilter {
             db,
             write_batch: wb,
             delete_key_prefix: vec![],
+            delete_key_ts: 0,
             key_prefix: vec![],
             remove_older: false,
 
@@ -144,7 +146,10 @@ impl Drop for WriteCompactionFilter {
             // still some versions for the key which are not included in this compaction.
             let cf_handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
             let mut iter = DBIterator::new_cf(self.db.clone(), cf_handle, ReadOptions::new());
-            let mut valid = iter.seek(SeekKey::Key(&self.delete_key_prefix)).unwrap();
+            let seek_key = Key::from_encoded_slice(&self.delete_key_prefix)
+                .append_ts(TimeStamp::from(self.delete_key_ts))
+                .into_encoded();
+            let mut valid = iter.seek(SeekKey::Key(&seek_key)).unwrap();
             while valid {
                 let (key, value) = (iter.key(), iter.value());
                 let key_prefix = match Key::split_on_ts_for(key) {
@@ -187,7 +192,7 @@ impl CompactionFilter for WriteCompactionFilter {
     ) -> bool {
         let safe_point = self.safe_point.load(Ordering::Relaxed);
         let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
-            Ok((key, ts)) => (key, ts),
+            Ok((key, ts)) => (key, ts.into_inner()),
             // Invalid MVCC keys, don't touch them.
             Err(_) => return false,
         };
@@ -200,7 +205,7 @@ impl CompactionFilter for WriteCompactionFilter {
         }
 
         self.versions += 1;
-        if commit_ts.into_inner() > safe_point {
+        if commit_ts > safe_point {
             return false;
         }
 
@@ -222,6 +227,7 @@ impl CompactionFilter for WriteCompactionFilter {
                         filtered = true;
                         self.delete_key_prefix.clear();
                         self.delete_key_prefix.extend_from_slice(key_prefix);
+                        self.delete_key_ts = commit_ts;
                     }
                 }
                 WriteType::Put => self.remove_older = true,
@@ -247,7 +253,6 @@ pub mod tests {
     use crate::storage::mvcc::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
     use engine_traits::{CompactExt, Peekable, SyncMutable};
-    use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = RocksEngine::from_db(engine.get_rocksdb());
