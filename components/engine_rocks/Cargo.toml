@@ -37,7 +37,8 @@ serde_derive = "1.0"
 coarsetime = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/hicqu/rust-rocksdb.git"
+branch = "compaction-bottommost-level"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
