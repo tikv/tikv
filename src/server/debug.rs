@@ -756,9 +756,6 @@ impl Debugger {
     }
 
     pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
-        let mut region = Region::default();
-        region.set_start_key(start.to_owned());
-        region.set_end_key(end.to_owned());
         dump_mvcc_properties(
             &self.engines.kv,
             &keys::data_key(start),
