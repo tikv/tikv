@@ -20,6 +20,7 @@ make_auto_flush_static_metric! {
         normal,
         transfer_leader,
         conf_change,
+        batch,
     }
 
     pub label_enum AdminCmdType {
@@ -455,8 +456,15 @@ lazy_static! {
             "collect topN of read qps",
         &["order"]
         ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches"
         ).unwrap();
+
+    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_apply_pending_bytes",
+        "The bytes pending in the channel of apply FSMs"
+    )
+    .unwrap();
 }

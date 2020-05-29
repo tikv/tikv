@@ -118,7 +118,7 @@ impl Collation {
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
-            -46 | -83 => Ok(Collation::Utf8Mb4Bin),
+            -46 | -83 | -65 | -47 => Ok(Collation::Utf8Mb4Bin),
             -63 | 63 => Ok(Collation::Binary),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),

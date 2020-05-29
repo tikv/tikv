@@ -29,8 +29,8 @@ use raftstore::coprocessor::CoprocessorHost;
 use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
+use security::SecurityManager;
 use tikv_util::collections::HashSet;
-use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
 
@@ -278,8 +278,8 @@ mod tests {
     use self::waiter_manager::tests::*;
     use super::*;
     use raftstore::coprocessor::RegionChangeEvent;
+    use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::security::SecurityConfig;
 
     use std::thread;
     use std::time::Duration;

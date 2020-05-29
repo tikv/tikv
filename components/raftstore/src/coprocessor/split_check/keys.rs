@@ -90,7 +90,7 @@ pub struct KeysCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> KeysCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot>, E> KeysCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -104,7 +104,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for KeysCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for KeysCheckObserver<C, E>
 where
     E: KvEngine,
 {
