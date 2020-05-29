@@ -121,7 +121,10 @@ impl MvccPropertiesCollector {
 
 impl TablePropertiesCollector for MvccPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
+        // TsFilter filters sst based on max_ts and min_ts during iterating.
+        // To prevent seeing outdated (GC) records, we should consider
+        // RocksDB delete entry type.
+        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
             return;
         }
 
@@ -140,6 +143,11 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        if entry_type == DBEntryType::Delete {
+            // Empty value for delete entry type, skip following properties.
+            return;
+        }
+
         self.props.num_versions += 1;
 
         if k != self.last_row.as_slice() {
