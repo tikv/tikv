@@ -3,24 +3,16 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-<<<<<<< HEAD:src/import/sst_importer.rs
-use std::io::Write as _;
-use std::ops::Bound;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-=======
-use std::io::{self, Write};
+use std::io::{self, Write as _};
 use std::marker::Unpin;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917):components/sst_importer/src/sst_importer.rs
 
 use futures_util::io::{AsyncRead, AsyncReadExt};
 use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
-<<<<<<< HEAD:src/import/sst_importer.rs
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::storage::mvcc::Write;
@@ -28,20 +20,7 @@ use crate::storage::Key;
 use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriter, DB};
 use engine::CF_WRITE;
-use external_storage::{block_on_external_io, create_storage, url_of_backend};
-use futures_util::io::{copy, AllowStdIo};
-=======
-use tokio::time::timeout;
-use uuid::{Builder as UuidBuilder, Uuid};
-
-use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksSstReader};
-use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstExt,
-    SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
-};
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917):components/sst_importer/src/sst_importer.rs
 use tikv_util::time::Limiter;
 
 use super::metrics::*;
@@ -148,12 +127,9 @@ impl SSTImporter {
         }
     }
 
-<<<<<<< HEAD:src/import/sst_importer.rs
-    fn do_download(
-=======
     async fn read_external_storage_into_file(
         input: &mut (dyn AsyncRead + Unpin),
-        output: &mut dyn Write,
+        output: &mut dyn io::Write,
         speed_limiter: &Limiter,
         expected_length: u64,
         min_read_speed: usize,
@@ -193,8 +169,7 @@ impl SSTImporter {
         Ok(())
     }
 
-    fn do_download<E: KvEngine>(
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917):components/sst_importer/src/sst_importer.rs
+    fn do_download(
         &self,
         meta: &SSTMeta,
         backend: &StorageBackend,
@@ -208,32 +183,11 @@ impl SSTImporter {
         let url = url_of_backend(backend);
 
         {
-<<<<<<< HEAD:src/import/sst_importer.rs
-            let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
-            let file_length =
-                block_on_external_io(copy(ext_reader, &mut file_writer)).map_err(|e| {
-                    Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e)
-                })?;
-            if meta.length != 0 && meta.length != file_length {
-                let reason = format!("length {}, expect {}", file_length, meta.length);
-                return Err(Error::FileCorrupted(path.temp, reason));
-            }
-            IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
-            file_writer.into_inner().sync_data()?;
-=======
             // prepare to download the file from the external_storage
             let ext_storage = create_storage(backend)?;
             let mut ext_reader = ext_storage.read(name);
 
-            let mut plain_file;
-            let mut encrypted_file;
-            let file_writer: &mut dyn Write = if let Some(key_manager) = &self.key_manager {
-                encrypted_file = key_manager.create_file(&path.temp)?;
-                &mut encrypted_file
-            } else {
-                plain_file = File::create(&path.temp)?;
-                &mut plain_file
-            };
+            let mut file_writer = File::create(&path.temp)?;
 
             // the minimum speed of reading data, in bytes/second.
             // if reading speed is slower than this rate, we will stop with
@@ -243,7 +197,7 @@ impl SSTImporter {
 
             block_on_external_io(Self::read_external_storage_into_file(
                 &mut ext_reader,
-                file_writer,
+                &mut file_writer,
                 &speed_limiter,
                 meta.length,
                 MINIMUM_READ_SPEED,
@@ -257,11 +211,7 @@ impl SSTImporter {
                 )
             })?;
 
-            OpenOptions::new()
-                .append(true)
-                .open(&path.temp)?
-                .sync_data()?;
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917):components/sst_importer/src/sst_importer.rs
+            file_writer.sync_data()?;
         }
 
         // now validate the SST file.
@@ -1072,7 +1022,7 @@ mod tests {
             &mut output,
             &Limiter::new(INFINITY),
             0,
-            usize::MAX,
+            std::usize::MAX,
         ))
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
