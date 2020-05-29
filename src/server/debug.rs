@@ -35,7 +35,6 @@ use raftstore::store::{write_initial_apply_state, write_initial_raft_state, writ
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
-use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
@@ -733,20 +732,13 @@ impl Debugger {
     pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
-        let db = &self.engines.kv;
+        let start = keys::enc_start_key(region);
+        let end = keys::enc_end_key(region);
 
-        let mut num_entries = 0;
-        let mut mvcc_properties = MvccProperties::new();
-        let start = keys::enc_start_key(&region);
-        let end = keys::enc_end_key(&region);
-        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
-        for (_, v) in collection.iter() {
-            num_entries += v.num_entries();
-            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
-            mvcc_properties.add(&mvcc);
-        }
+        let mut res = dump_mvcc_properties(&self.engines.kv, &start, &end)?;
 
-        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(self.engines.kv.c(), region))
+        {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -754,41 +746,72 @@ impl Debugger {
             None => Vec::new(),
         };
 
-        let mut res: Vec<(String, String)> = [
-            ("num_files", collection.len() as u64),
-            ("num_entries", num_entries),
-            ("num_deletes", num_entries - mvcc_properties.num_versions),
-            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
-            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
-            ("mvcc.num_rows", mvcc_properties.num_rows),
-            ("mvcc.num_puts", mvcc_properties.num_puts),
-            ("mvcc.num_deletes", mvcc_properties.num_deletes),
-            ("mvcc.num_versions", mvcc_properties.num_versions),
-            ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_string(),
-            escape(&middle_key),
+            "middle_key_by_approximate_size".to_owned(),
+            hex::encode(&middle_key),
         ));
-        res.push((
-            "sst_files".to_string(),
-            collection
-                .iter()
-                .map(|(k, _)| {
-                    Path::new(&*k)
-                        .file_name()
-                        .map(|f| f.to_str().unwrap())
-                        .unwrap_or(&*k)
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-        ));
+
         Ok(res)
     }
+
+    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        dump_mvcc_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )
+    }
+}
+
+fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut num_entries = 0; // number of Rocksdb K/V entries.
+
+    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let num_files = collection.len();
+
+    let mut mvcc_properties = MvccProperties::new();
+    for (_, v) in collection.iter() {
+        num_entries += v.num_entries();
+        let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
+        mvcc_properties.add(&mvcc);
+    }
+
+    let sst_files = collection
+        .iter()
+        .map(|(k, _)| {
+            Path::new(&*k)
+                .file_name()
+                .map(|f| f.to_str().unwrap())
+                .unwrap_or(&*k)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut res: Vec<(String, String)> = [
+        ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+        ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
+        ("mvcc.num_rows", mvcc_properties.num_rows),
+        ("mvcc.num_puts", mvcc_properties.num_puts),
+        ("mvcc.num_deletes", mvcc_properties.num_deletes),
+        ("mvcc.num_versions", mvcc_properties.num_versions),
+        ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .collect();
+
+    // Entries and delete marks of RocksDB.
+    let num_deletes = num_entries - mvcc_properties.num_versions;
+    res.push(("num_entries".to_owned(), num_entries.to_string()));
+    res.push(("num_deletes".to_owned(), num_deletes.to_string()));
+
+    // count and list of files.
+    res.push(("num_files".to_owned(), num_files.to_string()));
+    res.push(("sst_files".to_owned(), sst_files));
+
+    Ok(res)
 }
 
 fn recover_mvcc_for_range(
