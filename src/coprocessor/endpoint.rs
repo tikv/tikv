@@ -585,9 +585,6 @@ mod tests {
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
 
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
@@ -614,11 +611,15 @@ mod tests {
     }
 
     async fn yield_now() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
         struct YieldNow {
             yielded: bool,
         }
 
-        impl std::future::Future for YieldNow {
+        impl Future for YieldNow {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -638,12 +639,12 @@ mod tests {
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            // To simulate the execution of `BatchExecutorsRunner`, we run the task 
-            // for one millisecond (MAX_TIME_SLICE) every time, then yield.
-            for _ in 0..self.handle_duration_millis {
-                thread::sleep(Duration::from_millis(1));
+            // We split the task into small executions of 1 second.
+            for _ in 0..self.handle_duration_millis / 1_000 {
+                thread::sleep(Duration::from_millis(1_000));
                 yield_now().await;
             }
+            thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
 
             self.result.take().unwrap()
         }
