@@ -239,8 +239,10 @@ mod tests {
     use super::*;
 
     use engine_traits::KvEngine;
+    use std::thread;
     use tempfile::Builder;
     use test_sst_importer::new_test_engine;
+    use tikv_util::config::ReadableDuration;
 
     fn check_import_options<E>(
         db: &E,
@@ -311,6 +313,40 @@ mod tests {
         switcher.enter_normal_mode(mf).unwrap();
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_normal_mode(mf).unwrap();
+        check_import_options(&db, &normal_db_options, &normal_cf_options);
+    }
+
+    #[test]
+    fn test_import_mode_timeout() {
+        let temp_dir = Builder::new()
+            .prefix("test_import_mode_timeout")
+            .tempdir()
+            .unwrap();
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+
+        let import_db_options = ImportModeDBOptions::new();
+        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let import_cf_options = ImportModeCFOptions::new();
+        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+
+        fn mf(_cf: &str, _name: &str, _v: f64) {}
+
+        let cfg = Config {
+            import_mode_timeout: ReadableDuration::secs(5),
+            ..Config::default()
+        };
+        let threads = futures_cpupool::Builder::new()
+            .name_prefix("sst-importer")
+            .pool_size(cfg.num_threads)
+            .create();
+
+        let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+        check_import_options(&db, &normal_db_options, &normal_cf_options);
+        switcher.enter_import_mode(mf).unwrap();
+        check_import_options(&db, &import_db_options, &import_cf_options);
+
+        thread::sleep(Duration::from_secs(10));
+
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
 }
