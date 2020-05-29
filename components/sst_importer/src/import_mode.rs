@@ -90,24 +90,21 @@ impl<T: KvEngine> ImportModeSwitcher<T> {
         // spawn a background future to put TiKV back into normal mode after timeout
         let switcher = Arc::downgrade(&inner);
         let timer_loop = async move {
-            loop {
-                let next_check = match switcher.upgrade() {
-                    Some(switcher) => {
-                        let mut switcher = switcher.lock().unwrap();
-                        let now = Instant::now();
-                        if now >= switcher.next_check {
-                            if switcher.mode == SwitchMode::Import {
-                                let mf = switcher.metrics_fn;
-                                if !switcher.enter_normal_mode(mf).is_ok() {
-                                    error!("failed to put TiKV back into normal mode");
-                                }
+            // loop until the switcher has been dropped
+            while let Some(switcher) = switcher.upgrade() {
+                let next_check = {
+                    let mut switcher = switcher.lock().unwrap();
+                    let now = Instant::now();
+                    if now >= switcher.next_check {
+                        if switcher.mode == SwitchMode::Import {
+                            let mf = switcher.metrics_fn;
+                            if switcher.enter_normal_mode(mf).is_err() {
+                                error!("failed to put TiKV back into normal mode");
                             }
-                            switcher.next_check = now + switcher.timeout
                         }
-                        switcher.next_check
+                        switcher.next_check = now + switcher.timeout
                     }
-                    // if the switcher has been dropped, we can stop
-                    None => break,
+                    switcher.next_check
                 };
 
                 let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
