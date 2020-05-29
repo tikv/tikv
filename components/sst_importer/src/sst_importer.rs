@@ -22,13 +22,7 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstExt,
     SstReader, SstWriter, CF_DEFAULT, CF_WRITE,
 };
-<<<<<<< HEAD
-use external_storage::{block_on_external_io, create_storage, url_of_backend};
-use futures_util::io::{copy, AllowStdIo};
-use keys;
-=======
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -1147,7 +1141,7 @@ mod tests {
             &mut output,
             &Limiter::new(INFINITY),
             0,
-            usize::MAX,
+            std::usize::MAX,
         ))
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);

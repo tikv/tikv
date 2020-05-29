@@ -13,14 +13,10 @@ futures = "0.3.1"
 futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-<<<<<<< HEAD
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
-=======
 http = "0.2.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 hyper = "0.13.3"
 hyper-tls = "0.4.1"
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
 rand = "0.7"
 rusoto_core = "0.43.0"
 rusoto_s3 = "0.43.0"

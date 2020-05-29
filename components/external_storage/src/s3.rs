@@ -22,8 +22,6 @@ use super::{
 };
 use kvproto::backup::S3 as Config;
 
-const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-
 /// S3 compatible storage
 #[derive(Clone)]
 pub struct S3Storage {
@@ -283,37 +281,11 @@ impl ExternalStorage for S3Storage {
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
-<<<<<<< HEAD
-        let get_var = |s: &String| {
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.clone())
-            }
-        };
-        let req = PutObjectRequest {
-            key,
-            bucket: self.config.bucket.clone(),
-            body: Some(ByteStream::new(
-                AsyncReadAsSyncStreamOfBytes::with_capacity(reader, READ_BUF_SIZE),
-            )),
-            content_length: Some(content_length as i64),
-            acl: get_var(&self.config.acl),
-            server_side_encryption: get_var(&self.config.sse),
-            ssekms_key_id: get_var(&self.config.sse_kms_key_id),
-            storage_class: get_var(&self.config.storage_class),
-            ..Default::default()
-        };
-        block_on_external_io(self.client.put_object(req))
-            .map(|_| ())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to put object {}", e)))
-=======
 
         let uploader = S3Uploader::new(&self.client, &self.config, key);
         block_on_external_io(uploader.run(&mut *reader, content_length)).map_err(|e| {
             io::Error::new(io::ErrorKind::Other, format!("failed to put object {}", e))
         })
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {

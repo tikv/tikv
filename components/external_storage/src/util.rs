@@ -2,12 +2,8 @@
 
 use bytes::Bytes;
 use futures::stream::{self, Stream};
-<<<<<<< HEAD
-use futures_io::AsyncRead;
-=======
 use futures_util::io::AsyncRead;
 use rand::{thread_rng, Rng};
->>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
 use std::{
     future::Future,
     io, iter,
@@ -29,15 +25,6 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // we use this member to ensure every call to `poll_next()` reuse the same
     // buffer.
     buf: Vec<u8>,
-}
-
-impl<R> AsyncReadAsSyncStreamOfBytes<R> {
-    pub fn with_capacity(reader: R, capacity: usize) -> Self {
-        Self {
-            reader: Mutex::new(reader),
-            buf: vec![0; capacity],
-        }
-    }
 }
 
 impl<R: AsyncRead + Unpin> Stream for AsyncReadAsSyncStreamOfBytes<R> {
