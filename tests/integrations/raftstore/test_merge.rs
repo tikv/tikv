@@ -267,7 +267,7 @@ fn test_node_merge_prerequisites_check() {
 fn test_node_check_merged_message() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
-    do_not_ensure_all_target_peer_exist(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -337,7 +337,7 @@ fn test_node_merge_slow_split_left() {
 fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    do_not_ensure_all_target_peer_exist(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
@@ -402,7 +402,7 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
 fn test_node_merge_dist_isolation() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    do_not_ensure_all_target_peer_exist(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -478,7 +478,7 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    do_not_ensure_all_target_peer_exist(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
 
@@ -879,7 +879,7 @@ fn test_request_snapshot_after_propose_merge() {
 fn test_merge_isolated_store_with_no_target_peer() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
-    do_not_ensure_all_target_peer_exist(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

@@ -1080,7 +1080,7 @@ impl TestPdClient {
         }
     }
 
-    pub fn do_not_ensure_all_target_peer_exist(&self) {
+    pub fn ignore_merge_target_integrity(&self) {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 }

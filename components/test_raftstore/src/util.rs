@@ -560,9 +560,9 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
-pub fn do_not_ensure_all_target_peer_exist<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.dev_assert = false;
-    cluster.pd_client.do_not_ensure_all_target_peer_exist();
+    cluster.pd_client.ignore_merge_target_integrity();
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

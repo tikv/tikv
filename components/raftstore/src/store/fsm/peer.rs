@@ -1320,9 +1320,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         drop(meta);
 
         // All of the target peers must exist before merging which is guaranteed by PD.
-        // Now the target peer is not in region map, so if everything is ok, the local target
-        // region should be fresher than merge target
-        if self.is_local_merge_target_region_fresher(merge_target)? {
+        // Now the target peer is not in region map, so if everything is ok, the merge target
+        // region should be staler than the local target region
+        if self.is_merge_target_region_stale(merge_target)? {
             Ok(true)
         } else {
             if self.ctx.cfg.dev_assert {
@@ -1905,11 +1905,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
-    /// Check if merge target region in kv engine is fresher than target region.
+    /// Check if merge target region is staler than the local one in kv engine.
     /// It should be called when target region is not in region map in memory.
     /// If everything is ok, the answer should always be true because PD should ensure all target peers exist.
     /// So if not, error log will be printed and return false.
-    fn is_local_merge_target_region_fresher(&self, target_region: &metapb::Region) -> Result<bool> {
+    fn is_merge_target_region_stale(&self, target_region: &metapb::Region) -> Result<bool> {
         let target_region_id = target_region.get_id();
         let target_peer_id = util::find_peer(target_region, self.ctx.store_id())
             .unwrap()
@@ -2021,7 +2021,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // All of the target peers must exist before merging which is guaranteed by PD.
         // Now the target peer is not in region map.
-        match self.is_local_merge_target_region_fresher(target_region) {
+        match self.is_merge_target_region_stale(target_region) {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";
