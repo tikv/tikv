@@ -13,7 +13,14 @@ futures = "0.3.1"
 futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
+<<<<<<< HEAD
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
+=======
+http = "0.2.0"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+hyper = "0.13.3"
+hyper-tls = "0.4.1"
+>>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
 rand = "0.7"
 rusoto_core = "0.43.0"
 rusoto_s3 = "0.43.0"
@@ -22,7 +29,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tikv_alloc = { path = "../tikv_alloc" }
-tokio = "0.2.13"
+tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
 bytes = "0.5.3"
 

@@ -1138,8 +1138,16 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
+<<<<<<< HEAD
  "kvproto",
  "rand 0.7.3",
+=======
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "rand",
+>>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
  "rusoto_core",
  "rusoto_mock",
  "rusoto_s3",
@@ -3887,6 +3895,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
  "tokio-sync",
  "txn_types",
  "uuid",
