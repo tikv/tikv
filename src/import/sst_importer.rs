@@ -3,11 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-<<<<<<< HEAD:src/import/sst_importer.rs
-use std::io::Write as _;
-=======
-use std::io::{self, Write};
->>>>>>> 1bdab7b... external_storage: fix GCS download error, support GCS endpoints, and refactoring (#7734):components/sst_importer/src/sst_importer.rs
+use std::io::{self, Write as _};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
