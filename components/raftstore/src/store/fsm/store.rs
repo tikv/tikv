@@ -299,14 +299,14 @@ impl<T, C> PollContext<T, C> {
     /// hibernated if it still within the hibernate timeout, see
     /// https://github.com/tikv/tikv/issues/7747
     pub fn is_hibernate_timeout(&mut self) -> bool {
-        match self.node_start_time.as_ref() {
-            Some(t) if t.elapsed() < self.cfg.hibernate_timeout.0 => false,
-            Some(_) => {
-                self.node_start_time = None;
-                true
-            }
-            None => true,
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
         }
+        timeout
     }
 }
 
