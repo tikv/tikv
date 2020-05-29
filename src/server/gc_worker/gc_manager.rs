@@ -15,6 +15,7 @@ use crate::server::metrics::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
+use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
 use super::Result;
 
@@ -240,6 +241,8 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
 
     /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
     gc_manager_ctx: GcManagerContext,
+
+    cfg_tracker: GcWorkerConfigManager,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
@@ -247,6 +250,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
         worker_scheduler: FutureScheduler<GcTask>,
+        cfg_tracker: GcWorkerConfigManager,
     ) -> GcManager<S, R> {
         GcManager {
             cfg,
@@ -254,6 +258,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
+            cfg_tracker,
         }
     }
 
@@ -308,12 +313,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             set_status_metrics(GcManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
-            // Don't need to run GC any more.
-            // set_status_metrics(GcManagerState::Working);
-            // self.gc_a_round()?;
-            // if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
-            //     on_finished();
-            // }
+            // Don't need to run GC any more if compaction filter is enabled.
+            if !self.cfg_tracker.value().enable_compaction_filter {
+                set_status_metrics(GcManagerState::Working);
+                self.gc_a_round()?;
+                if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
+                    on_finished();
+                }
+            }
         }
     }
 
@@ -415,7 +422,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     /// If safe point updates again at some time, it will still try to GC all regions with the
     /// latest safe point. If safe point always updates before `gc_a_round` finishes, `gc_a_round`
     /// may never stop, but it doesn't matter.
-    #[allow(dead_code)]
     fn gc_a_round(&mut self) -> GcManagerResult<()> {
         let mut need_rewind = false;
         // Represents where we should stop doing GC. `None` means the very end of the TiKV.
@@ -708,7 +714,12 @@ mod tests {
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
 
-            let gc_manager = GcManager::new(cfg, Arc::new(AtomicU64::new(0)), worker.scheduler());
+            let gc_manager = GcManager::new(
+                cfg,
+                Arc::new(AtomicU64::new(0)),
+                worker.scheduler(),
+                GcWorkerConfigManager::default(),
+            );
             Self {
                 gc_manager: Some(gc_manager),
                 worker,
