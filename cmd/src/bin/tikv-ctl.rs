@@ -568,6 +568,8 @@ trait DebugExecutor {
 
     fn dump_region_properties(&self, region_id: u64);
 
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>);
+
     fn dump_store_info(&self);
 
     fn dump_cluster_info(&self);
@@ -755,6 +757,10 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
+        unimplemented!("only available for local mode");
     }
 
     fn dump_store_info(&self) {
@@ -968,6 +974,15 @@ impl DebugExecutor for Debugger {
         let props = self
             .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            v1!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
         for (name, value) in props {
             v1!("{}: {}", name, value);
         }
@@ -1654,6 +1669,26 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("range-properties")
+                .about("Show range properties")
+                .arg(
+                    Arg::with_name("start")
+                        .long("start")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex start key"),
+                )
+                .arg(
+                    Arg::with_name("end")
+                        .long("end")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex end key"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("split-region")
                 .about("Split the region")
                 .arg(
@@ -2063,6 +2098,10 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("range-properties") {
+        let start_key = from_hex(matches.value_of("start").unwrap()).unwrap();
+        let end_key = from_hex(matches.value_of("end").unwrap()).unwrap();
+        debug_executor.dump_range_properties(start_key, end_key);
     } else if let Some(matches) = matches.subcommand_matches("fail") {
         if host.is_none() {
             ve1!("command fail requires host");
