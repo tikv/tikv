@@ -133,9 +133,9 @@ quick_error! {
         ResourceTemporarilyUnavailable(msg: String) {
             display("{}", msg)
         }
-        CannotReadExternalStorage(url: String, name: String, err: IoError) {
+        CannotReadExternalStorage(url: String, name: String, local_path: PathBuf, err: IoError) {
             cause(err)
-            display("Cannot read {}/{}: {}", url, name, err)
+            display("Cannot read {}/{} into {}: {}", url, name, local_path.display(), err)
         }
         WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
             display("\

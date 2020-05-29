@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{
-    util::{block_on_external_io, error_stream, AsyncReadAsSyncStreamOfBytes},
+    util::{block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError},
     ExternalStorage,
 };
 
@@ -12,14 +12,14 @@ use std::{
     sync::Arc,
 };
 
-use bytes::Bytes;
 use futures_util::{
     future::{FutureExt, TryFutureExt},
-    io::AsyncRead,
-    stream::TryStreamExt,
+    io::{AsyncRead, AsyncReadExt, Cursor},
+    stream::{StreamExt, TryStreamExt},
 };
+use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
+use hyper_tls::HttpsConnector;
 use kvproto::backup::Gcs as Config;
-use reqwest::{Body, Client};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},
@@ -37,7 +37,7 @@ const HARDCODED_ENDPOINTS: &[&str] = &[
 pub struct GCSStorage {
     config: Config,
     svc_access: Arc<ServiceAccountAccess>,
-    client: Client,
+    client: Client<HttpsConnector<HttpConnector>, Body>,
 }
 
 trait ResultExt {
@@ -45,39 +45,128 @@ trait ResultExt {
 
     // Maps the error of this result as an `std::io::Error` with `Other` error
     // kind.
-    fn or_io_error<D: Display>(self, msg: D) -> Result<Self::Ok>;
+    fn or_io_error<D: Display>(self, msg: D) -> io::Result<Self::Ok>;
 
     // Maps the error of this result as an `std::io::Error` with `InvalidInput`
     // error kind.
-    fn or_invalid_input<D: Display>(self, msg: D) -> Result<Self::Ok>;
+    fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<Self::Ok>;
 }
 
-impl<T, E: Display> ResultExt for std::result::Result<T, E> {
+impl<T, E: Display> ResultExt for Result<T, E> {
     type Ok = T;
-    fn or_io_error<D: Display>(self, msg: D) -> Result<T> {
-        self.map_err(|e| Error::new(ErrorKind::Other, format!("{}: {}", msg, e)))
+    fn or_io_error<D: Display>(self, msg: D) -> io::Result<T> {
+        self.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}: {}", msg, e)))
     }
-    fn or_invalid_input<D: Display>(self, msg: D) -> Result<T> {
-        self.map_err(|e| Error::new(ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
+    fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
+        self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
+    }
+}
+
+enum RequestError {
+    Hyper(hyper::Error),
+    OAuth(tame_oauth::Error),
+    Gcs(tame_gcs::Error),
+    InvalidEndpoint(http::uri::InvalidUri),
+}
+
+impl From<hyper::Error> for RequestError {
+    fn from(err: hyper::Error) -> Self {
+        Self::Hyper(err)
+    }
+}
+
+impl From<tame_oauth::Error> for RequestError {
+    fn from(err: tame_oauth::Error) -> Self {
+        Self::OAuth(err)
+    }
+}
+
+impl From<http::uri::InvalidUri> for RequestError {
+    fn from(err: http::uri::InvalidUri) -> Self {
+        Self::InvalidEndpoint(err)
+    }
+}
+
+impl From<tame_gcs::Error> for RequestError {
+    fn from(err: tame_gcs::Error) -> Self {
+        Self::Gcs(err)
+    }
+}
+
+impl From<StatusCode> for RequestError {
+    fn from(code: StatusCode) -> Self {
+        Self::OAuth(tame_oauth::Error::HttpStatus(code))
+    }
+}
+
+impl From<RequestError> for io::Error {
+    fn from(err: RequestError) -> Self {
+        match err {
+            RequestError::Hyper(e) => Self::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid HTTP request: {}", e),
+            ),
+            RequestError::OAuth(tame_oauth::Error::Io(e)) => e,
+            RequestError::OAuth(e) => Self::new(
+                io::ErrorKind::InvalidInput,
+                format!("authorization failed: {}", e),
+            ),
+            RequestError::Gcs(e) => Self::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid GCS request: {}", e),
+            ),
+            RequestError::InvalidEndpoint(e) => Self::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid GCS endpoint: {}", e),
+            ),
+        }
+    }
+}
+
+impl RetryError for RequestError {
+    fn placeholder() -> Self {
+        Self::OAuth(tame_oauth::Error::InvalidKeyFormat)
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            // FIXME: Inspect the error source?
+            Self::Hyper(e) => {
+                e.is_closed()
+                    || e.is_connect()
+                    || e.is_incomplete_message()
+                    || e.is_body_write_aborted()
+            }
+            // See https://cloud.google.com/storage/docs/exponential-backoff.
+            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::TOO_MANY_REQUESTS)) => true,
+            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::REQUEST_TIMEOUT)) => true,
+            Self::OAuth(tame_oauth::Error::HttpStatus(status)) => status.is_server_error(),
+            // Consider everything else not retryable.
+            _ => false,
+        }
     }
 }
 
 impl GCSStorage {
     /// Create a new GCS storage for the given config.
-    pub fn new(config: &Config) -> Result<GCSStorage> {
+    pub fn new(config: &Config) -> io::Result<GCSStorage> {
         if config.bucket.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing bucket name",
+            ));
         }
         if config.credentials_blob.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidInput, "missing credentials"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing credentials",
+            ));
         }
         let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob)
             .or_invalid_input("invalid credentials_blob")?;
         let svc_access =
             ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
-        let client = Client::builder()
-            .build()
-            .or_io_error("unable to create reqwest client")?;
+        let client = Client::builder().build(HttpsConnector::new());
         Ok(GCSStorage {
             config: config.clone(),
             svc_access: Arc::new(svc_access),
@@ -92,47 +181,12 @@ impl GCSStorage {
         key.to_owned()
     }
 
-    fn convert_request<R: 'static>(&self, req: http::Request<R>) -> Result<reqwest::Request>
-    where
-        R: AsyncRead + Send + Unpin,
-    {
-        let uri = req.uri().to_string();
-        self.client
-            .request(req.method().clone(), &uri)
-            .headers(req.headers().clone())
-            .body(Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(
-                req.into_body(),
-            )))
-            .build()
-            .or_io_error("failed to build request")
-    }
-
-    async fn convert_response(
+    async fn set_auth(
         &self,
-        tag: &str,
-        res: reqwest::Response,
-    ) -> Result<http::Response<Bytes>> {
-        let mut builder = http::Response::builder()
-            .status(res.status())
-            .version(res.version());
-        for (key, value) in res.headers().iter() {
-            builder = builder.header(key, value);
-        }
-        // convert_response is only used to read access token.
-        let content = res
-            .bytes()
-            .await
-            .or_io_error(format_args!("failed to read {} response", tag))?;
-        builder
-            .body(content)
-            .or_io_error(format_args!("failed to build {} response body", tag))
-    }
-
-    async fn set_auth(&self, req: &mut reqwest::Request, scope: tame_gcs::Scopes) -> Result<()> {
-        let token_or_request = self
-            .svc_access
-            .get_token(&[scope])
-            .or_io_error("failed to get token")?;
+        req: &mut Request<Body>,
+        scope: tame_gcs::Scopes,
+    ) -> Result<(), RequestError> {
+        let token_or_request = self.svc_access.get_token(&[scope])?;
         let token = match token_or_request {
             TokenOrRequest::Token(token) => token,
             TokenOrRequest::Request {
@@ -140,74 +194,67 @@ impl GCSStorage {
                 scope_hash,
                 ..
             } => {
-                let res = self
-                    .client
-                    .execute(request.into())
-                    .await
-                    .or_io_error("request GCS access token failed")?;
-                let response = self.convert_response("GCS access token", res).await?;
-
+                let res = self.client.request(request.map(From::from)).await?;
+                if !res.status().is_success() {
+                    return Err(res.status().into());
+                }
+                let (parts, body) = res.into_parts();
+                let body = hyper::body::to_bytes(body).await?;
                 self.svc_access
-                    .parse_token_response(scope_hash, response)
-                    .or_io_error("failed to parse GCS token response")?
+                    .parse_token_response(scope_hash, Response::from_parts(parts, body))?
             }
         };
-        req.headers_mut().insert(
-            http::header::AUTHORIZATION,
-            token
-                .try_into()
-                .or_io_error("failed to set GCS auth token")?,
-        );
+        req.headers_mut()
+            .insert(http::header::AUTHORIZATION, token.try_into()?);
 
         Ok(())
     }
 
     async fn make_request(
         &self,
-        mut req: reqwest::Request,
+        mut req: Request<Body>,
         scope: tame_gcs::Scopes,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<Response<Body>, RequestError> {
         // replace the hard-coded GCS endpoint by the custom one.
         let endpoint = self.config.get_endpoint();
         if !endpoint.is_empty() {
-            let url = req.url().as_str();
+            let url = req.uri().to_string();
             for hardcoded in HARDCODED_ENDPOINTS {
                 if url.starts_with(hardcoded) {
-                    *req.url_mut() = reqwest::Url::parse(
-                        &[endpoint.trim_end_matches('/'), &url[hardcoded.len()..]].concat(),
-                    )
-                    .or_invalid_input("invalid custom GCS endpoint")?;
+                    *req.uri_mut() = [endpoint.trim_end_matches('/'), &url[hardcoded.len()..]]
+                        .concat()
+                        .parse()?;
                     break;
                 }
             }
         }
 
         self.set_auth(&mut req, scope).await?;
-        let response = self
-            .client
-            .execute(req)
-            .await
-            .or_io_error("make GCS request failed")?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.or_io_error(format_args!(
-                "GCS request failed and failed to read error message, status: {}, error",
-                status
-            ))?;
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!("request failed. status: {}, text: {}", status, text),
-            ));
+        let res = self.client.request(req).await?;
+        if !res.status().is_success() {
+            return Err(res.status().into());
         }
-
-        Ok(response)
+        Ok(res)
     }
 
-    fn error_to_async_read<E>(kind: ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin>
+    fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin>
     where
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        Box::new(error_stream(Error::new(kind, e)).into_async_read())
+        Box::new(error_stream(io::Error::new(kind, e)).into_async_read())
+    }
+}
+
+// FIXME: `impl Copy for PredefinedAcl` and get rid of this silly function.
+fn copy_predefined_acl(acl: &Option<PredefinedAcl>) -> Option<PredefinedAcl> {
+    match acl {
+        None => None,
+        Some(PredefinedAcl::AuthenticatedRead) => Some(PredefinedAcl::AuthenticatedRead),
+        Some(PredefinedAcl::BucketOwnerFullControl) => Some(PredefinedAcl::BucketOwnerFullControl),
+        Some(PredefinedAcl::BucketOwnerRead) => Some(PredefinedAcl::BucketOwnerRead),
+        Some(PredefinedAcl::Private) => Some(PredefinedAcl::Private),
+        Some(PredefinedAcl::ProjectPrivate) => Some(PredefinedAcl::ProjectPrivate),
+        Some(PredefinedAcl::PublicRead) => Some(PredefinedAcl::PublicRead),
     }
 }
 
@@ -215,19 +262,15 @@ impl ExternalStorage for GCSStorage {
     fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
+        mut reader: Box<dyn AsyncRead + Send + Unpin>,
         content_length: u64,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         use std::convert::TryFrom;
 
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.clone()).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid bucket {}: {}", self.config.bucket, e),
-            )
-        })?;
+        let bucket = BucketName::try_from(self.config.bucket.clone())
+            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket))?;
         let storage_class: Option<StorageClass> = if self.config.storage_class.is_empty() {
             None
         } else {
@@ -248,8 +291,8 @@ impl ExternalStorage for GCSStorage {
             "projectPrivate" => Some(PredefinedAcl::ProjectPrivate),
             "publicRead" => Some(PredefinedAcl::PublicRead),
             _ => {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     format!("invalid predefined_acl {}", self.config.predefined_acl),
                 ));
             }
@@ -259,15 +302,30 @@ impl ExternalStorage for GCSStorage {
             storage_class,
             ..Default::default()
         };
-        let optional = Some(InsertObjectOptional {
-            predefined_acl,
-            ..Default::default()
-        });
-        let req = Object::insert_multipart(&bucket, reader, content_length, &metadata, optional)
-            .or_io_error("failed to create GCS insert request")?;
-        block_on_external_io(
-            self.make_request(self.convert_request(req)?, tame_gcs::Scopes::ReadWrite),
-        )?;
+
+        block_on_external_io(async move {
+            // FIXME: Switch to upload() API so we don't need to read the entire data into memory
+            // in order to retry.
+            let mut data = Vec::with_capacity(content_length as usize);
+            reader.read_to_end(&mut data).await?;
+            retry(|| async {
+                let data = Cursor::new(data.clone());
+                let req = Object::insert_multipart(
+                    &bucket,
+                    data,
+                    content_length,
+                    &metadata,
+                    Some(InsertObjectOptional {
+                        predefined_acl: copy_predefined_acl(&predefined_acl),
+                        ..Default::default()
+                    }),
+                )?
+                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+            })
+            .await?;
+            Ok::<_, io::Error>(())
+        })?;
         Ok(())
     }
 
@@ -277,33 +335,30 @@ impl ExternalStorage for GCSStorage {
         debug!("read file from GCS storage"; "key" => %name);
         let oid = match ObjectId::new(bucket, name) {
             Ok(oid) => oid,
-            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::InvalidInput, e),
+            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
         };
         let request = match Object::download(&oid, None /*optional*/) {
-            Ok(request) => request,
-            Err(e) => return GCSStorage::error_to_async_read(ErrorKind::Other, e),
+            Ok(request) => request.map(|_: io::Empty| Body::empty()),
+            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
         };
-        // The body is actually an std::io::Empty. The use of read_to_end is only to convert it
-        // into something convenient to convert into reqwest::Body.
-        let (parts, mut body) = request.into_parts();
-        let mut body_content = vec![];
-        if let Err(e) = body.read_to_end(&mut body_content) {
-            return GCSStorage::error_to_async_read(ErrorKind::Other, e);
-        }
-
         Box::new(
-            self.make_request(
-                http::Request::from_parts(parts, body_content).into(),
-                tame_gcs::Scopes::ReadOnly,
-            )
-            .boxed() // this `.boxed()` pin the future.
-            .map_ok(|response| {
-                response.bytes_stream().map_err(|e| {
-                    Error::new(ErrorKind::Other, format!("download from gcs error {}", e))
+            self.make_request(request, tame_gcs::Scopes::ReadOnly)
+                .and_then(|response| async {
+                    if response.status().is_success() {
+                        Ok(response.into_body().map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("download from GCS error: {}", e),
+                            )
+                        }))
+                    } else {
+                        Err(RequestError::from(response.status()))
+                    }
                 })
-            })
-            .try_flatten_stream()
-            .into_async_read(),
+                .err_into::<io::Error>()
+                .try_flatten_stream()
+                .boxed() // this `.boxed()` pin the stream.
+                .into_async_read(),
         )
     }
 }
