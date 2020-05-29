@@ -172,38 +172,41 @@ impl Dicts {
                   "fname" => fname, 
                   "method" => format!("{:?}", method), 
                   "iv" => hex::encode(iv.as_slice()));
+        } else {
+            info!("new plaintext file"; "fname" => fname);
         }
         Ok(self.file_dict.files.get(fname).unwrap())
     }
 
     fn delete_file(&mut self, fname: &str) -> Result<()> {
-        let file = self.file_dict.files.remove(fname).ok_or_else(|| {
-            Error::Io(IoError::new(
-                ErrorKind::NotFound,
-                format!("file not found, {}", fname),
-            ))
-        })?;
+        let file = match self.file_dict.files.remove(fname) {
+            Some(file_info) => file_info,
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                info!("delete untracked plaintext file"; "fname" => fname);
+                return Ok(());
+            }
+        };
 
         // TOOD GC unused data keys.
         self.save_file_dict()?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
+        } else {
+            info!("delete plaintext file"; "fname" => fname);
         }
         Ok(())
     }
 
     fn link_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = self
-            .file_dict
-            .files
-            .get(src_fname)
-            .cloned()
-            .ok_or_else(|| {
-                Error::Io(IoError::new(
-                    ErrorKind::NotFound,
-                    format!("file not found, {}", src_fname),
-                ))
-            })?;
+        let file = match self.file_dict.files.get(src_fname) {
+            Some(file_info) => file_info.clone(),
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
+                return Ok(());
+            }
+        };
         if self.file_dict.files.get(dst_fname).is_some() {
             return Err(Error::Io(IoError::new(
                 ErrorKind::AlreadyExists,
@@ -215,22 +218,28 @@ impl Dicts {
         self.save_file_dict()?;
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        } else {
+            info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
     }
 
     fn rename_file(&mut self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let file = self.file_dict.files.remove(src_fname).ok_or_else(|| {
-            Error::Io(IoError::new(
-                ErrorKind::NotFound,
-                format!("file not found, {}", src_fname),
-            ))
-        })?;
+        let file = match self.file_dict.files.remove(src_fname) {
+            Some(file_info) => file_info,
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
+                return Ok(());
+            }
+        };
         let method = file.method;
         self.file_dict.files.insert(dst_fname.to_owned(), file);
         self.save_file_dict()?;
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
+        } else {
+            info!("rename plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
         Ok(())
     }
@@ -506,7 +515,7 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FileCofnig, Mock};
+    use crate::config::{FileConfig, Mock};
     use crate::master_key::tests::MockBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
@@ -519,6 +528,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    // TODO(yiwu): use the similar method in test_util crate instead.
     fn new_tmp_key_manager(
         temp: Option<tempfile::TempDir>,
         method: Option<EncryptionMethod>,
@@ -539,6 +549,7 @@ mod tests {
         (tmp, manager)
     }
 
+    // TODO(yiwu): use the similar method in test_util crate instead.
     fn create_key_file(name: &str) -> (PathBuf, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
@@ -702,8 +713,8 @@ mod tests {
         let get_file = manager.get_file("foo").unwrap();
         assert_eq!(new_file, get_file);
         manager.delete_file("foo").unwrap();
-        manager.delete_file("foo").unwrap_err();
-        manager.delete_file("foo1").unwrap_err();
+        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo1").unwrap();
 
         // Must be plaintext if file not found.
         let file = manager.get_file("foo").unwrap();
@@ -740,7 +751,7 @@ mod tests {
         assert_eq!(file1, file);
 
         // Source file not exists.
-        manager.link_file("not exists", "not exists1").unwrap_err();
+        manager.link_file("not exists", "not exists1").unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
         manager.link_file("foo2", "foo1").unwrap_err();
@@ -760,10 +771,13 @@ mod tests {
         assert_eq!(file1, file);
 
         // foo must not exist (should be plaintext)
-        manager.rename_file("foo", "foo2").unwrap_err();
-        let file2 = manager.get_file("foo").unwrap();
-        assert_ne!(file2, file);
-        assert_eq!(file2.method, DBEncryptionMethod::Plaintext);
+        manager.rename_file("foo", "foo2").unwrap();
+        let file_foo = manager.get_file("foo").unwrap();
+        assert_ne!(file_foo, file);
+        assert_eq!(file_foo.method, DBEncryptionMethod::Plaintext);
+        let file_foo2 = manager.get_file("foo2").unwrap();
+        assert_ne!(file_foo2, file);
+        assert_eq!(file_foo2.method, DBEncryptionMethod::Plaintext);
     }
 
     #[test]
@@ -865,7 +879,7 @@ mod tests {
     fn test_key_manager_rotate_on_key_expose() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            config: FileCofnig {
+            config: FileConfig {
                 path: key_path.to_str().unwrap().to_owned(),
             },
         };
@@ -911,7 +925,7 @@ mod tests {
     fn test_expose_keys_on_insecure_backend() {
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key = MasterKeyConfig::File {
-            config: FileCofnig {
+            config: FileConfig {
                 path: key_path.to_str().unwrap().to_owned(),
             },
         };

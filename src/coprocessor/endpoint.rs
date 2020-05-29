@@ -8,7 +8,6 @@ use async_stream::try_stream;
 use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
-use rand::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -21,8 +20,7 @@ use tipb::{DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
-use crate::storage::kv::with_tls_engine;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -299,25 +297,13 @@ impl<E: Engine> Endpoint<E> {
             self.batch_row_limit
         }
     }
-
     #[inline]
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
-        // make engine not cross yield point
-        async move {
-            val?; // propagate error
-            let (_ctx, result) = future
-                .map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
-                .await?;
-            // map storage::kv::Error -> storage::txn::Error -> storage::Error
-            result.map_err(Error::from)
-        }
+        kv::snapshot(engine, ctx).map_err(Error::from)
     }
-
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -390,9 +376,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
@@ -503,9 +487,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool

@@ -36,6 +36,7 @@ addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
 status-thread-pool-size = 1
+max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -113,7 +114,7 @@ raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
-clean-stale-peer-delay = "13s"
+clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
@@ -143,8 +144,11 @@ cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
 apply-max-batch-size = 22
 apply-pool-size = 4
+apply-reschedule-duration = "3s"
+apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
+store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
@@ -533,15 +537,15 @@ cert-allowed-cn = [
     "example.tikv.com",
 ]
 
-[encryption]
+[security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
 
-[encryption.master-key]
+[security.encryption.master-key]
 type = "file"
 path = "/master/key/path"
 
-[encryption.previous-master-key]
+[security.encryption.previous-master-key]
 type = "plaintext"
 
 [import]
