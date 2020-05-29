@@ -1069,8 +1069,16 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
+<<<<<<< HEAD
  "kvproto",
  "rand 0.7.2",
+=======
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "rand",
+>>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
  "rusoto_core",
  "rusoto_mock",
  "rusoto_s3",
@@ -3840,7 +3848,38 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c049c77bf85fbc036484c97b008276d539d9ebff9dfbde37b632ebcd5b8746b6"
 dependencies = [
+<<<<<<< HEAD
  "unreachable",
+=======
+ "crc32fast",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "futures 0.1.29",
+ "futures-executor",
+ "futures-util",
+ "grpcio",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "prometheus",
+ "quick-error",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_sst_importer",
+ "test_util",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio 0.2.13",
+ "tokio-sync",
+ "txn_types",
+ "uuid",
+>>>>>>> 3c667df... Improve robustness of Backup/Restore involving external_storage (#7917)
 ]
 
 [[package]]
