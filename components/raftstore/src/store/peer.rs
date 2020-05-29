@@ -938,7 +938,12 @@ impl Peer {
                     if ctx.cfg.dev_assert {
                         panic!("{} failed to get peer {} from cache", self.tag, id);
                     }
-                    error!("{} failed to get peer {} from cache", self.tag, id);
+                    error!(
+                        "failed to get peer from cache";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "get_peer_id" => id,
+                    );
                 }
             }
         }
