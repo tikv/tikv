@@ -166,7 +166,7 @@ pub struct CompareInMeta<T: Eq + Hash> {
 #[inline]
 pub fn compare_in_by_hash<T: InByHash>(
     metadata: &CompareInMeta<T::StoreKey>,
-    args: &[&Option<T::Key>],
+    args: &[Option<&T::Key>],
 ) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
@@ -236,7 +236,7 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
 
 #[rpn_fn(varg, min_args = 1)]
 #[inline]
-pub fn compare_in_by_compare<T: InByCompare>(args: &[&Option<T>]) -> Result<Option<Int>> {
+pub fn compare_in_by_compare<T: InByCompare>(args: &[Option<&T>]) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {

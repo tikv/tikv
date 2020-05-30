@@ -372,6 +372,23 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
+
+/// Parses an evaluable type like `Option<&T>`.
+struct RpnFnRefEvaluableType {
+    eval_type: TypePath,
+}
+
+impl parse::Parse for RpnFnRefEvaluableType {
+    fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
+        input.parse::<self::kw::Option>()?;
+        input.parse::<Token![<]>()?;
+        input.parse::<Token![&]>()?;
+        let eval_type = input.parse::<TypePath>()?;
+        input.parse::<Token![>]>()?;
+        Ok(Self { eval_type })
+    }
+}
+
 /// Parses a function signature parameter like `val: &Option<T>`.
 struct RpnFnSignatureParam {
     _pat: Pat,
@@ -382,8 +399,7 @@ impl parse::Parse for RpnFnSignatureParam {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let pat = input.parse::<Pat>()?;
         input.parse::<Token![:]>()?;
-        input.parse::<Token![&]>()?;
-        let et = input.parse::<RpnFnEvaluableType>()?;
+        let et = input.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
             eval_type: et.eval_type,
@@ -924,7 +940,7 @@ impl NormalRpnFn {
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like `&Option<T>`")
+                    Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`")
                 })?;
             arg_types.push(arg_type.eval_type);
         }
