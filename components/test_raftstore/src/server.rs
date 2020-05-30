@@ -18,8 +18,7 @@ use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter, StoreMeta};
 use raftstore::store::{AutoSplitController, Callback, LocalReader, SnapManager, SplitCheckRunner};
 use raftstore::Result;
 use security::SecurityManager;
@@ -124,6 +123,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: Engines,
+        store_meta: Arc<Mutex<StoreMeta>>,
         router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
@@ -141,7 +141,6 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);

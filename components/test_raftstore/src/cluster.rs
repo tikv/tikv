@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -19,6 +19,7 @@ use engine::{Engines, DB};
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
 use pd_client::PdClient;
+use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
@@ -47,6 +48,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
+        store_meta: Arc<Mutex<StoreMeta>>,
         router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
@@ -98,6 +100,7 @@ pub struct Cluster<T: Simulator> {
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,
@@ -118,6 +121,7 @@ impl<T: Simulator> Cluster<T> {
             leaders: HashMap::default(),
             paths: vec![],
             dbs: vec![],
+            store_metas: HashMap::default(),
             count,
             engines: HashMap::default(),
             sim,
@@ -138,7 +142,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn create_engines(&mut self) {
-        for _ in 0..self.count {
+        for id in 0..self.count {
             let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let cache = self.cfg.storage.block_cache.build_shared_cache();
@@ -171,10 +175,19 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..self.count - self.engines.len() {
             let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
             let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
             self.dbs.push(engines.clone());
             self.paths.push(path.unwrap());
-            let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
+            let node_id = sim.run_node(
+                0,
+                self.cfg.clone(),
+                engines.clone(),
+                store_meta.clone(),
+                router,
+                system,
+            )?;
             self.engines.insert(node_id, engines);
+            self.store_metas.insert(node_id, store_meta);
         }
         Ok(())
     }
@@ -213,12 +226,18 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
+        let store_meta = self.store_metas[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, self.cfg.clone(), engines, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            self.cfg.clone(),
+            engines,
+            store_meta,
+            router,
+            system,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -442,6 +461,8 @@ impl<T: Simulator> Cluster<T> {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
         }
 
         let mut region = metapb::Region::default();
@@ -471,6 +492,8 @@ impl<T: Simulator> Cluster<T> {
         for (id, engines) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
         }
 
         for (&id, engines) in &self.engines {

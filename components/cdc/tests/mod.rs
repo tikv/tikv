@@ -128,8 +128,14 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
+            let mut cdc_endpoint = cdc::Endpoint::new(
+                pd_cli.clone(),
+                worker.scheduler(),
+                raft_router,
+                cdc_ob,
+                cluster.store_metas[id].clone(),
+                RocksEngine::from_db(cluster.engines[id].kv.clone()),
+            );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();

@@ -244,5 +244,5 @@ pub trait CmdObserver: Coprocessor {
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self, extras: Vec<Extra>);
+    fn on_flush_apply(&self, extra: Extra);
 }

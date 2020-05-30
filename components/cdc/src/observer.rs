@@ -107,13 +107,13 @@ impl CmdObserver for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    fn on_flush_apply(&self, extras: Vec<Extra>) {
+    fn on_flush_apply(&self, extra: Extra) {
         fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
-                extras,
+                extra,
             }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
@@ -185,10 +185,10 @@ mod tests {
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply(Vec::default());
+        observer.on_flush_apply(HashMap::default());
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { multi } => {
+            Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }

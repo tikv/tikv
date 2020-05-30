@@ -17,7 +17,7 @@ use engine_traits::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraRead};
 use tikv_util::collections::HashMap;
-use txn_types::{Key, Value};
+use txn_types::{Key, TimeStamp, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -77,11 +77,14 @@ impl Modify {
 #[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
-    pub extra: Option<HashMap<Key, Value>>,
+    pub extra: Option<HashMap<Key, (Option<Value>, TimeStamp)>>,
 }
 
 impl WriteData {
-    pub fn new(modifies: Vec<Modify>, extra: Option<HashMap<Key, Value>>) -> Self {
+    pub fn new(
+        modifies: Vec<Modify>,
+        extra: Option<HashMap<Key, (Option<Value>, TimeStamp)>>,
+    ) -> Self {
         Self { modifies, extra }
     }
 

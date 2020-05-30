@@ -159,6 +159,22 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
+    pub fn prev_write(&mut self, key: &Key) -> Result<Option<(TimeStamp, Write)>> {
+        let cursor = self.write_cursor.as_mut().unwrap();
+        let ok = cursor.prev(&mut self.statistics.write);
+        if !ok {
+            return Ok(None);
+        }
+        let write_key = cursor.key(&mut self.statistics.write);
+        let commit_ts = Key::decode_ts_from(write_key)?;
+        if !Key::is_user_key_eq(write_key, key.as_encoded()) {
+            return Ok(None);
+        }
+        let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
+        self.statistics.write.processed += 1;
+        Ok(Some((commit_ts, write)))
+    }
+
     /// Checks if there is a lock which blocks reading the key at the given ts.
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {

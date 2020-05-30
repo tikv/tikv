@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeSet;
 use std::mem;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -19,17 +21,18 @@ use kvproto::cdcpb::{
     EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
+use kvproto::kvrpcpb::ExtraRead;
 use tikv::storage::mvcc::ScannerBuilder;
 
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngine, Snapshot, CF_DEFAULT, CF_WRITE};
+use engine_traits::{Iterable, KvEngine, Peekable, Snapshot, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
-use raftstore::store::RegionSnapshot;
+use raftstore::store::Extra;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
@@ -183,6 +186,7 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
+    extra_read: ExtraRead,
 }
 
 impl Delegate {
@@ -197,6 +201,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
+            extra_read: ExtraRead::default(),
         }
     }
 
@@ -243,6 +248,10 @@ impl Delegate {
         } else {
             &mut self.downstreams
         }
+    }
+
+    pub fn set_extra_read(&mut self, extra_read: ExtraRead) {
+        self.extra_read = extra_read;
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
@@ -389,7 +398,7 @@ impl Delegate {
     pub fn on_batch(
         &mut self,
         batch: CmdBatch,
-        extra_map: &mut HashMap<Vec<u8>, Vec<u8>>,
+        extra_map: &mut Extra,
         kv_engine: &RocksEngine,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
@@ -507,10 +516,11 @@ impl Delegate {
         &mut self,
         index: u64,
         requests: Vec<Request>,
-        extra_map: &mut HashMap<Vec<u8>, Vec<u8>>,
+        extra: &mut Extra,
         kv_engine: &RocksEngine,
     ) {
         let mut rows = HashMap::default();
+        let mut to_read_previous = BTreeSet::default();
         let mut total_size = 0;
         for mut req in requests {
             // CDC cares about put requests only.
@@ -569,25 +579,37 @@ impl Delegate {
                     let lock = Lock::parse(put.get_value()).unwrap();
                     let key = put.take_key();
 
-                    // if let LockType::Delete = lock.lock_type {
-                    //     match extra_map.remove(&key) {
-                    //         Some(value) => row.previous_value = value,
-                    //         None => {
-                    //             // If the previous value wasn't in extra values, try to read it.
-                    //             let snap = RegionSnapshot::from_snapshot(
-                    //                 kv_engine.snapshot().into_sync(),
-                    //                 Region::default(),
-                    //             );
-                    //             let mut scanner = ScannerBuilder::new(snap, lock.ts, true)
-                    //                 .range(, None)
-                    //                 .build_delta_scanner(lock.ts)
-                    //                 .unwrap();
-                    //         }
-                    //     }
-                    // }
+                    if (self.extra_read == ExtraRead::Deleted && LockType::Delete == lock.lock_type)
+                        || (self.extra_read == ExtraRead::Updated
+                            && (lock.lock_type == LockType::Put
+                                || lock.lock_type == LockType::Delete))
+                    {
+                        let encoded = Key::from_encoded(key.clone())
+                            .append_ts(lock.ts)
+                            .into_encoded();
+                        match extra.remove(&encoded) {
+                            Some((value, ts)) => {
+                                let previous_encoded = Key::from_encoded(key.clone())
+                                    .append_ts(TimeStamp::new(ts))
+                                    .into_encoded();
+                                row.previous_value = value.unwrap_or_else(|| {
+                                    kv_engine
+                                        .snapshot()
+                                        .get_value(&keys::data_key(&previous_encoded))
+                                        .unwrap()
+                                        .unwrap()
+                                        .deref()
+                                        .to_vec()
+                                })
+                            }
+                            None => {
+                                // If the previous value wasn't in extra values, try to read it.
+                                to_read_previous.insert(encoded);
+                            }
+                        }
+                    }
 
-                    let lock_type = lock.lock_type;
-                    let skip = decode_lock(put.take_key(), lock, &mut row);
+                    let skip = decode_lock(key, lock, &mut row);
                     if skip {
                         continue;
                     }

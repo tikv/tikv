@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
+use raftstore::store::{Callback, CasualMessage, Extra, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
@@ -193,6 +193,15 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.ch.send_command(req, cb)
+    }
+
+    fn send_command_with_extra(
+        &self,
+        req: RaftCmdRequest,
+        extra: Option<Extra>,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.ch.send_command_with_extra(req, extra, cb)
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {

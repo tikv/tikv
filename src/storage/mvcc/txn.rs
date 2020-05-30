@@ -108,7 +108,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    pub fn take_extra(&mut self) -> Option<HashMap<Key, Value>> {
+    pub fn take_extra(&mut self) -> Option<HashMap<Key, (Option<Value>, TimeStamp)>> {
         self.writes.extra.take()
     }
 
@@ -550,25 +550,6 @@ impl<S: Snapshot> MvccTxn<S> {
         let should_not_write = mutation.should_not_write();
         let mutation_type = mutation.mutation_type();
         let (key, value) = mutation.into_key_value();
-        macro_rules! maybe_read_extra {
-            ($short_value: expr, $start_ts: expr) => {
-                if (self.extra_read == ExtraRead::Deleted && mutation_type == MutationType::Delete)
-                    || (self.extra_read == ExtraRead::Updated
-                        && (mutation_type == MutationType::Delete
-                            || mutation_type == MutationType::Put))
-                {
-                    let value = if let Some(value) = $short_value {
-                        Some(value)
-                    } else {
-                        self.reader.get(&key, $start_ts, true).unwrap()
-                    };
-                    self.writes.extra.as_mut().unwrap().insert(
-                        key.clone().append_ts($start_ts),
-                        value.unwrap_or_else(Vec::default),
-                    );
-                }
-            };
-        };
 
         fail_point!("prewrite", |err| Err(make_txn_error(
             err,
@@ -596,7 +577,30 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                maybe_read_extra!(write.short_value, write.start_ts);
+                if need_extra_read(self.extra_read, mutation_type) {
+                    match write.write_type {
+                        WriteType::Put | WriteType::Delete => {
+                            self.writes.extra.as_mut().unwrap().insert(
+                                key.clone().append_ts(self.start_ts),
+                                (write.short_value, write.start_ts),
+                            );
+                        }
+                        _ => loop {
+                            if let Some((_, prev_write)) = self.reader.prev_write(&key)? {
+                                match prev_write.write_type {
+                                    WriteType::Put | WriteType::Delete => {
+                                        self.writes.extra.as_mut().unwrap().insert(
+                                            key.clone().append_ts(self.start_ts),
+                                            (write.short_value, write.start_ts),
+                                        );
+                                    }
+                                    _ => continue,
+                                }
+                            }
+                            break;
+                        },
+                    }
+                }
             }
         }
         if should_not_write {
@@ -607,9 +611,6 @@ impl<S: Snapshot> MvccTxn<S> {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
-
-            // Otherwise the lock was belong to the same txn, the previous value would be recorded in the lock cf.
-            maybe_read_extra!(lock.short_value, lock.ts);
 
             // TODO: remove it in future
             if lock.lock_type == LockType::Pessimistic {
@@ -1127,6 +1128,17 @@ macro_rules! new_txn {
     ($ss: expr, $ts: literal, $fill_cache: expr) => {
         $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache)
     };
+}
+
+fn need_extra_read(extra_read: ExtraRead, mutation_type: MutationType) -> bool {
+    if (extra_read == ExtraRead::Deleted && mutation_type == MutationType::Delete)
+        || (extra_read == ExtraRead::Updated
+            && (mutation_type == MutationType::Delete || mutation_type == MutationType::Put))
+    {
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]

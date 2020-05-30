@@ -280,9 +280,11 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         }
 
         let mut reqs = Vec::with_capacity(batch.modifies.len());
-        let extra = batch
-            .extra
-            .map(|e| e.into_iter().map(|(k, v)| (k.into_encoded(), v)).collect());
+        let extra = batch.extra.map(|e| {
+            e.into_iter()
+                .map(|(k, (v, ts))| (k.into_encoded(), (v, ts.into_inner())))
+                .collect()
+        });
         for m in batch.modifies {
             let mut req = Request::default();
             match m {

@@ -30,6 +30,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use tikv_util::collections::HashMap;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -334,7 +335,7 @@ where
     notifier: Notifier<E>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
-    extras: MustConsumeVec<Extra>,
+    extra: Extra,
     apply_res: Vec<ApplyRes<E>>,
     exec_ctx: Option<ExecContext>,
 
@@ -381,7 +382,7 @@ where
             notifier,
             kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
-            extras: MustConsumeVec::new("extra key/value of cmds"),
+            extra: HashMap::default(),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -486,7 +487,7 @@ where
             self.kv_wb_last_keys = 0;
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply(mem::take(&mut self.extras));
+        self.host.on_flush_apply(mem::take(&mut self.extra));
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -1066,7 +1067,9 @@ where
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
             match cmd_extra {
-                Some(extra) => apply_ctx.extras.push(extra),
+                Some(extra) => extra.into_iter().for_each(|(k, v)| {
+                    apply_ctx.extra.insert(k, v);
+                }),
                 None => (),
             }
             apply_ctx
@@ -3873,7 +3876,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, extras: Vec<Extra>) {
+        fn on_flush_apply(&self, _: Extra) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {

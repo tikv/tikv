@@ -312,9 +312,10 @@ where
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
                     let mut metrics = self.metrics.borrow_mut();
-                    if let Some(resp) =
+                    if let Some(mut resp) =
                         delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
                     {
+                        resp.extra_read = delegate.extra_read.load();
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -693,7 +694,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
                 invalid: Arc::new(AtomicBool::new(false)),
-                extra_read: Arc::new(AtomicCell::new(ExtraRead::Noop)),
+                extra_read: Arc::new(AtomicCell::new(ExtraRead::default())),
             };
             meta.readers.insert(1, read_delegate);
         }

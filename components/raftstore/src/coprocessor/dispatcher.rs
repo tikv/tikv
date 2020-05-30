@@ -468,7 +468,7 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self, extras: Vec<Extra>) {
+    pub fn on_flush_apply(&self, extra: Extra) {
         assert!(
             !self.registry.cmd_observers.is_empty(),
             "CmdObserver is not registered"
@@ -480,7 +480,7 @@ where
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(extras.clone())
+                .on_flush_apply(extra.clone())
         }
         self.registry
             .cmd_observers
@@ -488,7 +488,7 @@ where
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(extras)
+            .on_flush_apply(extra)
     }
 
     pub fn shutdown(&self) {

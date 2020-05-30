@@ -122,7 +122,7 @@ where
     }
 }
 
-pub type Extra = HashMap<Vec<u8>, Vec<u8>>;
+pub type Extra = HashMap<Vec<u8>, (Option<Vec<u8>>, u64)>;
 
 bitflags! {
     pub struct PeerTicks: u8 {
