@@ -10,7 +10,6 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine::rocks;
 use engine_rocks::{encryption::get_env, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
@@ -338,7 +337,7 @@ impl TiKVServer {
         let mut raft_db_opts = self.config.raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
-        let raft_engine = rocks::util::new_engine_opt(
+        let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
@@ -353,9 +352,12 @@ impl TiKVServer {
         let db_path = self
             .store_path
             .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine =
-            rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-                .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let engines = engine::Engines::new(
             Arc::new(kv_engine),
