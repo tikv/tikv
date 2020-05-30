@@ -46,7 +46,6 @@ tokio-core = "0.1"
 tokio-executor = "0.1"
 tokio-sync = "0.1.7"
 tokio-timer = "0.2"
-tempfile = "3.0"
 url = "2"
 zeroize = { version = "1.1", features = ["alloc"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -63,6 +62,7 @@ git = "https://github.com/tikv/yatp.git"
 [dev-dependencies]
 futures-cpupool = "0.1"
 panic_hook = { path = "../panic_hook" }
+protobuf = "2"
 regex = "1.0"
 tempfile = "3.0"
 toml = "0.4"

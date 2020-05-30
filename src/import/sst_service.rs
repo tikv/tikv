@@ -185,6 +185,10 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Rout
             .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // FIXME: download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_storage_backend(),

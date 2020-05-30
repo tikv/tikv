@@ -20,8 +20,7 @@ use tipb::{DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
-use crate::storage::kv::with_tls_engine;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -300,25 +299,13 @@ impl<E: Engine> Endpoint<E> {
             self.batch_row_limit
         }
     }
-
     #[inline]
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
-        // make engine not cross yield point
-        async move {
-            val?; // propagate error
-            let (_ctx, result) = future
-                .map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
-                .await?;
-            // map storage::kv::Error -> storage::txn::Error -> storage::Error
-            result.map_err(Error::from)
-        }
+        kv::snapshot(engine, ctx).map_err(Error::from)
     }
-
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
