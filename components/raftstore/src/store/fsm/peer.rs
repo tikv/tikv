@@ -1928,7 +1928,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             ) {
                 return Ok(true);
             }
-            // The local target region epoch is not fresher than target region's.
+            // The local target region epoch is staler than target region's.
             // In the case where the peer is destroyed by receiving gc msg rather than applying conf change,
             // the epoch may staler but it's legal, so check peer id to assure that.
             if let Some(local_target_peer_id) =
@@ -1950,8 +1950,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         );
                     }
                     cmp::Ordering::Greater => {
-                        // If local target peer id is greater than the one in target region, its epoch
-                        // must be fresher than target_region's, but it's not.
+                        // The local target peer id is greater than the one in target region, but its epoch
+                        // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
                                     target region {:?}", self.fsm.peer.tag, local_target_peer_id, target_peer_id, target_state.get_region(), target_region);
                     }
