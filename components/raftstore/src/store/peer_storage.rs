@@ -1667,8 +1667,8 @@ mod tests {
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
-    use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_traits::KvEngines;
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1696,12 +1696,12 @@ mod tests {
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
-        bootstrap_store(&engines.c(), 1, 1).unwrap();
+        let engines = KvEngines::new(kv_db.c().clone(), raft_db.c().clone(), shared_block_cache);
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
-        prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
-        PeerStorage::new(engines.c(), &region, sched, 0, "".to_owned()).unwrap()
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
+        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
     struct ReadyContext {
@@ -2524,13 +2524,13 @@ mod tests {
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
-        bootstrap_store(&engines.c(), 1, 1).unwrap();
+        let engines = KvEngines::new(kv_db.c().clone(), raft_db.c().clone(), shared_block_cache);
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
-        prepare_bootstrap_cluster(&engines.c(), &region).unwrap();
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<RocksEngine, RocksEngine>> {
-            PeerStorage::new(engines.c(), &region, sched.clone(), 0, "".to_owned())
+            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, "".to_owned())
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();
@@ -2546,13 +2546,11 @@ mod tests {
         let log_key = keys::raft_log_key(1, 11);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
         engines
             .raft
-            .c()
             .put_msg(&raft_state_key, &raft_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2560,13 +2558,11 @@ mod tests {
         let log_key = keys::raft_log_key(1, 20);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.set_last_index(20);
         engines
             .raft
-            .c()
             .put_msg(&raft_state_key, &raft_state)
             .unwrap();
         s = build_storage().unwrap();
@@ -2574,11 +2570,10 @@ mod tests {
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // Missing last log is invalid.
-        engines.raft.c().delete(&log_key).unwrap();
+        engines.raft.delete(&log_key).unwrap();
         assert!(build_storage().is_err());
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
             .unwrap();
 
@@ -2592,7 +2587,6 @@ mod tests {
         let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2602,7 +2596,6 @@ mod tests {
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2610,7 +2603,6 @@ mod tests {
         let log_key = keys::raft_log_key(1, 14);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_commit(14);
@@ -2621,7 +2613,6 @@ mod tests {
         // log term miss match is invalid.
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1))
             .unwrap();
         assert!(build_storage().is_err());
@@ -2629,13 +2620,11 @@ mod tests {
         // hard state term miss match is invalid.
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
         engines
             .raft
-            .c()
             .put_msg(&raft_state_key, &raft_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2646,12 +2635,10 @@ mod tests {
         let log_key = keys::raft_log_key(1, 13);
         engines
             .raft
-            .c()
             .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
             .unwrap();
         engines
             .raft
-            .c()
             .put_msg(&raft_state_key, &raft_state)
             .unwrap();
         assert!(build_storage().is_err());
@@ -2661,13 +2648,11 @@ mod tests {
         raft_state.mut_hard_state().set_commit(12);
         engines
             .raft
-            .c()
             .put_msg(&raft_state_key, &raft_state)
             .unwrap();
         apply_state.set_last_commit_index(13);
         engines
             .kv
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert!(build_storage().is_err());

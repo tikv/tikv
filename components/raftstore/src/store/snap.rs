@@ -1539,7 +1539,7 @@ pub mod tests {
 
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, DBOptions, Env, DB};
-    use engine::Engines;
+    use engine_traits::KvEngines;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1612,7 +1612,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<Engines> {
+    ) -> Result<KvEngines<RocksEngine, RocksEngine>> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1641,9 +1641,9 @@ pub mod tests {
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(Engines {
-            kv,
-            raft,
+        Ok(KvEngines {
+            kv: kv.c().clone(),
+            raft: raft.c().clone(),
             shared_block_cache,
         })
     }
@@ -2419,7 +2419,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_, RocksEngine>(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = RocksSnapshot::new(engine.kv.clone());
+        let snapshot = RocksSnapshot::new(engine.kv.as_inner().clone());
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
@@ -2428,7 +2428,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
             s.build(
-                engine.kv.c(),
+                &engine.kv,
                 &snapshot,
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
@@ -2457,7 +2457,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
             s.build(
-                &engine.kv.c(),
+                &engine.kv,
                 &snapshot,
                 &region,
                 &mut snap_data,

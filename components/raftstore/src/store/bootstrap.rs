@@ -121,8 +121,8 @@ mod tests {
 
     use super::*;
     use engine::rocks;
-    use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat};
+    use engine_traits::KvEngines;
+    use engine_rocks::{Compat};
     use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]
@@ -143,17 +143,17 @@ mod tests {
                 .unwrap(),
         );
         let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&kv_engine),
-            Arc::clone(&raft_engine),
+        let engines = KvEngines::new(
+            kv_engine.c().clone(),
+            raft_engine.c().clone(),
             shared_block_cache,
         );
         let region = initial_region(1, 1, 1);
 
-        assert!(bootstrap_store(&engines.c(), 1, 1).is_ok());
-        assert!(bootstrap_store(&engines.c(), 1, 1).is_err());
+        assert!(bootstrap_store(&engines, 1, 1).is_ok());
+        assert!(bootstrap_store(&engines, 1, 1).is_err());
 
-        assert!(prepare_bootstrap_cluster(&engines.c(), &region).is_ok());
+        assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
             .c()
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
@@ -175,8 +175,8 @@ mod tests {
             .unwrap()
             .is_some());
 
-        assert!(clear_prepare_bootstrap_key(&engines.c()).is_ok());
-        assert!(clear_prepare_bootstrap_cluster(&engines.c(), 1).is_ok());
+        assert!(clear_prepare_bootstrap_key(&engines).is_ok());
+        assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
         assert!(is_range_empty(
             kv_engine.c(),
             CF_RAFT,
