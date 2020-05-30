@@ -16,17 +16,17 @@ use super::Result;
 
 type RocksDBMetricsFn = fn(cf: &str, name: &str, v: f64);
 
-struct ImportModeSwitcherInner<T: KvEngine> {
+struct ImportModeSwitcherInner<E: KvEngine> {
     mode: SwitchMode,
     backup_db_options: ImportModeDBOptions,
     backup_cf_options: Vec<(String, ImportModeCFOptions)>,
     timeout: Duration,
     next_check: Instant,
-    db: T,
+    db: E,
     metrics_fn: RocksDBMetricsFn,
 }
 
-impl<T: KvEngine> ImportModeSwitcherInner<T> {
+impl<E: KvEngine> ImportModeSwitcherInner<E> {
     fn enter_normal_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
         if self.mode == SwitchMode::Normal {
             return Ok(());
@@ -68,12 +68,12 @@ impl<T: KvEngine> ImportModeSwitcherInner<T> {
 }
 
 #[derive(Clone)]
-pub struct ImportModeSwitcher<T: KvEngine> {
-    inner: Arc<Mutex<ImportModeSwitcherInner<T>>>,
+pub struct ImportModeSwitcher<E: KvEngine> {
+    inner: Arc<Mutex<ImportModeSwitcherInner<E>>>,
 }
 
-impl<T: KvEngine> ImportModeSwitcher<T> {
-    pub fn new(cfg: &Config, executor: &CpuPool, db: T) -> ImportModeSwitcher<T> {
+impl<E: KvEngine> ImportModeSwitcher<E> {
+    pub fn new(cfg: &Config, executor: &CpuPool, db: E) -> ImportModeSwitcher<E> {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let timeout = cfg.import_mode_timeout.0;
@@ -332,7 +332,7 @@ mod tests {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config {
-            import_mode_timeout: ReadableDuration::secs(5),
+            import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
         let threads = futures_cpupool::Builder::new()
@@ -345,7 +345,7 @@ mod tests {
         switcher.enter_import_mode(mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
 
-        thread::sleep(Duration::from_secs(10));
+        thread::sleep(Duration::from_secs(1));
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
