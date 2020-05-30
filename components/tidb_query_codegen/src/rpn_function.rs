@@ -1037,6 +1037,7 @@ impl NormalRpnFn {
             self.metadata_type.is_some() || self.metadata_mapper.is_some(),
         );
         let extract2 = extract.clone();
+        let extract3 = extract.clone();
         let call_arg2 = extract.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
@@ -1065,6 +1066,7 @@ impl NormalRpnFn {
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
+                        #(let #extract3 = #extract3.as_ref());*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
