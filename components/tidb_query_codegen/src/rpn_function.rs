@@ -420,8 +420,7 @@ impl parse::Parse for VargsRpnFnSignatureParam {
         input.parse::<Token![&]>()?;
         let slice_inner;
         bracketed!(slice_inner in input);
-        slice_inner.parse::<Token![&]>()?;
-        let et = slice_inner.parse::<RpnFnEvaluableType>()?;
+        let et = slice_inner.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
             eval_type: et.eval_type,
