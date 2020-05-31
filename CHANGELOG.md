@@ -2,6 +2,14 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.15]
+### Bugfixes
+- Fix a panic issue that Titan GC may delete an already deleted blob file [#7970](https://github.com/tikv/tikv/pull/7970)
+- Fix the issue that clean snapshot files which were in used after restarting [#7925](https://github.com/tikv/tikv/pull/7925)
+- Change schedule tick failure log to debug level to make logs less verbose [#7904](https://github.com/tikv/tikv/pull/7904)
+- Make grpc message size limit configurable [#7822](https://github.com/tikv/tikv/pull/7822)
+- Fix the issue that the memory defragmentation will not be very effective after running for a long time [#7790](https://github.com/tikv/tikv/pull/7790)
+
 ## [3.0.14]
 ### Features
 - Improve the performance when many conflicts and the `BatchRollback` condition exist in optimistic transactions [#7605](https://github.com/tikv/tikv/pull/7605)
