@@ -1052,6 +1052,7 @@ impl NormalRpnFn {
         );
         let extract2 = extract.clone();
         let extract3 = extract.clone();
+        let extract4 = extract.clone();
         let call_arg2 = extract.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
@@ -1061,6 +1062,7 @@ impl NormalRpnFn {
             quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
                 #(let (#extract2, arg) = arg.extract(0));*;
+                #(let #extract4 = #extract4.as_ref());*;
                 #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
             },
         );
