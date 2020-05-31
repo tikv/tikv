@@ -61,31 +61,6 @@ impl Into<spanpb::Event> for TraceEvent {
 }
 
 pub fn encode_spans(rx: Collector) -> impl Iterator<Item = spanpb::SpanSet> {
-    /*
-    let finished_spans = rx.collect();
-    let spans = finished_spans.into_iter().map(|span| {
-        let mut s = spanpb::Span::default();
-
-        s.set_id(span.id.into());
-        s.set_start(span.elapsed_start);
-        s.set_end(span.elapsed_end);
-        s.set_event(TraceEvent::from(span.tag).into());
-
-        #[cfg(feature = "prost-codec")]
-        if let Some(p) = span.parent {
-            s.parent = Some(spanpb::Parent::ParentValue(p.into()));
-        } else {
-            s.parent = Some(spanpb::Parent::ParentNone(true));
-        };
-        #[cfg(feature = "protobuf-codec")]
-        if let Some(p) = span.parent {
-            s.set_parent_value(p.into());
-        }
-        s
-    });
-    spans.into_iter()
-     */
-
     let span_sets = rx.collect();
     span_sets
         .into_iter()
