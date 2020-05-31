@@ -1,5 +1,5 @@
 use kvproto::span as spanpb;
-use minitrace::CollectorRx;
+use minitrace::Collector;
 
 #[repr(u32)]
 pub enum TraceEvent {
@@ -60,8 +60,9 @@ impl Into<spanpb::Event> for TraceEvent {
     }
 }
 
-pub fn encode_spans(mut rx: CollectorRx) -> impl Iterator<Item = spanpb::Span> {
-    let finished_spans = rx.collect().unwrap();
+pub fn encode_spans(mut rx: Collector) -> impl Iterator<Item = spanpb::SpanSet> {
+    /*
+    let finished_spans = rx.collect();
     let spans = finished_spans.into_iter().map(|span| {
         let mut s = spanpb::Span::default();
 
@@ -83,4 +84,16 @@ pub fn encode_spans(mut rx: CollectorRx) -> impl Iterator<Item = spanpb::Span> {
         s
     });
     spans.into_iter()
+     */
+
+    let span_sets = rx.collect();
+    //TODO finish encode to proto
+    span_sets
+        .into_iter()
+        .map(|span_set| {
+            let mut set = spanpb::SpanSet::default();
+
+            set
+        })
+        .into_iter()
 }

@@ -319,7 +319,7 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
-        minitrace::new_span(TraceEvent::Scheduled).enter();
+        minitrace::new_span(TraceEvent::Scheduled);
         tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -348,7 +348,7 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(
             handler
                 .handle_request()
-                .in_current_span(TraceEvent::HandleRequest),
+                .trace_task(TraceEvent::HandleRequest),
             &mut tracker,
         );
         let result = if let Some(semaphore) = &semaphore {
@@ -409,28 +409,32 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let (tx, rx) = minitrace::Collector::unbounded();
         let _enable_trace = req.enable_trace;
         //TODO remove before merge
         let enable_trace = true;
 
-        let span_root = if enable_trace {
-            minitrace::new_span_root(tx, tikv_util::trace::TraceEvent::CoprRequest)
-        } else {
-            minitrace::none()
-        };
+        let (_guard, collector) = minitrace::trace_may_enable(
+            enable_trace,
+            tikv_util::trace::TraceEvent::CoprRequest,
+        );
+
         let result_of_future =
             self.parse_request(req, peer, false)
                 .map(|(handler_builder, req_ctx)| {
                     self.handle_unary_request(req_ctx, handler_builder)
-                        .instrument(span_root)
+                        .trace_task(tikv_util::trace::TraceEvent::CoprRequest)
                 });
 
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
             .map(move |mut resp: coppb::Response| {
-                resp.set_spans(tikv_util::trace::encode_spans(rx).collect());
+                match collector {
+                    Some(collector) => {
+                        resp.set_spans(tikv_util::trace::encode_spans(collector).collect())
+                    }
+                    None => {}
+                }
                 resp
             })
     }

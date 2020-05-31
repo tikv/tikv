@@ -49,7 +49,7 @@ tokio-timer = "0.2"
 url = "2"
 zeroize = { version = "1.1", features = ["alloc"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-minitrace = { git = "https://github.com/zhongzc/minitrace.git", branch = "master" }
+minitrace = { git = "https://github.com/pingcap-incubator/minitrace.git", branch = "into_u32" }
 protobuf = "2"
 
 
