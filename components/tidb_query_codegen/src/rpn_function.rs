@@ -746,17 +746,16 @@ impl VargsRpnFn {
                         use tidb_query_datatype::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        vargs_buf.resize(args_len, 0);
+                        vargs_buf.resize(args_len, None);
+                        let mut vargs_buf : Vec<Option<&#arg_type>> = Vec::with_capacity(args_len);
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
-                                let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                                vargs_buf[arg_index] = arg as *const _ as usize;
+                                let arg: Option<&#arg_type> = scalar_arg.into();
+                                vargs_buf.push(arg);
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* unsafe {
-                                &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
-                            })?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* &vargs_buf)?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
