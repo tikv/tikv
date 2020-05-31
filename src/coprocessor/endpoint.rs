@@ -319,17 +319,16 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
-        minitrace::new_span(TraceEvent::Scheduled);
+        let _schedule_guard = minitrace::trace_crossthread(TraceEvent::Scheduled);
         tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
-        let snapshot_span = minitrace::new_span(TraceEvent::Snapshot);
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
+        .trace_task(TraceEvent::Snapshot)
         .await?;
-        std::mem::drop(snapshot_span);
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -413,10 +412,8 @@ impl<E: Engine> Endpoint<E> {
         //TODO remove before merge
         let enable_trace = true;
 
-        let (_guard, collector) = minitrace::trace_may_enable(
-            enable_trace,
-            tikv_util::trace::TraceEvent::CoprRequest,
-        );
+        let (_guard, collector) =
+            minitrace::trace_may_enable(enable_trace, tikv_util::trace::TraceEvent::CoprRequest);
 
         let result_of_future =
             self.parse_request(req, peer, false)
