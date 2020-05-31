@@ -224,7 +224,7 @@ pub struct Endpoint<T> {
     min_ts_region_id: u64,
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -321,10 +321,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
                     }
+                    self.connections
+                        .iter_mut()
+                        .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 }
-                self.connections
-                    .iter_mut()
-                    .for_each(|(_, conn)| conn.unsubscribe(region_id));
                 // Do not continue to observe the events of the region.
                 let oid = self.observer.unsubscribe_region(region_id, observe_id);
                 assert_eq!(
@@ -381,6 +381,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             downstream.sink_duplicate_error(request.get_region_id());
             error!("duplicate register";
                 "region_id" => region_id,
+                "conn_id" => ?conn_id,
+                "req_id" => request.get_request_id(),
                 "downstream_id" => ?downstream.get_id());
             return;
         }
@@ -388,6 +390,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
+            "req_id" => request.get_request_id(),
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
@@ -534,15 +537,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.id == observe_id {
-                if let Err(e) = delegate.on_region_ready(resolver, region) {
-                    assert!(delegate.has_failed());
-                    // Delegate has error, deregister the corresponding region.
-                    let deregister = Deregister::Region {
-                        region_id,
-                        observe_id: delegate.id,
-                        err: e,
-                    };
-                    self.on_deregister(deregister);
+                for downstream in delegate.on_region_ready(resolver, region) {
+                    let conn_id = downstream.get_conn_id();
+                    if !delegate.subscribe(downstream) {
+                        let conn = self.connections.get_mut(&conn_id).unwrap();
+                        conn.unsubscribe(region_id);
+                    }
                 }
             } else {
                 debug!("stale region ready";
@@ -822,7 +822,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -866,7 +866,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksSnapshot>> RunnableWithTimer<Task, ()> for Endpoint<T> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
@@ -880,342 +880,306 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use engine_traits::DATA_CFS;
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::Event as Event_oneof_event;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::kvrpcpb::Context;
-    use kvproto::metapb;
-    use raftstore::errors::Error as RaftStoreError;
-    use raftstore::store::msg::CasualMessage;
-    use std::collections::BTreeMap;
-    use std::fmt::Display;
-    use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-    use tempfile::TempDir;
-    use test_raftstore::MockRaftStoreRouter;
-    use test_raftstore::TestPdClient;
-    use tikv::storage::kv::Engine;
-    use tikv::storage::mvcc::tests::*;
-    use tikv::storage::TestEngineBuilder;
-    use tikv_util::collections::HashSet;
-    use tikv_util::mpsc::batch;
-    use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use engine_traits::DATA_CFS;
+//     #[cfg(feature = "prost-codec")]
+//     use kvproto::cdcpb::event::Event as Event_oneof_event;
+//     use kvproto::errorpb::Error as ErrorHeader;
+//     use kvproto::kvrpcpb::Context;
+//     use kvproto::metapb;
+//     use raftstore::errors::Error as RaftStoreError;
+//     use raftstore::store::msg::CasualMessage;
+//     use std::collections::BTreeMap;
+//     use std::fmt::Display;
+//     use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+//     use tempfile::TempDir;
+//     use test_raftstore::MockRaftStoreRouter;
+//     use test_raftstore::TestPdClient;
+//     use tikv::storage::kv::Engine;
+//     use tikv::storage::mvcc::tests::*;
+//     use tikv::storage::TestEngineBuilder;
+//     use tikv_util::collections::HashSet;
+//     use tikv_util::mpsc::batch;
+//     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
 
-    struct ReceiverRunnable<T> {
-        tx: Sender<T>,
-    }
+//     struct ReceiverRunnable<T> {
+//         tx: Sender<T>,
+//     }
 
-    impl<T: Display> Runnable<T> for ReceiverRunnable<T> {
-        fn run(&mut self, task: T) {
-            self.tx.send(task).unwrap();
-        }
-    }
+//     impl<T: Display> Runnable<T> for ReceiverRunnable<T> {
+//         fn run(&mut self, task: T) {
+//             self.tx.send(task).unwrap();
+//         }
+//     }
 
-    fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker<T>, Receiver<T>) {
-        let (tx, rx) = channel();
-        let runnable = ReceiverRunnable { tx };
-        let mut worker = WorkerBuilder::new("test-receiver-worker").create();
-        worker.start(runnable).unwrap();
-        (worker, rx)
-    }
+//     fn new_receiver_worker<T: Display + Send + 'static>() -> (Worker<T>, Receiver<T>) {
+//         let (tx, rx) = channel();
+//         let runnable = ReceiverRunnable { tx };
+//         let mut worker = WorkerBuilder::new("test-receiver-worker").create();
+//         worker.start(runnable).unwrap();
+//         (worker, rx)
+//     }
 
-    fn mock_initializer() -> (Worker<Task>, ThreadPool, Initializer, Receiver<Task>) {
-        let (receiver_worker, rx) = new_receiver_worker();
+//     fn mock_initializer() -> (Worker<Task>, ThreadPool, Initializer, Receiver<Task>) {
+//         let (receiver_worker, rx) = new_receiver_worker();
 
-        let pool = Builder::new()
-            .name_prefix("test-initializer-worker")
-            .pool_size(4)
-            .build();
-        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
+//         let pool = Builder::new()
+//             .name_prefix("test-initializer-worker")
+//             .pool_size(4)
+//             .build();
+//         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
 
-        let initializer = Initializer {
-            sched: receiver_worker.scheduler(),
+//         let initializer = Initializer {
+//             sched: receiver_worker.scheduler(),
 
-            region_id: 1,
-            observe_id: ObserveID::new(),
-            downstream_id: DownstreamID::new(),
-            downstream_state,
-            conn_id: ConnID::new(),
-            checkpoint_ts: 1.into(),
-            batch_size: 1,
+//             region_id: 1,
+//             observe_id: ObserveID::new(),
+//             downstream_id: DownstreamID::new(),
+//             downstream_state,
+//             conn_id: ConnID::new(),
+//             checkpoint_ts: 1.into(),
+//             batch_size: 1,
 
-            build_resolver: true,
-        };
+//             build_resolver: true,
+//         };
 
-        (receiver_worker, pool, initializer, rx)
-    }
+//         (receiver_worker, pool, initializer, rx)
+//     }
 
-    #[test]
-    fn test_initializer_build_resolver() {
-        let (mut worker, _pool, mut initializer, rx) = mock_initializer();
+//     #[test]
+//     fn test_initializer_build_resolver() {
+//         let (mut worker, _pool, mut initializer, rx) = mock_initializer();
 
-        let temp = TempDir::new().unwrap();
-        let engine = TestEngineBuilder::new()
-            .path(temp.path())
-            .cfs(DATA_CFS)
-            .build()
-            .unwrap();
+//         let temp = TempDir::new().unwrap();
+//         let engine = TestEngineBuilder::new()
+//             .path(temp.path())
+//             .cfs(DATA_CFS)
+//             .build()
+//             .unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
+//         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
 
-        // Pessimistic locks should not be tracked
-        for i in 0..10 {
-            let k = &[b'k', i];
-            let ts = TimeStamp::new(i as _);
-            must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
-        }
+//         // Pessimistic locks should not be tracked
+//         for i in 0..10 {
+//             let k = &[b'k', i];
+//             let ts = TimeStamp::new(i as _);
+//             must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
+//         }
 
-        for i in 10..100 {
-            let (k, v) = (&[b'k', i], &[b'v', i]);
-            let ts = TimeStamp::new(i as _);
-            must_prewrite_put(&engine, k, v, k, ts);
-            expected_locks.entry(ts).or_default().insert(k.to_vec());
-        }
+//         for i in 10..100 {
+//             let (k, v) = (&[b'k', i], &[b'v', i]);
+//             let ts = TimeStamp::new(i as _);
+//             must_prewrite_put(&engine, k, v, k, ts);
+//             expected_locks.entry(ts).or_default().insert(k.to_vec());
+//         }
 
-        let region = Region::default();
-        let snap = engine.snapshot(&Context::default()).unwrap();
+//         let region = Region::default();
+//         let snap = engine.snapshot(&Context::default()).unwrap();
 
-        let check_result = || loop {
-            let task = rx.recv().unwrap();
-            match task {
-                Task::ResolverReady { resolver, .. } => {
-                    assert_eq!(resolver.locks(), &expected_locks);
-                    return;
-                }
-                Task::IncrementalScan { .. } => continue,
-                t => panic!("unepxected task {} received", t),
-            }
-        };
+//         let check_result = || loop {
+//             let task = rx.recv().unwrap();
+//             match task {
+//                 Task::ResolverReady { resolver, .. } => {
+//                     assert_eq!(resolver.locks(), &expected_locks);
+//                     return;
+//                 }
+//                 Task::IncrementalScan { .. } => continue,
+//                 t => panic!("unepxected task {} received", t),
+//             }
+//         };
 
-        initializer.async_incremental_scan(snap.clone(), region.clone());
-        check_result();
-        initializer.batch_size = 1000;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
-        check_result();
+//         initializer.async_incremental_scan(snap.clone(), region.clone());
+//         check_result();
+//         initializer.batch_size = 1000;
+//         initializer.async_incremental_scan(snap.clone(), region.clone());
+//         check_result();
 
-        initializer.batch_size = 10;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
-        check_result();
+//         initializer.batch_size = 10;
+//         initializer.async_incremental_scan(snap.clone(), region.clone());
+//         check_result();
 
-        initializer.batch_size = 11;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
-        check_result();
+//         initializer.batch_size = 11;
+//         initializer.async_incremental_scan(snap.clone(), region.clone());
+//         check_result();
 
-        initializer.build_resolver = false;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+//         initializer.build_resolver = false;
+//         initializer.async_incremental_scan(snap.clone(), region.clone());
 
-        loop {
-            let task = rx.recv_timeout(Duration::from_secs(1));
-            match task {
-                Ok(Task::IncrementalScan { .. }) => continue,
-                Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(e) => panic!("unexpected err {:?}", e),
-            }
-        }
+//         loop {
+//             let task = rx.recv_timeout(Duration::from_secs(1));
+//             match task {
+//                 Ok(Task::IncrementalScan { .. }) => continue,
+//                 Ok(t) => panic!("unepxected task {} received", t),
+//                 Err(RecvTimeoutError::Timeout) => break,
+//                 Err(e) => panic!("unexpected err {:?}", e),
+//             }
+//         }
 
-        // Test cancellation.
-        initializer.downstream_state.store(DownstreamState::Stopped);
-        initializer.async_incremental_scan(snap, region);
+//         // Test cancellation.
+//         initializer.downstream_state.store(DownstreamState::Stopped);
+//         initializer.async_incremental_scan(snap, region);
 
-        loop {
-            let task = rx.recv_timeout(Duration::from_secs(1));
-            match task {
-                Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(e) => panic!("unexpected err {:?}", e),
-            }
-        }
+//         loop {
+//             let task = rx.recv_timeout(Duration::from_secs(1));
+//             match task {
+//                 Ok(t) => panic!("unepxected task {} received", t),
+//                 Err(RecvTimeoutError::Timeout) => break,
+//                 Err(e) => panic!("unexpected err {:?}", e),
+//             }
+//         }
 
-        worker.stop().unwrap().join().unwrap();
-    }
+//         worker.stop().unwrap().join().unwrap();
+//     }
 
-    //     #[test]
-    //     fn test_raftstore_is_busy() {
-    //         let (task_sched, task_rx) = dummy_scheduler();
-    //         let raft_router = MockRaftStoreRouter::new();
-    //         let observer = CdcObserver::new(task_sched.clone());
-    //         let pd_client = Arc::new(TestPdClient::new(0, true));
-    //         let mut pr = metapb::Peer::default();
-    //         pr.set_store_id(1);
-    //         pr.set_id(1);
-    //         let mut store_meta = StoreMeta::new(0);
-    //         store_meta.readers.insert(1, ReadDelegate::from_peer(&pr));
-    //         let temp = TempDir::new().unwrap();
-    //         let engine = TestEngineBuilder::new()
-    //             .path(temp.path())
-    //             .cfs(DATA_CFS)
-    //             .build()
-    //             .unwrap();
-    //         let mut ep = Endpoint::new(
-    //             pd_client,
-    //             task_sched,
-    //             raft_router.clone(),
-    //             observer,
-    //             Arc::new(AtomicCell::new(store_meta)),
-    //             engine,
-    //         );
-    //         let (tx, _rx) = batch::unbounded(1);
+//     #[test]
+//     fn test_raftstore_is_busy() {
+//         let (task_sched, task_rx) = dummy_scheduler();
+//         let raft_router = MockRaftStoreRouter::new();
+//         let observer = CdcObserver::new(task_sched.clone());
+//         let pd_client = Arc::new(TestPdClient::new(0, true));
+//         let mut ep = Endpoint::new(pd_client, task_sched, raft_router.clone(), observer);
+//         let (tx, _rx) = batch::unbounded(1);
 
-    //         // Fill the channel.
-    //         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
-    //         loop {
-    //             if let Err(RaftStoreError::Transport(_)) =
-    //                 raft_router.casual_send(1, CasualMessage::ClearRegionSize)
-    //             {
-    //                 break;
-    //             }
-    //         }
-    //         // Make sure channel is full.
-    //         raft_router
-    //             .casual_send(1, CasualMessage::ClearRegionSize)
-    //             .unwrap_err();
+//         // Fill the channel.
+//         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
+//         loop {
+//             if let Err(RaftStoreError::Transport(_)) =
+//                 raft_router.casual_send(1, CasualMessage::ClearRegionSize)
+//             {
+//                 break;
+//             }
+//         }
+//         // Make sure channel is full.
+//         raft_router
+//             .casual_send(1, CasualMessage::ClearRegionSize)
+//             .unwrap_err();
 
-    //         let conn = Conn::new(tx);
-    //         let conn_id = conn.get_id();
-    //         ep.run(Task::OpenConn { conn });
-    //         let mut req_header = Header::default();
-    //         req_header.set_cluster_id(0);
-    //         let mut req = ChangeDataRequest::default();
-    //         req.set_region_id(1);
-    //         let region_epoch = req.get_region_epoch().clone();
-    //         let downstream = Downstream::new("".to_string(), region_epoch, 0);
-    //         ep.run(Task::Register {
-    //             request: req,
-    //             downstream,
-    //             conn_id,
-    //         });
-    //         assert_eq!(ep.capture_regions.len(), 1);
+//         let conn = Conn::new(tx);
+//         let conn_id = conn.get_id();
+//         ep.run(Task::OpenConn { conn });
+//         let mut req_header = Header::default();
+//         req_header.set_cluster_id(0);
+//         let mut req = ChangeDataRequest::default();
+//         req.set_region_id(1);
+//         let region_epoch = req.get_region_epoch().clone();
+//         let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+//         ep.run(Task::Register {
+//             request: req,
+//             downstream,
+//             conn_id,
+//         });
+//         assert_eq!(ep.capture_regions.len(), 1);
 
-    //         for _ in 0..5 {
-    //             if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
-    //                 task_rx.recv_timeout(Duration::from_secs(1))
-    //             {
-    //                 if let Some(Error::Request(err)) = err {
-    //                     assert!(!err.has_server_is_busy());
-    //                 }
-    //             }
-    //         }
-    //     }
+//         for _ in 0..5 {
+//             if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
+//                 task_rx.recv_timeout(Duration::from_secs(1))
+//             {
+//                 if let Some(Error::Request(err)) = err {
+//                     assert!(!err.has_server_is_busy());
+//                 }
+//             }
+//         }
+//     }
 
-    //     #[test]
-    //     fn test_deregister() {
-    //         let (task_sched, _task_rx) = dummy_scheduler();
-    //         let raft_router = MockRaftStoreRouter::new();
-    //         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-    //         let observer = CdcObserver::new(task_sched.clone());
-    //         let pd_client = Arc::new(TestPdClient::new(0, true));
-    //         let mut pr = metapb::Peer::default();
-    //         pr.set_store_id(1);
-    //         pr.set_id(1);
-    //         let mut store_meta = StoreMeta::new(0);
-    //         store_meta.readers.insert(1, ReadDelegate::from_peer(&pr));
-    //         let temp = TempDir::new().unwrap();
-    //         let engine = TestEngineBuilder::new()
-    //             .path(temp.path())
-    //             .cfs(DATA_CFS)
-    //             .build()
-    //             .unwrap();
-    //         let mut ep = Endpoint::new(
-    //             pd_client,
-    //             task_sched,
-    //             raft_router.clone(),
-    //             observer,
-    //             Arc::new(AtomicCell::new(store_meta)),
-    //             engine,
-    //         );
-    //         let (tx, rx) = batch::unbounded(1);
+//     #[test]
+//     fn test_deregister() {
+//         let (task_sched, _task_rx) = dummy_scheduler();
+//         let raft_router = MockRaftStoreRouter::new();
+//         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+//         let observer = CdcObserver::new(task_sched.clone());
+//         let pd_client = Arc::new(TestPdClient::new(0, true));
+//         let mut ep = Endpoint::new(pd_client, task_sched, raft_router, observer);
+//         let (tx, rx) = batch::unbounded(1);
 
-    //         let conn = Conn::new(tx);
-    //         let conn_id = conn.get_id();
-    //         ep.run(Task::OpenConn { conn });
-    //         let mut req_header = Header::default();
-    //         req_header.set_cluster_id(0);
-    //         let mut req = ChangeDataRequest::default();
-    //         req.set_region_id(1);
-    //         let region_epoch = req.get_region_epoch().clone();
-    //         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
-    //         let downstream_id = downstream.get_id();
-    //         ep.run(Task::Register {
-    //             request: req.clone(),
-    //             downstream,
-    //             conn_id,
-    //         });
-    //         assert_eq!(ep.capture_regions.len(), 1);
+//         let conn = Conn::new(tx);
+//         let conn_id = conn.get_id();
+//         ep.run(Task::OpenConn { conn });
+//         let mut req_header = Header::default();
+//         req_header.set_cluster_id(0);
+//         let mut req = ChangeDataRequest::default();
+//         req.set_region_id(1);
+//         let region_epoch = req.get_region_epoch().clone();
+//         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+//         let downstream_id = downstream.get_id();
+//         ep.run(Task::Register {
+//             request: req.clone(),
+//             downstream,
+//             conn_id,
+//         });
+//         assert_eq!(ep.capture_regions.len(), 1);
 
-    //         let mut err_header = ErrorHeader::default();
-    //         err_header.set_not_leader(Default::default());
-    //         let deregister = Deregister::Downstream {
-    //             region_id: 1,
-    //             downstream_id,
-    //             conn_id,
-    //             err: Some(Error::Request(err_header.clone())),
-    //         };
-    //         ep.run(Task::Deregister(deregister));
-    //         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-    //         let event = change_data_event.event.take().unwrap();
-    //         match event {
-    //             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-    //             _ => panic!("unknown event"),
-    //         }
-    //         assert_eq!(ep.capture_regions.len(), 0);
+//         let mut err_header = ErrorHeader::default();
+//         err_header.set_not_leader(Default::default());
+//         let deregister = Deregister::Downstream {
+//             region_id: 1,
+//             downstream_id,
+//             conn_id,
+//             err: Some(Error::Request(err_header.clone())),
+//         };
+//         ep.run(Task::Deregister(deregister));
+//         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+//         let event = change_data_event.event.take().unwrap();
+//         match event {
+//             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
+//             _ => panic!("unknown event"),
+//         }
+//         assert_eq!(ep.capture_regions.len(), 0);
 
-    //         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0);
-    //         let new_downstream_id = downstream.get_id();
-    //         ep.run(Task::Register {
-    //             request: req.clone(),
-    //             downstream,
-    //             conn_id,
-    //         });
-    //         assert_eq!(ep.capture_regions.len(), 1);
+//         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+//         let new_downstream_id = downstream.get_id();
+//         ep.run(Task::Register {
+//             request: req.clone(),
+//             downstream,
+//             conn_id,
+//         });
+//         assert_eq!(ep.capture_regions.len(), 1);
 
-    //         let deregister = Deregister::Downstream {
-    //             region_id: 1,
-    //             downstream_id,
-    //             conn_id,
-    //             err: Some(Error::Request(err_header.clone())),
-    //         };
-    //         ep.run(Task::Deregister(deregister));
-    //         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
-    //         assert_eq!(ep.capture_regions.len(), 1);
+//         let deregister = Deregister::Downstream {
+//             region_id: 1,
+//             downstream_id,
+//             conn_id,
+//             err: Some(Error::Request(err_header.clone())),
+//         };
+//         ep.run(Task::Deregister(deregister));
+//         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+//         assert_eq!(ep.capture_regions.len(), 1);
 
-    //         let deregister = Deregister::Downstream {
-    //             region_id: 1,
-    //             downstream_id: new_downstream_id,
-    //             conn_id,
-    //             err: Some(Error::Request(err_header.clone())),
-    //         };
-    //         ep.run(Task::Deregister(deregister));
-    //         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
-    //         let event = change_data_event.event.take().unwrap();
-    //         match event {
-    //             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
-    //             _ => panic!("unknown event"),
-    //         }
-    //         assert_eq!(ep.capture_regions.len(), 0);
+//         let deregister = Deregister::Downstream {
+//             region_id: 1,
+//             downstream_id: new_downstream_id,
+//             conn_id,
+//             err: Some(Error::Request(err_header.clone())),
+//         };
+//         ep.run(Task::Deregister(deregister));
+//         let (_, mut change_data_event) = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+//         let event = change_data_event.event.take().unwrap();
+//         match event {
+//             Event_oneof_event::Error(err) => assert!(err.has_not_leader()),
+//             _ => panic!("unknown event"),
+//         }
+//         assert_eq!(ep.capture_regions.len(), 0);
 
-    //         // Stale deregister should be filtered.
-    //         let downstream = Downstream::new("".to_string(), region_epoch, 0);
-    //         ep.run(Task::Register {
-    //             request: req,
-    //             downstream,
-    //             conn_id,
-    //         });
-    //         assert_eq!(ep.capture_regions.len(), 1);
-    //         let deregister = Deregister::Region {
-    //             region_id: 1,
-    //             // A stale ObserveID (different from the actual one).
-    //             observe_id: ObserveID::new(),
-    //             err: Error::Request(err_header),
-    //         };
-    //         ep.run(Task::Deregister(deregister));
-    //         match rx.recv_timeout(Duration::from_millis(500)) {
-    //             Err(_) => (),
-    //             _ => panic!("unknown event"),
-    //         }
-    //         assert_eq!(ep.capture_regions.len(), 1);
-    //     }
-}
+//         // Stale deregister should be filtered.
+//         let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+//         ep.run(Task::Register {
+//             request: req,
+//             downstream,
+//             conn_id,
+//         });
+//         assert_eq!(ep.capture_regions.len(), 1);
+//         let deregister = Deregister::Region {
+//             region_id: 1,
+//             // A stale ObserveID (different from the actual one).
+//             observe_id: ObserveID::new(),
+//             err: Error::Request(err_header),
+//         };
+//         ep.run(Task::Deregister(deregister));
+//         match rx.recv_timeout(Duration::from_millis(500)) {
+//             Err(_) => (),
+//             _ => panic!("unknown event"),
+//         }
+//         assert_eq!(ep.capture_regions.len(), 1);
+//     }
+// }

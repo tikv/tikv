@@ -106,7 +106,7 @@ pub struct SizeCheckObserver<C, E> {
     _phantom: PhantomData<E>,
 }
 
-impl<C: CasualRouter<E>, E> SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot>, E> SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -120,7 +120,7 @@ where
 
 impl<C: Send, E: Send> Coprocessor for SizeCheckObserver<C, E> {}
 
-impl<C: CasualRouter<E> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
+impl<C: CasualRouter<E::Snapshot> + Send, E> SplitCheckObserver<E> for SizeCheckObserver<C, E>
 where
     E: KvEngine,
 {
@@ -385,11 +385,10 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::properties::RangePropertiesCollectorFactory;
-    use engine_rocks::{Compat, RocksEngine};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
@@ -409,7 +408,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -441,7 +440,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -724,7 +723,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
@@ -763,7 +763,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(data_cf).unwrap();
         let mut big_value = Vec::with_capacity(256);
@@ -886,7 +887,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         let cf_size = 2 + 1024 + 2 + 2048 + 2 + 4096;
@@ -926,7 +928,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         for i in 0..100 {
@@ -967,7 +970,8 @@ pub mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut cf_size = 0;
         let cf = db.cf_handle("default").unwrap();

@@ -10,10 +10,8 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::Snapshot;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{
@@ -48,7 +46,7 @@ impl SyncBenchRouter {
                 let region = self.region.to_owned();
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
                 })
             }
             Callback::Write(cb) => {
@@ -63,7 +61,7 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
+impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
@@ -77,7 +75,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 
@@ -87,7 +85,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = Builder::new().prefix("bench_rafkv").tempdir().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
+    let db = engine_rocks::raw_util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 
@@ -99,7 +97,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
-            snapshot.into_sync(),
+            Arc::new(snapshot),
             Region::default(),
         )),
     };

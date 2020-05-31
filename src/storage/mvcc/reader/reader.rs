@@ -473,10 +473,10 @@ mod tests {
 
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use engine::rocks::util::CFOptions;
     use engine::rocks::DB;
-    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
+    use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -657,14 +657,14 @@ mod tests {
 
         fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.compact_range_cf(cf, None, None);
             }
         }
@@ -684,7 +684,7 @@ mod tests {
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -812,6 +812,51 @@ mod tests {
 
             assert_eq!(iter.next().unwrap(), false);
         }
+    }
+
+    #[test]
+    fn test_ts_filter_lost_delete() {
+        let dir = tempfile::Builder::new()
+            .prefix("test_ts_filter_lost_deletion")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().to_str().unwrap();
+        let region = make_region(1, vec![0], vec![]);
+
+        let db = open_db(&path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        let key1 = &[1];
+        engine.put(key1, 2, 3);
+        engine.flush();
+        engine.compact();
+
+        // Delete key 1 commit ts@5 and GC@6
+        // Put key 2 commit ts@7
+        let key2 = &[2];
+        engine.put(key2, 6, 7);
+        engine.delete(key1, 4, 5);
+        engine.gc(key1, 6);
+        engine.flush();
+
+        // Scan kv with ts filter [1, 6].
+        let mut iopt = IterOptions::default();
+        iopt.set_hint_min_ts(Bound::Included(1));
+        iopt.set_hint_max_ts(Bound::Included(6));
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+        // Must not omit the latest deletion of key1 to prevent seeing outdated record.
+        assert_eq!(iter.seek_to_first().unwrap(), true);
+        assert_eq!(
+            Key::from_encoded_slice(iter.key())
+                .to_raw()
+                .unwrap()
+                .as_slice(),
+            key2
+        );
+        assert_eq!(iter.next().unwrap(), false);
     }
 
     fn test_with_properties(path: &str, region: &Region) {

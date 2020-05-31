@@ -7,17 +7,17 @@ use std::{result, thread};
 
 use futures::Future;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, RegionEpoch};
+use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
 use raft::eraftpb::ConfChangeType;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 
-use engine::rocks;
+use encryption::DataKeyManager;
 use engine::{Engines, DB};
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_DEFAULT, CF_RAFT};
+use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
@@ -26,7 +26,6 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
@@ -49,7 +48,8 @@ pub trait Simulator {
         cfg: TiKvConfig,
         engines: Engines,
         store_meta: Arc<Mutex<StoreMeta>>,
-        router: RaftRouter<RocksEngine>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -62,7 +62,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -101,7 +101,10 @@ pub struct Cluster<T: Simulator> {
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
+    key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub engines: HashMap<u64, Engines>,
+    key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
+    pub labels: HashMap<u64, HashMap<String, String>>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -119,11 +122,14 @@ impl<T: Simulator> Cluster<T> {
         Cluster {
             cfg: new_tikv_config(id),
             leaders: HashMap::default(),
+            count,
             paths: vec![],
             dbs: vec![],
             store_metas: HashMap::default(),
-            count,
+            key_managers: vec![],
             engines: HashMap::default(),
+            key_managers_map: HashMap::default(),
+            labels: HashMap::default(),
             sim,
             pd_client,
         }
@@ -141,25 +147,28 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
+    /// Engines in a just created cluster are not bootstraped, which means they are not associated
+    /// with a `node_id`. Call `Cluster::start` can bootstrap all nodes in the cluster.
+    ///
+    /// However sometimes a node can be bootstrapped externally. This function can be called to
+    /// mark them as bootstrapped in `Cluster`.
+    pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
+        let engines = self.dbs[offset].clone();
+        let key_mgr = self.key_managers[offset].clone();
+        assert!(self.engines.insert(node_id, engines).is_none());
+        assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
+    }
+
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksSnapshot>>) {
+        let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
+        self.dbs.push(engines);
+        self.key_managers.push(key_manager);
+        self.paths.push(dir);
+    }
+
     pub fn create_engines(&mut self) {
-        for id in 0..self.count {
-            let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-            let cache = self.cfg.storage.block_cache.build_shared_cache();
-            let kv_db_opt = self.cfg.rocksdb.build_opt();
-            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
-            let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
-                    .unwrap(),
-            );
-            let raft_path = dir.path().join("raft");
-            let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
-            let engines = Engines::new(engine, raft_engine, cache.is_some());
-            self.dbs.push(engines);
-            self.paths.push(dir);
+        for _ in 0..self.count {
+            self.create_engine(None);
         }
     }
 
@@ -171,34 +180,35 @@ impl<T: Simulator> Cluster<T> {
         }
 
         // Try start new nodes.
-        let mut sim = self.sim.wl();
         for _ in 0..self.count - self.engines.len() {
             let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
-            let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
+            self.create_engine(Some(router.clone()));
+
+            let engines = self.dbs.last().unwrap().clone();
+            let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-            self.dbs.push(engines.clone());
-            self.paths.push(path.unwrap());
+
+            let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
                 self.cfg.clone(),
                 engines.clone(),
                 store_meta.clone(),
+                key_mgr.clone(),
                 router,
                 system,
             )?;
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
+            self.key_managers_map.insert(node_id, key_mgr);
         }
         Ok(())
     }
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            engine
-                .kv
-                .c()
-                .compact_range("default", None, None, false, 1)
-                .unwrap();
+            let db = engine.kv.c();
+            db.compact_range("default", None, None, false, 1).unwrap();
         }
     }
 
@@ -227,7 +237,12 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let store_meta = self.store_metas[&node_id].clone();
+        let key_mgr = self.key_managers_map[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        let mut cfg = self.cfg.clone();
+        if let Some(labels) = self.labels.get(&node_id) {
+            cfg.server.labels = labels.to_owned();
+        }
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim.wl().run_node(
@@ -235,6 +250,7 @@ impl<T: Simulator> Cluster<T> {
             self.cfg.clone(),
             engines,
             store_meta,
+            key_mgr,
             router,
             system,
         )?;
@@ -454,15 +470,19 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    // Multiple nodes with fixed node id, like node 1, 2, .. 5,
-    // First region 1 is in all stores with peer 1, 2, .. 5.
-    // Peer 1 is in node 1, store 1, etc.
+    /// Multiple nodes with fixed node id, like node 1, 2, .. 5,
+    /// First region 1 is in all stores with peer 1, 2, .. 5.
+    /// Peer 1 is in node 1, store 1, etc.
+    ///
+    /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
-        for (id, engines) in self.dbs.iter().enumerate() {
-            let id = id as u64 + 1;
+        for (i, engines) in self.dbs.iter().enumerate() {
+            let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
             self.store_metas.insert(id, store_meta);
+            self.key_managers_map
+                .insert(id, self.key_managers[i].clone());
         }
 
         let mut region = metapb::Region::default();
@@ -489,11 +509,13 @@ impl<T: Simulator> Cluster<T> {
 
     // Return first region id.
     pub fn bootstrap_conf_change(&mut self) -> u64 {
-        for (id, engines) in self.dbs.iter().enumerate() {
-            let id = id as u64 + 1;
+        for (i, engines) in self.dbs.iter().enumerate() {
+            let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
             self.store_metas.insert(id, store_meta);
+            self.key_managers_map
+                .insert(id, self.key_managers[i].clone());
         }
 
         for (&id, engines) in &self.engines {
@@ -515,12 +537,41 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .bootstrap_cluster(new_store(1, "".to_owned()), region)
             .unwrap();
-
-        for &id in self.engines.keys() {
-            self.pd_client
-                .put_store(new_store(id, "".to_owned()))
-                .unwrap();
+        for id in self.engines.keys() {
+            let mut store = new_store(*id, "".to_owned());
+            if let Some(labels) = self.labels.get(id) {
+                for (key, value) in labels.iter() {
+                    let mut l = StoreLabel::default();
+                    l.key = key.clone();
+                    l.value = value.clone();
+                    store.labels.push(l);
+                }
+            }
+            self.pd_client.put_store(store).unwrap();
         }
+    }
+
+    pub fn add_label(&mut self, node_id: u64, key: &str, value: &str) {
+        self.labels
+            .entry(node_id)
+            .or_default()
+            .insert(key.to_owned(), value.to_owned());
+    }
+
+    pub fn add_new_engine(&mut self) -> u64 {
+        self.create_engine(None);
+        self.count += 1;
+        let node_id = self.count as u64;
+
+        let engines = self.dbs.last().unwrap().clone();
+        bootstrap_store(&engines.c(), self.id(), node_id).unwrap();
+        self.engines.insert(node_id, engines);
+
+        let key_mgr = self.key_managers.last().unwrap().clone();
+        self.key_managers_map.insert(node_id, key_mgr);
+
+        self.run_node(node_id).unwrap();
+        node_id
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
@@ -1249,7 +1300,7 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksEngine>| {
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksSnapshot>| {
                 let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);

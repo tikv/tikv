@@ -19,7 +19,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -49,7 +49,7 @@ pub struct ImportSSTService<Router> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
@@ -74,7 +74,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
     }
 }
 
-impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -185,6 +185,10 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // FIXME: download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_storage_backend(),
