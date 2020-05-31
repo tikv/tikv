@@ -2,6 +2,27 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.2]
+### New Features
++ Support using user owned KMS key for server-side encryption when backup to S3 [#7749](https://github.com/tikv/tikv/pull/7749)
+
+### Bug Fixes
++ Fix the issue that a peer may not be destroyed after isolation recovery [#7636](https://github.com/tikv/tikv/pull/7636)
++ Fix the issue of deadlock when batch empty requests with zero delay is handled [#7539](https://github.com/tikv/tikv/pull/7539)
++ Fix the issue that delete snapshot files after restarting [#7926](https://github.com/tikv/tikv/pull/7926)
++ Make grpc message size limit configurable #[7823](https://github.com/tikv/tikv/pull/7823)
++ Fix the issue of backup fails with DefaultNotFound error [#7938](https://github.com/tikv/tikv/pull/7938)
++ Fix the issue that may cause data loss during merging and network partition [#7762](https://github.com/tikv/tikv/pull/7762)
+
+## [3.1.1]
+### Bug Fixes
++ Fix the issue that a region may be stuck during multi-times merging [#7517](https://github.com/tikv/tikv/pull/7517)
++ Fix the issue that a removed learner may not really be removed in some cases [#7517](https://github.com/tikv/tikv/pull/7517)
++ Fix the issue that needless wake-up results in useless retry and performance reduction in heavy contention workloads [#7585](https://github.com/tikv/tikv/pull/7585)
++ Improve performance when there are many write conflicts in optimistic transactions [#7608](https://github.com/tikv/tikv/pull/7608)
++ Fix the issue of logical behavior for floats [#7582](https://github.com/tikv/tikv/pull/7582)
++ Fix the issue of converting bytes to bool [#7547](https://github.com/tikv/tikv/pull/7547)
+
 ## [3.1.0]
 ### Bug Fixes
 + Fix the panic issue caused by replica read [#7418](https://github.com/tikv/tikv/pull/7418) [#7369](https://github.com/tikv/tikv/pull/7369)
