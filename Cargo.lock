@@ -3706,6 +3706,7 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
+ "futures-cpupool",
  "futures-executor",
  "futures-util",
  "grpcio",
