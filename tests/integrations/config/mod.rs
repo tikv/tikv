@@ -157,7 +157,7 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
-        clean_stale_peer_delay: ReadableDuration::secs(13),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
@@ -628,6 +628,7 @@ fn test_serde_custom_tikv_config() {
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
+        import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {

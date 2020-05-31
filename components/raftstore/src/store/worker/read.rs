@@ -559,7 +559,6 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine::rocks;
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
@@ -578,7 +577,8 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
-            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                .unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,
