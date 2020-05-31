@@ -426,11 +426,8 @@ impl<E: Engine> Endpoint<E> {
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
             .map(move |mut resp: coppb::Response| {
-                match collector {
-                    Some(collector) => {
-                        resp.set_spans(tikv_util::trace::encode_spans(collector).collect())
-                    }
-                    None => {}
+                if let Some(collector) = collector {
+                    resp.set_spans(tikv_util::trace::encode_spans(collector).collect())
                 }
                 resp
             })
