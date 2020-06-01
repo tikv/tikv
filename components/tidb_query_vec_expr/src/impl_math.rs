@@ -263,7 +263,7 @@ fn abs_int(arg: Option<&Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 fn abs_uint(arg: Option<&Int>) -> Result<Option<Int>> {
-    Ok(*arg)
+    Ok(arg.cloned())
 }
 
 #[rpn_fn]
@@ -290,7 +290,7 @@ fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
-    Ok(arg.and_then(|n| {
+    Ok(arg.cloned().and_then(|n| {
         if *n > 0f64 {
             Some(1)
         } else if *n == 0f64 {
@@ -304,7 +304,7 @@ fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| {
+    Ok(arg.cloned().and_then(|n| {
         if *n < 0f64 {
             None
         } else {
@@ -321,7 +321,7 @@ fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn radians(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| Real::new(*n * std::f64::consts::PI / 180_f64).ok()))
+    Ok(arg.cloned().and_then(|n| Real::new(*n * std::f64::consts::PI / 180_f64).ok()))
 }
 
 #[inline]
@@ -401,7 +401,7 @@ fn rand() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
-    let mut rng = MySQLRng::new_with_seed(seed.unwrap_or(0));
+    let mut rng = MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
@@ -467,7 +467,7 @@ pub fn round_real(arg: Option<&Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn round_int(arg: Option<&Int>) -> Result<Option<Int>> {
-    Ok(*arg)
+    Ok(arg.cloned())
 }
 
 #[inline]
@@ -488,8 +488,8 @@ pub fn round_dec(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
-    match (arg0, arg1) {
-        (&Some(x), &Some(d)) => {
+    match (arg0.cloned(), arg1.cloned()) {
+        (Some(x), Some(d)) => {
             if d >= 0 {
                 Ok(Some(x))
             } else {
@@ -507,8 +507,8 @@ pub fn truncate_int_with_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<O
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_uint(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
-    match (arg0, arg1) {
-        (&Some(x), &Some(_)) => Ok(Some(x)),
+    match (arg0.cloned(), arg1.cloned()) {
+        (Some(x), Some(_)) => Ok(Some(x)),
         _ => Ok(None),
     }
 }
@@ -516,8 +516,8 @@ pub fn truncate_int_with_uint(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_int(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
-    match (arg0, arg1) {
-        (&Some(x), &Some(d)) => {
+    match (arg0.cloned(), arg1.cloned()) {
+        (Some(x), Some(d)) => {
             let d = if d >= 0 {
                 d.min(i64::from(i32::max_value())) as i32
             } else {
@@ -532,8 +532,8 @@ pub fn truncate_real_with_int(arg0: Option<&Real>, arg1: Option<&Int>) -> Result
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
-    match (arg0, arg1) {
-        (&Some(x), &Some(d)) => {
+    match (arg0.cloned(), arg1.cloned()) {
+        (Some(x), Some(d)) => {
             let d = (d as u64).min(i32::max_value() as u64) as i32;
             Ok(Some(truncate_real(x, d)))
         }

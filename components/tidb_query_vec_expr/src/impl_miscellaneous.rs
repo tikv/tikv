@@ -22,7 +22,7 @@ const PREFIX_MAPPED: [u8; 12] = [
 #[inline]
 pub fn any_value<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
     if let Some(arg) = args.first() {
-        Ok((*arg).clone())
+        Ok(arg.cloned())
     } else {
         Ok(None)
     }
@@ -40,7 +40,7 @@ pub fn inet_aton(addr: Option<&Bytes>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn inet_ntoa(arg: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(arg
+    Ok(arg.cloned()
         .and_then(|arg| u32::try_from(arg).ok())
         .map(|arg| format!("{}", Ipv4Addr::from(arg)).into_bytes()))
 }

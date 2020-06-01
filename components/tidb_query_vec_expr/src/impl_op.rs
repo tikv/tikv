@@ -41,7 +41,7 @@ pub fn logical_xor(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>
 #[rpn_fn]
 #[inline]
 pub fn unary_not_int(arg: Option<&Int>) -> Result<Option<i64>> {
-    Ok(arg.map(|v| (v == 0) as i64))
+    Ok(arg.cloned().map(|v| (v == 0) as i64))
 }
 
 #[rpn_fn]
@@ -61,7 +61,7 @@ pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
 pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     use std::cmp::Ordering::*;
 
-    match *arg {
+    match arg.cloned() {
         Some(val) => {
             let uval = val as u64;
             match uval.cmp(&(std::i64::MAX as u64 + 1)) {
@@ -77,7 +77,7 @@ pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
-    match *arg {
+    match arg.cloned() {
         Some(val) => {
             if val == std::i64::MIN {
                 Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
@@ -92,13 +92,13 @@ pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_real(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map(|val| -val))
+    Ok(arg.cloned().map(|val| -val))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
-    Ok(arg.as_ref().map(|val| -*val))
+    Ok(arg.map(|val| -*val))
 }
 
 #[rpn_fn]
@@ -158,9 +158,9 @@ impl KeepNull for KeepNullOff {
 #[inline]
 pub fn int_is_true<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
-        arg.map(|v| (v != 0) as i64)
+        arg.cloned().map(|v| (v != 0) as i64)
     } else {
-        Some(arg.map_or(0, |v| (v != 0) as i64))
+        Some(arg.cloned().map_or(0, |v| (v != 0) as i64))
     })
 }
 
@@ -188,9 +188,9 @@ pub fn decimal_is_true<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>
 #[inline]
 pub fn int_is_false<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
-        arg.map(|v| (v == 0) as i64)
+        arg.cloned().map(|v| (v == 0) as i64)
     } else {
-        Some(arg.map_or(0, |v| (v == 0) as i64))
+        Some(arg.cloned().map_or(0, |v| (v == 0) as i64))
     })
 }
 
