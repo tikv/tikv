@@ -379,10 +379,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
-        let task = Task::new(cid, batch_id, cmd);
+        let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
-        self.try_to_wake_up(cid);
+        if self.inner.acquire_lock(cid) {
+            self.get_snapshot(cid, batch_id);
+        }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -393,17 +395,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid);
+            self.get_snapshot(cid, None);
         }
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&self, cid: u64) {
-        let mut task = self.inner.dequeue_task(cid);
+    fn get_snapshot(&self, cid: u64, batch_id: Option<ThreadReadId>) {
+        let task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-        let batch_id = task.batch_id.take();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
         let cb = must_call(

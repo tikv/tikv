@@ -76,6 +76,7 @@ impl ReadDelegate {
     pub fn update(&mut self, progress: Progress) {
         match progress {
             Progress::Region(region) => {
+                self.fresh_valid_ts();
                 self.region = Arc::new(region);
             }
             Progress::Term(term) => {
@@ -332,11 +333,12 @@ where
                         let snapshot = if need_snapshot {
                             if use_cache_snapshot {
                                 self.metrics.local_executed_cache_requests += 1;
-                                self.snap_cache.as_ref().map(|snap| {
-                                    let mut snapshot = snap.clone();
-                                    snapshot.set_region(delegate.region.clone());
-                                    snapshot
-                                })
+                                let mut snapshot = self.snap_cache.clone();
+                                snapshot
+                                    .as_mut()
+                                    .unwrap()
+                                    .set_region(delegate.region.clone());
+                                snapshot
                             } else {
                                 let snap = RegionSnapshot::from_snapshot(
                                     Arc::new(self.kv_engine.snapshot()),

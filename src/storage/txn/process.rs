@@ -34,7 +34,6 @@ use crate::storage::{
 };
 use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
-use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::Instant;
 
 pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -46,7 +45,6 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 /// Task is a running command.
 pub struct Task {
     pub cid: u64,
-    pub batch_id: Option<ThreadReadId>,
     pub tag: metrics::CommandKind,
 
     cmd: Command,
@@ -56,10 +54,9 @@ pub struct Task {
 
 impl Task {
     /// Creates a task for a running command.
-    pub fn new(cid: u64, batch_id: Option<ThreadReadId>, cmd: Command) -> Task {
+    pub fn new(cid: u64, cmd: Command) -> Task {
         Task {
             cid,
-            batch_id,
             tag: cmd.tag(),
             region_id: cmd.ctx.get_region_id(),
             ts: cmd.ts(),
