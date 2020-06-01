@@ -459,7 +459,7 @@ mod tests {
         /// foo(v) performs v * 2.
         #[rpn_fn]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.0))
+            Ok(v.map(|v| *v * 2.0))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -574,7 +574,7 @@ mod tests {
         /// foo(v) performs v1 + float(v2) - 1.
         #[rpn_fn]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
+            Ok(Some(*v1.unwrap() + *v2.unwrap() as f64 - 1.0))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -605,7 +605,7 @@ mod tests {
         /// foo(v) performs v1 - v2.
         #[rpn_fn]
         fn foo(v1: Option<&Real>, v2: Option<&Real>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() - v2.unwrap()))
+            Ok(Some(*v1.unwrap() - *v2.unwrap()))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -643,7 +643,7 @@ mod tests {
         /// foo(v) performs v1 - float(v2).
         #[rpn_fn]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() - v2.unwrap() as f64))
+            Ok(Some(*v1.unwrap() - *v2.unwrap() as f64))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -682,7 +682,7 @@ mod tests {
         #[rpn_fn]
         fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(
-                (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
+                (v1.unwrap().into_inner() * 2.5 - (*v2.unwrap() as f64) * 3.5) as i64,
             ))
         }
 
@@ -831,7 +831,7 @@ mod tests {
         /// fn_a(v1, v2, v3) performs v1 * v2 - v3.
         #[rpn_fn]
         fn fn_a(v1: Option<&Real>, v2: Option<&Real>, v3: Option<&Real>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
+            Ok(Some(*v1.unwrap() * *v2.unwrap() - *v3.unwrap()))
         }
 
         /// fn_b() returns 42.0.
@@ -929,7 +929,7 @@ mod tests {
         /// foo(v) performs v * 2.
         #[rpn_fn]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.0))
+            Ok(v.map(|v| *v * 2.0))
         }
 
         // foo() only accepts 1 parameter but we will give 2.
@@ -954,7 +954,7 @@ mod tests {
         /// Expects real argument, receives int argument.
         #[rpn_fn]
         fn foo(v: Option<&Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.5))
+            Ok(v.map(|v| *v * 2.5))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -986,13 +986,13 @@ mod tests {
         /// fn_a(a: int, b: float, c: int) performs: float(a) - b * float(c)
         #[rpn_fn]
         fn fn_a(a: Option<&i64>, b: Option<&Real>, c: Option<&i64>) -> Result<Option<Real>> {
-            Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
+            Ok(Real::new(*a.unwrap() as f64 - b.unwrap().into_inner() * *c.unwrap() as f64).ok())
         }
 
         /// fn_b(a: float, b: int) performs: a * (float(b) - 1.5)
         #[rpn_fn]
         fn fn_b(a: Option<&Real>, b: Option<&i64>) -> Result<Option<Real>> {
-            Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
+            Ok(Real::new(a.unwrap().into_inner() * (*b.unwrap() as f64 - 1.5)).ok())
         }
 
         /// fn_c() returns: int(42)
@@ -1095,7 +1095,7 @@ mod tests {
         #[rpn_fn(varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
         fn fn_b<T: Evaluable>(metadata: &String, v: &[Option<&T>]) -> Result<Option<T>> {
             assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
-            Ok(v[0].clone())
+            Ok(v[0].cloned())
         }
 
         fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> Result<String> {
