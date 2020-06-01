@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine::{rocks, DB};
+use engine::DB;
 use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
@@ -17,7 +17,7 @@ use tikv_util::worker::{Scheduler, Worker};
 
 fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     Arc::new(
-        rocks::util::new_engine(
+        engine_rocks::raw_util::new_engine(
             path.as_ref().to_str().unwrap(),
             None,
             &["split-check-config"],

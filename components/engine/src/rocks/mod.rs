@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod util;
-
 pub use rocksdb::{
     new_compaction_filter_raw, run_ldb_tool, BlockBasedOptions, CFHandle, Cache,
     ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
