@@ -746,19 +746,17 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, None);
-                        let mut vargs_buf = Vec::new();
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
-                            vargs_buf.clear();
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                                let arg = arg as *const Option<#arg_type> as usize;
-                                let arg: &'static Option<#arg_type> = unsafe { &* (arg as *const Option<#arg_type>) };
                                 let arg: Option<&#arg_type> = arg.as_ref();
-                                vargs_buf.push(arg);
+                                let arg: Option<&usize> = unsafe { std::mem::transmute::<Option<&#arg_type>, Option<&usize>>(arg) };
+                                vargs_buf[arg_index] = arg;
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* &vargs_buf)?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
+                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<&#arg_type>]) })?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
