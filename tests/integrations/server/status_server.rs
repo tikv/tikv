@@ -1,9 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::{Future, Stream};
-use futures03::compat::{Compat, Compat01As03};
-use hyper::rt;
-use hyper::{Client, StatusCode, Uri};
+use hyper::{body, Client, StatusCode, Uri};
 use security::SecurityConfig;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -19,9 +16,9 @@ async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Erro
         .authority(authority.to_string().as_str())
         .path_and_query(format!("/region/{}", region_id).as_str())
         .build()?;
-    let resp = Compat01As03::new(client.get(uri)).await?;
+    let resp = client.get(uri).await?;
     let (parts, raw_body) = resp.into_parts();
-    let body = Compat01As03::new(raw_body.concat2()).await?;
+    let body = body::to_bytes(raw_body).await?;
     assert_eq!(
         StatusCode::OK,
         parts.status,
@@ -45,11 +42,14 @@ fn test_region_meta_endpoint() {
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
     let mut status_server =
-        StatusServer::new(1, None, ConfigController::default(), router.unwrap());
+        StatusServer::new(1, None, ConfigController::default(), router.unwrap()).unwrap();
     assert!(status_server
         .start("127.0.0.1:0".to_string(), &SecurityConfig::default())
         .is_ok());
-    let check_task = Box::pin(check(status_server.listening_addr(), region_id));
-    rt::run(Compat::new(check_task).map_err(|err| panic!("{}", err)));
+    let check_task = check(status_server.listening_addr(), region_id);
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    if let Err(err) = rt.block_on(check_task) {
+        panic!("{}", err);
+    }
     status_server.stop();
 }
