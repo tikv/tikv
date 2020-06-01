@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn]
-//! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
+//! fn foo(x: Option<&u32>) -> Result<Option<u8>> {
 //!     Ok(None)
 //! }
 //! ```
@@ -17,16 +17,16 @@
 //!
 //! If neither `varg` or `raw_varg` are supplied, then the generated arguments
 //! follow from the supplied function's arguments. Each argument must have a type
-//! `&Option<T>` for some `T`.
+//! `Option<&T>` for some `T`.
 //!
 //! ### `varg`
 //!
 //! The RPN operator takes a variable number of arguments. The arguments are passed
-//! as a `&[&Option<T>]`. E.g.,
+//! as a `&[Option<&T>]`. E.g.,
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -99,7 +99,7 @@
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(capture = [ctx])]
-//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
+//! fn with_context(ctx: &mut EvalContext, param: Option<&Decimal>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -142,13 +142,13 @@
 //! first argument is a scalar. The code may look like:
 //!
 //! ```ignore
-//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
+//! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32>> {
 //!     // match text
 //! }
 //!
 //! #[rpn_fn]
-//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
-//!     let regex = build_regex(regex);
+//! fn regex_match(regex: Option<&Bytes>, text: Option<&Bytes>) -> Result<Option<i32>> {
+//!     let regex = build_regex(regex.cloned());
 //!     regex_match_impl(&regex, text)
 //! }
 //!
@@ -180,7 +180,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
