@@ -552,6 +552,7 @@ type = "plaintext"
 [import]
 num-threads = 123
 stream-channel-window = 123
+import-mode-timeout = "1453s"
 
 [gc]
 ratio-threshold = 1.2
