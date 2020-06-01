@@ -746,9 +746,10 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, None);
-                        let mut vargs_buf : Vec<Option<&#arg_type>> = Vec::with_capacity(args_len);
+                        let mut vargs_buf = Vec::new();
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
+                            vargs_buf.clear();
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
