@@ -134,8 +134,15 @@ apply-pool-size = 4
 store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
+<<<<<<< HEAD
 hibernate-regions = true
 perf-level = 4
+=======
+hibernate-regions = false
+early-apply = false
+dev-assert = true
+perf-level = 5
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 
 [coprocessor]
 split-region-on-table = false
