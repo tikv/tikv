@@ -329,11 +329,12 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 /// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
     engine: &E,
+    read_id: Option<ThreadReadId>,
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
+    let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error

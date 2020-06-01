@@ -30,7 +30,7 @@ where
         &self,
         _read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<S>,
     ) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
@@ -108,7 +108,7 @@ where
     E: KvEngine,
 {
     router: RaftRouter<E::Snapshot>,
-    local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+    local_reader: RefCell<LocalReader<RaftRouter<E::Snapshot>, E>>,
 }
 
 impl<E> Clone for ServerRaftStoreRouter<E>

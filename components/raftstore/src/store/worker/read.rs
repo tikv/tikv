@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -173,13 +173,12 @@ where
     tag: String,
 }
 
-
-impl<E: KvEngine> LocalReader<RaftRouter<E::Snapshot>, E> {
-    pub fn new(
-        kv_engine: E,
-        store_meta: Arc<Mutex<StoreMeta>>,
-        router: RaftRouter<E::Snapshot>,
-    ) -> Self {
+impl<C, E> LocalReader<C, E>
+where
+    C: ProposalRouter<E::Snapshot>,
+    E: KvEngine,
+{
+    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -193,13 +192,7 @@ impl<E: KvEngine> LocalReader<RaftRouter<E::Snapshot>, E> {
             tag: "[local_reader]".to_string(),
         }
     }
-}
 
-impl<C, E> LocalReader<C, E>
-where
-    C: ProposalRouter<E::Snapshot>,
-    E: KvEngine,
-{
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
@@ -420,30 +413,6 @@ where
 
     pub fn release_snapshot_cache(&mut self) {
         self.snap_cache.take();
-    }
-
-    /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
-    /// Returns `true`, it can be safely sent to localreader,
-    /// Returns `false`, it must not be sent to localreader.
-    #[inline]
-    pub fn acceptable(request: &RaftCmdRequest) -> bool {
-        if request.has_admin_request() || request.has_status_request() {
-            false
-        } else {
-            for r in request.get_requests() {
-                match r.get_cmd_type() {
-                    CmdType::Get | CmdType::Snap => (),
-                    CmdType::Delete
-                    | CmdType::Put
-                    | CmdType::DeleteRange
-                    | CmdType::Prewrite
-                    | CmdType::IngestSst
-                    | CmdType::ReadIndex
-                    | CmdType::Invalid => return false,
-                }
-            }
-            true
-        }
     }
 }
 

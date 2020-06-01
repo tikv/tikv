@@ -302,7 +302,7 @@ impl<E: Engine> Endpoint<E> {
         engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, ctx).map_err(Error::from)
+        kv::snapshot(engine, None, ctx).map_err(Error::from)
     }
     /// The real implementation of handling a unary request.
     ///

@@ -188,24 +188,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Get a snapshot of `engine`.
-    fn snapshot_with_cache(
+    fn snapshot(
         engine: &E,
-        read_id: ThreadReadId,
+        read_id: Option<ThreadReadId>,
         ctx: &Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, Some(read_id), callback);
-        // make engine not cross yield point
-        async move {
-            val?;
-            let (_ctx, result) = future
-                .map_err(|cancel| EngineError::from(EngineErrorInner::Other(box_err!(cancel))))
-                .await?;
-            result.map_err(txn::Error::from).map_err(Error::from)
-        }
-    }
-    fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, ctx)
+        kv::snapshot(engine, read_id, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -248,7 +236,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -302,13 +291,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = ThreadReadId::new();
+                let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
                 let mut snaps = vec![];
                 for req in requests {
                     let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot_with_cache(engine, read_id.clone(), req.get_context())
+                        Self::snapshot(engine, read_id.clone(), req.get_context())
                     });
                     snaps.push((req, snap));
                 }
@@ -381,7 +370,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -480,7 +470,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -654,7 +645,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -694,12 +686,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = ThreadReadId::new();
+                let read_id = Some(ThreadReadId::new());
                 let mut results = Vec::default();
                 let mut snaps = vec![];
                 for req in gets {
                     let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot_with_cache(engine, read_id.clone(), req.get_context())
+                        Self::snapshot(engine, read_id.clone(), req.get_context())
                     });
                     snaps.push((req, snap));
                 }
@@ -764,7 +756,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
@@ -1065,7 +1058,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -1177,7 +1171,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
@@ -3294,7 +3289,7 @@ mod tests {
             results.clone().collect(),
             block_on(async {
                 let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
+                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
                 <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
@@ -3310,7 +3305,7 @@ mod tests {
             results.rev().collect(),
             block_on(async move {
                 let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
+                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
                 <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),
