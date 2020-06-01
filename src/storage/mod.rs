@@ -198,7 +198,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map_err(Error::from)
     }
 
-    fn release_snapshot(&self) {
+    pub fn release_snapshot(&self) {
         self.engine.release_snapshot();
     }
 
