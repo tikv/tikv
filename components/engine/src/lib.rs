@@ -2,8 +2,6 @@
 
 #![recursion_limit = "200"]
 
-#[macro_use]
-extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 

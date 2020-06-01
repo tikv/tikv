@@ -1666,8 +1666,8 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine::rocks::util::new_engine;
     use engine::Engines;
+    use engine_rocks::raw_util::new_engine;
     use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
