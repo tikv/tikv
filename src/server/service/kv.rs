@@ -825,14 +825,15 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let gc_worker = self.gc_worker.clone();
-        let mut batcher = if self.enable_req_batch {
-            Some(ReqBatcher::new())
-        } else {
-            None
-        };
+        let enable_req_batch = self.enable_req_batch;
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
+            let mut batcher = if enable_req_batch {
+                Some(ReqBatcher::new())
+            } else {
+                None
+            };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
