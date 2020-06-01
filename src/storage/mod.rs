@@ -23,8 +23,8 @@ mod types;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator, RocksEngine,
-        ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
+        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -35,7 +35,7 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
-    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
+    kv::{with_tls_engine, Modify},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
@@ -204,20 +204,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             result.map_err(txn::Error::from).map_err(Error::from)
         }
     }
-
-    /// Get a snapshot of `engine`.
     fn snapshot(engine: &E, ctx: &Context) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, None, callback);
-        // make engine not cross yield point
-        async move {
-            val?; // propagate error
-            let (_ctx, result) = future
-                .map_err(|cancel| EngineError::from(EngineErrorInner::Other(box_err!(cancel))))
-                .await?;
-            // map storage::kv::Error -> storage::txn::Error -> storage::Error
-            result.map_err(txn::Error::from).map_err(Error::from)
-        }
+        kv::snapshot(engine, ctx)
+            .map_err(txn::Error::from)
+            .map_err(Error::from)
     }
 
     #[inline]
@@ -1474,11 +1464,12 @@ mod tests {
     use crate::config::TitanDBConfig;
     use crate::storage::{
         config::BlockCacheConfig,
+        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
-    use engine::rocks::util::CFOptions;
+    use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use futures03::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, LockInfo};

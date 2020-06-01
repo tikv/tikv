@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
@@ -19,7 +19,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -44,12 +44,12 @@ pub struct ImportSSTService<Router> {
     engine: RocksEngine,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
-    switcher: Arc<Mutex<ImportModeSwitcher>>,
+    switcher: ImportModeSwitcher<RocksEngine>,
     limiter: Limiter,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
@@ -61,20 +61,21 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
+        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
         ImportSSTService {
             cfg,
             router,
             engine,
             threads,
             importer,
-            switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            switcher,
             limiter: Limiter::new(INFINITY),
             security_mgr,
         }
     }
 }
 
-impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -88,14 +89,13 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let timer = Instant::now_coarse();
 
         let res = {
-            let mut switcher = self.switcher.lock().unwrap();
             fn mf(cf: &str, name: &str, v: f64) {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine, mf),
-                SwitchMode::Import => switcher.enter_import_mode(&self.engine, mf),
+                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
+                SwitchMode::Import => self.switcher.enter_import_mode(mf),
             }
         };
         match res {
@@ -185,6 +185,10 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // FIXME: download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_storage_backend(),
@@ -231,7 +235,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let label = "ingest";
         let timer = Instant::now_coarse();
 
-        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+        if self.switcher.get_mode() == SwitchMode::Normal
             && self
                 .engine
                 .ingest_maybe_slowdown_writes(CF_DEFAULT)

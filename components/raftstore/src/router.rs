@@ -9,21 +9,21 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
 use std::cell::RefCell;
 use tikv_util::threadpool::ThreadReadId;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter<E>: Send + Clone
+pub trait RaftStoreRouter<S>: Send + Clone
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
     fn read(
@@ -70,15 +70,15 @@ where
         )
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<E>) -> RaftStoreResult<()>;
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<S>) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
-impl<E> RaftStoreRouter<E> for RaftStoreBlackHole
+impl<S> RaftStoreRouter<S> for RaftStoreBlackHole
 where
-    E: KvEngine,
+    S: Snapshot,
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
@@ -86,7 +86,7 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<E::Snapshot>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<S>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -97,19 +97,30 @@ where
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage<E>) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<S>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
-#[derive(Clone)]
 pub struct ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
-    router: RaftRouter<E>,
-    local_reader: RefCell<LocalReader<RaftRouter<E>, E>>,
+    router: RaftRouter<E::Snapshot>,
+    local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+}
+
+impl<E> Clone for ServerRaftStoreRouter<E>
+where
+    E: KvEngine,
+{
+    fn clone(&self) -> Self {
+        ServerRaftStoreRouter {
+            router: self.router.clone(),
+            local_reader: self.local_reader.clone(),
+        }
+    }
 }
 
 impl<E> ServerRaftStoreRouter<E>
@@ -118,8 +129,8 @@ where
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<E>,
-        reader: LocalReader<RaftRouter<E>, E>,
+        router: RaftRouter<E::Snapshot>,
+        reader: LocalReader<RaftRouter<E::Snapshot>, E>,
     ) -> ServerRaftStoreRouter<E> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
@@ -146,7 +157,7 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E>
+impl<E> RaftStoreRouter<E::Snapshot> for ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
@@ -195,7 +206,7 @@ where
         Ok(())
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<E>) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<E::Snapshot>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))

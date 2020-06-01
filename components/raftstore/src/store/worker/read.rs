@@ -173,8 +173,13 @@ where
     tag: String,
 }
 
-impl<E: KvEngine, C: ProposalRouter<E::Snapshot>> LocalReader<C, E> {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+
+impl<E: KvEngine> LocalReader<RaftRouter<E::Snapshot>, E> {
+    pub fn new(
+        kv_engine: E,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        router: RaftRouter<E::Snapshot>,
+    ) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -615,7 +620,6 @@ mod tests {
 
     use crate::store::util::Lease;
     use crate::store::Callback;
-    use engine::rocks;
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::time::monotonic_raw_now;
@@ -634,7 +638,8 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
-            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                .unwrap();
         let (ch, rx) = sync_channel(1);
         let mut reader = LocalReader::new(RocksEngine::from_db(Arc::new(db)), store_meta, ch);
         reader.store_id = Cell::new(Some(store_id));

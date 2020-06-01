@@ -6,7 +6,7 @@ publish = false
 description = "A scalar expression of query engine to run TiDB pushed down executors"
 
 [dependencies]
-base64 = "0.10"
+base64 = "0.12"
 bstr = "0.2.8"
 byteorder = "1.2"
 

@@ -14,6 +14,7 @@ use std::{error, ptr, result};
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
+use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
@@ -323,6 +324,32 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
             *e.get() = ptr::null_mut();
         }
     });
+}
+
+/// Get a snapshot of `engine`.
+pub fn snapshot<E: Engine>(
+    engine: &E,
+    ctx: &Context,
+) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let (callback, future) =
+        tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
+    let val = engine.async_snapshot(ctx, callback);
+    // make engine not cross yield point
+    async move {
+        val?; // propagate error
+        let (_ctx, result) = future
+            .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
+            .await?;
+        result
+    }
+}
+
+pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
+    let bt = backtrace::Backtrace::new();
+    warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
+    let mut err = ErrorHeader::default();
+    err.set_message("async snapshot callback is dropped".to_string());
+    (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
 }
 
 #[cfg(test)]
