@@ -249,7 +249,7 @@ pub fn compare_in_by_compare<T: InByCompare>(args: &[Option<&T>]) -> Result<Opti
                         default_ret = None;
                     }
                     Some(v) => {
-                        if v == base_val {
+                        if *v == base_val {
                             return Ok(Some(1));
                         }
                     }

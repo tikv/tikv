@@ -9,9 +9,9 @@ use tidb_query_datatype::codec::data_type::*;
 #[inline]
 fn if_null<T: Evaluable>(lhs: Option<&T>, rhs: Option<&T>) -> Result<Option<T>> {
     if lhs.is_some() {
-        return Ok(lhs.clone());
+        return Ok(lhs.cloned());
     }
-    Ok(rhs.clone())
+    Ok(rhs.cloned())
 }
 
 #[rpn_fn(raw_varg, extra_validator = case_when_validator::<T>)]
@@ -20,12 +20,12 @@ pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>>
     for chunk in args.chunks(2) {
         if chunk.len() == 1 {
             // Else statement
-            let ret: Option<&T> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
+            let ret: &Option<T> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
             return Ok(ret.clone());
         }
-        let cond: Option<&Int> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
+        let cond: &Option<Int> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         if cond.unwrap_or(0) != 0 {
-            let ret: Option<&T> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
+            let ret: &Option<T> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
             return Ok(ret.clone());
         }
     }
@@ -39,12 +39,11 @@ fn if_condition<T: Evaluable>(
     value_if_true: Option<&T>,
     value_if_false: Option<&T>,
 ) -> Result<Option<T>> {
-    Ok(if condition.unwrap_or(0) != 0 {
-        value_if_true
+    Ok(if condition.cloned().unwrap_or(0) != 0 {
+        value_if_true.cloned()
     } else {
-        value_if_false
-    }
-    .clone())
+        value_if_false.cloned()
+    })
 }
 
 fn case_when_validator<T: Evaluable>(expr: &tipb::Expr) -> Result<()> {
