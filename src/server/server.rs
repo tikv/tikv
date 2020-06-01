@@ -112,11 +112,6 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
-                Some(Duration::from(cfg.request_batch_wait_duration))
-            } else {
-                None
-            },
             security_mgr.clone(),
         );
 

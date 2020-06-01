@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
@@ -62,8 +61,6 @@ pub struct Service<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: Lo
 
     enable_req_batch: bool,
 
-    req_batch_wait_duration: Option<Duration>,
-
     timer_pool: Arc<Mutex<ThreadPool>>,
 
     grpc_thread_load: Arc<ThreadLoad>,
@@ -84,7 +81,6 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Ser
         grpc_thread_load: Arc<ThreadLoad>,
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
-        req_batch_wait_duration: Option<Duration>,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
@@ -103,7 +99,6 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Ser
             readpool_normal_thread_load,
             timer_pool,
             enable_req_batch,
-            req_batch_wait_duration,
             security_mgr,
         }
     }
