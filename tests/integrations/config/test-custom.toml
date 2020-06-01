@@ -152,6 +152,11 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
+<<<<<<< HEAD
+=======
+dev-assert = true
+perf-level = 5
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 
 [coprocessor]
 split-region-on-table = false

@@ -812,7 +812,7 @@ impl Peer {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<T, C>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -843,6 +843,16 @@ impl Peer {
                             "time" => ?now,
                         );
                     }
+                } else {
+                    if ctx.cfg.dev_assert {
+                        panic!("{} failed to get peer {} from cache", self.tag, id);
+                    }
+                    error!(
+                        "failed to get peer from cache";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "get_peer_id" => id,
+                    );
                 }
             }
         }
@@ -2529,7 +2539,7 @@ impl Peer {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
-            pending_peers: self.collect_pending_peers(),
+            pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
@@ -2643,7 +2653,57 @@ impl Peer {
         }
     }
 
+<<<<<<< HEAD
     pub fn send_want_rollback_merge<T: Transport>(&self, premerge_commit: u64, trans: &mut T) {
+=======
+    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+            self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
+            self.check_stale_peers = self.region().get_peers().to_vec();
+        }
+        for peer in &self.check_stale_peers {
+            if peer.get_id() == self.peer_id() {
+                continue;
+            }
+            let mut send_msg = RaftMessage::default();
+            send_msg.set_region_id(self.region_id);
+            send_msg.set_from_peer(self.peer.clone());
+            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+            send_msg.set_to_peer(peer.clone());
+            let extra_msg = send_msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
+            if let Err(e) = ctx.trans.send(send_msg) {
+                error!(
+                    "failed to send check stale peer message";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => peer.get_id(),
+                    "target_store_id" => peer.get_store_id(),
+                    "err" => ?e,
+                );
+            } else {
+                ctx.need_flush_trans = true;
+            }
+        }
+    }
+
+    pub fn on_check_stale_peer_response(
+        &mut self,
+        check_conf_ver: u64,
+        check_peers: Vec<metapb::Peer>,
+    ) {
+        if self.check_stale_conf_ver < check_conf_ver {
+            self.check_stale_conf_ver = check_conf_ver;
+            self.check_stale_peers = check_peers;
+        }
+    }
+
+    pub fn send_want_rollback_merge<T: Transport, C>(
+        &self,
+        premerge_commit: u64,
+        ctx: &mut PollContext<T, C>,
+    ) {
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         send_msg.set_from_peer(self.peer.clone());
@@ -2664,7 +2724,7 @@ impl Peer {
         let extra_msg = send_msg.mut_extra_msg();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             error!(
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
@@ -2673,6 +2733,8 @@ impl Peer {
                 "target_store_id" => to_peer.get_store_id(),
                 "err" => ?e
             );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 }

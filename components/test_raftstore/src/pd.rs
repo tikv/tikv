@@ -132,7 +132,22 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    new_pd_merge_region(region)
+                    if cluster.check_merge_target_integrity {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::default()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::SplitRegion {
@@ -228,6 +243,15 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+<<<<<<< HEAD
+=======
+
+    replication_status: Option<ReplicationStatus>,
+    region_replication_status: HashMap<u64, RegionReplicationStatus>,
+
+    // for merging
+    pub check_merge_target_integrity: bool,
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 }
 
 impl Cluster {
@@ -256,6 +280,12 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+<<<<<<< HEAD
+=======
+            replication_status: None,
+            region_replication_status: HashMap::default(),
+            check_merge_target_integrity: true,
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
         }
     }
 
@@ -1004,6 +1034,10 @@ impl TestPdClient {
                 }
             }
         }
+    }
+
+    pub fn ignore_merge_target_integrity(&self) {
+        self.cluster.wl().check_merge_target_integrity = false;
     }
 }
 

@@ -30,7 +30,12 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
+<<<<<<< HEAD
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+=======
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
+
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -109,7 +114,6 @@ pub enum Task {
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     },
     ReadStats {
         read_stats: ReadStats,
@@ -220,11 +224,10 @@ impl Display for Task {
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-                ref merge_source,
             } => write!(
                 f,
-                "validate peer {:?} with region {:?}, merge_source {:?}",
-                peer, region, merge_source
+                "validate peer {:?} with region {:?}",
+                peer, region
             ),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
@@ -681,7 +684,6 @@ impl<T: PdClient> Runner<T> {
         handle: &Handle,
         local_region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     ) {
         let router = self.router.clone();
         let f = self
@@ -729,11 +731,7 @@ impl<T: PdClient> Runner<T> {
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
                                 .inc();
-                            if let Some(source) = merge_source {
-                                send_merge_fail(&router, source, peer);
-                            } else {
-                                send_destroy_peer_message(&router, local_region, peer, pd_region);
-                            }
+                            send_destroy_peer_message(&router, local_region, peer, pd_region);
                             return Ok(());
                         }
                         info!(
@@ -1010,11 +1008,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 self.handle_store_heartbeat(handle, stats, store_info)
             }
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(handle, regions),
-            Task::ValidatePeer {
-                region,
-                peer,
-                merge_source,
-            } => self.handle_validate_peer(handle, region, peer, merge_source),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
@@ -1113,6 +1107,7 @@ fn send_admin_request(
     }
 }
 
+<<<<<<< HEAD
 /// Sends merge fail message to gc merge source.
 fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
@@ -1130,6 +1125,8 @@ fn send_merge_fail(router: &RaftRouter<RocksEngine>, source_region_id: u64, targ
     }
 }
 
+=======
+>>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
     router: &RaftRouter<RocksEngine>,
