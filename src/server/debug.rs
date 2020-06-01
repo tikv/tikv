@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
-use engine::rocks::util::get_cf_handle;
 use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::{self, Engines};
+use engine_rocks::util::get_cf_handle;
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, SeekKey, TableProperties,
@@ -1456,8 +1456,7 @@ mod tests {
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
     use engine_traits::{CFHandleExt, Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1559,7 +1558,7 @@ mod tests {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocks::util::new_engine_opt(
+            engine_rocks::raw_util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
