@@ -26,7 +26,7 @@ impl CachedRequestHandler {
 
 #[async_trait]
 impl RequestHandler for CachedRequestHandler {
-    #[minitrace::trace(TraceEvent::HandleCached)]
+    #[minitrace::trace_async(TraceEvent::HandleCached)]
     async fn handle_request(&mut self) -> Result<Response> {
         let mut resp = Response::default();
         resp.set_is_cache_hit(true);

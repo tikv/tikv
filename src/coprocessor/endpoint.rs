@@ -637,7 +637,7 @@ mod tests {
 
     #[async_trait]
     impl RequestHandler for UnaryFixture {
-        #[minitrace::trace(TraceEvent::HandleUnaryFixture)]
+        #[minitrace::trace_async(TraceEvent::HandleUnaryFixture)]
         async fn handle_request(&mut self) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()

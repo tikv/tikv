@@ -104,7 +104,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    #[minitrace::trace(TraceEvent::HandleAnalyze)]
+    #[minitrace::trace_async(TraceEvent::HandleAnalyze)]
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {

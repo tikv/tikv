@@ -49,7 +49,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    #[minitrace::trace(TraceEvent::HandleChecksum)]
+    #[minitrace::trace_async(TraceEvent::HandleChecksum)]
     async fn handle_request(&mut self) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
