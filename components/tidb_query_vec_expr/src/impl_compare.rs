@@ -224,7 +224,7 @@ impl CmpOp for CmpOpNullEQ {
 pub fn coalesce<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
         if arg.is_some() {
-            return Ok((*arg).clone());
+            return Ok(arg.cloned());
         }
     }
     Ok(None)
@@ -292,7 +292,7 @@ where
                         return Ok(None);
                     }
                     Some(v) => {
-                        res = chooser(res, *v);
+                        res = chooser(res, **v);
                     }
                 }
             }
