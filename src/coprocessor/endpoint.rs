@@ -319,7 +319,6 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
-        let _schedule_guard = minitrace::trace_crossthread(TraceEvent::Scheduled);
         tracker.req_ctx.deadline.check()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
@@ -327,7 +326,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
-        .trace_task(TraceEvent::Snapshot)
+        .trace_async(TraceEvent::Snapshot)
         .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -347,7 +346,7 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(
             handler
                 .handle_request()
-                .trace_task(TraceEvent::HandleRequest),
+                .trace_async(TraceEvent::HandleRequest),
             &mut tracker,
         );
         let result = if let Some(semaphore) = &semaphore {
@@ -391,7 +390,8 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .trace_task(tikv_util::trace::TraceEvent::Scheduled),
                 priority,
                 task_id,
             )
@@ -419,7 +419,7 @@ impl<E: Engine> Endpoint<E> {
             self.parse_request(req, peer, false)
                 .map(|(handler_builder, req_ctx)| {
                     self.handle_unary_request(req_ctx, handler_builder)
-                        .trace_task(tikv_util::trace::TraceEvent::CoprRequest)
+                        .trace_async(tikv_util::trace::TraceEvent::CoprRequest)
                 });
 
         future::result(result_of_future)
