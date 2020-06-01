@@ -655,7 +655,7 @@ impl VargsRpnFn {
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[&Option<T>]`")
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`")
             })?;
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
