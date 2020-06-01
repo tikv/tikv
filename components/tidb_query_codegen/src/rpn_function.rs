@@ -372,7 +372,6 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
-
 /// Parses an evaluable type like `Option<&T>`.
 struct RpnFnRefEvaluableType {
     eval_type: TypePath,
@@ -1194,7 +1193,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(arg0: &Option<Int>, arg1: &Option<Real>) -> tidb_query_common::Result<Option<Decimal>> {
+            fn foo(arg0: Option<&Int>, arg1: Option<&Real>) -> tidb_query_common::Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1272,6 +1271,8 @@ mod tests_normal {
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1357,7 +1358,7 @@ mod tests_normal {
     fn generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
-            fn foo<A: M, B>(arg0: &Option<A::X>) -> Result<Option<B>>
+            fn foo<A: M, B>(arg0: Option<&A::X>) -> Result<Option<B>>
             where B: N<A> {
                 Ok(None)
             }
@@ -1439,6 +1440,7 @@ mod tests_normal {
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
                         result.push(foo :: <A, B> (arg0)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1536,7 +1538,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(ctx: &mut EvalContext, arg0: &Option<Int>, arg1: &Option<Real>) -> Result<Option<Decimal>> {
+            fn foo(ctx: &mut EvalContext, arg0: Option<&Int>, arg1: Option<&Real>) -> Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1586,6 +1588,8 @@ mod tests_normal {
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(ctx, arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
