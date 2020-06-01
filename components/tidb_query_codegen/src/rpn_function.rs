@@ -751,8 +751,8 @@ impl VargsRpnFn {
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
-                                let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
-                                let arg: Option<&#arg_type> = scalar_arg.into();
+                                let scalar_arg: &Option<#arg_type> = args[arg_index].get_logical_scalar_ref(row_index).as_ref();
+                                let arg: Option<&#arg_type> = scalar_arg.as_ref();
                                 vargs_buf.push(arg);
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* &vargs_buf)?);
