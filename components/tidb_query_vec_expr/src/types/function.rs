@@ -280,16 +280,16 @@ pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
 // `rpn_fn`. In this way, we can reduce overhead of allocating new Vec.
 // According to https://doc.rust-lang.org/std/mem/fn.size_of.html ,
 // &T and Option<&T> has the same size.
-assert_eq_size!(&Int, Option<&Int>);
-assert_eq_size!(&Real, Option<&Real>);
-assert_eq_size!(&Decimal, Option<&Decimal>);
-assert_eq_size!(&Bytes, Option<&Bytes>);
-assert_eq_size!(&DateTime, Option<&DateTime>);
-assert_eq_size!(&Duration, Option<&Duration>);
-assert_eq_size!(&Json, Option<&Json>);
+assert_eq_size!(usize, Option<&Int>);
+assert_eq_size!(usize, Option<&Real>);
+assert_eq_size!(usize, Option<&Decimal>);
+assert_eq_size!(usize, Option<&Bytes>);
+assert_eq_size!(usize, Option<&DateTime>);
+assert_eq_size!(usize, Option<&Duration>);
+assert_eq_size!(usize, Option<&Json>);
 
 thread_local! {
-    pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<Option<&'static usize>>> =
+    pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =

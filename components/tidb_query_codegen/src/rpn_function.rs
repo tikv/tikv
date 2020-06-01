@@ -745,14 +745,14 @@ impl VargsRpnFn {
                         use tidb_query_datatype::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        vargs_buf.resize(args_len, None);
+                        vargs_buf.resize(args_len, 0);
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
                                 let arg: Option<&#arg_type> = arg.as_ref();
-                                let arg: Option<&usize> = unsafe { std::mem::transmute::<Option<&#arg_type>, Option<&usize>>(arg) };
+                                let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) };
                                 vargs_buf[arg_index] = arg;
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
