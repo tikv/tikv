@@ -41,7 +41,7 @@ pub fn logical_xor(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>
 #[rpn_fn]
 #[inline]
 pub fn unary_not_int(arg: Option<&Int>) -> Result<Option<i64>> {
-    Ok(arg.cloned().map(|v| (v == 0) as i64))
+    Ok(arg.map(|v| (*v == 0) as i64))
 }
 
 #[rpn_fn]
@@ -61,13 +61,13 @@ pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
 pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     use std::cmp::Ordering::*;
 
-    match arg.cloned() {
+    match arg {
         Some(val) => {
-            let uval = val as u64;
+            let uval = *val as u64;
             match uval.cmp(&(std::i64::MAX as u64 + 1)) {
                 Greater => Err(Error::overflow("BIGINT", &format!("-{}", uval)).into()),
                 Equal => Ok(Some(std::i64::MIN)),
-                Less => Ok(Some(-val)),
+                Less => Ok(Some(-*val)),
             }
         }
         None => Ok(None),
@@ -77,12 +77,12 @@ pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
-    match arg.cloned() {
+    match arg {
         Some(val) => {
-            if val == std::i64::MIN {
-                Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
+            if *val == std::i64::MIN {
+                Err(Error::overflow("BIGINT", &format!("-{}", *val)).into())
             } else {
-                Ok(Some(-val))
+                Ok(Some(-*val))
             }
         }
         None => Ok(None),
@@ -92,7 +92,7 @@ pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_real(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.cloned().map(|val| -val))
+    Ok(arg.map(|val| -*val))
 }
 
 #[rpn_fn]
@@ -158,9 +158,9 @@ impl KeepNull for KeepNullOff {
 #[inline]
 pub fn int_is_true<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
-        arg.cloned().map(|v| (v != 0) as i64)
+        arg.map(|v| (*v != 0) as i64)
     } else {
-        Some(arg.cloned().map_or(0, |v| (v != 0) as i64))
+        Some(arg.map_or(0, |v| (*v != 0) as i64))
     })
 }
 
@@ -188,9 +188,9 @@ pub fn decimal_is_true<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>
 #[inline]
 pub fn int_is_false<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
-        arg.cloned().map(|v| (v == 0) as i64)
+        arg.map(|v| (*v == 0) as i64)
     } else {
-        Some(arg.cloned().map_or(0, |v| (v == 0) as i64))
+        Some(arg.map_or(0, |v| (*v == 0) as i64))
     })
 }
 
