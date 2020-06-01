@@ -848,6 +848,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
             }
             if let Some(batch) = batcher.as_mut() {
                 batch.commit(&storage, &tx);
+                storage.release_snapshot();
             }
             future::ok(())
         });

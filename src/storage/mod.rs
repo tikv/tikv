@@ -198,6 +198,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map_err(Error::from)
     }
 
+    fn release_snapshot(&self) {
+        self.engine.release_snapshot();
+    }
+
     #[inline]
     fn with_tls_engine<F, R>(f: F) -> R
     where
