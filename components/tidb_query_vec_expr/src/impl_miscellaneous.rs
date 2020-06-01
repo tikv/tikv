@@ -40,7 +40,8 @@ pub fn inet_aton(addr: Option<&Bytes>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn inet_ntoa(arg: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(arg.cloned()
+    Ok(arg
+        .cloned()
         .and_then(|arg| u32::try_from(arg).ok())
         .map(|arg| format!("{}", Ipv4Addr::from(arg)).into_bytes()))
 }

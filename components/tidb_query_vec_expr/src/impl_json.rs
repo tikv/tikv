@@ -49,7 +49,9 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     assert!(args.len() >= 2);
     // base Json argument
     let base: &Option<Json> = args[0].as_ref();
-    let base = base.as_ref().map_or(Json::none(), |json| Ok(json.to_owned()))?;
+    let base = base
+        .as_ref()
+        .map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
     let buf_size = args.len() / 2;
 
@@ -62,7 +64,9 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 
         path_expr_list.push(try_opt!(parse_json_path(path.as_ref())));
 
-        let value = value.as_ref().map_or(Json::none(), |json| Ok(json.to_owned()))?;
+        let value = value
+            .as_ref()
+            .map_or(Json::none(), |json| Ok(json.to_owned()))?;
         values.push(value);
     }
     Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))

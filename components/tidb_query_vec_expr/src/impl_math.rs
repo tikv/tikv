@@ -321,7 +321,9 @@ fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn radians(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.cloned().and_then(|n| Real::new(*n * std::f64::consts::PI / 180_f64).ok()))
+    Ok(arg
+        .cloned()
+        .and_then(|n| Real::new(*n * std::f64::consts::PI / 180_f64).ok()))
 }
 
 #[inline]
