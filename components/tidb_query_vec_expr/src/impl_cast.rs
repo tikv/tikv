@@ -465,7 +465,7 @@ fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Opt
 #[rpn_fn]
 #[inline]
 fn cast_real_as_signed_real(val: Option<&Real>) -> Result<Option<Real>> {
-    Ok(val.map(|x| *x))
+    Ok(val.cloned())
 }
 
 #[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
