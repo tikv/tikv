@@ -50,7 +50,7 @@ pub fn week_with_mode(
     if t.is_none() || m.is_none() {
         return Ok(None);
     }
-    let (t, m) = (t.as_ref().unwrap(), m.as_ref().unwrap());
+    let (t, m) = (t.unwrap(), m.unwrap());
     if t.invalid_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
@@ -142,7 +142,7 @@ pub fn to_days(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
-    arg.map_or(Ok(None), |daynr: Int| {
+    arg.cloned().map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
         Ok(Some(time))
     })

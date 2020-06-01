@@ -421,7 +421,7 @@ fn field<T: Evaluable + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
         Some(val) => args
             .iter()
             .skip(1)
-            .position(|&i| i.as_ref() == Some(val))
+            .position(|&i| i == Some(val))
             .map_or(0, |pos| (pos + 1) as i64),
     }))
 }
@@ -456,7 +456,7 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
 #[rpn_fn]
 #[inline]
 pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(match *len {
+    Ok(match len.cloned() {
         Some(len) => {
             if len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
                 None
@@ -668,11 +668,11 @@ mod tests {
             (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
             (Some(b"GG".to_vec()), None),
             (
-                hex_str_arg(&Some(b"string".to_vec())).unwrap(),
+                hex_str_arg(Some(&b"string".to_vec())).unwrap(),
                 Some(b"string".to_vec()),
             ),
             (
-                hex_str_arg(&Some(b"1267".to_vec())).unwrap(),
+                hex_str_arg(Some(&b"1267".to_vec())).unwrap(),
                 Some(b"1267".to_vec()),
             ),
             (Some(b"41\0".to_vec()), None),
