@@ -1053,7 +1053,7 @@ fn cast_time_as_time(
     val: Option<&Time>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
-        let mut val = val.clone();
+        let mut val = *val;
         val.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
         val.round_frac(ctx, extra.ret_field_type.get_decimal() as i8)
             .map(Some)

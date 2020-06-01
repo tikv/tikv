@@ -345,19 +345,19 @@ pub fn exp(arg: Option<&Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn sin(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.sin()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.sin()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 fn cos(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.cos()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.cos()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 fn tan(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.tan()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.tan()).ok()))
 }
 
 #[inline]
@@ -417,19 +417,19 @@ fn degrees(arg: Option<&Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn asin(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.asin()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.asin()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn acos(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.acos()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.acos()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn atan_1_arg(arg: Option<&Real>) -> Result<Option<Real>> {
-    Ok(arg.map_or(None, |arg| Real::new(arg.atan()).ok()))
+    Ok(arg.and_then(|arg| Real::new(arg.atan()).ok()))
 }
 
 #[inline]
