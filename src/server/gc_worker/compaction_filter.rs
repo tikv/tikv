@@ -7,12 +7,10 @@ use std::sync::{Arc, Mutex};
 use super::GcWorkerConfigManager;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine::rocks::{
-    new_compaction_filter_raw, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
-    CompactionFilterFactory, DBCompactionFilter, DBIterator, ReadOptions, SeekKey, WriteOptions,
-    DB,
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
+    DBCompactionFilter, DBIterator, ReadOptions, SeekKey, WriteOptions, DB,
 };
-use engine_rocks::RocksEngine;
-use engine_rocks::RocksWriteBatch;
+use engine_rocks::{util::get_cf_handle, RocksEngine, RocksWriteBatch};
 use engine_traits::{Mutable, WriteBatch, CF_WRITE};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
@@ -107,12 +105,20 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn delete_default_key(&mut self, key: &[u8]) {
+    fn delete_default_key(&mut self, key: &[u8], write_batch: Option<&mut RocksWriteBatch>) {
+        if let Some(write_batch) = write_batch {
+            write_batch.delete(key).unwrap();
+            return;
+        }
         self.write_batch.delete(key).unwrap();
         self.flush_pending_writes_if_need();
     }
 
-    fn delete_write_key(&mut self, key: &[u8]) {
+    fn delete_write_key(&mut self, key: &[u8], write_batch: Option<&mut RocksWriteBatch>) {
+        if let Some(write_batch) = write_batch {
+            write_batch.delete_cf(CF_WRITE, key).unwrap();
+            return;
+        }
         self.write_batch.delete_cf(CF_WRITE, key).unwrap();
         self.flush_pending_writes_if_need();
     }
@@ -142,6 +148,9 @@ impl WriteCompactionFilter {
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.delete_key_prefix.is_empty() && self.delete_key_prefix == self.key_prefix {
+            let mut write_batch =
+                RocksWriteBatch::with_capacity(Arc::clone(&self.db), DEFAULT_DELETE_BATCH_SIZE);
+
             // In this compaction, the last MVCC version is deleted. However there could be
             // still some versions for the key which are not included in this compaction.
             let cf_handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
@@ -162,13 +171,17 @@ impl Drop for WriteCompactionFilter {
                 let (start_ts, short_value) = (write.start_ts, write.short_value);
                 if short_value.is_none() {
                     let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-                    self.delete_default_key(key.as_encoded());
+                    self.delete_default_key(key.as_encoded(), Some(&mut write_batch));
                 }
 
-                self.delete_write_key(key);
+                self.delete_write_key(key, Some(&mut write_batch));
                 self.deleted += 1;
                 valid = iter.next().unwrap();
             }
+
+            let mut opts = WriteOptions::new();
+            opts.set_sync(true);
+            self.db.write_opt(write_batch.as_inner(), &opts).unwrap();
         }
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
@@ -237,7 +250,7 @@ impl CompactionFilter for WriteCompactionFilter {
         if filtered {
             if short_value.is_none() {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-                self.delete_default_key(key.as_encoded());
+                self.delete_default_key(key.as_encoded(), None);
             }
             self.deleted += 1;
         }
