@@ -33,6 +33,24 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn unhex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(content) = arg {
+        // hex::decode will fail on odd-length content
+        // but mysql won't
+        // so do some padding
+        let mut padded_content = Vec::with_capacity(content.len() + content.len() % 2);
+        if content.len() % 2 == 1 {
+            padded_content.push(b'0')
+        }
+        padded_content.extend_from_slice(content);
+        Ok(hex::decode(padded_content).ok())
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
 }
@@ -600,6 +618,34 @@ pub fn from_base64(bs: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn quote(input: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match input.as_ref() {
+        Some(bytes) => {
+            let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
+            result.push(b'\'');
+            for byte in bytes.iter() {
+                if *byte == b'\'' || *byte == b'\\' {
+                    result.push(b'\\');
+                    result.push(*byte)
+                } else if *byte == b'\0' {
+                    result.push(b'\\');
+                    result.push(b'0')
+                } else if *byte == 26u8 {
+                    result.push(b'\\');
+                    result.push(b'Z');
+                } else {
+                    result.push(*byte)
+                }
+            }
+            result.push(b'\'');
+            Ok(Some(result))
+        }
+        _ => Ok(Some(Vec::from("NULL"))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +689,35 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
+    #[test]
+    fn test_unhex() {
+        let cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"GG".to_vec()), None),
+            (
+                hex_str_arg(&Some(b"string".to_vec())).unwrap(),
+                Some(b"string".to_vec()),
+            ),
+            (
+                hex_str_arg(&Some(b"1267".to_vec())).unwrap(),
+                Some(b"1267".to_vec()),
+            ),
+            (Some(b"41\0".to_vec()), None),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"b".to_vec()), Some(vec![0xb])),
+            (Some(b"a1b".to_vec()), Some(vec![0xa, 0x1b])),
+            (None, None),
+        ];
+        for (arg, expect_output) in cases {
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[test]
     fn test_oct_int() {
         let cases = vec![
@@ -2328,5 +2403,29 @@ mod tests {
             .evaluate(ScalarFuncSig::FromBase64)
             .unwrap();
         assert_eq!(invalid_base64_output, Some(b"".to_vec()));
+    }
+
+    #[test]
+    fn test_quote() {
+        let cases: Vec<(&str, &str)> = vec![
+            (r"Don\'t!", r"'Don\\\'t!'"),
+            (r"Don't", r"'Don\'t'"),
+            (r"\'", r"'\\\''"),
+            (r#"\""#, r#"'\\"'"#),
+            (r"萌萌哒(๑•ᴗ•๑)😊", r"'萌萌哒(๑•ᴗ•๑)😊'"),
+            (r"㍿㌍㍑㌫", r"'㍿㌍㍑㌫'"),
+            (str::from_utf8(&[26, 0]).unwrap(), r"'\Z\0'"),
+        ];
+
+        for (input, expect) in cases {
+            let input = Bytes::from(input);
+            let expect_vec = Bytes::from(expect);
+            let got = quote(&Some(input)).unwrap();
+            assert_eq!(got, Some(expect_vec))
+        }
+
+        // check for null
+        let got = quote(&None).unwrap();
+        assert_eq!(got, Some(Bytes::from("NULL")))
     }
 }

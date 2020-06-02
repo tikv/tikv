@@ -1,51 +1,19 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
+//! Functions for constructing the rocksdb crate's `DB` type
+//!
+//! These are an artifact of refactoring the engine traits and will go away
+//! eventually. Prefer to use the versions in the `util` module.
 
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::{Error, Result};
+use engine_traits::Result;
 use rocksdb::load_latest_options;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, DBCompressionType, DBOptions, Env,
-    SliceTransform, DB,
-};
+use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
 
-pub use crate::rocks::CFHandle;
 use engine_traits::CF_DEFAULT;
-
-// Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
-    DBCompressionType::Lz4,
-    DBCompressionType::Snappy,
-    DBCompressionType::Zstd,
-];
-
-pub fn get_fastest_supported_compression_type() -> DBCompressionType {
-    let all_supported_compression = supported_compression();
-    *COMPRESSION_PRIORITY
-        .iter()
-        .find(|c| all_supported_compression.contains(c))
-        .unwrap_or(&DBCompressionType::No)
-}
-
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
-    let handle = db
-        .cf_handle(cf)
-        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
-    Ok(handle)
-}
-
-pub fn open_opt(
-    opts: DBOptions,
-    path: &str,
-    cfs: Vec<&str>,
-    cfs_opts: Vec<ColumnFamilyOptions>,
-) -> Result<DB> {
-    let db = DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())?;
-    Ok(db)
-}
 
 pub struct CFOptions<'a> {
     cf: &'a str,
@@ -215,7 +183,7 @@ pub fn new_engine_opt(
     Ok(db)
 }
 
-pub fn db_exist(path: &str) -> bool {
+pub(crate) fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {
         return false;
@@ -225,72 +193,6 @@ pub fn db_exist(path: &str) -> bool {
     // but db has not been created, `DB::list_column_families` fails and we can clean up
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
-}
-
-pub struct FixedSuffixSliceTransform {
-    pub suffix_len: usize,
-}
-
-impl FixedSuffixSliceTransform {
-    pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform { suffix_len }
-    }
-}
-
-impl SliceTransform for FixedSuffixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        let mid = key.len() - self.suffix_len;
-        let (left, _) = key.split_at(mid);
-        left
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.suffix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct FixedPrefixSliceTransform {
-    pub prefix_len: usize,
-}
-
-impl FixedPrefixSliceTransform {
-    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform { prefix_len }
-    }
-}
-
-impl SliceTransform for FixedPrefixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        &key[..self.prefix_len]
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.prefix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct NoopSliceTransform;
-
-impl SliceTransform for NoopSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        key
-    }
-
-    fn in_domain(&mut self, _: &[u8]) -> bool {
-        true
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
@@ -304,8 +206,8 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::{ColumnFamilyOptions, DBOptions, DB};
     use engine_traits::CF_DEFAULT;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempfile::Builder;
 
     #[test]

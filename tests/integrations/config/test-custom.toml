@@ -114,7 +114,7 @@ raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"
-clean-stale-peer-delay = "13s"
+clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
@@ -152,6 +152,7 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
+dev-assert = true
 perf-level = 5
 
 [coprocessor]
@@ -551,6 +552,7 @@ type = "plaintext"
 [import]
 num-threads = 123
 stream-channel-window = 123
+import-mode-timeout = "1453s"
 
 [gc]
 ratio-threshold = 1.2
