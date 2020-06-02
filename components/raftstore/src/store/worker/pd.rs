@@ -896,7 +896,7 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
-                if sender.send(read_stats).is_error() {
+                if sender.send(read_stats).is_err() {
                     warn!("send read_stats failed, are we shutting down?")
                 }
             }
