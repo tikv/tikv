@@ -1537,14 +1537,19 @@ impl Peer {
     ) {
         debug!(
             "handle reads with a read index";
-            "request_id" => ?read.binary_id(),
+            "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-        for (req, cb) in read.cmds.drain(..) {
+        for (req, cb, mut read_index) in read.cmds.drain(..) {
             if !replica_read {
-                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                if read_index.is_none() {
+                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
+                    // Starting from the second, all the following one's read_index is not none.
+                    read_index = read.read_index;
+                }
+                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
             }
             if req.get_header().get_replica_read() {
@@ -2107,10 +2112,11 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
+                    let committed_index = self.get_store().committed_index();
                     if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.push_command(req, cb);
+                            read.push_command(req, cb, committed_index);
                             return false;
                         }
                     }
