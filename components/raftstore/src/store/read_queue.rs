@@ -27,7 +27,12 @@ pub struct ReadIndexRequest {
 }
 
 impl ReadIndexRequest {
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>, read_index: u64) {
+    pub fn push_command(
+        &mut self,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        read_index: u64,
+    ) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb, Some(read_index)));
     }

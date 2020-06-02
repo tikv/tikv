@@ -12,11 +12,11 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
+use pd_client::PdClient;
 use raftstore::store::Callback;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
-use pd_client::PdClient;
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
@@ -533,7 +533,7 @@ fn test_not_leader_read_lease() {
 /// 4. Propose another read index request.
 /// 5. Remove the filter and check whether the latter read index is greater than applied index.
 ///
-/// In previous implementation, these two read index request will be batched and 
+/// In previous implementation, these two read index request will be batched and
 /// will get the same read index which breaks the correctness because the latter one
 /// is proposed after the applied index has increased and replied to client.
 #[test]
@@ -556,20 +556,18 @@ fn test_read_index_after_write() {
     let filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 2)
             .direction(Direction::Recv)
-            .msg_type(MessageType::MsgHeartbeat)
+            .msg_type(MessageType::MsgHeartbeat),
     );
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(2, filter);
-    
+    cluster.sim.wl().add_recv_filter(2, filter);
+
     let mut req = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_read_index_cmd()],
         true,
     );
-    req.mut_header().set_peer(new_peer(1, region_on_store1.get_id()));
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
     // Don't care about the first one's read index
     let (cb, _) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
@@ -583,12 +581,18 @@ fn test_read_index_after_write() {
         vec![new_read_index_cmd()],
         true,
     );
-    req.mut_header().set_peer(new_peer(1, region_on_store1.get_id()));
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
     let (cb, rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
 
     let response = rx.recv_timeout(heartbeat_interval).unwrap();
-    assert!(response.get_responses()[0].get_read_index().get_read_index() >= applied_index);
+    assert!(
+        response.get_responses()[0]
+            .get_read_index()
+            .get_read_index()
+            >= applied_index
+    );
 }
