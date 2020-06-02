@@ -1032,7 +1032,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 region_id,
                 peer_id,
                 merge_from_snapshot,
-                ..
             } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
@@ -1042,9 +1041,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     // to destroy itself
                     let mut meta = self.ctx.store_meta.lock().unwrap();
                     // The `need_atomic` flag must be true
-                    assert_eq!(
+                    assert!(
                         *meta.destroyed_region_for_snap.get(&region_id).unwrap(),
-                        true
                     );
 
                     let target_region_id = *meta.targets_map.get(&region_id).unwrap();

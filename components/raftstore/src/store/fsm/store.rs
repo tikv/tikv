@@ -102,7 +102,7 @@ pub struct StoreMeta {
     /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
     /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
-    /// target_region_id -> (source_region_id -> merge_target_epoch)
+    /// target_region_id -> (source_region_id -> merge_target_region)
     pub pending_merge_targets: HashMap<u64, HashMap<u64, metapb::Region>>,
     /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
     /// source_region_id -> target_region_id
