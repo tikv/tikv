@@ -1,9 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use std::{mem, thread, u64};
 
+use dashmap::DashMap;
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use txn_types::{Key, Value};
@@ -89,6 +91,8 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: Option<L>,
 
+    lock_table: DashMap<u64, Arc<Mutex<HashMap<Key, MvccLock>>>>,
+
     pipelined_pessimistic_lock: bool,
 
     _phantom: PhantomData<E>,
@@ -105,6 +109,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
             lock_mgr,
+            lock_table: DashMap::default(),
             pipelined_pessimistic_lock,
             _phantom: Default::default(),
         }
@@ -231,10 +236,12 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
+        let lock_table = self.lock_table.entry(task.region_id).or_default().clone();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,
             lock_mgr,
+            lock_table,
             &mut statistics,
             self.pipelined_pessimistic_lock,
         ) {
@@ -528,6 +535,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
     lock_mgr: Option<L>,
+    lock_table: Arc<Mutex<HashMap<Key, MvccLock>>>,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
@@ -571,6 +579,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             } else {
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
+            txn.lock_table = Some(lock_table);
 
             let mut locks = vec![];
             for m in mutations {
@@ -612,6 +621,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let rows = mutations.len();
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let mut locks = vec![];
             for (m, is_pessimistic_lock) in mutations.into_iter() {
@@ -657,6 +667,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
             let rows = keys.len();
             let mut res = if return_values {
                 Ok(PessimisticLockRes::Values(vec![]))
@@ -713,6 +724,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 }));
             }
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let rows = keys.len();
             // Pessimistic txn needs key_hashes to wake up waiters
@@ -735,6 +747,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             // The rollback must be protected, see more on
@@ -747,6 +760,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }
         CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -766,6 +780,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             assert!(lock_mgr.is_some());
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -789,6 +804,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             key_locks,
         }) => {
             let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let mut scan_key = scan_key.take();
             let rows = key_locks.len();
@@ -841,6 +857,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             resolve_keys,
         }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let rows = resolve_keys.len();
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -865,6 +882,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -881,6 +899,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             rollback_if_not_exist,
         }) => {
             let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
+            txn.lock_table = Some(lock_table);
 
             let mut released_locks = ReleasedLocks::new(lock_ts, TimeStamp::zero());
             let (txn_status, released) = txn.check_txn_status(

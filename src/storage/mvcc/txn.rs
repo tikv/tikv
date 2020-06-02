@@ -6,6 +6,8 @@ use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
+use std::sync::{Arc, Mutex};
+use tikv_util::collections::HashMap;
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
 };
@@ -44,6 +46,26 @@ pub struct MvccTxn<S: Snapshot> {
     writes: Vec<Modify>,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
+    pub lock_table: Option<Arc<Mutex<HashMap<Key, Lock>>>>,
+}
+
+pub fn pessimistic_lock(
+    primary: &[u8],
+    start_ts: TimeStamp,
+    lock_ttl: u64,
+    for_update_ts: TimeStamp,
+    min_commit_ts: TimeStamp,
+) -> Lock {
+    Lock::new(
+        LockType::Pessimistic,
+        primary.to_vec(),
+        start_ts,
+        lock_ttl,
+        None,
+        for_update_ts,
+        0,
+        min_commit_ts,
+    )
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -84,6 +106,7 @@ impl<S: Snapshot> MvccTxn<S> {
             write_size: 0,
             writes: vec![],
             collapse_rollback: true,
+            lock_table: None,
         }
     }
 
@@ -110,16 +133,24 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn put_lock(&mut self, key: Key, lock: &Lock) {
-        let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
-        self.write_size += write.size();
-        self.writes.push(write);
+        if let Some(lock_table) = &self.lock_table {
+            lock_table.lock().unwrap().insert(key, lock.clone());
+        } else {
+            let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
+            self.write_size += write.size();
+            self.writes.push(write);
+        }
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
-        let write = Modify::Delete(CF_LOCK, key);
-        self.write_size += write.size();
-        self.writes.push(write);
+        if let Some(lock_table) = &self.lock_table {
+            lock_table.lock().unwrap().remove(&key);
+        } else {
+            let write = Modify::Delete(CF_LOCK, key);
+            self.write_size += write.size();
+            self.writes.push(write);
+        }
         Some(released)
     }
 
@@ -149,6 +180,16 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
+    }
+
+    fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        if let Some(lock_table) = &self.lock_table {
+            let lock_table = lock_table.lock().unwrap();
+            if let Some(lock) = lock_table.get(key) {
+                return Ok(Some(lock.clone()));
+            }
+        }
+        self.reader.load_lock(key)
     }
 
     fn prewrite_key_value(
@@ -201,7 +242,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
         let write = Write::new_rollback(self.start_ts, protected);
         self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-        if self.collapse_rollback {
+        if self.collapse_rollback && lock.lock_type != LockType::Pessimistic {
             self.collapse_prev_rollback(key.clone())?;
         }
         Ok(self.unlock_key(key, is_pessimistic_txn))
@@ -264,27 +305,8 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        fn pessimistic_lock(
-            primary: &[u8],
-            start_ts: TimeStamp,
-            lock_ttl: u64,
-            for_update_ts: TimeStamp,
-            min_commit_ts: TimeStamp,
-        ) -> Lock {
-            Lock::new(
-                LockType::Pessimistic,
-                primary.to_vec(),
-                start_ts,
-                lock_ttl,
-                None,
-                for_update_ts,
-                0,
-                min_commit_ts,
-            )
-        }
-
         let mut val = None;
-        if let Some(lock) = self.reader.load_lock(&key)? {
+        if let Some(lock) = self.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
@@ -416,7 +438,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        if let Some(lock) = self.reader.load_lock(&key)? {
+        if let Some(lock) = self.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 // Abort on lock belonging to other transaction if
                 // prewrites a pessimistic lock.
@@ -565,7 +587,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
         // Check whether the current key is locked at any timestamp.
-        if let Some(lock) = self.reader.load_lock(&key)? {
+        if let Some(lock) = self.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
@@ -604,7 +626,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
+        let (lock_type, short_value, is_pessimistic_txn) = match self.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
@@ -760,7 +782,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        match self.reader.load_lock(&key)? {
+        match self.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
                 // If the lock is not expired, do not rollback it but report key is locked.
@@ -803,7 +825,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        if let Some(lock) = self.reader.load_lock(&key)? {
+        if let Some(lock) = self.load_lock(&key)? {
             if lock.lock_type == LockType::Pessimistic
                 && lock.ts == self.start_ts
                 && lock.for_update_ts <= for_update_ts
@@ -834,7 +856,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
+        if let Some(mut lock) = self.load_lock(&primary_key)? {
             if lock.ts == self.start_ts {
                 if lock.ttl < advise_ttl {
                     lock.ttl = advise_ttl;
@@ -895,7 +917,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
-        match self.reader.load_lock(&primary_key)? {
+        match self.load_lock(&primary_key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 

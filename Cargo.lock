@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0989268a37e128d4d7a8028f1c60099430113fdbc70419010601ce51a228e4fe"
+checksum = "2f3e0bf23f51883cce372d5d5892211236856e4bb37fb942e1eb135ee0f146e3"
 dependencies = [
  "const-random",
 ]
@@ -901,9 +901,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "3.7.0"
+version = "3.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "010ef3f25ed5bb93505a3238d19957622190268640526aab07174c66ccf5d611"
+checksum = "10d08e418e3e6a253979dd45c7686b726cf79d5d4a968f73de3ff25b5a1d7424"
 dependencies = [
  "ahash",
  "cfg-if",
@@ -2381,9 +2381,9 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.11.1"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76dac5ed2a876980778b8b85f75a71b6cbf0db0b1232ee12f826bccb00d09d72"
+checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
 dependencies = [
  "hermit-abi",
  "libc",
@@ -4396,6 +4396,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "dashmap",
  "derive_more",
  "encryption",
  "engine",
