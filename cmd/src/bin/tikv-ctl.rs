@@ -26,7 +26,6 @@ use protobuf::Message;
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
-use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -78,7 +77,8 @@ fn new_debug_executor(
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
             let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
             let kv_path = kv_path.to_str().unwrap();
-            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db =
+                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let mut raft_path = raft_db
                 .map(ToString::to_string)
@@ -93,7 +93,8 @@ fn new_debug_executor(
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
             let raft_db =
-                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
+                    .unwrap();
 
             Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),

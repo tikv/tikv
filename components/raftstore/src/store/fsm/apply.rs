@@ -848,16 +848,6 @@ where
 
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
-                // Msg::CatchUpLogs may have arrived before Msg::Apply.
-                if expect_index > entry.get_index() && self.is_merging {
-                    info!(
-                        "skip log as it's already applied";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "index" => entry.get_index()
-                    );
-                    continue;
-                }
                 panic!(
                     "{} expect index {}, but got {}",
                     self.tag,
