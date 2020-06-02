@@ -30,9 +30,7 @@ use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::{
-    Bytes, DateTime, Decimal, Duration, Evaluable, Int, Json, Real, ScalarValueRef, VectorValue,
-};
+use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
 
 /// Metadata of an RPN function.

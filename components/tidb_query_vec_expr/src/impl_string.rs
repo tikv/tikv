@@ -620,8 +620,8 @@ pub fn from_base64(bs: Option<&Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn quote(input: &Option<Bytes>) -> Result<Option<Bytes>> {
-    match input.as_ref() {
+pub fn quote(input: Option<&Bytes>) -> Result<Option<Bytes>> {
+    match input {
         Some(bytes) => {
             let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
             result.push(b'\'');
@@ -2420,12 +2420,12 @@ mod tests {
         for (input, expect) in cases {
             let input = Bytes::from(input);
             let expect_vec = Bytes::from(expect);
-            let got = quote(&Some(input)).unwrap();
+            let got = quote(Some(&input)).unwrap();
             assert_eq!(got, Some(expect_vec))
         }
 
         // check for null
-        let got = quote(&None).unwrap();
+        let got = quote(None).unwrap();
         assert_eq!(got, Some(Bytes::from("NULL")))
     }
 }
