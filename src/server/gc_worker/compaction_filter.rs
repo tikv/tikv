@@ -75,10 +75,11 @@ struct WriteCompactionFilter {
     db: Arc<DB>,
 
     write_batch: RocksWriteBatch,
-    delete_key_prefix: Vec<u8>,
-    delete_key_ts: u64,
     key_prefix: Vec<u8>,
     remove_older: bool,
+
+    delete_key_prefix: Vec<u8>,
+    delete_key_ts: u64,
 
     versions: usize,
     deleted: usize,
@@ -94,11 +95,13 @@ impl WriteCompactionFilter {
             bottommost_level: context.bottommost_level(),
             safe_point,
             db,
+
             write_batch: wb,
-            delete_key_prefix: vec![],
-            delete_key_ts: 0,
             key_prefix: vec![],
             remove_older: false,
+
+            delete_key_prefix: vec![],
+            delete_key_ts: 0,
 
             versions: 0,
             deleted: 0,
@@ -175,6 +178,7 @@ impl Drop for WriteCompactionFilter {
                 }
 
                 self.delete_write_key(key, Some(&mut write_batch));
+                self.versions += 1;
                 self.deleted += 1;
                 valid = iter.next().unwrap();
             }
@@ -191,6 +195,13 @@ impl Drop for WriteCompactionFilter {
         } else {
             self.db.flush(true).unwrap();
         }
+
+        info!(
+            "Dropping WriteCompactionFilter";
+            "bottommost_level" => self.bottommost_level,
+            "versions" => self.versions,
+            "deleted" => self.deleted,
+        );
     }
 }
 
