@@ -6,7 +6,7 @@ use tidb_query_datatype::codec::data_type::Int;
 
 #[rpn_fn]
 #[inline]
-pub fn bit_count(arg: &Option<Int>) -> Result<Option<Int>> {
+pub fn bit_count(arg: Option<&Int>) -> Result<Option<Int>> {
     Ok(arg.map(|v| Int::from(v.count_ones())))
 }
 
