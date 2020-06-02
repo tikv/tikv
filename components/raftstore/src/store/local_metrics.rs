@@ -313,7 +313,9 @@ impl RaftProposeMetrics {
             self.conf_change = 0;
         }
         if self.batch > 0 {
-            PEER_PROPOSAL_COUNTER.batch.inc_by(self.batch as i64);
+            PEER_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["batch"])
+                .inc_by(self.batch as i64);
             self.batch = 0;
         }
         self.request_wait_time.flush();

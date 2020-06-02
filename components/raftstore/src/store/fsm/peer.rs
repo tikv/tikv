@@ -7,12 +7,8 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-<<<<<<< HEAD
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-=======
-use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
->>>>>>> a935b3b... batch multiple write request into an entry (#6600) (#6683)
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable};
 use futures::Future;
@@ -103,10 +99,6 @@ pub struct PeerFsm<E: KvEngine> {
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<E>>>,
     pub receiver: Receiver<PeerMsg<E>>,
-<<<<<<< HEAD
-=======
-    /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
-    skip_split_count: usize,
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder,
@@ -116,8 +108,7 @@ pub struct BatchRaftCmdRequestBuilder {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
->>>>>>> a935b3b... batch multiple write request into an entry (#6600) (#6683)
+    callbacks: Vec<(Callback<RocksEngine>, usize)>,
 }
 
 impl<E: KvEngine> Drop for PeerFsm<E> {
@@ -182,13 +173,9 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
-<<<<<<< HEAD
-=======
-                skip_split_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
->>>>>>> a935b3b... batch multiple write request into an entry (#6600) (#6683)
             }),
         ))
     }
@@ -227,13 +214,9 @@ impl<E: KvEngine> PeerFsm<E> {
                 has_ready: false,
                 mailbox: None,
                 receiver: rx,
-<<<<<<< HEAD
-=======
-                skip_split_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
->>>>>>> a935b3b... batch multiple write request into an entry (#6600) (#6683)
             }),
         ))
     }
@@ -301,7 +284,7 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksSnapshot>) {
+    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
         let req_num = req.get_requests().len();
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = req.take_requests().into();
@@ -332,7 +315,7 @@ impl BatchRaftCmdRequestBuilder {
     fn build(
         &mut self,
         metric: &mut RaftProposeMetrics,
-    ) -> Option<(RaftCmdRequest, Callback<RocksSnapshot>)> {
+    ) -> Option<(RaftCmdRequest, Callback<RocksEngine>)> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
