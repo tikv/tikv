@@ -2801,7 +2801,7 @@ where
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
-                s.message_count = state.pending_msgs.len() as i64;
+                s.message_count += state.pending_msgs.len() as i64;
                 s.pending_msgs = state.pending_msgs.drain(..).collect();
                 return;
             }
@@ -2999,7 +2999,7 @@ where
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         let pending_msgs: Vec<Msg<E>> = drainer.collect();
-                        state.message_count = pending_msgs.len() as i64;
+                        state.message_count += pending_msgs.len() as i64;
                         state.pending_msgs = pending_msgs;
                         break;
                     }
