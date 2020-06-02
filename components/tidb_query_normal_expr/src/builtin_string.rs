@@ -2280,6 +2280,14 @@ mod tests {
         let cases = vec![
             (
                 vec![
+                    Datum::I64(0),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
                     Datum::I64(1),
                     Datum::Bytes(b"DataBase".to_vec()),
                     Datum::Bytes(b"Hello World!".to_vec()),
