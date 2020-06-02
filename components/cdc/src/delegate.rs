@@ -609,9 +609,7 @@ impl Delegate {
                                         .snapshot()
                                         .get_value(&keys::data_key(&previous_encoded))
                                         .unwrap()
-                                        .unwrap()
-                                        .deref()
-                                        .to_vec()
+                                        .map_or_else(Vec::default, |v| v.deref().to_vec())
                                 })
                             }
                             None => {
