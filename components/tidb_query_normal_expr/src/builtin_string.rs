@@ -1002,7 +1002,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_insert
     #[inline]
     pub fn insert<'a, 'b: 'a>(
         &'b self,
@@ -1026,6 +1025,31 @@ impl ScalarFunc {
         ret.extend_from_slice(&newstr);
         ret.extend_from_slice(&s[upos + ulen - 1..]);
         Ok(Some(Cow::Owned(ret)))
+    }
+
+    #[inline]
+    pub fn make_set<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mask = try_opt!(self.children[0].eval_int(ctx, row));
+        let mut output: Vec<u8> = Vec::new();
+        let mut pow2 = 1;
+        let s = b",";
+        let mut q = false;
+        for expr in self.children.iter().skip(1) {
+            if pow2 & mask != 0 {
+                let input = try_opt!(expr.eval_string(ctx, row));
+                if q {
+                    output.extend_from_slice(s);
+                }
+                output.extend_from_slice(&input);
+                q = true;
+            }
+            pow2 <<= 1;
+        }
+        Ok(Some(Cow::Owned(output)))
     }
 }
 
@@ -2304,6 +2328,98 @@ mod tests {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_make_set() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::I64(0),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(1),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(2),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(5),
+                    Datum::Bytes(b"asd".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"asd,Hola".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(1 | 2 | 4 | 8),
+                    Datum::Bytes(b"asd".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes("asd,Hello,Hola,Cześć".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-1),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"a,b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-2),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-3),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"a,c".to_vec()),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::MakeSet, &children);
+            let e = Expression::build(&mut ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
         }
     }
 
