@@ -1256,6 +1256,7 @@ mod tests {
         }
 
         {
+            // Test multi-stage tasks
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration_yieldable(
