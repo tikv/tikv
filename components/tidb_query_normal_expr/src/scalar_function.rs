@@ -143,6 +143,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::FindInSet => (2, 2),
 
+            ScalarFuncSig::InsertUtf8 => (4, 4),
+
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
             | ScalarFuncSig::CastIntAsString
@@ -924,6 +926,7 @@ dispatch_call! {
         Lpad => lpad,
         RpadUtf8 => rpad_utf8,
         Rpad => rpad,
+        InsertUtf8 => insert_utf8,
 
         StringAnyValue => string_any_value,
         AddTimeStringNull => add_time_string_null,
