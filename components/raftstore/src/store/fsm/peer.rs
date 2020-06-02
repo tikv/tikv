@@ -105,7 +105,6 @@ pub struct PeerFsm<S: Snapshot> {
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder,
-    pub message_count: i64,
 }
 
 pub struct BatchRaftCmdRequestBuilder {
@@ -119,7 +118,6 @@ impl<S: Snapshot> Drop for PeerFsm<S> {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
-            self.message_count += 1;
             let callback = match msg {
                 PeerMsg::RaftCommand(cmd) => cmd.callback,
                 PeerMsg::CasualMessage(CasualMessage::SplitRegion { callback, .. }) => callback,
@@ -132,9 +130,6 @@ impl<S: Snapshot> Drop for PeerFsm<S> {
             let mut resp = RaftCmdResponse::default();
             resp.mut_header().set_error(err);
             callback.invoke_with_response(resp);
-        }
-        if self.message_count > 0 {
-            PEER_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
         }
     }
 }
@@ -185,7 +180,6 @@ impl<S: Snapshot> PeerFsm<S> {
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                message_count: 0,
             }),
         ))
     }
@@ -228,7 +222,6 @@ impl<S: Snapshot> PeerFsm<S> {
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
-                message_count: 0,
             }),
         ))
     }

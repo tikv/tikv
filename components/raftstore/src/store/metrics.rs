@@ -468,15 +468,9 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref PEER_RECEIVED_MESSAGES_COUNTER: IntCounter = register_int_counter!(
-            "tikv_raftstore_peer_message_total",
-            "The total number of messages received by peer FSMs."
-    )
-    .unwrap();
-
-    pub static ref APPLY_RECEIVED_MESSAGES_COUNTER: IntCounter = register_int_counter!(
-            "tikv_raftstore_apply_message_total",
-            "The total number of messages received by apply FSMs."
+    pub static ref APPLY_PENDING_MSGS_COUNTER: IntCounter = register_int_counter!(
+            "tikv_raftstore_apply_messages_total",
+            "The total number of pending messages of apply FSMs."
     )
     .unwrap();
 }

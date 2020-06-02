@@ -697,6 +697,18 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<E>>,
+    message_count: i64,
+}
+
+impl<E> Drop for YieldState<E>
+where
+    E: KvEngine,
+{
+    fn drop(&mut self) {
+        if self.message_count > 0 {
+            APPLY_PENDING_MSGS_COUNTER.inc_by(self.message_count);
+        }
+    }
 }
 
 impl<E> Debug for YieldState<E>
@@ -877,6 +889,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
+                        message_count: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -2603,7 +2616,6 @@ where
     delegate: ApplyDelegate<E>,
     receiver: Receiver<Msg<E>>,
     mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
-    message_count: i64,
 }
 
 impl<E> ApplyFsm<E>
@@ -2624,7 +2636,6 @@ where
                 delegate,
                 receiver: rx,
                 mailbox: None,
-                message_count: 0,
             }),
         )
     }
@@ -2790,7 +2801,8 @@ where
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
-                s.pending_msgs = state.pending_msgs;
+                s.message_count = state.pending_msgs.len() as i64;
+                s.pending_msgs = state.pending_msgs.drain(..).collect();
                 return;
             }
         }
@@ -2986,7 +2998,9 @@ where
                     }
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
-                        state.pending_msgs = drainer.collect();
+                        let pending_msgs: Vec<Msg<E>> = drainer.collect();
+                        state.message_count = pending_msgs.len() as i64;
+                        state.pending_msgs = pending_msgs;
                         break;
                     }
                 }
@@ -3046,9 +3060,6 @@ where
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
-        if self.message_count > 0 {
-            APPLY_RECEIVED_MESSAGES_COUNTER.inc_by(self.message_count);
-        }
     }
 }
 
@@ -3130,10 +3141,7 @@ where
         }
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => {
-                    normal.message_count += 1;
-                    self.msg_buf.push(msg)
-                }
+                Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
