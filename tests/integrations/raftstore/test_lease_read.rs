@@ -531,11 +531,11 @@ fn test_not_leader_read_lease() {
 /// 2. Propose a read index request.
 /// 3. Put a key and get the latest applied index.
 /// 4. Propose another read index request.
-/// 5. Remove filter and check whether the latter read index is greater than applied index.
+/// 5. Remove the filter and check whether the latter read index is greater than applied index.
 ///
 /// In previous implementation, these two read index request will be batched and 
 /// will get the same read index which breaks the correctness because the latter one
-/// is proposed after applied inex has increased and replied to client.
+/// is proposed after the applied index has increased and replied to client.
 #[test]
 fn test_read_index_after_write() {
     let mut cluster = new_node_cluster(0, 3);

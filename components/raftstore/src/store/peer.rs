@@ -1546,7 +1546,7 @@ impl Peer {
             if !replica_read {
                 if read_index.is_none() {
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
-                    // Starting from the second, all the following one's read_index is not none.
+                    // Starting from the second, all the following ones' read_index is not none.
                     read_index = read.read_index;
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
