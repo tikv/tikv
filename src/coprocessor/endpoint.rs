@@ -588,6 +588,7 @@ mod tests {
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
+        yieldable: bool,
         result: Option<Result<coppb::Response>>,
     }
 
@@ -595,6 +596,7 @@ mod tests {
         pub fn new(result: Result<coppb::Response>) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis: 0,
+                yieldable: false,
                 result: Some(result),
             }
         }
@@ -605,6 +607,18 @@ mod tests {
         ) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis,
+                yieldable: false,
+                result: Some(result),
+            }
+        }
+
+        pub fn new_with_duration_yieldable(
+            result: Result<coppb::Response>,
+            handle_duration_millis: u64,
+        ) -> UnaryFixture {
+            UnaryFixture {
+                handle_duration_millis,
+                yieldable: true,
                 result: Some(result),
             }
         }
@@ -639,12 +653,16 @@ mod tests {
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            // We split the task into small executions of 1 second.
-            for _ in 0..self.handle_duration_millis / 1_000 {
-                thread::sleep(Duration::from_millis(1_000));
-                yield_now().await;
+            if self.yieldable {
+                // We split the task into small executions of 1 second.
+                for _ in 0..self.handle_duration_millis / 1_000 {
+                    thread::sleep(Duration::from_millis(1_000));
+                    yield_now().await;
+                }
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+            } else {
+                thread::sleep(Duration::from_millis(self.handle_duration_millis));
             }
-            thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
 
             self.result.take().unwrap()
         }
@@ -1234,6 +1252,61 @@ mod tests {
             assert_lt!(
                 resp.get_exec_details().get_handle_time().get_wait_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+        }
+
+        {
+            // Request 1: Unary, success response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Ok(coppb::Response::default()),
+                    PAYLOAD_SMALL as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            // Sleep a while to make sure that thread is spawn and snapshot is taken.
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Request 2: Unary, error response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Err(box_err!("foo")),
+                    PAYLOAD_LARGE as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Response 1
+            let resp = &rx.recv().unwrap()[0];
+            assert!(resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+
+            // Response 2
+            let resp = &rx.recv().unwrap()[0];
+            assert!(!resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 
