@@ -4673,7 +4673,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/renkai/tipb.git?branch=trace_enum#08582b31c469033a10e4a549878d0de7f5b76645"
+source = "git+https://github.com/renkai/tipb.git?branch=trace_enum#7554cb44d58e69bfee9cb5c0e32a57e88c9e2e1d"
 dependencies = [
  "lazy_static",
  "prost",
