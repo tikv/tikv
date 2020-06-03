@@ -249,7 +249,7 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
 #[inline]
 fn cast_signed_int_as_unsigned_int(
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Int>,
+    val: Option<&Int>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -266,7 +266,7 @@ fn cast_signed_int_as_unsigned_int(
 
 #[rpn_fn]
 #[inline]
-fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<Int>> {
+fn cast_int_as_int_others(val: Option<&Int>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(*val)),
@@ -278,7 +278,7 @@ fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<Int>> {
 fn cast_real_as_uint(
     ctx: &mut EvalContext,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Real>,
+    val: Option<&Real>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -305,7 +305,7 @@ fn cast_string_as_int(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -373,7 +373,7 @@ fn cast_string_as_int(
 }
 
 #[rpn_fn(capture = [ctx])]
-fn cast_binary_string_as_int(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Int>> {
+fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<&Bytes>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -388,7 +388,7 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: &Option<Bytes>) -> Resu
 fn cast_decimal_as_uint(
     ctx: &mut EvalContext,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Decimal>,
+    val: Option<&Decimal>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -406,7 +406,7 @@ fn cast_decimal_as_uint(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_json_as_uint(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<Int>> {
+fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<&Json>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(j) => {
@@ -425,7 +425,7 @@ fn cast_json_as_uint(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option
 
 #[rpn_fn]
 #[inline]
-fn cast_signed_int_as_signed_real(val: &Option<Int>) -> Result<Option<Real>> {
+fn cast_signed_int_as_signed_real(val: Option<&Int>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Real::new(*val as f64).ok()),
@@ -436,7 +436,7 @@ fn cast_signed_int_as_signed_real(val: &Option<Int>) -> Result<Option<Real>> {
 #[inline]
 fn cast_signed_int_as_unsigned_real(
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Int>,
+    val: Option<&Int>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -455,7 +455,7 @@ fn cast_signed_int_as_unsigned_real(
 // so we can merge uint to signed/unsigned real in one function
 #[rpn_fn]
 #[inline]
-fn cast_unsigned_int_as_signed_or_unsigned_real(val: &Option<Int>) -> Result<Option<Real>> {
+fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Real::new(*val as u64 as f64).ok()),
@@ -464,15 +464,15 @@ fn cast_unsigned_int_as_signed_or_unsigned_real(val: &Option<Int>) -> Result<Opt
 
 #[rpn_fn]
 #[inline]
-fn cast_real_as_signed_real(val: &Option<Real>) -> Result<Option<Real>> {
-    Ok(*val)
+fn cast_real_as_signed_real(val: Option<&Real>) -> Result<Option<Real>> {
+    Ok(val.cloned())
 }
 
 #[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_unsigned_real(
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Real>,
+    val: Option<&Real>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -492,7 +492,7 @@ fn cast_real_as_unsigned_real(
 fn cast_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -509,7 +509,7 @@ fn cast_string_as_signed_real(
 fn cast_binary_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -527,7 +527,7 @@ fn cast_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -547,7 +547,7 @@ fn cast_string_as_unsigned_real(
 fn cast_binary_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -564,7 +564,7 @@ fn cast_binary_string_as_unsigned_real(
 fn cast_decimal_as_unsigned_real(
     ctx: &mut EvalContext,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Decimal>,
+    val: Option<&Decimal>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -593,7 +593,7 @@ fn cast_decimal_as_unsigned_real(
 fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<T>,
+    val: Option<&T>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
@@ -609,7 +609,7 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
 fn cast_uint_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Int>,
+    val: Option<&Int>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
@@ -625,7 +625,7 @@ fn cast_uint_as_string(
 fn cast_float_real_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Real>,
+    val: Option<&Real>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
@@ -645,7 +645,7 @@ fn cast_float_real_as_string(
 fn cast_string_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
@@ -689,7 +689,7 @@ fn cast_as_string_helper(
 fn cast_unsigned_int_as_signed_or_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<i64>,
+    val: Option<&i64>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -712,7 +712,7 @@ fn cast_signed_int_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<i64>,
+    val: Option<&i64>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -737,7 +737,7 @@ fn cast_real_as_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Real>,
+    val: Option<&Real>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -763,7 +763,7 @@ fn cast_string_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -789,7 +789,7 @@ fn cast_string_as_unsigned_decimal(
 fn cast_decimal_as_signed_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Decimal>,
+    val: Option<&Decimal>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -807,7 +807,7 @@ fn cast_decimal_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: &Option<Decimal>,
+    val: Option<&Decimal>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -831,7 +831,7 @@ fn cast_decimal_as_unsigned_decimal(
 fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<From>,
+    val: Option<&From>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -853,7 +853,7 @@ fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
 fn cast_int_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Int>,
+    val: Option<&Int>,
 ) -> Result<Option<Duration>> {
     match val {
         None => Ok(None),
@@ -876,7 +876,7 @@ fn cast_int_as_duration(
 fn cast_time_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<DateTime>,
+    val: Option<&DateTime>,
 ) -> Result<Option<Duration>> {
     match val {
         None => Ok(None),
@@ -891,7 +891,7 @@ fn cast_time_as_duration(
 #[inline]
 fn cast_duration_as_duration(
     extra: &RpnFnCallExtra,
-    val: &Option<Duration>,
+    val: Option<&Duration>,
 ) -> Result<Option<Duration>> {
     match val {
         None => Ok(None),
@@ -906,7 +906,7 @@ macro_rules! cast_as_duration {
         fn $as_uint_fn(
             ctx: &mut EvalContext,
             extra: &RpnFnCallExtra,
-            val: &Option<$ty>,
+            val: Option<&$ty>,
         ) -> Result<Option<Duration>> {
             match val {
                 None => Ok(None),
@@ -954,13 +954,13 @@ cast_as_duration!(
 fn cast_int_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Int>,
+    val: Option<&Int>,
 ) -> Result<Option<Time>> {
-    if let Some(val) = *val {
+    if let Some(val) = val {
         // Parse `val` as a `u64`
         Time::parse_from_i64(
             ctx,
-            val,
+            *val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
         )
@@ -981,7 +981,7 @@ fn cast_int_as_time(
 fn cast_real_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Real>,
+    val: Option<&Real>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
@@ -1004,7 +1004,7 @@ fn cast_real_as_time(
 fn cast_string_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Bytes>,
+    val: Option<&Bytes>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
@@ -1027,7 +1027,7 @@ fn cast_string_as_time(
 fn cast_decimal_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Decimal>,
+    val: Option<&Decimal>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a string.
@@ -1050,9 +1050,10 @@ fn cast_decimal_as_time(
 fn cast_time_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Time>,
+    val: Option<&Time>,
 ) -> Result<Option<Time>> {
-    if let Some(mut val) = val {
+    if let Some(val) = val {
+        let mut val = *val;
         val.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
         val.round_frac(ctx, extra.ret_field_type.get_decimal() as i8)
             .map(Some)
@@ -1066,12 +1067,12 @@ fn cast_time_as_time(
 fn cast_duration_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: &Option<Duration>,
+    val: Option<&Duration>,
 ) -> Result<Option<Time>> {
-    if let Some(val) = *val {
+    if let Some(val) = val {
         Time::from_duration(
             ctx,
-            val,
+            *val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
         )
         .and_then(|now| now.round_frac(ctx, extra.ret_field_type.get_decimal() as i8))
@@ -1092,7 +1093,7 @@ fn cast_duration_as_time(
 
 #[rpn_fn]
 #[inline]
-fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
+fn cast_bool_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(Json::from_bool(*val != 0)?)),
@@ -1101,7 +1102,7 @@ fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
 
 #[rpn_fn]
 #[inline]
-fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
+fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(Json::from_u64(*val as u64)?)),
@@ -1110,7 +1111,7 @@ fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
 
 #[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Result<Option<Json>> {
+fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<&Bytes>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -1135,7 +1136,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
 
 #[rpn_fn]
 #[inline]
-fn cast_json_as_json(val: &Option<Json>) -> Result<Option<Json>> {
+fn cast_json_as_json(val: Option<&Json>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(val.clone())),
@@ -1146,7 +1147,7 @@ fn cast_json_as_json(val: &Option<Json>) -> Result<Option<Json>> {
 #[inline]
 fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     ctx: &mut EvalContext,
-    val: &Option<From>,
+    val: Option<&From>,
 ) -> Result<Option<To>> {
     match val {
         None => Ok(None),
@@ -1187,54 +1188,54 @@ mod tests {
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let ret_field_type: FieldType = FieldType::default();
         let extra = RpnFnCallExtra {
             ret_field_type: &ret_field_type,
         };
-        let r = func(&mut ctx, &extra, &None).unwrap();
+        let r = func(&mut ctx, &extra, None).unwrap();
         assert!(r.is_none());
     }
 
     fn test_none_with_ctx<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, Option<&Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
-        let r = func(&mut ctx, &None).unwrap();
+        let r = func(&mut ctx, None).unwrap();
         assert!(r.is_none());
     }
 
     fn test_none_with_extra<F, Input, Ret>(func: F)
     where
-        F: Fn(&RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(&RpnFnCallExtra, Option<&Input>) -> Result<Option<Ret>>,
     {
         let ret_field_type: FieldType = FieldType::default();
         let extra = RpnFnCallExtra {
             ret_field_type: &ret_field_type,
         };
-        let r = func(&extra, &None).unwrap();
+        let r = func(&extra, None).unwrap();
         assert!(r.is_none());
     }
 
     fn test_none_with_metadata<F, Input, Ret>(func: F)
     where
-        F: Fn(&tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(&tipb::InUnionMetadata, Option<&Input>) -> Result<Option<Ret>>,
     {
         let metadata = make_metadata(true);
-        let r = func(&metadata, &None).unwrap();
+        let r = func(&metadata, None).unwrap();
         assert!(r.is_none());
     }
 
     fn test_none_with_ctx_and_metadata<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, &tipb::InUnionMetadata, Option<&Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let metadata = make_metadata(true);
-        let r = func(&mut ctx, &metadata, &None).unwrap();
+        let r = func(&mut ctx, &metadata, None).unwrap();
         assert!(r.is_none());
     }
 
@@ -1244,7 +1245,7 @@ mod tests {
             &mut EvalContext,
             &RpnFnCallExtra,
             &tipb::InUnionMetadata,
-            &Option<Input>,
+            Option<&Input>,
         ) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
@@ -1253,15 +1254,15 @@ mod tests {
             ret_field_type: &ret_field_type,
         };
         let metadata = make_metadata(true);
-        let r = func(&mut ctx, &extra, &metadata, &None).unwrap();
+        let r = func(&mut ctx, &extra, &metadata, None).unwrap();
         assert!(r.is_none());
     }
 
     fn test_none_with_nothing<F, Input, Ret>(func: F)
     where
-        F: Fn(&Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(Option<&Input>) -> Result<Option<Ret>>,
     {
-        let r = func(&None).unwrap();
+        let r = func(None).unwrap();
         assert!(r.is_none());
     }
 
@@ -1427,7 +1428,7 @@ mod tests {
             (u64::MAX as i64, u64::MAX as i64),
         ];
         for (input, expect) in cs {
-            let r = cast_int_as_int_others(&Some(input));
+            let r = cast_int_as_int_others(Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -1452,7 +1453,7 @@ mod tests {
         ];
         for (input, expect, in_union) in cs {
             let metadata = make_metadata(in_union);
-            let r = cast_signed_int_as_unsigned_int(&metadata, &Some(input));
+            let r = cast_signed_int_as_unsigned_int(&metadata, Some(&input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1482,7 +1483,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Real, Int>(&mut ctx, &Real::new(input).ok());
+            let r = cast_any_as_any::<Real, Int>(&mut ctx, Real::new(input).as_ref().ok());
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
@@ -1505,7 +1506,11 @@ mod tests {
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
             let metadata = make_metadata(true);
-            let r = cast_real_as_uint(&mut ctx, &metadata, &Some(Real::new(input).unwrap()));
+            let r = cast_real_as_uint(
+                &mut ctx,
+                &metadata,
+                Some(Real::new(input).as_ref().unwrap()),
+            );
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1533,7 +1538,7 @@ mod tests {
             }
             .into();
             let metadata = make_metadata(false);
-            let r = cast_real_as_uint(&mut ctx, &metadata, &Real::new(input).ok());
+            let r = cast_real_as_uint(&mut ctx, &metadata, Real::new(input).as_ref().ok());
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1555,7 +1560,11 @@ mod tests {
             }
             .into();
             let metadata = make_metadata(false);
-            let r = cast_real_as_uint(&mut ctx, &metadata, &Some(Real::new(input).unwrap()));
+            let r = cast_real_as_uint(
+                &mut ctx,
+                &metadata,
+                Some(Real::new(input).as_ref().unwrap()),
+            );
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1812,7 +1821,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_warning(&ctx, err_code, log.as_str());
@@ -1854,7 +1863,7 @@ mod tests {
             let mut ctx = EvalContext::default();
             let metadata = make_metadata(true);
 
-            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, Some(&input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1892,7 +1901,7 @@ mod tests {
             .into();
             let metadata = make_metadata(false);
 
-            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, Some(&input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1924,7 +1933,7 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Time, Int>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -2177,7 +2186,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Duration, Int>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Duration, Int>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -2239,7 +2248,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Json, Int>(&mut ctx, Some(&input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
@@ -2279,7 +2288,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
+            let r = cast_json_as_uint(&mut ctx, Some(&input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2321,7 +2330,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
+            let r = cast_json_as_uint(&mut ctx, Some(&input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2341,7 +2350,7 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let r = cast_signed_int_as_signed_real(&Some(input));
+            let r = cast_signed_int_as_signed_real(Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2369,7 +2378,7 @@ mod tests {
         ];
         for (input, expect, in_union) in cs {
             let metadata = make_metadata(in_union);
-            let r = cast_signed_int_as_unsigned_real(&metadata, &Some(input));
+            let r = cast_signed_int_as_unsigned_real(&metadata, Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}",
@@ -2390,7 +2399,7 @@ mod tests {
             (i64::MAX as u64, i64::MAX as u64 as f64),
         ];
         for (input, expect) in cs {
-            let r = cast_unsigned_int_as_signed_or_unsigned_real(&Some(input as i64));
+            let r = cast_unsigned_int_as_signed_or_unsigned_real(Some(&(input as i64)));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2413,7 +2422,7 @@ mod tests {
             (u64::MAX as f64, u64::MAX as f64),
         ];
         for (input, expect) in cs {
-            let r = cast_real_as_signed_real(&Some(Real::new(input).unwrap()));
+            let r = cast_real_as_signed_real(Some(Real::new(input).as_ref().unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2447,7 +2456,7 @@ mod tests {
 
         for (input, expect, in_union) in cs {
             let metadata = make_metadata(in_union);
-            let r = cast_real_as_unsigned_real(&metadata, &Some(Real::new(input).unwrap()));
+            let r = cast_real_as_unsigned_real(&metadata, Some(Real::new(input).as_ref().unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}",
@@ -2898,7 +2907,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2962,7 +2971,7 @@ mod tests {
             }
             .into();
             let metadata = make_metadata(in_union);
-            let r = cast_decimal_as_unsigned_real(&mut ctx, &metadata, &Some(input));
+            let r = cast_decimal_as_unsigned_real(&mut ctx, &metadata, Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}, expect_overflow: {}, result: {:?}",
@@ -3000,7 +3009,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Time, Real>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Time, Real>(&mut ctx, Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3032,7 +3041,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Duration, Real>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Duration, Real>(&mut ctx, Some(&input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3084,7 +3093,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Json, Real>(&mut ctx, Some(&input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3102,7 +3111,7 @@ mod tests {
         cast_func: FnCast,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Bytes>>,
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&T>) -> Result<Option<Bytes>>,
     {
         #[derive(Clone, Copy)]
         enum FlenType {
@@ -3339,7 +3348,7 @@ mod tests {
                 .into();
                 let extra = make_extra(&rft);
 
-                let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
+                let r = cast_func(&mut ctx, &extra, Some(&input.clone()));
 
                 let mut expect = bytes.clone();
                 if *pad_zero && flen > expect.len() as isize {
@@ -3403,8 +3412,8 @@ mod tests {
         test_as_string_helper(
             cs,
             |ctx, extra, val| {
-                let val = val.map(|x| x as i64);
-                cast_uint_as_string(ctx, extra, &val)
+                let val = val.map(|x| *x as i64);
+                cast_uint_as_string(ctx, extra, val.as_ref())
             },
             "cast_uint_as_string",
         );
@@ -3435,7 +3444,7 @@ mod tests {
                 cast_float_real_as_string(
                     ctx,
                     extra,
-                    &val.map(|x| Real::new(f64::from(x)).unwrap()),
+                    val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
                 )
             },
             "cast_float_real_as_string",
@@ -3479,7 +3488,7 @@ mod tests {
         test_as_string_helper(
             cs,
             |ctx, extra, val| {
-                cast_any_as_string::<Real>(ctx, extra, &val.map(|x| Real::new(x).unwrap()))
+                cast_any_as_string::<Real>(ctx, extra, val.map(|x| Real::new(*x).unwrap()).as_ref())
             },
             "cast_any_as_string::<Real>",
         );
@@ -3691,7 +3700,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Json, Bytes>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Json, Bytes>(&mut ctx, Some(&input.clone()));
             let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3718,7 +3727,7 @@ mod tests {
             &mut EvalContext,
             &RpnFnCallExtra,
             &tipb::InUnionMetadata,
-            &Option<T>,
+            Option<&T>,
         ) -> Result<Option<Decimal>>,
         FnToStr: Fn(&T) -> String,
     {
@@ -4052,7 +4061,7 @@ mod tests {
                     }
                     .into();
                     let cast_func_res =
-                        cast_func(&mut ctx, &extra, &metadata, &Some(input.clone()));
+                        cast_func(&mut ctx, &extra, &metadata, Some(&input.clone()));
 
                     let mut ctx = CtxConfig {
                         overflow_as_warning,
@@ -4220,8 +4229,8 @@ mod tests {
         test_as_decimal_helper(
             cs,
             |ctx, extra, metadata, val| {
-                let val = val.map(|x| Real::new(x).unwrap());
-                cast_real_as_decimal(ctx, extra, metadata, &val)
+                let val = val.map(|x| Real::new(*x).unwrap());
+                cast_real_as_decimal(ctx, extra, metadata, val.as_ref())
             },
             |x| x.to_string(),
             "cast_real_as_decimal",
@@ -4479,7 +4488,7 @@ mod tests {
             cs,
             |ctx, extra, _, val| {
                 let val = val.map(|x| x.as_bytes().to_vec());
-                cast_any_as_decimal::<Bytes>(ctx, extra, &val)
+                cast_any_as_decimal::<Bytes>(ctx, extra, val.as_ref())
             },
             |x| (*x).to_string(),
             "cast_string_as_signed_decimal",
@@ -4686,7 +4695,7 @@ mod tests {
             cs,
             |ctx, extra, metadata, val| {
                 let val = val.map(|x| x.as_bytes().to_vec());
-                cast_string_as_unsigned_decimal(ctx, extra, metadata, &val)
+                cast_string_as_unsigned_decimal(ctx, extra, metadata, val.as_ref())
             },
             |x| (*x).to_string(),
             "cast_string_as_unsigned_decimal",
@@ -5164,7 +5173,7 @@ mod tests {
         func_cast: FnCast,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Duration>>,
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&T>) -> Result<Option<Duration>>,
     {
         // cast_real_as_duration call `Duration::parse`, directly,
         // and `Duration::parse`, is test in duration.rs.
@@ -5185,7 +5194,7 @@ mod tests {
                 .into();
                 let extra = make_extra(&rft);
 
-                let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
+                let result = func_cast(&mut ctx, &extra, Some(&val.clone()));
 
                 let val_str = func_to_cast_str(&val);
                 let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
@@ -5252,8 +5261,8 @@ mod tests {
             |x| x.to_string(),
             |x| x.to_string(),
             |ctx, extra, val| {
-                let val = val.map(|x| Real::new(x).unwrap());
-                cast_real_as_duration(ctx, extra, &val)
+                let val = val.map(|x| Real::new(*x).unwrap());
+                cast_real_as_duration(ctx, extra, val.as_ref())
             },
             "cast_real_as_duration",
         )
@@ -5383,7 +5392,7 @@ mod tests {
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let expect_time =
                 Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
-            let result = cast_time_as_duration(&mut ctx, &extra, &Some(input_time));
+            let result = cast_time_as_duration(&mut ctx, &extra, Some(&input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, fsp: {}, expect_fsp: {}, expect: {}, output: {:?}",
@@ -5418,7 +5427,7 @@ mod tests {
             let mut ctx = EvalContext::default();
             let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
             let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
-            let r = cast_duration_as_duration(&extra, &Some(dur));
+            let r = cast_duration_as_duration(&extra, Some(&dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
             let log = format!(
@@ -5498,7 +5507,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Int, Json>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Int, Json>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5514,7 +5523,7 @@ mod tests {
             (i64::MAX as u64, Json::from_u64(i64::MAX as u64).unwrap()),
         ];
         for (input, expect) in cs {
-            let r = cast_uint_as_json(&Some(input as i64));
+            let r = cast_uint_as_json(Some(&(input as i64)));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5530,7 +5539,7 @@ mod tests {
             (i64::MAX, Json::from_bool(true).unwrap()),
         ];
         for (input, expect) in cs {
-            let result = cast_bool_as_json(&Some(input));
+            let result = cast_bool_as_json(Some(&input));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }
@@ -5554,7 +5563,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Real, Json>(&mut ctx, &Real::new(input).ok());
+            let r = cast_any_as_any::<Real, Json>(&mut ctx, Real::new(input).as_ref().ok());
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5634,7 +5643,7 @@ mod tests {
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
             let extra = make_extra(&rft);
-            let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
+            let result = cast_string_as_json(&extra, Some(&input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
@@ -5672,7 +5681,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input));
+            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5719,7 +5728,7 @@ mod tests {
         ];
         for (input, time_type, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input));
+            let result = cast_any_as_any::<Time, Json>(&mut ctx, Some(&input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
@@ -5752,7 +5761,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Duration, Json>(&mut ctx, &Some(input));
+            let result = cast_any_as_any::<Duration, Json>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }
@@ -5786,7 +5795,7 @@ mod tests {
 
         for input in cs {
             let expect = input.clone();
-            let result = cast_json_as_json(&Some(input.clone()));
+            let result = cast_json_as_json(Some(&input.clone()));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }

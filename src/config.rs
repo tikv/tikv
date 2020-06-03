@@ -1953,6 +1953,8 @@ mod readpool_tests {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[config(hidden)]
     pub cfg_path: String,
 
