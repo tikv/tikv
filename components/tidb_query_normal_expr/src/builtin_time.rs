@@ -580,7 +580,7 @@ impl ScalarFunc {
         let d400 = year / 400;
         let leap = d4 - d100 + d400;
         day = day + leap + year * 365 + 365;
-        if day > 366*9999 || day == 0 {
+        if day > 366 * 9999 || day == 0 {
             return Ok(None);
         }
         let days = day as u32;
