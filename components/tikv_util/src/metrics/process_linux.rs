@@ -5,8 +5,6 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use procinfo::pid as pid_info;
-
 use prometheus::core::{Collector, Desc};
 use prometheus::{proto, Counter, Gauge, Opts};
 use std::sync::Mutex;
