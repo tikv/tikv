@@ -111,10 +111,8 @@ impl Collector for ProcessCollector {
         };
 
         // collect MetricFamilys.
-        let mut mfs = Vec::with_capacity(MERTICS_NUMBER);
+        let mut mfs = Vec::with_capacity(4);
         mfs.extend(cpu_total_mfs);
-        mfs.extend(self.open_fds.collect());
-        mfs.extend(self.max_fds.collect());
         mfs.extend(self.vsize.collect());
         mfs.extend(self.rss.collect());
         mfs.extend(self.start_time.collect());

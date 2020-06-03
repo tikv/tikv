@@ -2735,6 +2735,7 @@ checksum = "c434e93ef69c216e68e4f417c927b4f31502c3560b72cfdb6827e2321c5c6b3e"
 dependencies = [
  "bitflags",
  "byteorder",
+ "chrono",
  "hex 0.4.2",
  "lazy_static",
  "libc",
@@ -4571,6 +4572,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "procfs",
+ "procinfo",
  "prometheus",
  "protobuf",
  "quick-error",
