@@ -26,7 +26,7 @@ use tikv::storage::mvcc::ScannerBuilder;
 
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngine, Peekable, Snapshot, CF_DEFAULT, CF_WRITE};
+use engine_traits::{Iterable, KvEngine, Peekable, ReadOptions, Snapshot, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -604,10 +604,12 @@ impl Delegate {
                                 let previous_encoded = Key::from_encoded(key.clone())
                                     .append_ts(TimeStamp::new(ts))
                                     .into_encoded();
+                                let mut opts = ReadOptions::new();
+                                opts.set_fill_cache(false);
                                 row.previous_value = value.unwrap_or_else(|| {
                                     kv_engine
                                         .snapshot()
-                                        .get_value(&keys::data_key(&previous_encoded))
+                                        .get_value_opt(&opts, &keys::data_key(&previous_encoded))
                                         .unwrap()
                                         .map_or_else(Vec::default, |v| v.deref().to_vec())
                                 })

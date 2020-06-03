@@ -447,8 +447,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 region_id,
             }
         };
-        if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-            reader.extra_read.store(request.get_extra_read());
+        {
+            if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                reader.extra_read.store(request.get_extra_read());
+            }
         }
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
