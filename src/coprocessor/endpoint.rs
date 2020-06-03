@@ -423,7 +423,7 @@ impl<E: Engine> Endpoint<E> {
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
-            .trace_async(tipb::Event::TiKvCoprGetRequest as u32)
+            .trace_task(tipb::Event::TiKvCoprGetRequest as u32)
             .map(move |mut resp: coppb::Response| {
                 if let Some(collector) = collector {
                     resp.set_spans(tikv_util::trace::encode_spans(collector).collect())
