@@ -42,20 +42,20 @@ impl From<u32> for TraceEvent {
     }
 }
 
-impl Into<spanpb::Event> for TraceEvent {
-    fn into(self) -> spanpb::Event {
+impl Into<tipb::Event> for TraceEvent {
+    fn into(self) -> tipb::Event {
         match self {
-            TraceEvent::Unknown => spanpb::Event::Unknown,
-            TraceEvent::CoprRequest => spanpb::Event::CoprRequest,
-            TraceEvent::Scheduled => spanpb::Event::Scheduled,
-            TraceEvent::Snapshot => spanpb::Event::Snapshot,
-            TraceEvent::HandleRequest => spanpb::Event::HandleRequest,
-            TraceEvent::HandleUnaryFixture => spanpb::Event::HandleUnaryFixture,
-            TraceEvent::HandleChecksum => spanpb::Event::HandleChecksum,
-            TraceEvent::HandleDag => spanpb::Event::HandleDag,
-            TraceEvent::HandleBatchDag => spanpb::Event::HandleBatchDag,
-            TraceEvent::HandleAnalyze => spanpb::Event::HandleAnalyze,
-            TraceEvent::HandleCached => spanpb::Event::HandleCached,
+            TraceEvent::Unknown => tipb::Event::Unknown,
+            TraceEvent::CoprRequest => tipb::Event::TiKvCoprGetRequest,
+            TraceEvent::Scheduled => tipb::Event::TiKvCoprScheduleTask,
+            TraceEvent::Snapshot => tipb::Event::TiKvCoprGetSnapshot,
+            TraceEvent::HandleRequest => tipb::Event::TiKvCoprHandleRequest,
+            TraceEvent::HandleUnaryFixture => tipb::Event::Unknown,
+            TraceEvent::HandleChecksum => tipb::Event::Unknown,
+            TraceEvent::HandleDag => tipb::Event::TiKvCoprExecuteDagRunner,
+            TraceEvent::HandleBatchDag => tipb::Event::TiKvCoprExecuteBatchDagRunner,
+            TraceEvent::HandleAnalyze => tipb::Event::Unknown,
+            TraceEvent::HandleCached => tipb::Event::Unknown,
         }
     }
 }
@@ -74,7 +74,7 @@ pub fn encode_spans(rx: Collector) -> impl Iterator<Item = spanpb::SpanSet> {
                 s.set_id(span.id);
                 s.set_begin_cycles(span.begin_cycles);
                 s.set_end_cycles(span.end_cycles);
-                s.set_event(TraceEvent::from(span.event).into());
+                s.set_event(span.event);
 
                 #[cfg(feature = "prost-codec")]
                 use minitrace::Link;

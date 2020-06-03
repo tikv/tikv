@@ -408,7 +408,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let _enable_trace = req.enable_trace;
+        let _enable_trace = req.is_trace_enabled;
         //TODO remove before merge
         let enable_trace = true;
 
