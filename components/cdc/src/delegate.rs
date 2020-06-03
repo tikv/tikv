@@ -17,9 +17,8 @@ use kvproto::cdcpb::{
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    Error as EventError, ErrorDuplicateRequest,
-    Event, EventEntries, EventLogType, EventLongTxn, EventRow, EventRowOpType, Event_oneof_event,
-    TxnInfo, TxnStatus,
+    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventLongTxn,
+    EventRow, EventRowOpType, Event_oneof_event, TxnInfo, TxnStatus,
 };
 use kvproto::errorpb;
 
@@ -492,6 +491,10 @@ impl Delegate {
             })
             .collect::<Vec<_>>();
 
+        info!("report long live transactions to CDC";
+            "region_id" => self.region_id,
+            "before_ts" => filter_ts,
+            "txns" => txn.len());
         let mut event = EventLongTxn::default();
         event.set_txn_info(txn.into());
         let mut change_data_event = Event::default();
@@ -509,6 +512,10 @@ impl Delegate {
                 return;
             }
         };
+
+        info!("notify transactions to update min_commit_ts";
+            "region_id" => self.region_id,
+            "txns" => txn_status.len());
 
         resolver.update_txn_status(
             txn_status
