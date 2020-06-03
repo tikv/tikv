@@ -1,8 +1,7 @@
 use kvproto::span as spanpb;
-use minitrace::Collector;
+use minitrace::SpanSet;
 
-pub fn encode_spans(rx: Collector) -> impl Iterator<Item = spanpb::SpanSet> {
-    let span_sets = rx.collect();
+pub fn encode_spans(span_sets: Vec<SpanSet>) -> impl Iterator<Item = spanpb::SpanSet> {
     span_sets
         .into_iter()
         .map(|span_set| {

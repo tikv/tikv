@@ -2107,7 +2107,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#0f5390a9e1eb8d94d9369421bf27ef123c026076"
+source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2119,8 +2119,8 @@ dependencies = [
 
 [[package]]
 name = "minitrace-attribute"
-version = "0.0.1"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#0f5390a9e1eb8d94d9369421bf27ef123c026076"
+version = "0.1.0"
+source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",

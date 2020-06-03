@@ -409,24 +409,19 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let _enable_trace = req.is_trace_enabled;
         //TODO remove before merge
-        let enable_trace = true;
+        let trace_enabled = true;
 
-        let (_guard, collector) =
-            minitrace::trace_may_enable(enable_trace, tipb::Event::TiKvCoprGetRequest as u32);
-
-        let result_of_future =
-            self.parse_request(req, peer, false)
-                .map(|(handler_builder, req_ctx)| {
-                    self.handle_unary_request(req_ctx, handler_builder)
-                });
+        let result_of_future = self
+            .parse_request(req, peer, false)
+            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
-            .trace_task(tipb::Event::TiKvCoprGetRequest as u32)
-            .map(move |mut resp: coppb::Response| {
-                if let Some(collector) = collector {
-                    resp.set_spans(tikv_util::trace::encode_spans(collector).collect())
+            .future_trace_may_enable(trace_enabled, tipb::Event::TiKvCoprGetRequest as u32)
+            .map(move |(spans, mut resp)| {
+                if let Some(span_sets) = spans {
+                    resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
                 }
                 resp
             })
