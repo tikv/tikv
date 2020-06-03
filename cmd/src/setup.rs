@@ -10,11 +10,14 @@ use clap::ArgMatches;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::HashMap;
-use tikv_util::config;
-use tikv_util::{self, logger};
+use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+// The info log file names does not end with ".log" since it conflict with rocksdb WAL files.
+pub const DEFAULT_ROCKSDB_LOG_FILE: &str = "rocksdb.info";
+pub const DEFAULT_RAFTDB_LOG_FILE: &str = "raftdb.info";
 
 #[macro_export]
 macro_rules! fatal {
@@ -39,6 +42,22 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
         Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
     ));
     Ok(PathBuf::from(new_path))
+}
+
+fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
+    let mut path = Path::new(path).to_path_buf();
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
+    }
+    let path = path.to_str().unwrap_or_else(|| {
+        fatal!("failed to construct engine log dir {:?}, {:?}", path, sub_path);
+    });
+    config::ensure_dir_exist(path).unwrap_or_else(|e| {
+        fatal!("failed to create engine log dir: {}", e);
+    });
+    config::canonicalize_log_dir(&path, filename).unwrap_or_else(|e| {
+        fatal!("failed to canonicalize engine log dir: {}", e);
+    })
 }
 
 #[allow(dead_code)]
@@ -91,33 +110,26 @@ pub fn initial_logger(config: &TiKvConfig) {
             Some(slow_log_drainer)
         };
 
-        let rocksdb_info_log_dir = if config.rocksdb.info_log_dir.is_empty() {
-            config::canonicalize_sub_path(&config.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)
-                .and_then(|log_dir| config::canonicalize_log_dir(log_dir.as_str(), "LOG"))
+        let rocksdb_info_log_path = if config.rocksdb.info_log_dir.is_empty() {
+            make_engine_log_path(
+                &config.storage.data_dir,
+                DEFAULT_ROCKSDB_SUB_DIR,
+                DEFAULT_ROCKSDB_LOG_FILE,
+            )
         } else {
-            config::canonicalize_log_dir(&config.rocksdb.info_log_dir, "rocksdb.log")
-        }
-        .unwrap_or_else(|e| {
-            fatal!(
-                "failed to check rocksdb_log with file {}: {}",
-                config.rocksdb.info_log_dir,
-                e
-            );
-        });
-        let raftdb_info_log_dir = if config.raftdb.info_log_dir.is_empty() {
-            config::canonicalize_log_dir(&config.raft_store.raftdb_path.clone(), "LOG")
+            make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
+        };
+        let raftdb_info_log_path = if config.raftdb.info_log_dir.is_empty() {
+            make_engine_log_path(
+                &config.raft_store.raftdb_path.clone(),
+                "",
+                DEFAULT_RAFTDB_LOG_FILE,
+            )
         } else {
-            config::canonicalize_log_dir(&config.raftdb.info_log_dir, "raft.log")
-        }
-        .unwrap_or_else(|e| {
-            fatal!(
-                "failed to check raftdb_log with file {}: {}",
-                config.raftdb.info_log_dir,
-                e
-            );
-        });
+            make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
+        };
         let rocksdb_log_drainer = logger::file_drainer(
-            &rocksdb_info_log_dir,
+            &rocksdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
             rename_by_timestamp,
@@ -125,13 +137,13 @@ pub fn initial_logger(config: &TiKvConfig) {
         .unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize rocksdb log with file {}: {}",
-                rocksdb_info_log_dir,
+                rocksdb_info_log_path,
                 e
             );
         });
 
         let raftdb_log_drainer = logger::file_drainer(
-            &raftdb_info_log_dir,
+            &raftdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
             rename_by_timestamp,
@@ -139,7 +151,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         .unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize raftdb log with file {}: {}",
-                raftdb_info_log_dir,
+                raftdb_info_log_path,
                 e
             );
         });
