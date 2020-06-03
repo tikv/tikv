@@ -25,7 +25,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState, ReportLocksCfg};
 use crate::metrics::*;
 use crate::service::{Conn, ConnID};
 use crate::{CdcObserver, Error, Result};
@@ -115,6 +115,10 @@ pub enum Task {
         entries: Vec<Option<TxnEntry>>,
     },
     RegisterMinTsEvent,
+    NotifyTxnStatus {
+        region_id: u64,
+        txn_status: Vec<TxnStatus>,
+    },
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
@@ -187,6 +191,14 @@ impl fmt::Debug for Task {
                 .field("scan_entries", &entries.len())
                 .finish(),
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
+            Task::NotifyTxnStatus {
+                region_id,
+                txn_status,
+            } => de
+                .field("type", &"notify_txn_status")
+                .field("region_id", region_id)
+                .field("txn_status", txn_status)
+                .finish(),
             Task::InitDownstream {
                 ref downstream_id, ..
             } => de
@@ -385,7 +397,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
-            let d = Delegate::new(region_id);
+            let d = Delegate::new(region_id, Some(ReportLocksCfg::default()));
             is_new_delegate = true;
             d
         });
@@ -616,6 +628,17 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         self.tso_worker.spawn(fut);
     }
 
+    fn notify_txn_status(&mut self, region_id: u64, txn_status: Vec<TxnStatus>) {
+        if let Some(region) = self.capture_regions.get_mut(&region_id) {
+            region.update_txn_status(txn_status);
+        } else {
+            info!(
+                "trying to notify txn status to region but region is not registered";
+                "region_id" => region_id,
+            );
+        }
+    }
+
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
     }
@@ -836,6 +859,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T>
             Task::MultiBatch { multi } => self.on_multi_batch(multi),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
+            Task::NotifyTxnStatus {
+                region_id,
+                txn_status,
+            } => self.notify_txn_status(region_id, txn_status),
             Task::InitDownstream {
                 downstream_id,
                 downstream_state,

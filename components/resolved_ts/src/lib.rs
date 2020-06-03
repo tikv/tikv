@@ -254,6 +254,25 @@ impl Resolver {
             })
             .collect()
     }
+
+    pub fn update_txn_status(
+        &mut self,
+        txn_status: impl IntoIterator<Item = (TimeStamp, TimeStamp)>,
+    ) {
+        for (start_ts, min_commit_ts) in txn_status.into_iter() {
+            if let Some(txn) = self.locks.get_mut(&start_ts) {
+                if txn.min_commit_ts < min_commit_ts {
+                    Self::update_min_commit_ts_map(
+                        &mut self.txn_min_commit_ts,
+                        start_ts,
+                        txn.min_commit_ts,
+                        min_commit_ts,
+                    );
+                    txn.min_commit_ts = min_commit_ts;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,7 +401,7 @@ mod tests {
             Case {
                 locks: vec![(10, 10, b"a", b"a"), (11, 11, b"c", b"d")],
                 ts: 12,
-                expected_result: vec![(10, b"a"), (11, b"b")],
+                expected_result: vec![(10, b"a"), (11, b"d")],
             },
             Case {
                 locks: vec![
@@ -391,7 +410,7 @@ mod tests {
                     (12, 13, b"e", b"f"),
                 ],
                 ts: 14,
-                expected_result: vec![(11, b"d"), (13, b"f")],
+                expected_result: vec![(11, b"d"), (12, b"f")],
             },
             Case {
                 locks: vec![

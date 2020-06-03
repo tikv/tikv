@@ -183,7 +183,7 @@ fn test_cdc_basic() {
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Entries(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
 
     suite.stop();
@@ -422,7 +422,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -434,7 +434,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
 
     // checkpoint_ts = 5;
@@ -484,7 +484,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -497,7 +497,7 @@ fn test_cdc_scan() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
 
     event_feed_wrap.as_ref().replace(None);
@@ -696,7 +696,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
@@ -708,7 +708,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
@@ -725,7 +725,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
 
     // Prewrite
@@ -757,7 +757,7 @@ fn test_cdc_batch_size_limit() {
         Event_oneof_event::Error(e) => panic!("{:?}", e),
         Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
         Event_oneof_event::Admin(e) => panic!("{:?}", e),
-        Event_oneof_event::CheckLocks(e) => panic!("{:?}", e),
+        Event_oneof_event::LongTxn(e) => panic!("{:?}", e),
     }
 
     event_feed_wrap.as_ref().replace(None);

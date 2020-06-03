@@ -3,20 +3,23 @@
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
+    change_data_request::{NotifyTxnStatus as RequestNotifyTxnStatus, Register as RequestRegister},
     error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
-        LogType as EventLogType, Row as EventRow,
+        LogType as EventLogType, LongTxn as EventLongTxn, Row as EventRow,
     },
-    Error as EventError, Event,
+    Error as EventError, Event, TxnInfo, TxnStatus,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
-    EventRowOpType, Event_oneof_event,
+    Error as EventError, ErrorDuplicateRequest,
+    Event, EventEntries, EventLogType, EventLongTxn, EventRow, EventRowOpType, Event_oneof_event,
+    TxnInfo, TxnStatus,
 };
 use kvproto::errorpb;
 
@@ -209,6 +212,26 @@ enum PendingLock {
     },
 }
 
+pub struct ReportLocksCfg {
+    pub report_locks_threshold: Duration,
+    pub report_locks_limit: Duration,
+}
+
+impl ReportLocksCfg {
+    fn new(report_locks_threshold: Duration, report_locks_limit: Duration) -> Self {
+        Self {
+            report_locks_threshold,
+            report_locks_limit,
+        }
+    }
+}
+
+impl Default for ReportLocksCfg {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(5), Duration::from_secs(3))
+    }
+}
+
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
@@ -222,11 +245,12 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
+    report_locks_cfg: Option<ReportLocksCfg>,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64) -> Delegate {
+    pub fn new(region_id: u64, report_locks_cfg: Option<ReportLocksCfg>) -> Delegate {
         Delegate {
             region_id,
             id: ObserveID::new(),
@@ -236,6 +260,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
+            report_locks_cfg,
         }
     }
 
@@ -376,6 +401,13 @@ impl Delegate {
             .sink_event(change_data_event, size);
     }
 
+    fn notify_one(&self, change_data_event: Event, size: usize) {
+        let downstreams = self.downstreams();
+        let index = rand::random::<usize>() % downstreams.len();
+        let downstream = &downstreams[index];
+        downstream.sink_event(change_data_event, size);
+    }
+
     /// Install a resolver and return pending downstreams.
     pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Vec<Downstream> {
         assert!(
@@ -425,9 +457,64 @@ impl Delegate {
         change_data_event.region_id = self.region_id;
         change_data_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts.into_inner()));
         self.broadcast(change_data_event, 0, true);
-        CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+        let resolved_ts_gap = (min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64;
+        CDC_RESOLVED_TS_GAP_HISTOGRAM.observe(resolved_ts_gap);
+        if let Some(cfg) = &self.report_locks_cfg {
+            if resolved_ts_gap > cfg.report_locks_threshold.as_secs_f64() {
+                let ts = min_ts.physical() - (cfg.report_locks_limit.as_millis() as u64);
+                self.report_locks(TimeStamp::compose(ts, 0));
+            }
+        }
         Some(resolved_ts)
+    }
+
+    fn report_locks(&self, filter_ts: TimeStamp) {
+        let resolver = match &self.resolver {
+            Some(r) => r,
+            None => {
+                debug!("region resolver not ready";
+                    "region_id" => self.region_id);
+                return;
+            }
+        };
+
+        let mut size = 0;
+
+        let txn = resolver
+            .txn_before_ts(filter_ts)
+            .into_iter()
+            .map(|(start_ts, primary)| {
+                size += 8 + primary.len();
+                let mut txn_info = TxnInfo::default();
+                txn_info.set_start_ts(start_ts.into_inner());
+                txn_info.set_primary(primary);
+                txn_info
+            })
+            .collect::<Vec<_>>();
+
+        let mut event = EventLongTxn::default();
+        event.set_txn_info(txn.into());
+        let mut change_data_event = Event::default();
+        change_data_event.region_id = self.region_id;
+        change_data_event.event = Some(Event_oneof_event::LongTxn(event));
+        self.notify_one(change_data_event, size);
+    }
+
+    pub fn update_txn_status(&mut self, txn_status: Vec<TxnStatus>) {
+        let resolver = match &mut self.resolver {
+            Some(r) => r,
+            None => {
+                info!("region resolver not ready when trying to update txn status";
+                    "region_id" => self.region_id);
+                return;
+            }
+        };
+
+        resolver.update_txn_status(
+            txn_status
+                .into_iter()
+                .map(|t| (t.get_start_ts().into(), t.get_min_commit_ts().into())),
+        );
     }
 
     pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
@@ -787,7 +874,7 @@ mod tests {
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let mut delegate = Delegate::new(region_id, None);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
@@ -914,7 +1001,7 @@ mod tests {
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let mut delegate = Delegate::new(region_id, None);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
