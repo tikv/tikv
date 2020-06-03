@@ -908,7 +908,7 @@ impl Peer {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<T, C>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -939,6 +939,16 @@ impl Peer {
                             "time" => ?now,
                         );
                     }
+                } else {
+                    if ctx.cfg.dev_assert {
+                        panic!("{} failed to get peer {} from cache", self.tag, id);
+                    }
+                    error!(
+                        "failed to get peer from cache";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "get_peer_id" => id,
+                    );
                 }
             }
         }
@@ -2657,7 +2667,7 @@ impl Peer {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
-            pending_peers: self.collect_pending_peers(),
+            pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
@@ -2815,7 +2825,11 @@ impl Peer {
         }
     }
 
-    pub fn send_want_rollback_merge<T: Transport>(&self, premerge_commit: u64, trans: &mut T) {
+    pub fn send_want_rollback_merge<T: Transport, C>(
+        &self,
+        premerge_commit: u64,
+        ctx: &mut PollContext<T, C>,
+    ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         send_msg.set_from_peer(self.peer.clone());
@@ -2836,7 +2850,7 @@ impl Peer {
         let extra_msg = send_msg.mut_extra_msg();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             error!(
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
@@ -2845,6 +2859,8 @@ impl Peer {
                 "target_store_id" => to_peer.get_store_id(),
                 "err" => ?e
             );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 }

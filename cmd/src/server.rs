@@ -790,6 +790,7 @@ impl TiKVServer {
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
+                self.config.server.advertise_status_addr.clone(),
                 &self.config.security,
             ) {
                 error!(
