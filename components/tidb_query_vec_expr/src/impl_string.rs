@@ -3,7 +3,6 @@
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
-use std::cmp::Ordering;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
@@ -478,62 +477,43 @@ pub fn substring_index(
     delim: &Option<Bytes>,
     count: &Option<Int>,
 ) -> Result<Option<Bytes>> {
-    Ok(
-        if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
-            match count.cmp(&0i64) {
-                std::cmp::Ordering::Greater => {
-                    // last already-found `delim` pattern start at this index
-                    let mut current_pattern_start_at = None;
-                    // find the count-th `delim` pattern
-                    for _ in 0..*count {
-                        // this round of found start at last round's pattern's start at + pattern's length
-                        let find_start_index = current_pattern_start_at
-                            .map(|it| it + delim.len())
-                            .unwrap_or(0);
-                        // this result is the offset from "last round's pattern's start at + pattern's length"
-                        let result = twoway::find_bytes(&s[find_start_index..], &delim);
-                        if let Some(result) = result {
-                            current_pattern_start_at = Some(find_start_index + result);
-                        } else {
-                            // no more matched pattern, break out of the loop
-                            current_pattern_start_at = None;
-                            break;
-                        }
-                    }
-                    if let Some(pattern_start_at) = current_pattern_start_at {
-                        Some(s[..pattern_start_at].to_vec())
-                    } else {
-                        // no enough patterns, just return the full string
-                        Some(s.clone())
-                    }
-                }
-                std::cmp::Ordering::Less => {
-                    // same as above, just from opposite direction
-                    let mut current_pattern_end_at = None;
-                    for _ in 0..-*count {
-                        let find_end_index = current_pattern_end_at
-                            .map(|it| it - delim.len())
-                            .unwrap_or_else(|| s.len());
-                        let result = twoway::rfind_bytes(&s[..find_end_index], &delim);
-                        if let Some(result) = result {
-                            current_pattern_end_at = Some(result + delim.len())
-                        } else {
-                            current_pattern_end_at = Some(0);
-                            break;
-                        }
-                    }
-                    if let Some(pattern_end_at) = current_pattern_end_at {
-                        Some(s[pattern_end_at..].to_vec())
-                    } else {
-                        Some(s.clone())
-                    }
-                }
-                Ordering::Equal => Some(Vec::<u8>::new()),
-            }
+    if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
+        let count = *count;
+        if count == 0 || s.len() == 0 || delim.len() == 0 {
+            return Ok(Some(Vec::new()));
+        }
+        let finder = if count > 0 {
+            twoway::find_bytes
         } else {
-            None
-        },
-    )
+            twoway::rfind_bytes
+        };
+        let mut remaining = &s[..];
+        let mut remaining_pattern_count = count.abs();
+        let mut bound = 0;
+        while remaining_pattern_count > 0 {
+            if let Some(offset) = finder(&remaining, delim) {
+                if count > 0 {
+                    bound += offset + delim.len();
+                    remaining = &s[bound..];
+                } else {
+                    bound = offset;
+                    remaining = &s[..bound];
+                }
+            } else {
+                break;
+            }
+            remaining_pattern_count -= 1;
+        }
+        Ok(Some(if remaining_pattern_count > 0 {
+            s[..].to_vec()
+        } else if count > 0 {
+            s[..bound - delim.len()].to_vec()
+        } else {
+            s[bound + delim.len()..].to_vec()
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 #[rpn_fn]
