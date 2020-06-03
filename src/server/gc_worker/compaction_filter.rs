@@ -92,7 +92,7 @@ impl WriteCompactionFilter {
 
         let wb = RocksWriteBatch::with_capacity(Arc::clone(&db), DEFAULT_DELETE_BATCH_SIZE);
         WriteCompactionFilter {
-            bottommost_level: context.bottommost_level(),
+            bottommost_level: context.is_bottommost_level(),
             safe_point,
             db,
 

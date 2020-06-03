@@ -1919,7 +1919,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-bottommost-level#b5ab0bdb1ff2f4f542b93762c9a22aaefba0a993"
+source = "git+https://github.com/tikv/rust-rocksdb.git#8dc64d8563dd393e1375c36d0b329d9c13048f16"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1938,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-bottommost-level#b5ab0bdb1ff2f4f542b93762c9a22aaefba0a993"
+source = "git+https://github.com/tikv/rust-rocksdb.git#8dc64d8563dd393e1375c36d0b329d9c13048f16"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3188,7 +3188,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-bottommost-level#b5ab0bdb1ff2f4f542b93762c9a22aaefba0a993"
+source = "git+https://github.com/tikv/rust-rocksdb.git#8dc64d8563dd393e1375c36d0b329d9c13048f16"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4368,6 +4368,7 @@ dependencies = [
  "profiler",
  "prometheus-static-metric",
  "protobuf",
+ "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
