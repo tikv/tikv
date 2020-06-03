@@ -30,7 +30,6 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::future::Instrument;
-use tikv_util::trace::TraceEvent;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -326,7 +325,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
-        .trace_async(TraceEvent::Snapshot)
+        .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
         .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -346,7 +345,7 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = track(
             handler
                 .handle_request()
-                .trace_async(TraceEvent::HandleRequest),
+                .trace_async(tipb::Event::TiKvCoprHandleRequest as u32),
             &mut tracker,
         );
         let result = if let Some(semaphore) = &semaphore {
@@ -391,7 +390,7 @@ impl<E: Engine> Endpoint<E> {
         self.read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .trace_task(tikv_util::trace::TraceEvent::Scheduled),
+                    .trace_task(tipb::Event::TiKvCoprScheduleTask as u32),
                 priority,
                 task_id,
             )
@@ -413,13 +412,13 @@ impl<E: Engine> Endpoint<E> {
         let enable_trace = true;
 
         let (_guard, collector) =
-            minitrace::trace_may_enable(enable_trace, tikv_util::trace::TraceEvent::CoprRequest);
+            minitrace::trace_may_enable(enable_trace, tipb::Event::TiKvCoprGetRequest as u32);
 
         let result_of_future =
             self.parse_request(req, peer, false)
                 .map(|(handler_builder, req_ctx)| {
                     self.handle_unary_request(req_ctx, handler_builder)
-                        .trace_async(tikv_util::trace::TraceEvent::CoprRequest)
+                        .trace_async(tipb::Event::TiKvCoprGetRequest as u32)
                 });
 
         future::result(result_of_future)

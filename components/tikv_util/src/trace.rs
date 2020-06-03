@@ -1,53 +1,6 @@
 use kvproto::span as spanpb;
 use minitrace::Collector;
 
-#[repr(u32)]
-pub enum TraceEvent {
-    #[allow(dead_code)]
-    Unknown = 0u32,
-    CoprRequest = 1u32,
-    Scheduled = 2u32,
-    Snapshot = 3u32,
-    HandleRequest = 4u32,
-    HandleDag = 7u32,
-    HandleBatchDag = 8u32,
-}
-
-impl Into<u32> for TraceEvent {
-    fn into(self) -> u32 {
-        self as u32
-    }
-}
-
-impl From<u32> for TraceEvent {
-    fn from(x: u32) -> Self {
-        match x {
-            _ if x == TraceEvent::Unknown as u32 => TraceEvent::Unknown,
-            _ if x == TraceEvent::CoprRequest as u32 => TraceEvent::CoprRequest,
-            _ if x == TraceEvent::Scheduled as u32 => TraceEvent::Scheduled,
-            _ if x == TraceEvent::Snapshot as u32 => TraceEvent::Snapshot,
-            _ if x == TraceEvent::HandleRequest as u32 => TraceEvent::HandleRequest,
-            _ if x == TraceEvent::HandleDag as u32 => TraceEvent::HandleDag,
-            _ if x == TraceEvent::HandleBatchDag as u32 => TraceEvent::HandleBatchDag,
-            _ => unimplemented!("enumeration not exhausted"),
-        }
-    }
-}
-
-impl Into<tipb::Event> for TraceEvent {
-    fn into(self) -> tipb::Event {
-        match self {
-            TraceEvent::Unknown => tipb::Event::Unknown,
-            TraceEvent::CoprRequest => tipb::Event::TiKvCoprGetRequest,
-            TraceEvent::Scheduled => tipb::Event::TiKvCoprScheduleTask,
-            TraceEvent::Snapshot => tipb::Event::TiKvCoprGetSnapshot,
-            TraceEvent::HandleRequest => tipb::Event::TiKvCoprHandleRequest,
-            TraceEvent::HandleDag => tipb::Event::TiKvCoprExecuteDagRunner,
-            TraceEvent::HandleBatchDag => tipb::Event::TiKvCoprExecuteBatchDagRunner,
-        }
-    }
-}
-
 pub fn encode_spans(rx: Collector) -> impl Iterator<Item = spanpb::SpanSet> {
     let span_sets = rx.collect();
     span_sets
