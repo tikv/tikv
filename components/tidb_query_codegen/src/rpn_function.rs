@@ -372,26 +372,58 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`.
-struct RpnFnRefEvaluableType {
-    eval_type: TypePath,
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`.
+/// Option<&T> corresponds to `Ref`.
+/// Option<JsonRef> corresponds to `Type`.
+enum RpnFnRefEvaluableType {
+    Type(TypePath),
+    Ref(TypePath)
+}
+
+impl RpnFnRefEvaluableType {
+    /// parse type like `JsonRef`
+    fn parse_type_path(input: parse::ParseStream<'_>) -> Result<(Self, parse::ParseStream<'_>)> {
+        let eval_type = input.parse::<TypePath>()?;
+        Ok((Self::Type(eval_type), input))
+    }
+
+    /// parse type like `&T`
+    fn parse_type_ref(input: parse::ParseStream<'_>) -> Result<(Self, parse::ParseStream<'_>)> {
+        input.parse::<Token![&]>()?;
+        let eval_type = input.parse::<TypePath>()?;
+        Ok((Self::Ref(eval_type), input))
+    }
+
+    fn get_type_path(&self) -> TypePath {
+        match self {
+            Self::Type(x) => x.clone(),
+            Self::Ref(x) => x.clone()
+        }
+    }
 }
 
 impl parse::Parse for RpnFnRefEvaluableType {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         input.parse::<self::kw::Option>()?;
         input.parse::<Token![<]>()?;
-        input.parse::<Token![&]>()?;
-        let eval_type = input.parse::<TypePath>()?;
+        let (eval_type, input) = Self::parse_type_path(input.clone())
+            .or_else(|_| Self::parse_type_ref(input.clone()))?;
         input.parse::<Token![>]>()?;
-        Ok(Self { eval_type })
+        Ok(eval_type)
+    }
+}
+
+fn add_lifetime_to_type(refeval: RpnFnRefEvaluableType) -> TokenStream {
+    match refeval {
+        RpnFnRefEvaluableType::Ref(x) => quote!{ &'args_ #x },
+        RpnFnRefEvaluableType::Type(x) => quote!{ #x <'args_> },
     }
 }
 
 /// Parses a function signature parameter like `val: &Option<T>`.
 struct RpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for RpnFnSignatureParam {
@@ -401,7 +433,7 @@ impl parse::Parse for RpnFnSignatureParam {
         let et = input.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -409,7 +441,7 @@ impl parse::Parse for RpnFnSignatureParam {
 /// Parses a function signature parameter like `val: &[&Option<T>]`.
 struct VargsRpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for VargsRpnFnSignatureParam {
@@ -422,7 +454,7 @@ impl parse::Parse for VargsRpnFnSignatureParam {
         let et = slice_inner.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -655,7 +687,7 @@ impl VargsRpnFn {
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`")
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`")
             })?;
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
@@ -675,7 +707,7 @@ impl VargsRpnFn {
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
             item_fn,
-            arg_type: arg_type.eval_type,
+            arg_type: arg_type.eval_type.get_type_path(),
             ret_type: ret_type.eval_type,
         })
     }
@@ -939,9 +971,9 @@ impl NormalRpnFn {
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`")
+                    Error::new_spanned(fn_arg, "Expect parameter type to be like Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>")
                 })?;
-            arg_types.push(arg_type.eval_type);
+            arg_types.push(arg_type.eval_type.get_type_path());
         }
         let ret_type = parse2::<RpnFnSignatureReturnType>(
             (&item_fn.sig.output).into_token_stream(),
@@ -969,7 +1001,7 @@ impl NormalRpnFn {
     }
 
     fn generate(self) -> TokenStream {
-        vec![
+        let x = vec![
             self.generate_fn_trait(),
             self.generate_dummy_fn_trait_impl(),
             self.generate_real_fn_trait_impl(),
@@ -978,7 +1010,9 @@ impl NormalRpnFn {
             self.item_fn.into_token_stream(),
         ]
         .into_iter()
-        .collect()
+        .collect();
+        println!("{}", x);
+        x
     }
 
     fn generate_fn_trait(&self) -> TokenStream {
@@ -1599,5 +1633,23 @@ mod tests_normal {
             expected.to_string(),
             gen.generate_real_fn_trait_impl().to_string()
         );
+    }
+
+    #[test]
+    fn test_add_lifetime_ref() {
+        let input = quote!{ Option<&Int> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let parsed_type = add_lifetime_to_type(x);
+        let expected = quote! { &'args_ Int };
+        assert_eq!(expected.to_string(), parsed_type.to_string());
+    }
+
+    #[test]
+    fn test_add_lifetime_type() {
+        let input = quote!{ Option<JsonRef> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let parsed_type = add_lifetime_to_type(x);
+        let expected = quote! { JsonRef <'args_> };
+        assert_eq!(expected.to_string(), parsed_type.to_string());
     }
 }
