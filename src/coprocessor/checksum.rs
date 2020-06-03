@@ -10,7 +10,6 @@ use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
-use tikv_util::trace::TraceEvent;
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
@@ -49,7 +48,6 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    #[minitrace::trace_async(TraceEvent::HandleChecksum)]
     async fn handle_request(&mut self) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
