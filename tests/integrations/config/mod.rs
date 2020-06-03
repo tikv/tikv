@@ -193,6 +193,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+        dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
     };
@@ -629,6 +630,7 @@ fn test_serde_custom_tikv_config() {
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
+        import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {

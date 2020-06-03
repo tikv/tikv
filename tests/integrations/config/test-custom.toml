@@ -153,6 +153,7 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 early-apply = false
+dev-assert = true
 perf-level = 5
 
 [coprocessor]
@@ -552,6 +553,7 @@ type = "plaintext"
 [import]
 num-threads = 123
 stream-channel-window = 123
+import-mode-timeout = "1453s"
 
 [gc]
 ratio-threshold = 1.2

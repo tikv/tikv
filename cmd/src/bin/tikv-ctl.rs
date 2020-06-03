@@ -26,7 +26,6 @@ use protobuf::Message;
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
-use engine::rocks;
 use engine::Engines;
 use engine_rocks::encryption::get_env;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -76,19 +75,26 @@ fn new_debug_executor(
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+            let kv_path = kv_path.to_str().unwrap();
+            let kv_db =
+                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
-                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
-                    .canonicalize()
-                    .unwrap();
-                String::from(db_path.to_str().unwrap())
-            });
+            let mut raft_path = raft_db
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            raft_path = PathBuf::from(raft_path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .map(ToString::to_string)
+                .unwrap();
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
             let raft_db =
-                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
+                    .unwrap();
 
             Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
@@ -563,6 +569,8 @@ trait DebugExecutor {
 
     fn dump_region_properties(&self, region_id: u64);
 
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>);
+
     fn dump_store_info(&self);
 
     fn dump_cluster_info(&self);
@@ -750,6 +758,10 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
+        unimplemented!("only available for local mode");
     }
 
     fn dump_store_info(&self) {
@@ -963,6 +975,15 @@ impl DebugExecutor for Debugger {
         let props = self
             .get_region_properties(region_id)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
+        for (name, value) in props {
+            v1!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
         for (name, value) in props {
             v1!("{}: {}", name, value);
         }
@@ -1649,6 +1670,26 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("range-properties")
+                .about("Show range properties")
+                .arg(
+                    Arg::with_name("start")
+                        .long("start")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex start key"),
+                )
+                .arg(
+                    Arg::with_name("end")
+                        .long("end")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex end key"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("split-region")
                 .about("Split the region")
                 .arg(
@@ -2058,6 +2099,10 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("range-properties") {
+        let start_key = from_hex(matches.value_of("start").unwrap()).unwrap();
+        let end_key = from_hex(matches.value_of("end").unwrap()).unwrap();
+        debug_executor.dump_range_properties(start_key, end_key);
     } else if let Some(matches) = matches.subcommand_matches("fail") {
         if host.is_none() {
             ve1!("command fail requires host");
