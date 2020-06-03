@@ -162,15 +162,8 @@ fn test_serde_custom_tikv_config() {
         store_max_batch_size: 21,
         store_pool_size: 3,
         future_poll_size: 2,
-<<<<<<< HEAD
         hibernate_regions: true,
-=======
-        hibernate_regions: false,
-        early_apply: false,
         dev_assert: true,
-        apply_yield_duration: ReadableDuration::millis(333),
-        perf_level: PerfLevel::EnableTime,
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     value.rocksdb = DbConfig {

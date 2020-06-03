@@ -120,16 +120,8 @@ pub struct Config {
     pub store_pool_size: usize,
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
-<<<<<<< HEAD:src/raftstore/store/config.rs
-=======
-    #[config(hidden)]
-    pub early_apply: bool,
     #[doc(hidden)]
-    #[config(hidden)]
     pub dev_assert: bool,
-    #[config(hidden)]
-    pub apply_yield_duration: ReadableDuration,
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672):components/raftstore/src/store/config.rs
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -202,14 +194,8 @@ impl Default for Config {
             store_max_batch_size: 1024,
             store_pool_size: 2,
             future_poll_size: 1,
-<<<<<<< HEAD:src/raftstore/store/config.rs
             hibernate_regions: false,
-=======
-            hibernate_regions: true,
-            early_apply: true,
             dev_assert: false,
-            apply_yield_duration: ReadableDuration::millis(500),
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672):components/raftstore/src/store/config.rs
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
