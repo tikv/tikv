@@ -398,8 +398,8 @@ mod tests {
 
     /// This function returns 1 when the value is even, 0 otherwise.
     #[rpn_fn]
-    fn is_even(v: &Option<i64>) -> Result<Option<i64>> {
-        let r = match v {
+    fn is_even(v: Option<&i64>) -> Result<Option<i64>> {
+        let r = match v.cloned() {
             None => Some(0),
             Some(v) => {
                 if v % 2 == 0 {
@@ -593,10 +593,10 @@ mod tests {
     fn test_predicate_error() {
         /// This function returns error when value is None.
         #[rpn_fn]
-        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
-            match v {
+        fn foo(v: Option<&i64>) -> Result<Option<i64>> {
+            match v.cloned() {
                 None => Err(other_err!("foo")),
-                Some(v) => Ok(Some(*v)),
+                Some(v) => Ok(Some(v)),
             }
         }
 
