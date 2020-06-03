@@ -17,7 +17,6 @@ use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
-<<<<<<< HEAD:src/pd/pd.rs
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
@@ -26,23 +25,8 @@ use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
-use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-=======
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
-use crate::store::cmd_resp::new_error;
-use crate::store::metrics::*;
-use crate::store::util::is_epoch_stale;
-use crate::store::util::KeysInfoFormatter;
-use crate::store::worker::split_controller::{SplitInfo, TOP_N};
-use crate::store::worker::{AutoSplitController, ReadStats};
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
-
-use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672):components/raftstore/src/store/worker/pd.rs
 use tikv_util::collections::HashMap;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
@@ -175,11 +159,7 @@ impl Display for Task {
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-            } => write!(
-                f,
-                "validate peer {:?} with region {:?}",
-                peer, region
-            ),
+            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
@@ -827,26 +807,6 @@ fn send_admin_request(
     }
 }
 
-<<<<<<< HEAD:src/pd/pd.rs
-/// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
-    let target_id = target.get_id();
-    if let Err(e) = router.force_send(
-        source_region_id,
-        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-            target,
-            stale: true,
-        }),
-    ) {
-        error!(
-            "source region report merge failed";
-            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
-        );
-    }
-}
-
-=======
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672):components/raftstore/src/store/worker/pd.rs
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
     router: &RaftRouter,

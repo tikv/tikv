@@ -126,14 +126,6 @@ impl Operator {
                 if target_region_id == region_id {
                     pdpb::RegionHeartbeatResponse::new()
                 } else {
-<<<<<<< HEAD
-                    let region = cluster
-                        .get_region_by_id(target_region_id)
-                        .unwrap()
-                        .unwrap()
-                        .clone();
-                    new_pd_merge_region(region)
-=======
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
                     if cluster.check_merge_target_integrity {
                         let mut all_exist = true;
@@ -146,12 +138,11 @@ impl Operator {
                         if all_exist {
                             new_pd_merge_region(region)
                         } else {
-                            pdpb::RegionHeartbeatResponse::default()
+                            pdpb::RegionHeartbeatResponse::new()
                         }
                     } else {
                         new_pd_merge_region(region)
                     }
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
                 }
             }
             Operator::HalfSplitRegion { .. } => new_half_split_region(),
@@ -244,15 +235,9 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
-<<<<<<< HEAD
-=======
-
-    replication_status: Option<ReplicationStatus>,
-    region_replication_status: HashMap<u64, RegionReplicationStatus>,
 
     // for merging
     pub check_merge_target_integrity: bool,
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 }
 
 impl Cluster {
@@ -280,12 +265,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
-<<<<<<< HEAD
-=======
-            replication_status: None,
-            region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
         }
     }
 
@@ -987,30 +967,10 @@ impl TestPdClient {
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
-<<<<<<< HEAD
-=======
-
-    pub fn trigger_tso_failure(&self) {
-        self.trigger_tso_failure.store(true, Ordering::SeqCst);
-    }
-
-    pub fn shutdown_store(&self, store_id: u64) {
-        match self.cluster.write() {
-            Ok(mut c) => {
-                c.stores.remove(&store_id);
-            }
-            Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
-            }
-        }
-    }
 
     pub fn ignore_merge_target_integrity(&self) {
         self.cluster.wl().check_merge_target_integrity = false;
     }
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 }
 
 impl PdClient for TestPdClient {

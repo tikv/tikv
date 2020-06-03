@@ -210,13 +210,8 @@ debug = false
 codegen-units = 4
 lto = false
 incremental = true
-<<<<<<< HEAD
 panic = 'abort'
-debug-assertions = false
-=======
-panic = 'unwind'
 debug-assertions = true
->>>>>>> ed337a4... raftstore: rely on the all-target-peer-exist guarantee during merging (#7672)
 overflow-checks = false
 rpath = false
 
