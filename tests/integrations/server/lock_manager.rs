@@ -117,10 +117,6 @@ fn deadlock_detector_leader_must_be(cluster: &mut Cluster<ServerCluster>, store_
             .get_store_id(),
         store_id
     );
-    let leader_peer = find_peer_of_store(&leader_region, store_id);
-    cluster
-        .pd_client
-        .region_leader_must_be(leader_region.get_id(), leader_peer);
 }
 
 fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8], store_id: u64) {
