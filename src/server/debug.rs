@@ -971,10 +971,11 @@ impl MvccChecker {
             // match it.
             if let Some(ref l) = lock {
                 // All write records's ts should be less than the for_update_ts (if the
-                // lock is a pessimistic lock) or the ts of the lock.
-                let (kind, check_ts) = match l.lock_type {
-                    LockType::Pessimistic => ("for_update_ts", l.for_update_ts),
-                    _ => ("ts", l.ts),
+                // lock is from a pessimistic transaction) or the ts of the lock.
+                let (kind, check_ts) = if l.for_update_ts >= l.ts {
+                    ("for_update_ts", l.for_update_ts)
+                } else {
+                    ("ts", l.ts)
                 };
 
                 if let Some((commit_ts, _)) = write {
@@ -2126,32 +2127,35 @@ mod tests {
             (b"k7", 96, 97, WriteType::Put, true, Expect::Keep),
         ]);
 
-        // Wrong pessimistic lock
+        // Locks from pessimistic transactions
         default.extend(vec![
             // key, start_ts
             (b"k8", 100, Expect::Keep),
+            (b"k9", 100, Expect::Keep),
         ]);
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
-            (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove),
+            (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
             (b"k8", 100, 110, WriteType::Put, false, Expect::Keep),
+            (b"k9", 100, 110, WriteType::Put, false, Expect::Keep),
         ]);
 
         // Out of range.
         default.extend(vec![
             // key, start_ts
-            (b"k9", 100, Expect::Keep),
+            (b"l0", 100, Expect::Keep),
         ]);
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
-            (b"k9", 101, 0, LockType::Put, false, Expect::Keep),
+            (b"l0", 101, 0, LockType::Put, false, Expect::Keep),
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k9", 102, 103, WriteType::Put, false, Expect::Keep),
+            (b"l0", 102, 103, WriteType::Put, false, Expect::Keep),
         ]);
 
         let mut kv = vec![];
@@ -2213,7 +2217,7 @@ mod tests {
         }
         db.c().write(&wb).unwrap();
         // Fix problems.
-        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k9").unwrap();
+        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
         db.c().write(&wb).unwrap();
