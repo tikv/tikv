@@ -193,13 +193,13 @@ impl Resolver {
             .get_mut(&min_commit_ts)
             .unwrap_or_else(|| {
                 panic!(
-                "missing min_commit_ts record for txn {}, whose min_commit_ts is expected to be {}",
-                start_ts,
-                min_commit_ts
-            );
+                    "missing min_commit_ts record for txn {}, whose min_commit_ts is expected to be {}",
+                    start_ts,
+                    min_commit_ts
+                );
             });
         assert!(
-            entry.remove(&min_commit_ts),
+            entry.remove(&start_ts),
             "missing min_commit_ts record for txn {}, whose min_commit_ts is expected to be {}",
             start_ts,
             min_commit_ts
