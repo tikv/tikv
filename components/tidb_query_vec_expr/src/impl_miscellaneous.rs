@@ -30,7 +30,7 @@ pub fn any_value<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
 
 #[rpn_fn]
 #[inline]
-pub fn inet_aton(addr: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn inet_aton(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(addr
         .as_ref()
         .map(|addr| String::from_utf8_lossy(addr))
@@ -48,7 +48,7 @@ pub fn inet_ntoa(arg: Option<&Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn inet6_aton(input: Option<&Bytes>) -> Result<Option<Bytes>> {
+pub fn inet6_aton(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     let input = match input {
         Some(input) => String::from_utf8_lossy(input),
         None => return Ok(None),
@@ -64,7 +64,7 @@ pub fn inet6_aton(input: Option<&Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn inet6_ntoa(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
+pub fn inet6_ntoa(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().and_then(|s| {
         if s.len() == IPV6_LENGTH {
             let v: &[u8; 16] = s.as_slice().try_into().unwrap();
@@ -80,7 +80,7 @@ pub fn inet6_ntoa(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn is_ipv4(addr: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn is_ipv4(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match addr {
         Some(addr) => match std::str::from_utf8(addr) {
             Ok(addr) => {
@@ -98,7 +98,7 @@ pub fn is_ipv4(addr: Option<&Bytes>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
-pub fn is_ipv4_compat(addr: Option<&Bytes>) -> Result<Option<i64>> {
+pub fn is_ipv4_compat(addr: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(addr.as_ref().map_or(Some(0), |addr| {
         if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_COMPAT) {
             Some(0)
@@ -110,7 +110,7 @@ pub fn is_ipv4_compat(addr: Option<&Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
-pub fn is_ipv4_mapped(addr: Option<&Bytes>) -> Result<Option<i64>> {
+pub fn is_ipv4_mapped(addr: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(addr.as_ref().map_or(Some(0), |addr| {
         if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_MAPPED) {
             Some(0)
@@ -122,7 +122,7 @@ pub fn is_ipv4_mapped(addr: Option<&Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
-pub fn is_ipv6(addr: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match addr {
         Some(addr) => match std::str::from_utf8(addr) {
             Ok(addr) => {

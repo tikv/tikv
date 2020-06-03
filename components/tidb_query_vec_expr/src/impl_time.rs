@@ -18,7 +18,7 @@ use tidb_query_datatype::expr::SqlMode;
 pub fn date_format(
     ctx: &mut EvalContext,
     t: Option<&DateTime>,
-    layout: Option<&Bytes>,
+    layout: Option<BytesRef>,
 ) -> Result<Option<Bytes>> {
     use std::str::from_utf8;
 

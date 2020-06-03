@@ -51,7 +51,7 @@ impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
     type T = Bytes;
 
     #[inline]
-    fn compare(lhs: Option<&Bytes>, rhs: Option<&Bytes>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<BytesRef>, rhs: Option<BytesRef>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -244,7 +244,7 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
+pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {

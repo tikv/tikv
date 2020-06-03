@@ -305,7 +305,7 @@ fn cast_string_as_int(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -373,7 +373,7 @@ fn cast_string_as_int(
 }
 
 #[rpn_fn(capture = [ctx])]
-fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<&Bytes>) -> Result<Option<Int>> {
+fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -406,7 +406,7 @@ fn cast_decimal_as_uint(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<&Json>) -> Result<Option<Int>> {
+fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(j) => {
@@ -492,7 +492,7 @@ fn cast_real_as_unsigned_real(
 fn cast_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -509,7 +509,7 @@ fn cast_string_as_signed_real(
 fn cast_binary_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -527,7 +527,7 @@ fn cast_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -547,7 +547,7 @@ fn cast_string_as_unsigned_real(
 fn cast_binary_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -645,7 +645,7 @@ fn cast_float_real_as_string(
 fn cast_string_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
@@ -763,7 +763,7 @@ fn cast_string_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -1004,7 +1004,7 @@ fn cast_real_as_time(
 fn cast_string_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
@@ -1111,7 +1111,7 @@ fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
 
 #[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<&Bytes>) -> Result<Option<Json>> {
+fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -1136,7 +1136,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<&Bytes>) -> Resul
 
 #[rpn_fn]
 #[inline]
-fn cast_json_as_json(val: Option<&Json>) -> Result<Option<Json>> {
+fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(val.clone())),
