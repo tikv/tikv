@@ -43,8 +43,9 @@ fn test_region_meta_endpoint() {
     assert!(router.is_some());
     let mut status_server =
         StatusServer::new(1, None, ConfigController::default(), router.unwrap()).unwrap();
+    let addr = "127.0.0.1:0".to_owned();
     assert!(status_server
-        .start("127.0.0.1:0".to_string(), &SecurityConfig::default())
+        .start(addr.clone(), addr, &SecurityConfig::default())
         .is_ok());
     let check_task = check(status_server.listening_addr(), region_id);
     let mut rt = tokio::runtime::Runtime::new().unwrap();
