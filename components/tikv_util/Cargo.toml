@@ -49,7 +49,7 @@ tokio-timer = "0.2"
 url = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+procfs = { version = "0.7", optional = true, default-features = false }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
