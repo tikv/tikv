@@ -2284,6 +2284,7 @@ where
     pub committed_term: u64,
     pub cbs: Vec<Proposal<S>>,
     entries_mem_size: i64,
+    entries_count: i64,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2300,7 +2301,8 @@ impl<S: Snapshot> Apply<S> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
         APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
-        APPLY_PENDING_MSGS_COUNTER.inc_by(entries.len() as i64);
+        let entries_count = entries.len() as i64;
+        APPLY_PENDING_ENTRIES_GAUGE.add(entries_count);
         Apply {
             peer_id,
             region_id,
@@ -2311,6 +2313,7 @@ impl<S: Snapshot> Apply<S> {
             committed_term,
             cbs,
             entries_mem_size,
+            entries_count,
         }
     }
 }
@@ -2318,6 +2321,7 @@ impl<S: Snapshot> Apply<S> {
 impl<S: Snapshot> Drop for Apply<S> {
     fn drop(&mut self) {
         APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
+        APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
     }
 }
 

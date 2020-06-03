@@ -468,9 +468,9 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref APPLY_PENDING_MSGS_COUNTER: IntCounter = register_int_counter!(
-            "tikv_raftstore_apply_messages_total",
-            "The total number of pending messages of apply FSMs."
+    pub static ref APPLY_PENDING_ENTRIES_GAUGE: IntGauge = register_int_gauge!(
+            "tikv_raftstore_apply_pending_entries",
+            "The number of pending entries in the channel of apply FSMs."
     )
     .unwrap();
 }
