@@ -564,10 +564,10 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut year = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
-        let mut days = try_opt!(self.children[1].eval_int(ctx, row)) as u32;
-        if year > 9999 {
-            year = 10000 // for returning error
+        let mut year = try_opt!(self.children[0].eval_int(ctx, row)) as i64;
+        let mut day = try_opt!(self.children[1].eval_int(ctx, row)) as i64;
+        if day <= 0 || year < 0 || year > 9999 {
+            return Ok(None);
         }
         if year < 70 {
             year += 2000;
@@ -579,9 +579,16 @@ impl ScalarFunc {
         let d100 = year / 100;
         let d400 = year / 400;
         let leap = d4 - d100 + d400;
-        days = days + leap + year * 365 + 365;
-        let time = Time::from_days(ctx, days)?;
-        Ok(Some(Cow::Owned(time)))
+        day = day + leap + year * 365 + 365;
+        if day > 366*9999 || day == 0 {
+            return Ok(None);
+        }
+        let days = day as u32;
+        let ret = Time::from_days(ctx, days)?;
+        if ret.year() > 9999 || ret.is_zero() {
+            return Ok(None);
+        }
+        Ok(Some(Cow::Owned(ret)))
     }
 }
 
@@ -1853,6 +1860,21 @@ mod tests {
 
     #[test]
     fn test_make_date() {
+        let null_cases = vec![
+            (Datum::Null, Datum::Null),
+            (Datum::I64(2014), Datum::I64(0)),
+            (Datum::I64(10000), Datum::I64(1)),
+            (Datum::I64(9999), Datum::I64(366)),
+            (Datum::I64(-1), Datum::I64(1)),
+            (Datum::I64(-4294965282), Datum::I64(1)),
+            (Datum::I64(0), Datum::I64(0)),
+            (Datum::I64(0), Datum::I64(-1)),
+            (Datum::I64(10), Datum::I64(-1)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2) in null_cases {
+            test_err_case_two_arg(&mut ctx, ScalarFuncSig::MakeDate, arg1, arg2);
+        }
         let cases = vec![
             (2014, 224234, "2627-12-07"),
             (2014, 1, "2014-01-01"),
@@ -1862,7 +1884,6 @@ mod tests {
             (8000, 705000, "9930-03-23"),
             (8001, 705000, "9931-03-24"),
         ];
-        let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
             let datetime = Time::parse_date(&mut ctx, exp).unwrap();
             test_ok_case_two_arg(
