@@ -1014,13 +1014,13 @@ impl ScalarFunc {
         let len = try_opt!(self.children[2].eval_int(ctx, row));
         let mut ulen: usize = len as usize;
         let newstr = try_opt!(self.children[3].eval_string(ctx, row));
-        let mut ret: Vec<u8> = Vec::new();
         if pos < 1 || upos > s.len() {
             return Ok(Some(s));
         }
         if ulen > s.len() - upos + 1 || len < 0 {
             ulen = s.len() - upos + 1;
         }
+        let mut ret: Vec<u8> = Vec::with_capacity(newstr.len() + s.len());
         ret.extend_from_slice(&s[0..upos - 1]);
         ret.extend_from_slice(&newstr);
         ret.extend_from_slice(&s[upos + ulen - 1..]);
@@ -1553,6 +1553,11 @@ mod tests {
     #[test]
     fn test_insert() {
         let cases = vec![
+            ("hello, world!", 1, 0, "asd", "asdhello, world!"),
+            ("hello, world!", 0, -1, "asd", "hello, world!"),
+            ("hello, world!", 0, 0, "asd", "hello, world!"),
+            ("hello, world!", -1, 0, "asd", "hello, world!"),
+            ("hello, world!", 1, -1, "asd", "asd"),
             ("hello, world!", 1, 1, "asd", "asdello, world!"),
             ("hello, world!", 1, 3, "asd", "asdlo, world!"),
             ("hello, world!", 2, 2, "asd", "hasdlo, world!"),
