@@ -2300,7 +2300,7 @@ impl<S: Snapshot> Apply<S> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
         APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
-        APPLY_PENDING_MSGS_COUNTER.inc_by(entries.len());
+        APPLY_PENDING_MSGS_COUNTER.inc_by(entries.len() as i64);
         Apply {
             peer_id,
             region_id,
