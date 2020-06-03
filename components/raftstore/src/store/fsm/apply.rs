@@ -697,18 +697,6 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<E>>,
-    message_count: i64,
-}
-
-impl<E> Drop for YieldState<E>
-where
-    E: KvEngine,
-{
-    fn drop(&mut self) {
-        if self.message_count > 0 {
-            APPLY_PENDING_MSGS_COUNTER.inc_by(self.message_count);
-        }
-    }
 }
 
 impl<E> Debug for YieldState<E>
@@ -889,7 +877,6 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        message_count: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -2313,6 +2300,7 @@ impl<S: Snapshot> Apply<S> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
         APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
+         APPLY_PENDING_MSGS_COUNTER.inc_by(entries.len());
         Apply {
             peer_id,
             region_id,
@@ -2801,8 +2789,7 @@ where
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
                 // or has been written too much data.
-                s.message_count += state.pending_msgs.len() as i64;
-                s.pending_msgs = state.pending_msgs.drain(..).collect();
+                s.pending_msgs = state.pending_msgs;
                 return;
             }
         }
@@ -2998,9 +2985,7 @@ where
                     }
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
-                        let pending_msgs: Vec<Msg<E>> = drainer.collect();
-                        state.message_count += pending_msgs.len() as i64;
-                        state.pending_msgs = pending_msgs;
+                        state.pending_msgs = drainer.collect();
                         break;
                     }
                 }
