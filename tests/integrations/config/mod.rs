@@ -63,6 +63,7 @@ fn test_serde_custom_tikv_config() {
         labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
+        advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
@@ -192,6 +193,7 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
+        dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
     };
