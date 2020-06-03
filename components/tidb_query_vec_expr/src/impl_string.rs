@@ -479,7 +479,7 @@ pub fn substring_index(
 ) -> Result<Option<Bytes>> {
     if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
         let count = *count;
-        if count == 0 || s.len() == 0 || delim.len() == 0 {
+        if count == 0 || s.is_empty() || delim.is_empty() {
             return Ok(Some(Vec::new()));
         }
         let finder = if count > 0 {
