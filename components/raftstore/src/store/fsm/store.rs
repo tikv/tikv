@@ -1505,7 +1505,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let (can_destroy, merge_to_this_peer) = maybe_destroy_source(
                 meta,
                 region_id,
-                msg.get_to_peer().get_id(),
+                target.get_id(),
                 exist_region.get_id(),
                 msg.get_region_epoch().to_owned(),
             );
@@ -1513,7 +1513,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 if !merge_to_this_peer {
                     regions_to_destroy.push(exist_region.get_id());
                 } else {
-                    // TODO, it shouldn't happen because all target peer should exist during merging
+                    error!(
+                        "A new peer has a merge source peer";
+                        "region_id" => region_id,
+                        "peer_id" => target.get_id(),
+                        "source_region" => ?exist_region,
+                    );
+                    if self.ctx.cfg.dev_assert {
+                        panic!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                    }
                 }
                 continue;
             }

@@ -1041,9 +1041,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     // to destroy itself
                     let mut meta = self.ctx.store_meta.lock().unwrap();
                     // The `need_atomic` flag must be true
-                    assert!(
-                        *meta.destroyed_region_for_snap.get(&region_id).unwrap(),
-                    );
+                    assert!(*meta.destroyed_region_for_snap.get(&region_id).unwrap());
 
                     let target_region_id = *meta.targets_map.get(&region_id).unwrap();
                     let is_ready = meta
