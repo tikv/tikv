@@ -672,6 +672,13 @@ fn generate_metadata_type_checker(
     }
 }
 
+fn is_ref_type(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => x.to_string() == "Json" || x.to_string() == "Bytes",
+        None => false
+    }
+}
+
 /// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
@@ -785,7 +792,8 @@ impl VargsRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
                     crate::function::VARG_PARAM_BUF.with(|vargs_buf| {
-                        use tidb_query_datatype::codec::data_type::Evaluable;
+                        use tidb_query_datatype::codec::data_type::{Evaluable, IntoEvaluableRef};
+
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, 0);
@@ -1098,6 +1106,12 @@ impl NormalRpnFn {
         let extract3 = extract.clone();
         let extract4 = extract.clone();
         let call_arg2 = extract.clone();
+        let extract_ref = extract
+            .clone()
+            .enumerate()
+            .filter(|(id, _)| is_ref_type(&self.arg_types[*id]))
+            .map(|(_, ident)| ident);
+        let extract_ref_2 = extract_ref.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,
@@ -1107,6 +1121,7 @@ impl NormalRpnFn {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
                 #(let (#extract2, arg) = arg.extract(0));*;
                 #(let #extract4 = #extract4.as_ref());*;
+                #(let #extract_ref_2 = #extract_ref_2.into_evaluable_ref());*;
                 #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
             },
         );
@@ -1121,12 +1136,15 @@ impl NormalRpnFn {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
+
                     #downcast_metadata
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
-                        #(let #extract3 = #extract3.as_ref().into_evaluable_ref());*;
+                        #(let #extract3 = #extract3.as_ref());*;
+                        #(let #extract_ref = #extract_ref.into_evaluable_ref());*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1687,5 +1705,21 @@ mod tests_normal {
             let expected = quote! { Bytes };
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
+    }
+
+    #[test]
+    fn test_is_ref_type() {
+        let input = quote! { Option<&A::T> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_ref_type(&type_path));
+        let input = quote! { Option<&Int> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_ref_type(&type_path));
+        let input = quote! { Option<JsonRef> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_ref_type(&type_path));
     }
 }
