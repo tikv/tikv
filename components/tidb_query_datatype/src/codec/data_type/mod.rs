@@ -244,4 +244,13 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_into_evaluable_ref() {
+        let x: Option<&Int> = Some(&1);
+        assert_eq!(x.into_evaluable_ref(), Some(&1));
+        let y = vec![1, 2, 3];
+        let x: Option<&Bytes> = Some(&y);
+        assert_eq!(x.into_evaluable_ref(), Some(vec![1, 2, 3].as_slice()));
+    }
 }
