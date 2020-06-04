@@ -1,15 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Implements SQL `LIKE`.
-//!
-//! This implementation needs refactor.
-//!
-//! 1. It is not effective. Consider target = 'aaaaaaaaaaaaaaa' and pattern = 'a%a%a%a%a%a%b'.
-//!    See https://research.swtch.com/glob
-//!
-//! 2. It should support non-binary mode (and binary mode) and do case insensitive comparing
-//!    in non-binary mode.
-
 use tidb_query_datatype::codec::collation::{Charset, Collator};
 use tidb_query_datatype::expr::Result;
 

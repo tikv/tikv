@@ -138,7 +138,7 @@ impl ChangeData for Service {
         let recv_req = stream.for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id);
+            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
             scheduler
                 .schedule(Task::Register {
                     request,
