@@ -65,12 +65,12 @@ pub fn inet6_aton(input: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn inet6_ntoa(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().and_then(|s| {
+    Ok(arg.and_then(|s| {
         if s.len() == IPV6_LENGTH {
-            let v: &[u8; 16] = s.as_slice().try_into().unwrap();
+            let v: &[u8; 16] = s.try_into().unwrap();
             Some(format!("{}", Ipv6Addr::from(*v)).into_bytes())
         } else if s.len() == IPV4_LENGTH {
-            let v: &[u8; 4] = s.as_slice().try_into().unwrap();
+            let v: &[u8; 4] = s.try_into().unwrap();
             Some(format!("{}", Ipv4Addr::from(*v)).into_bytes())
         } else {
             None

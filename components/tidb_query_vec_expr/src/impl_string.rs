@@ -16,19 +16,19 @@ const SPACE: u8 = 0o40u8;
 #[rpn_fn]
 #[inline]
 pub fn bin(num: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(num.as_ref().map(|i| Bytes::from(format!("{:b}", i))))
+    Ok(num.map(|i| Bytes::from(format!("{:b}", i))))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn oct_int(num: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(num.as_ref().map(|i| Bytes::from(format!("{:o}", i))))
+    Ok(num.map(|i| Bytes::from(format!("{:o}", i))))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn length(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
+    Ok(arg.map(|bytes| bytes.len() as i64))
 }
 
 #[rpn_fn]
@@ -52,7 +52,7 @@ pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn bit_length(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
+    Ok(arg.map(|bytes| bytes.len() as i64 * 8))
 }
 
 #[rpn_fn(varg, min_args = 1)]
@@ -75,10 +75,7 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
         let rest = &args[1..];
         Ok(Some(
-            rest.iter()
-                .filter_map(|x| x.as_ref().map(|inner| inner.as_slice()))
-                .collect::<Vec<&[u8]>>()
-                .join::<&[u8]>(sep.as_ref()),
+            rest.iter().filter_map(|x| x.clone()).collect::<Vec<&[u8]>>().join::<&[u8]>(sep),
         ))
     } else {
         Ok(None)
@@ -88,7 +85,7 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         if bytes.is_empty() {
             0
         } else {
@@ -100,7 +97,7 @@ pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
 #[rpn_fn]
 #[inline]
 pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         let s = String::from_utf8_lossy(bytes);
         s.chars().rev().collect::<String>().into_bytes()
     }))
@@ -109,13 +106,13 @@ pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn hex_int_arg(arg: Option<&Int>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|i| format!("{:X}", i).into_bytes()))
+    Ok(arg.map(|i| format!("{:X}", i).into_bytes()))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         let pos = bytes.iter().position(|&x| x != SPACE);
         if let Some(i) = pos {
             bytes[i..].to_vec()
@@ -128,7 +125,7 @@ pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         let pos = bytes.iter().rposition(|&x| x != SPACE);
         if let Some(i) = pos {
             bytes[..=i].to_vec()
@@ -237,7 +234,7 @@ pub fn replace(
     Ok(match (s, from_str, to_str) {
         (Some(s), Some(from_str), Some(to_str)) => {
             if from_str.is_empty() {
-                return Ok(Some(s.clone()));
+                return Ok(Some(s.to_vec()));
             }
             let mut dest = Vec::with_capacity(s.len());
             let mut last = 0;
@@ -349,7 +346,7 @@ pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Byt
 #[rpn_fn]
 #[inline]
 pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match arg.as_ref() {
+    match arg {
         Some(bytes) => match str::from_utf8(bytes) {
             Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
             Err(err) => Err(box_err!("invalid input value: {:?}", err)),
@@ -361,13 +358,13 @@ pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn upper(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|b| b.to_vec()))
+    Ok(arg.map(|b| b.to_vec()))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn hex_str_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
+    Ok(arg.map(|b| hex::encode_upper(b).into_bytes()))
 }
 
 #[rpn_fn]
@@ -378,7 +375,7 @@ pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Op
         _ => return Ok(None),
     };
 
-    Ok(twoway::find_bytes(s.as_slice(), substr.as_slice())
+    Ok(twoway::find_bytes(s, substr)
         .map(|i| 1 + i as i64)
         .or(Some(0)))
 }
@@ -386,7 +383,7 @@ pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Op
 #[rpn_fn]
 #[inline]
 pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         let mut s = bytes.to_vec();
         s.reverse();
         s
@@ -523,7 +520,7 @@ pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Op
 #[rpn_fn]
 #[inline]
 pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|bytes| {
+    Ok(arg.map(|bytes| {
         let l_pos = bytes.iter().position(|&x| x != SPACE);
         if let Some(i) = l_pos {
             let r_pos = bytes.iter().rposition(|&x| x != SPACE);
@@ -558,13 +555,13 @@ pub fn trim_3_args(
 #[rpn_fn]
 #[inline]
 pub fn char_length(bs: Option<BytesRef>) -> Result<Option<Int>> {
-    Ok(bs.as_ref().map(|b| b.len() as i64))
+    Ok(bs.map(|b| b.len() as i64))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
-    match bs.as_ref() {
+    match bs {
         Some(bytes) => match str::from_utf8(bytes) {
             Ok(s) => Ok(Some(s.chars().count() as i64)),
             Err(err) => Err(box_err!("invalid input value: {:?}", err)),
@@ -576,7 +573,7 @@ pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match bs.as_ref() {
+    match bs {
         Some(bytes) => {
             if bytes.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
                 return Ok(Some(Vec::new()));
@@ -599,7 +596,7 @@ pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match bs.as_ref() {
+    match bs {
         Some(bytes) => {
             let input_copy = strip_whitespace(bytes);
             let will_overflow = input_copy
