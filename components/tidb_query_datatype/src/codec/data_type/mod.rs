@@ -70,48 +70,12 @@ pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
 /// A trait of all types that can be used during evaluation (eval type).
 pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
-
-    /// Borrows this concrete type from a `ScalarValue` in the same type;
-    /// panics if the varient mismatches.
-    fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
-
-    /// Borrows this concrete type from a `ScalarValueRef` in the same type;
-    /// panics if the varient mismatches.
-    fn borrow_scalar_value_ref<'a>(v: &'a ScalarValueRef<'a>) -> &'a Option<Self>;
-
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
-    fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
-
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
-    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
 }
 
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
         impl Evaluable for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
-
-            #[inline]
-            fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
-                v.as_ref()
-            }
-
-            #[inline]
-            fn borrow_scalar_value_ref<'a>(v: &'a ScalarValueRef<'a>) -> &'a Option<Self> {
-                v.as_ref()
-            }
-
-            #[inline]
-            fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
-                v.as_ref()
-            }
-
-            #[inline]
-            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
-                VectorValue::from(vec)
-            }
         }
     };
 }
@@ -154,6 +118,83 @@ impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
 impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
     fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
         self.map(|x| x.as_ref())
+    }
+}
+
+pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
+    const EVAL_TYPE: EvalType;
+
+    /// Borrows this concrete type from a `ScalarValue` in the same type;
+    /// panics if the varient mismatches.
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self>;
+
+    /// Borrows this concrete type from a `ScalarValueRef` in the same type;
+    /// panics if the varient mismatches.
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self>;
+}
+
+macro_rules! impl_evaluable_ref {
+    ($ty:tt) => {
+        impl<'a> EvaluableRef<'a> for &'a $ty {
+            const EVAL_TYPE: EvalType = EvalType::$ty;
+        
+            fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+                match v {
+                    ScalarValue::$ty(x) => x.as_ref(),
+                    _ => unimplemented!(),
+                }
+            }
+        
+            fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+                match v {
+                    ScalarValueRef::$ty(x) => x,
+                    _ => unimplemented!(),
+                }
+            }
+        }
+    };
+}
+
+
+impl_evaluable_ref! { Int }
+impl_evaluable_ref! { Real }
+impl_evaluable_ref! { Decimal }
+impl_evaluable_ref! { DateTime }
+impl_evaluable_ref! { Duration }
+
+impl<'a> EvaluableRef<'a> for BytesRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Bytes;
+
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Bytes(x) => x.as_ref().map(|x| x.as_slice()),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Bytes(x) => x,
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl<'a> EvaluableRef<'a> for JsonRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Json;
+
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Json(x) => x.as_ref().map(|x| x.as_ref()),
+            _ => unimplemented!(),
+        }
+    }
+
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Json(x) => x,
+            _ => unimplemented!(),
+        }
     }
 }
 
