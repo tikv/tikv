@@ -382,16 +382,16 @@ enum RpnFnRefEvaluableType {
 
 impl RpnFnRefEvaluableType {
     /// Parse type like `JsonRef`
-    fn parse_type_path(input: parse::ParseStream<'_>) -> Result<(Self, parse::ParseStream<'_>)> {
+    fn parse_type_path(input: parse::ParseStream<'_>) -> Result<Self> {
         let eval_type = input.parse::<TypePath>()?;
-        Ok((Self::Type(eval_type), input))
+        Ok(Self::Type(eval_type))
     }
 
     /// Parse type like `&T`
-    fn parse_type_ref(input: parse::ParseStream<'_>) -> Result<(Self, parse::ParseStream<'_>)> {
+    fn parse_type_ref(input: parse::ParseStream<'_>) -> Result<Self> {
         input.parse::<Token![&]>()?;
         let eval_type = input.parse::<TypePath>()?;
-        Ok((Self::Ref(eval_type), input))
+        Ok(Self::Ref(eval_type))
     }
 
     /// Transform new `JsonRef`-like style type to old `&Json` type.
@@ -421,8 +421,12 @@ impl parse::Parse for RpnFnRefEvaluableType {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         input.parse::<self::kw::Option>()?;
         input.parse::<Token![<]>()?;
-        let (eval_type, input) = Self::parse_type_path(input.clone())
-            .or_else(|_| Self::parse_type_ref(input.clone()))?;
+        let lookahead = input.lookahead1();
+        let eval_type = if lookahead.peek(Token![&]) {
+            Self::parse_type_ref(input)?
+        } else {
+            Self::parse_type_path(input)?
+        };
         input.parse::<Token![>]>()?;
         Ok(eval_type)
     }
@@ -675,7 +679,7 @@ fn generate_metadata_type_checker(
 /// After full migration, this function should be deprecated.
 fn is_ref_type(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => x.to_string() == "Json" || x.to_string() == "Bytes",
+        Some(x) => *x == "Json" || *x == "Bytes",
         None => false,
     }
 }
@@ -686,7 +690,7 @@ fn is_ref_type(ty: &TypePath) -> bool {
 /// After full migration, this function should be deprecated.
 fn is_json(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => x.to_string() == "Json",
+        Some(x) => *x == "Json",
         None => false,
     }
 }
@@ -697,7 +701,7 @@ fn is_json(ty: &TypePath) -> bool {
 /// After full migration, this function should be deprecated.
 fn is_bytes(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => x.to_string() == "Bytes",
+        Some(x) => *x == "Bytes",
         None => false,
     }
 }
@@ -708,9 +712,9 @@ fn is_bytes(ty: &TypePath) -> bool {
 fn get_vargs_buf(ty: &TypePath) -> TokenStream {
     match ty.path.get_ident() {
         Some(x) => {
-            if x.to_string() == "Json" {
+            if *x == "Json" {
                 quote! { VARG_PARAM_BUF_JSON_REF }
-            } else if x.to_string() == "Bytes" {
+            } else if *x == "Bytes" {
                 quote! { VARG_PARAM_BUF_BYTES_REF }
             } else {
                 quote! { VARG_PARAM_BUF }
@@ -729,9 +733,9 @@ fn get_vargs_buf(ty: &TypePath) -> TokenStream {
 fn get_vectoried_type(ty: &TypePath) -> TokenStream {
     match ty.path.get_ident() {
         Some(x) => {
-            if x.to_string() == "Json" {
+            if *x == "Json" {
                 quote! { JsonRef }
-            } else if x.to_string() == "Bytes" {
+            } else if *x == "Bytes" {
                 quote! { BytesRef }
             } else {
                 quote! { &#ty }
