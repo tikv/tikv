@@ -564,8 +564,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut year = try_opt!(self.children[0].eval_int(ctx, row)) as i64;
-        let mut day = try_opt!(self.children[1].eval_int(ctx, row)) as i64;
+        let mut year = try_opt!(self.children[0].eval_int(ctx, row));
+        let mut day = try_opt!(self.children[1].eval_int(ctx, row));
         if day <= 0 || year < 0 || year > 9999 {
             return Ok(None);
         }
