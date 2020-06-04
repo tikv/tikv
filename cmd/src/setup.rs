@@ -186,8 +186,8 @@ pub fn initial_logger(config: &TiKvConfig) {
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
-    tikv_util::metrics::monitor_memory()
-        .unwrap_or_else(|e| fatal!("failed to start memory monitor: {}", e));
+    tikv_util::metrics::monitor_process()
+        .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
     tikv_util::metrics::monitor_allocator_stats("tikv")
