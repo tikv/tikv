@@ -443,37 +443,33 @@ impl Peer {
         info!(
             "switch replication mode";
             "version" => self.replication_mode_version,
-            "state" => self.dr_auto_sync_state,
+            "state" => ?self.dr_auto_sync_state,
             "region_id" => self.region_id,
             "peer_id" => self.peer.id
         );
     }
 
-    fn check_wait_sync_deadline(
-        &mut self,
-        raft_group: &mut RawNode,
-        check_consistent_res: Option<bool>,
-    ) {
-        if raft_group.raft.group_commit() || self.wait_sync_deadline.is_none() {
+    fn check_wait_sync_deadline(&mut self, check_consistent_res: Option<bool>) {
+        if self.raft_group.raft.group_commit() || self.wait_sync_deadline.is_none() {
             // The required replication state already reached.
             return;
         }
         if Instant::now() >= self.wait_sync_deadline.unwrap() || check_consistent_res == Some(true)
         {
             self.wait_sync_deadline = None;
-            raft_group.raft.enable_group_commit(true);
+            self.raft_group.raft.enable_group_commit(true);
         }
     }
 
-    fn check_group_commit_consistent(&mut self, raft_group: &mut RawNode) -> Option<bool> {
-        let original = raft_group.raft.group_commit();
+    fn check_group_commit_consistent(&mut self) -> Option<bool> {
+        let original = self.raft_group.raft.group_commit();
         let res = {
             // Hack: to check groups consistent we need to enable group commit first
-            // or Some(true) will never return
-            raft_group.raft.enable_group_commit(true);
-            raft_group.raft.check_group_commit_consistent()
+            // otherwise Some(true) will never return
+            self.raft_group.raft.enable_group_commit(true);
+            self.raft_group.raft.check_group_commit_consistent()
         };
-        raft_group.raft.enable_group_commit(original);
+        self.raft_group.raft.enable_group_commit(original);
         res
     }
 
@@ -2671,8 +2667,8 @@ impl Peer {
         status.state_id = self.replication_mode_version;
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
-                let res = self.check_group_commit_consistent(&mut self.raft_group);
-                self.check_wait_sync_deadline(&mut self.raft_group, res);
+                let res = self.check_group_commit_consistent();
+                self.check_wait_sync_deadline(res);
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_index_term() >= self.term() {

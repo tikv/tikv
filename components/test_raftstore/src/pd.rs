@@ -1026,12 +1026,16 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
+    pub fn switch_replication_mode(&self, state: DrAutoSyncState, wait_sync_timeout: Option<u64>) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state);
+        match wait_sync_timeout {
+            Some(t) => dr.set_wait_sync_timeout_hint(t as i32),
+            None => dr.clear_wait_sync_timeout_hint(),
+        }
     }
 
     pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
