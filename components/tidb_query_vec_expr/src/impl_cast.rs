@@ -3383,7 +3383,7 @@ mod tests {
         test_as_string_helper(cs, cast_any_as_string::<Int>, "cast_any_as_string::<Int>");
     }
 
-    fn helper_get_cs_ref<U, V: Clone, W: Clone>(cs: &Vec<(U, V, W)>) -> Vec<(&U, V, W)> {
+    fn helper_get_cs_ref<U, V: Clone, W: Clone>(cs: &[(U, V, W)]) -> Vec<(&U, V, W)> {
         cs.iter()
             .map(|(u, v, w)| (u, v.clone(), w.clone()))
             .collect()
