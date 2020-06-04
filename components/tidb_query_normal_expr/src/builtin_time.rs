@@ -566,7 +566,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let mut year = try_opt!(self.children[0].eval_int(ctx, row));
         let mut day = try_opt!(self.children[1].eval_int(ctx, row));
-        if day <= 0 || year < 0 || year > 9999 {
+        if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
             return Ok(None);
         }
         if year < 70 {
@@ -580,9 +580,6 @@ impl ScalarFunc {
         let d400 = year / 400;
         let leap = d4 - d100 + d400;
         day = day + leap + year * 365 + 365;
-        if day > 366 * 9999 || day <= 0 {
-            return Ok(None);
-        }
         let days = day as u32;
         let ret = Time::from_days(ctx, days)?;
         if ret.year() > 9999 || ret.is_zero() {
@@ -1870,12 +1867,22 @@ mod tests {
             (Datum::I64(0), Datum::I64(0)),
             (Datum::I64(0), Datum::I64(-1)),
             (Datum::I64(10), Datum::I64(-1)),
+            (Datum::I64(0), Datum::I64(9223372036854775807)),
+            (Datum::I64(100), Datum::I64(9999 * 366)),
+            (Datum::I64(9999), Datum::I64(9999 * 366)),
+            (Datum::I64(100), Datum::I64(3615901)),
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2) in null_cases {
             test_err_case_two_arg(&mut ctx, ScalarFuncSig::MakeDate, arg1, arg2);
         }
         let cases = vec![
+            (0, 1, "2000-01-01"),
+            (70, 1, "1970-01-01"),
+            (71, 1, "1971-01-01"),
+            (99, 1, "0100-01-01"),
+            (100, 1, "0100-01-01"),
+            (101, 1, "0101-01-01"),
             (2014, 224234, "2627-12-07"),
             (2014, 1, "2014-01-01"),
             (7900, 705000, "9830-03-23"),
@@ -1883,6 +1890,7 @@ mod tests {
             (7904, 705000, "9834-03-22"),
             (8000, 705000, "9930-03-23"),
             (8001, 705000, "9931-03-24"),
+            (100, 3615900, "9999-12-31"),
         ];
         for (arg1, arg2, exp) in cases {
             let datetime = Time::parse_date(&mut ctx, exp).unwrap();
