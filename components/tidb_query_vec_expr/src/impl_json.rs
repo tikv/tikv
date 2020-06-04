@@ -13,7 +13,7 @@ use tidb_query_datatype::codec::mysql::json::*;
 #[inline]
 fn json_depth(arg: Option<JsonRef>) -> Result<Option<i64>> {
     match arg {
-        Some(j) => Ok(Some(j.as_ref().depth()?)),
+        Some(j) => Ok(Some(j.depth()?)),
         None => Ok(None),
     }
 }
@@ -23,7 +23,7 @@ fn json_depth(arg: Option<JsonRef>) -> Result<Option<i64>> {
 fn json_type(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
     Ok(arg
         .as_ref()
-        .map(|json_arg| Bytes::from(json_arg.as_ref().json_type())))
+        .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
@@ -61,8 +61,10 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     for chunk in args[1..].chunks(2) {
         let path: &Option<Bytes> = chunk[0].as_ref();
         let value: &Option<Json> = chunk[1].as_ref();
+        let path = path.as_ref();
+        let path = path.into_evaluable_ref();
 
-        path_expr_list.push(try_opt!(parse_json_path(path.as_ref())));
+        path_expr_list.push(try_opt!(parse_json_path(path)));
 
         let value = value
             .as_ref()
@@ -152,12 +154,12 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     if args[0].is_none() {
         return Ok(None);
     }
-    let mut jsons = vec![];
+    let mut jsons: Vec<JsonRef> = vec![];
     let json_none = Json::none()?;
     for arg in args {
         match arg {
             None => jsons.push(json_none.as_ref()),
-            Some(j) => jsons.push(j.as_ref()),
+            Some(j) => jsons.push(j.clone()),
         }
     }
     Ok(Some(Json::merge(jsons)?))
@@ -167,7 +169,7 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
 #[inline]
 fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.as_ref().unquote()?)))
+        Ok(Some(Bytes::from(json_arg.unquote()?)))
     })
 }
 
@@ -254,8 +256,10 @@ fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpres
     let mut path_expr_list = Vec::with_capacity(args.len());
     for arg in args {
         let json_path: &Option<Bytes> = arg.as_ref();
+        let json_path = json_path.as_ref();
+        let json_path = json_path.into_evaluable_ref();
 
-        path_expr_list.push(try_opt!(parse_json_path(json_path.as_ref())));
+        path_expr_list.push(try_opt!(parse_json_path(json_path)));
     }
     Ok(Some(path_expr_list))
 }
