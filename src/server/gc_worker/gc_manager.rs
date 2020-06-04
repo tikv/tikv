@@ -302,6 +302,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     }
 
     fn run_impl(&mut self) -> GcManagerResult<()> {
+        info!("compaction_filter run impl is called");
         loop {
             AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                 .with_label_values(&[PROCESS_TYPE_GC])
@@ -311,6 +312,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 .set(0);
 
             set_status_metrics(GcManagerState::Idle);
+
+            info!("compaction_filter wait_for_next_safe_point is called");
             self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.

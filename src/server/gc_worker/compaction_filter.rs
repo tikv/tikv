@@ -47,16 +47,19 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
+        info!("create_compaction_filter is called");
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
             None => return std::ptr::null_mut(),
         };
         if !gc_context.cfg_tracker.value().enable_compaction_filter {
+            info!("compaction filter is disabled");
             return std::ptr::null_mut();
         }
         if gc_context.safe_point.load(Ordering::Relaxed) == 0 {
             // Safe point has not been initialized yet.
+            info!("safe point is 0");
             return std::ptr::null_mut();
         }
 
