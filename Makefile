@@ -286,7 +286,7 @@ clippy: pre-clippy
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null;\
 	done
-	@for pkg in "fuzz" do \
+	@for pkg in "fuzz"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
