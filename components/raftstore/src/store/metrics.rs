@@ -10,7 +10,6 @@ make_auto_flush_static_metric! {
         pre_and_post_process,
         write_thread_wait,
         db_mutex_lock_nanos,
-        report_time,
     }
     pub label_enum ProposalType {
         all,
