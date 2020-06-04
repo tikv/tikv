@@ -24,9 +24,6 @@ extern crate slog_global;
 #[macro_use]
 extern crate serde_derive;
 
-#[cfg(test)]
-extern crate test;
-
 mod cf_handle;
 pub use crate::cf_handle::*;
 mod cf_names;
