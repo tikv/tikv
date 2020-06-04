@@ -2,6 +2,25 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.1.2]
+### Bug Fixes
++ Fix the issue of backup fails with DefaultNotFound error [#7938](https://github.com/tikv/tikv/pull/7938)
++ Improved robustness with S3 and GCS storage, automatically retry on transient network error [#7965](https://github.com/tikv/tikv/pull/7965)
+
+## [3.1.1]
+### New Features
++ Improve the performance when many conflicts and the BatchRollback condition exist in optimistic transactions [#7605](https://github.com/tikv/tikv/pull/7605)
++ Fix the issue of decreased performance that occurs because the pessimistic lock waiter is frequently awakened when many conflicts exist in pessimistic transactions [#7584](https://github.com/tikv/tikv/pull/7584)
+### Bugfixes
++ Fix the issue that the node cannot be deleted correctly after the isolation recovery in some cases [#7703](https://github.com/tikv/tikv/pull/7703)
++ Fix the issue of data loss during network isolation caused by the Region Merge operation [#7679](https://github.com/tikv/tikv/pull/7679)
++ Fix the issue that learner cannot be removed correctly in some cases [#7598](https://github.com/tikv/tikv/pull/7598)
++ Fix the issue that the scanning result of raw key-value pairs might be out of order [#7597](https://github.com/tikv/tikv/pull/7597)
++ Fix the issue of reconnection when the batch of Raft messages is too large [#7542](https://github.com/tikv/tikv/pull/7542)
++ Fix the issue of gRPC thread deadlock caused by the empty request [#7538](https://github.com/tikv/tikv/pull/7538)
++ Fix the issue that the processing logic of restarting the learner is incorrect during the merge process [#7457](https://github.com/tikv/tikv/pull/7457)
++ Fix the issue that repeated requests on the cleanup of lock might destroy the atomicity of the transaction [#7388](https://github.com/tikv/tikv/pull/7388)
+
 ## [3.1.0]
 ### Bug Fixes
 + Fix the panic issue caused by replica read [#7418](https://github.com/tikv/tikv/pull/7418) [#7369](https://github.com/tikv/tikv/pull/7369)
