@@ -440,6 +440,20 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
     Ok(format!("{}", path.display()))
 }
 
+pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
+    let mut path = Path::new(path).canonicalize()?;
+    if path.is_file() {
+        return Ok(format!("{}", path.display()));
+    }
+    if !filename.is_empty() {
+        path = path.join(Path::new(filename));
+    }
+    if path.is_dir() {
+        return Err(format!("{} is a directory!", path.display()).into());
+    }
+    Ok(format!("{}", path.display()))
+}
+
 pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
     if !path.is_empty() {
         let p = Path::new(path);
