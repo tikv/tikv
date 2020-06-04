@@ -273,6 +273,9 @@ pub struct Peer {
     /// A flag that caches sync state. It's set to true when required replication
     /// state is reached for current region.
     pub replication_sync: bool,
+    /// The deadline to forcibly switch to sync replication mode if the required
+    /// replication state is not reached.
+    wait_sync_deadline: Option<Instant>,
 
     /// The known newest conf version and its corresponding peer list
     /// Send to these peers to check whether itself is stale.
@@ -359,6 +362,7 @@ impl Peer {
             replication_mode_version: 0,
             dr_auto_sync_state: DrAutoSyncState::Async,
             replication_sync: false,
+            wait_sync_deadline: None,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
         };
@@ -396,7 +400,7 @@ impl Peer {
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let mut guard = state.lock().unwrap();
-        let enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
+        let mut enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
             self.replication_mode_version = 0;
             self.dr_auto_sync_state = DrAutoSyncState::Async;
             false
@@ -406,6 +410,19 @@ impl Peer {
             guard.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async
         };
         if enable_group_commit {
+            if guard.status().get_dr_auto_sync().get_state() == DrAutoSyncState::SyncRecover {
+                let timeout = guard
+                    .status()
+                    .get_dr_auto_sync()
+                    .get_wait_sync_timeout_hint();
+                // If we can't reach groups consistent immediately, let's delay the time
+                // to enable group commit
+                if timeout > 0 && self.check_group_commit_consistent() != Some(true) {
+                    self.wait_sync_deadline =
+                        Some(Instant::now() + Duration::from_secs(timeout as u64));
+                    enable_group_commit = false;
+                }
+            }
             let ids = mem::replace(
                 guard.calculate_commit_group(
                     self.replication_mode_version,
@@ -418,11 +435,46 @@ impl Peer {
             self.raft_group.raft.assign_commit_groups(&ids);
         } else {
             drop(guard);
+            self.wait_sync_deadline = None;
         }
         self.raft_group
             .raft
             .enable_group_commit(enable_group_commit);
-        info!("switch replication mode"; "version" => self.replication_mode_version, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        info!(
+            "switch replication mode";
+            "version" => self.replication_mode_version,
+            "state" => self.dr_auto_sync_state,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.id
+        );
+    }
+
+    fn check_wait_sync_deadline(
+        &mut self,
+        raft_group: &mut RawNode,
+        check_consistent_res: Option<bool>,
+    ) {
+        if raft_group.raft.group_commit() || self.wait_sync_deadline.is_none() {
+            // The required replication state already reached.
+            return;
+        }
+        if Instant::now() >= self.wait_sync_deadline.unwrap() || check_consistent_res == Some(true)
+        {
+            self.wait_sync_deadline = None;
+            raft_group.raft.enable_group_commit(true);
+        }
+    }
+
+    fn check_group_commit_consistent(&mut self, raft_group: &mut RawNode) -> Option<bool> {
+        let original = raft_group.raft.group_commit();
+        let res = {
+            // Hack: to check groups consistent we need to enable group commit first
+            // or Some(true) will never return
+            raft_group.raft.enable_group_commit(true);
+            raft_group.raft.check_group_commit_consistent()
+        };
+        raft_group.raft.enable_group_commit(original);
+        res
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -2619,7 +2671,8 @@ impl Peer {
         status.state_id = self.replication_mode_version;
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
-                let res = self.raft_group.raft.check_group_commit_consistent();
+                let res = self.check_group_commit_consistent(&mut self.raft_group);
+                self.check_wait_sync_deadline(&mut self.raft_group, res);
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_index_term() >= self.term() {
