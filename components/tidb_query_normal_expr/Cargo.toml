@@ -25,7 +25,7 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
 tidb_query_shared_expr = { path = "../tidb_query_shared_expr" }
 tikv_util = { path = "../tikv_util" }
-tipb = { git = "https://github.com/renkai/tipb.git", branch = "trace_enum",  default-features = false }
+tipb = { git = "https://github.com/renkai/tipb.git",  default-features = false }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 
