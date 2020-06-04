@@ -4650,7 +4650,6 @@ dependencies = [
  "url",
  "utime",
  "yatp",
- "zeroize",
 ]
 
 [[package]]
