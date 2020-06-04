@@ -126,7 +126,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         } else {
-            let default_raftdb_info_log_path = if !config.raft_store.raftdb_path.is_empty() {
+            if !config.raft_store.raftdb_path.is_empty() {
                 make_engine_log_path(
                     &config.raft_store.raftdb_path.clone(),
                     "",
@@ -134,8 +134,7 @@ pub fn initial_logger(config: &TiKvConfig) {
                 )
             } else {
                 make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
-            };
-            default_raftdb_info_log_path
+            }
         };
         let rocksdb_log_drainer = logger::file_drainer(
             &rocksdb_info_log_path,
