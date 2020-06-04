@@ -473,9 +473,9 @@ pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn substring_index(
-    s: &Option<Bytes>,
-    delim: &Option<Bytes>,
-    count: &Option<Int>,
+    s: Option<&Bytes>,
+    delim: Option<&Bytes>,
+    count: Option<&Int>,
 ) -> Result<Option<Bytes>> {
     if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
         let count = *count;
