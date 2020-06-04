@@ -22,8 +22,10 @@ where
 
 #[rpn_fn]
 #[inline]
-pub fn compare_bytes<C: Collator, F: CmpOp>(lhs: Option<BytesRef>, rhs: Option<BytesRef>) -> Result<Option<i64>>
-{
+pub fn compare_bytes<C: Collator, F: CmpOp>(
+    lhs: Option<BytesRef>,
+    rhs: Option<BytesRef>,
+) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
         (None, None) => F::compare_null(),
         (None, _) | (_, None) => F::compare_partial_null(),

@@ -17,7 +17,7 @@ pub fn like<C: Collator>(
     match (target, pattern, escape) {
         (Some(target), Some(pattern), Some(escape)) => {
             Ok(Some(
-                like::like::<C>(target, pattern, *escape as u32)? as i64,
+                like::like::<C>(target, pattern, *escape as u32)? as i64
             ))
         }
         _ => Ok(None),

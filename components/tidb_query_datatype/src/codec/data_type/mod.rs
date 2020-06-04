@@ -8,7 +8,7 @@ pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
-pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTime, json::JsonRef};
+pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -136,7 +136,7 @@ macro_rules! impl_into_evaluable_ref {
                 self
             }
         }
-    }
+    };
 }
 
 impl_into_evaluable_ref! { Int }

@@ -453,7 +453,7 @@ impl ToInt for Json {
     }
 }
 
-impl <'a> ToInt for JsonRef<'a> {
+impl<'a> ToInt for JsonRef<'a> {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {

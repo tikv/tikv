@@ -75,7 +75,10 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
         let rest = &args[1..];
         Ok(Some(
-            rest.iter().filter_map(|x| x.clone()).collect::<Vec<&[u8]>>().join::<&[u8]>(sep),
+            rest.iter()
+                .filter_map(|x| *x)
+                .collect::<Vec<&[u8]>>()
+                .join::<&[u8]>(sep),
         ))
     } else {
         Ok(None)
@@ -137,7 +140,11 @@ pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn lpad(arg: Option<BytesRef>, len: Option<&Int>, pad: Option<BytesRef>) -> Result<Option<Bytes>> {
+pub fn lpad(
+    arg: Option<BytesRef>,
+    len: Option<&Int>,
+    pad: Option<BytesRef>,
+) -> Result<Option<Bytes>> {
     match (arg, len, pad) {
         (Some(arg), Some(len), Some(pad)) => {
             match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
@@ -203,7 +210,11 @@ pub fn lpad_utf8(
 
 #[rpn_fn]
 #[inline]
-pub fn rpad(arg: Option<BytesRef>, len: Option<&Int>, pad: Option<BytesRef>) -> Result<Option<Bytes>> {
+pub fn rpad(
+    arg: Option<BytesRef>,
+    len: Option<&Int>,
+    pad: Option<BytesRef>,
+) -> Result<Option<Bytes>> {
     match (arg, len, pad) {
         (Some(arg), Some(len), Some(pad)) => {
             match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {

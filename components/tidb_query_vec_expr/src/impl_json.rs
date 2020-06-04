@@ -159,7 +159,7 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     for arg in args {
         match arg {
             None => jsons.push(json_none.as_ref()),
-            Some(j) => jsons.push(j.clone()),
+            Some(j) => jsons.push(*j),
         }
     }
     Ok(Some(Json::merge(jsons)?))

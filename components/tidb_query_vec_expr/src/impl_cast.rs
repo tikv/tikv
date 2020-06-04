@@ -3620,7 +3620,11 @@ mod tests {
 
         let ref_cs = helper_get_cs_ref(&cs);
 
-        test_as_string_helper(ref_cs, cast_any_as_string::<Time>, "cast_any_as_string::<Time>");
+        test_as_string_helper(
+            ref_cs,
+            cast_any_as_string::<Time>,
+            "cast_any_as_string::<Time>",
+        );
     }
 
     #[test]
