@@ -60,7 +60,7 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
         fatal!("failed to create engine log dir: {}", e);
     });
     config::canonicalize_log_dir(&path, filename).unwrap_or_else(|e| {
-        fatal!("failed to canonicalize engine log dir: {}", e);
+        fatal!("failed to canonicalize engine log dir {:?}: {}", path, e);
     })
 }
 
@@ -123,14 +123,19 @@ pub fn initial_logger(config: &TiKvConfig) {
         } else {
             make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         };
-        let raftdb_info_log_path = if config.raftdb.info_log_dir.is_empty() {
+        let default_raftdb_info_log_path = if !config.raft_store.raftdb_path.is_empty() {
             make_engine_log_path(
                 &config.raft_store.raftdb_path.clone(),
                 "",
                 DEFAULT_RAFTDB_LOG_FILE,
             )
         } else {
+            make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
+        };
+        let raftdb_info_log_path = if config.raftdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
+        } else {
+            default_raftdb_info_log_path
         };
         let rocksdb_log_drainer = logger::file_drainer(
             &rocksdb_info_log_path,
