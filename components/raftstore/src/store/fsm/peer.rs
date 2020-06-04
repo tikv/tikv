@@ -1086,6 +1086,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .peer
                     .maybe_add_want_rollback_merge_peer(msg.get_from_peer().get_id(), &extra_msg);
             }
+            _ => unreachable!(),
         }
     }
 

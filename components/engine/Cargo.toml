@@ -42,7 +42,7 @@ time = "0.1"
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-branch = "tikv-4.x"
+branch = "master"
 
 [dev-dependencies]
 tempfile = "3.0"

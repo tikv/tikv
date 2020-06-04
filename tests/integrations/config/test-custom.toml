@@ -497,10 +497,10 @@ stream-channel-window = 123
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
+enable-compaction-filter = true
 
 [pessimistic-txn]
 enabled = false
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatible
 pipelined = true
-

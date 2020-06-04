@@ -1079,7 +1079,7 @@ macro_rules! new_txn {
 mod tests {
     use super::*;
 
-    use crate::storage::kv::{Engine, TestEngineBuilder};
+    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use kvproto::kvrpcpb::Context;
@@ -1572,7 +1572,10 @@ mod tests {
         must_prewrite_lock_err(&engine, key, key, 5);
     }
 
-    fn test_gc_imp(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8]) {
+    fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
+    where
+        F: Fn(&RocksEngine, &[u8], u64),
+    {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v1, k, 5);
@@ -1613,30 +1616,43 @@ mod tests {
         // 10             Commit(PUT,5)
         // 5    x5
 
-        must_gc(&engine, k, 12);
+        gc(&engine, k, 12);
         must_get(&engine, k, 12, v1);
 
-        must_gc(&engine, k, 22);
+        gc(&engine, k, 22);
         must_get(&engine, k, 22, v2);
         must_get_none(&engine, k, 12);
 
-        must_gc(&engine, k, 32);
+        gc(&engine, k, 32);
         must_get_none(&engine, k, 22);
         must_get_none(&engine, k, 35);
 
-        must_gc(&engine, k, 60);
+        gc(&engine, k, 60);
         must_get(&engine, k, 62, v3);
     }
 
     #[test]
     fn test_gc() {
-        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4");
+        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", must_gc);
 
         let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
+        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, must_gc);
+    }
+
+    #[test]
+    fn test_gc_with_compaction_filter() {
+        use crate::server::gc_worker::gc_by_compact;
+
+        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
+
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, gc_by_compact);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {

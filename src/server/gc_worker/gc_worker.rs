@@ -3,8 +3,10 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::mpsc;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{
+    atomic::{self, AtomicU64},
+    mpsc, Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
@@ -38,7 +40,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::AutoGcConfig;
 use super::gc_manager::{GcManager, GcManagerHandle};
-use super::{Callback, Error, ErrorInner, Result};
+use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -747,9 +749,22 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
+        let safe_point = Arc::new(AtomicU64::new(0));
+        if let Some(db) = self.local_storage.clone() {
+            let safe_point = Arc::clone(&safe_point);
+            let engine = RocksEngine::from_db(db);
+            init_compaction_filter(engine, safe_point, self.config_manager.clone());
+        }
+
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GcManager::new(cfg, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(
+            cfg,
+            safe_point,
+            self.worker_scheduler.clone(),
+            self.config_manager.clone(),
+        )
+        .start()?;
         *handle = Some(new_handle);
         Ok(())
     }
@@ -757,12 +772,9 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.local_storage.take(),
+            self.local_storage.clone(),
             self.raft_store_router.take(),
-            self.config_manager
-                .0
-                .clone()
-                .tracker("gc-worker".to_owned()),
+            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
