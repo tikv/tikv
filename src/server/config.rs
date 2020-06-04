@@ -339,9 +339,9 @@ mod tests {
 
         invalid_cfg = Config::default();
         invalid_cfg.status_addr = "0.0.0.0:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
-        invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
+        invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
