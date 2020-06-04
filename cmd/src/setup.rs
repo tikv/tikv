@@ -114,27 +114,27 @@ pub fn initial_logger(config: &TiKvConfig) {
             Some(slow_log_drainer)
         };
 
-        let rocksdb_info_log_path = if config.rocksdb.info_log_dir.is_empty() {
+        let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
+            make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
+        } else {
             make_engine_log_path(
                 &config.storage.data_dir,
                 DEFAULT_ROCKSDB_SUB_DIR,
                 DEFAULT_ROCKSDB_LOG_FILE,
             )
-        } else {
-            make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
         };
-        let default_raftdb_info_log_path = if !config.raft_store.raftdb_path.is_empty() {
-            make_engine_log_path(
-                &config.raft_store.raftdb_path.clone(),
-                "",
-                DEFAULT_RAFTDB_LOG_FILE,
-            )
-        } else {
-            make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
-        };
-        let raftdb_info_log_path = if config.raftdb.info_log_dir.is_empty() {
+        let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
             make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
         } else {
+            let default_raftdb_info_log_path = if !config.raft_store.raftdb_path.is_empty() {
+                make_engine_log_path(
+                    &config.raft_store.raftdb_path.clone(),
+                    "",
+                    DEFAULT_RAFTDB_LOG_FILE,
+                )
+            } else {
+                make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
+            };
             default_raftdb_info_log_path
         };
         let rocksdb_log_drainer = logger::file_drainer(
