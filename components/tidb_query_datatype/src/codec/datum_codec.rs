@@ -177,8 +177,8 @@ pub trait DatumPayloadEncoder:
     }
 
     #[inline]
-    fn write_datum_payload_json(&mut self, v: &Json) -> Result<()> {
-        self.write_json(v.as_ref()).map_err(|_| {
+    fn write_datum_payload_json(&mut self, v: JsonRef) -> Result<()> {
+        self.write_json(v).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from json".to_owned())
         })
     }
@@ -249,7 +249,7 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         self.write_datum_u64(val.to_packed_u64(ctx)?)
     }
 
-    fn write_datum_json(&mut self, val: &Json) -> Result<()> {
+    fn write_datum_json(&mut self, val: JsonRef) -> Result<()> {
         self.write_u8(datum::JSON_FLAG)?;
         self.write_datum_payload_json(val)?;
         Ok(())
@@ -303,7 +303,7 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
     }
 
     #[inline]
-    fn write_evaluable_datum_json(&mut self, val: &Json) -> Result<()> {
+    fn write_evaluable_datum_json(&mut self, val: JsonRef) -> Result<()> {
         self.write_datum_json(val)
     }
 }
