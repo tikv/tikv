@@ -467,3 +467,53 @@ fn test_read_after_peer_destroyed() {
         resp
     );
 }
+
+#[test]
+fn test_stale_read_during_merging_2() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    configure_for_merge(&mut cluster);
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+
+    cluster.run();
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v");
+    }
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let left_peer_1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
+    let right_peer_3 = find_peer(&right, 3).unwrap().to_owned();
+    cluster.must_transfer_leader(right.get_id(), right_peer_3.clone());
+
+    let leader_commit_prepare_merge_fp = "leader_commit_prepare_merge";
+    fail::cfg(leader_commit_prepare_merge_fp, "pause").unwrap();
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    cluster.must_put(b"k1", b"v1");
+
+    let value = read_on_peer(
+        &mut cluster,
+        left_peer_1.clone(),
+        left.clone(),
+        b"k1",
+        false,
+        Duration::from_secs(1),
+    );
+    if let Ok(response) = value {
+        if !response.get_header().has_error() {
+            println!("value {:?}", std::str::from_utf8(response.get_responses()[0].get_get().get_value()).unwrap());
+        }
+    }
+    
+    fail::remove(leader_commit_prepare_merge_fp);
+}

@@ -1454,6 +1454,7 @@ impl Peer {
                         split_to_be_updated = false;
                     }
                     if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
+                        fail_point!("leader_commit_prepare_merge");
                         // We committed prepare merge, to prevent unsafe read index,
                         // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
