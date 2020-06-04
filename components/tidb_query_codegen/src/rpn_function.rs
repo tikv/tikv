@@ -399,15 +399,18 @@ impl RpnFnRefEvaluableType {
     /// and will be removed after `rpn_fn` is refactored.
     fn get_type_path(&self) -> TypePath {
         match self {
-            Self::Type(x) => {
-                if x.path.get_ident().unwrap().to_string() == "JsonRef" {
-                    return parse_quote! { Json };
+            Self::Type(x) => match x.path.get_ident() {
+                Some(id) => {
+                    if id.to_string() == "JsonRef" {
+                        return parse_quote! { Json };
+                    }
+                    if id.to_string() == "BytesRef" {
+                        return parse_quote! { Bytes };
+                    }
+                    x.clone()
                 }
-                if x.path.get_ident().unwrap().to_string() == "BytesRef" {
-                    return parse_quote! { Bytes };
-                }
-                unreachable!()
-            }
+                None => x.clone(),
+            },
             Self::Ref(x) => x.clone(),
         }
     }
@@ -675,7 +678,51 @@ fn generate_metadata_type_checker(
 fn is_ref_type(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
         Some(x) => x.to_string() == "Json" || x.to_string() == "Bytes",
-        None => false
+        None => false,
+    }
+}
+
+fn is_json(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => x.to_string() == "Json",
+        None => false,
+    }
+}
+
+fn is_bytes(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => x.to_string() == "Bytes",
+        None => false,
+    }
+}
+
+fn get_vargs_buf(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if x.to_string() == "Json" {
+                quote! { VARG_PARAM_BUF_JSON_REF }
+            } else if x.to_string() == "Bytes" {
+                quote! { VARG_PARAM_BUF_BYTES_REF }
+            } else {
+                quote! { VARG_PARAM_BUF }
+            }
+        }
+        None => quote! { VARG_PARAM_BUF },
+    }
+}
+
+fn get_vectoried_type(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if x.to_string() == "Json" {
+                quote! { JsonRef }
+            } else if x.to_string() == "Bytes" {
+                quote! { BytesRef }
+            } else {
+                quote! { &#ty }
+            }
+        }
+        None => quote! { &#ty },
     }
 }
 
@@ -777,6 +824,22 @@ impl VargsRpnFn {
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
+        let transmute_ref = if is_json(arg_type) {
+            quote! {
+                let arg: Option<JsonRef> = arg.into_evaluable_ref();
+                let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
+            }
+        } else if is_bytes(arg_type) {
+            quote! {
+                let arg: Option<BytesRef> = arg.into_evaluable_ref();
+                let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
+            }
+        } else {
+            quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
+        };
+        let varg_buf = get_vargs_buf(arg_type);
+        let vectorized_type = get_vectoried_type(arg_type);
+
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> crate::RpnFnMeta
@@ -791,23 +854,23 @@ impl VargsRpnFn {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
-                    crate::function::VARG_PARAM_BUF.with(|vargs_buf| {
+                    crate::function::#varg_buf.with(|vargs_buf| {
                         use tidb_query_datatype::codec::data_type::{Evaluable, IntoEvaluableRef};
 
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        vargs_buf.resize(args_len, 0);
+                        vargs_buf.resize(args_len, Default::default());
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                                let arg: Option<&#arg_type> = arg.as_ref().into_evaluable_ref();
-                                let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) };
+                                let arg: Option<&#arg_type> = arg.as_ref();
+                                #transmute_ref
                                 vargs_buf[arg_index] = arg;
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
-                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<&#arg_type>]) })?);
+                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
@@ -1703,6 +1766,20 @@ mod tests_normal {
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
             let expected = quote! { Bytes };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { Option<C::T> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { C::T };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { Option<T> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { T };
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
     }
