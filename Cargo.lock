@@ -1054,6 +1054,8 @@ dependencies = [
  "quick-error",
  "raft",
  "rocksdb",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "sysinfo",
@@ -1095,11 +1097,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
-<<<<<<< HEAD
-=======
  "toml",
- "txn_types",
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 ]
 
 [[package]]
