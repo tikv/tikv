@@ -352,7 +352,7 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let exec_details = tracker.get_exec_details();
+        let exec_details = tracker.get_item_exec_details();
         tracker.on_finish_all_items();
 
         let mut resp = match result {
@@ -624,32 +624,6 @@ mod tests {
         }
     }
 
-    async fn yield_now() {
-        use std::future::Future;
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-
-        struct YieldNow {
-            yielded: bool,
-        }
-
-        impl Future for YieldNow {
-            type Output = ();
-
-            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-                if self.yielded {
-                    return Poll::Ready(());
-                }
-
-                self.yielded = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        }
-
-        YieldNow { yielded: false }.await
-    }
-
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
@@ -657,7 +631,7 @@ mod tests {
                 // We split the task into small executions of 1 second.
                 for _ in 0..self.handle_duration_millis / 1_000 {
                     thread::sleep(Duration::from_millis(1_000));
-                    yield_now().await;
+                    yatp::task::future::reschedule().await;
                 }
                 thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
             } else {
