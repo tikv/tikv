@@ -395,7 +395,7 @@ impl RpnFnRefEvaluableType {
     }
 
     /// Transform new `JsonRef`-like style type to old `&Json` type.
-    /// 
+    ///
     /// Note: this is a workaround for current copr framework.
     /// After full migration, this function should be deprecated.
     fn get_type_path(&self) -> TypePath {
@@ -669,9 +669,8 @@ fn generate_metadata_type_checker(
     }
 }
 
-
 /// Checks if parameter type is Json or Bytes
-/// 
+///
 /// Note: this is a workaround for current copr framework.
 /// After full migration, this function should be deprecated.
 fn is_ref_type(ty: &TypePath) -> bool {
@@ -682,7 +681,7 @@ fn is_ref_type(ty: &TypePath) -> bool {
 }
 
 /// Checks if parameter type is Json
-/// 
+///
 /// Note: this is a workaround for current copr framework.
 /// After full migration, this function should be deprecated.
 fn is_json(ty: &TypePath) -> bool {
@@ -693,7 +692,7 @@ fn is_json(ty: &TypePath) -> bool {
 }
 
 /// Checks if parameter type is Bytes
-/// 
+///
 /// Note: this is a workaround for current copr framework.
 /// After full migration, this function should be deprecated.
 fn is_bytes(ty: &TypePath) -> bool {
@@ -724,7 +723,7 @@ fn get_vargs_buf(ty: &TypePath) -> TokenStream {
 /// Transform copr framework type into vectorized function type
 /// For example, `Json` in copr framework will be transformed into
 /// `JsonRef` before passing to vectorized functions.
-/// 
+///
 /// Note: this is a workaround for current copr framework.
 /// After full migration, this function should be deprecated.
 fn get_vectoried_type(ty: &TypePath) -> TokenStream {
