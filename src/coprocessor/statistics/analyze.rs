@@ -8,7 +8,9 @@ use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use tidb_query_datatype::codec::datum;
+use tidb_query_datatype::codec::table;
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::def::{Collation, FieldTypeTp};
 use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
@@ -159,6 +161,7 @@ struct SampleBuilder<S: Snapshot> {
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
+    cols_info: Vec<::tipb::ColumnInfo>,
 }
 
 /// `SampleBuilder` is used to analyze columns. It collects sample from
@@ -176,9 +179,12 @@ impl<S: Snapshot> SampleBuilder<S> {
         }
 
         let mut col_len = cols_info.len();
-        if cols_info[0].get_pk_handle() {
+        let vec_cols_info = if cols_info[0].get_pk_handle() {
             col_len -= 1;
-        }
+            cols_info.to_vec()[1..col_len+1].to_vec()
+        } else {
+            cols_info.to_vec()
+        };
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
@@ -192,6 +198,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
+            cols_info: vec_cols_info,
         })
     }
 
@@ -200,13 +207,14 @@ impl<S: Snapshot> SampleBuilder<S> {
     // builder for PK which contains the histogram.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+        use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
                 self.max_sample_size,
                 self.max_fm_sketch_size,
                 self.cm_sketch_depth,
-                self.cm_sketch_width
+                self.cm_sketch_width,
             );
             self.col_len
         ];
@@ -220,7 +228,26 @@ impl<S: Snapshot> SampleBuilder<S> {
                     pk_builder.append(&v);
                 }
             }
-            for (collector, val) in collectors.iter_mut().zip(cols_iter) {
+            for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
+                if self.cols_info[i].get_tp() == FieldTypeTp::TinyBlob as i32 
+                || self.cols_info[i].get_tp() == FieldTypeTp::MediumBlob as i32
+                || self.cols_info[i].get_tp() == FieldTypeTp::Blob as i32
+                || self.cols_info[i].get_tp() == FieldTypeTp::VarChar as i32
+                || self.cols_info[i].get_tp() == FieldTypeTp::VarString as i32
+                || self.cols_info[i].get_tp() == FieldTypeTp::String as i32 {
+                    let sorted_val = match_template_collator! {
+                        TT, match Collation::from_i32(self.cols_info[i].get_collation())? {
+                            Collation::TT => {
+                                let mut mut_val = val.as_slice();
+                                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
+                                let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                datum::encode_value(&mut EvalContext::default(), &[datum::Datum::Bytes(decoded_sorted_val)]).unwrap()
+                            }
+                        }
+                    };
+                    collector.collect(sorted_val);
+                    continue;
+                }
                 collector.collect(val);
             }
         }

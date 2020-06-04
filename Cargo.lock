@@ -4424,6 +4424,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "more-asserts",
  "murmur3",
