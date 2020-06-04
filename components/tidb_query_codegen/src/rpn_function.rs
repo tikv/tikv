@@ -402,10 +402,10 @@ impl RpnFnRefEvaluableType {
         match self {
             Self::Type(x) => match x.path.get_ident() {
                 Some(id) => {
-                    if id.to_string() == "JsonRef" {
+                    if *id == "JsonRef" {
                         return parse_quote! { Json };
                     }
-                    if id.to_string() == "BytesRef" {
+                    if *id == "BytesRef" {
                         return parse_quote! { Bytes };
                     }
                     x.clone()
