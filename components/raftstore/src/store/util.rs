@@ -663,12 +663,16 @@ macro_rules! report_perf_context {
 #[macro_export]
 macro_rules! observe_perf_context_type {
     ($s:expr, $metric: expr, $v:ident) => {
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $metric
+            .with_label_values(&[stringify!($v)])
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
         $s.$v = $v;
     };
     ($s:expr, $context: expr, $metric: expr, $v:ident) => {
         let $v = $context.$v();
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
+        $metric
+            .with_label_values(&[stringify!($v)])
+            .observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
         $s.$v = $v;
     };
 }

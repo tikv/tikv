@@ -16,17 +16,11 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-<<<<<<< HEAD
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
     KvEngine, MiscExt, Peekable, Snapshot as SnapshotTrait, WriteBatch, WriteBatchVecExt,
 };
-=======
-
-use engine_rocks::RocksEngine;
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -42,7 +36,7 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
-use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
+use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -316,11 +310,8 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-<<<<<<< HEAD
     yield_duration: Duration,
-=======
     perf_context_statistics: PerfContextStatistics,
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -354,11 +345,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-<<<<<<< HEAD
             yield_duration: cfg.apply_yield_duration.0,
-=======
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
         }
     }
 
@@ -434,7 +422,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                 });
             report_perf_context!(
                 self.perf_context_statistics,
-                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM
             );
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();

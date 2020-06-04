@@ -2,16 +2,12 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-<<<<<<< HEAD
 use engine::rocks;
 use engine::DB;
 use engine_rocks::{
     Compat, RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec,
 };
-=======
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
 use engine_traits::{
     CompactionJobInfo, Iterable, KvEngine, Mutable, Peekable, WriteBatch, WriteBatchExt,
     WriteBatchVecExt, WriteOptions,
@@ -572,7 +568,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
         report_perf_context!(
             self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM
         );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {

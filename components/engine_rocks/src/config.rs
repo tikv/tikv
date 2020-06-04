@@ -1,12 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use configuration::ConfigValue;
-<<<<<<< HEAD:components/engine/src/rocks/util/config.rs
-use std::str::FromStr;
-=======
 pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354):components/engine_rocks/src/config.rs
+use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

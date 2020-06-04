@@ -18,17 +18,11 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-<<<<<<< HEAD
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
-use engine::rocks::util::config::BlobRunMode;
-use engine::rocks::DB;
-use engine::*;
-use engine_rocks::encryption::get_env;
-=======
 use engine::rocks::DB;
 use engine::*;
 use engine_rocks::config::BlobRunMode;
->>>>>>> 309ac6d... raftstore: add more duration metric about PerfContext (#7354)
+use engine_rocks::encryption::get_env;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Iterable, Peekable};
