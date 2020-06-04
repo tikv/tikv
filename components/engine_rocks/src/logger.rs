@@ -25,13 +25,13 @@ pub struct RaftDBLogger;
 impl Logger for RaftDBLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
         match log_level {
-            InfoLogLevel::Debug => debug!(#"raft_log","{}", log),
+            InfoLogLevel::Debug => debug!(#"raftdb_log","{}", log),
             InfoLogLevel::Info | InfoLogLevel::Header | InfoLogLevel::NumInfoLog => {
                 info!(#"raft_log","{}", log)
             }
-            InfoLogLevel::Warn => warn!(#"raft_log","{}", log),
-            InfoLogLevel::Error => error!(#"raft_log","{}", log),
-            InfoLogLevel::Fatal => crit!(#"raft_log","{}", log),
+            InfoLogLevel::Warn => warn!(#"raftdb_log","{}", log),
+            InfoLogLevel::Error => error!(#"raftdb_log","{}", log),
+            InfoLogLevel::Fatal => crit!(#"raftdb_log","{}", log),
         }
     }
 }
