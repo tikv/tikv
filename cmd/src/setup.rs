@@ -229,6 +229,10 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.server.status_addr = status_addr.to_owned();
     }
 
+    if let Some(advertise_status_addr) = matches.value_of("advertise-status-addr") {
+        config.server.advertise_status_addr = advertise_status_addr.to_owned();
+    }
+
     if let Some(data_dir) = matches.value_of("data-dir") {
         config.storage.data_dir = data_dir.to_owned();
     }
