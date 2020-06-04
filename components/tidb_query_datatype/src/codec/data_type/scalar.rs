@@ -45,10 +45,14 @@ impl ScalarValue {
 
     #[inline]
     pub fn as_scalar_value_ref(&self) -> ScalarValueRef<'_> {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValue::TT(v) => ScalarValueRef::TT(v),
-            }
+        match self {
+            ScalarValue::Int(x) => ScalarValueRef::Int(x.as_ref()),
+            ScalarValue::Duration(x) => ScalarValueRef::Duration(x.as_ref()),
+            ScalarValue::DateTime(x) => ScalarValueRef::DateTime(x.as_ref()),
+            ScalarValue::Real(x) => ScalarValueRef::Real(x.as_ref()),
+            ScalarValue::Decimal(x) => ScalarValueRef::Decimal(x.as_ref()),
+            ScalarValue::Bytes(x) => ScalarValueRef::Bytes(x.as_ref().map(|x| x.as_slice())),
+            ScalarValue::Json(x) => ScalarValueRef::Json(x.as_ref().map(|x| x.as_ref())),
         }
     }
 
@@ -149,23 +153,27 @@ impl From<ScalarValue> for Option<f64> {
 /// A scalar value reference container. Can be created from `ScalarValue` or `VectorValue`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalarValueRef<'a> {
-    Int(&'a Option<super::Int>),
-    Real(&'a Option<super::Real>),
-    Decimal(&'a Option<super::Decimal>),
-    Bytes(&'a Option<super::Bytes>),
-    DateTime(&'a Option<super::DateTime>),
-    Duration(&'a Option<super::Duration>),
-    Json(&'a Option<super::Json>),
+    Int(Option<&'a super::Int>),
+    Real(Option<&'a super::Real>),
+    Decimal(Option<&'a super::Decimal>),
+    Bytes(Option<BytesRef<'a>>),
+    DateTime(Option<&'a super::DateTime>),
+    Duration(Option<&'a super::Duration>),
+    Json(Option<JsonRef<'a>>),
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     #[allow(clippy::clone_on_copy)]
     pub fn to_owned(self) -> ScalarValue {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
-            }
+        match self {
+            ScalarValueRef::Int(x) => ScalarValue::Int(x.cloned()),
+            ScalarValueRef::Duration(x) => ScalarValue::Duration(x.cloned()),
+            ScalarValueRef::DateTime(x) => ScalarValue::DateTime(x.cloned()),
+            ScalarValueRef::Real(x) => ScalarValue::Real(x.cloned()),
+            ScalarValueRef::Decimal(x) => ScalarValue::Decimal(x.cloned()),
+            ScalarValueRef::Bytes(x) => ScalarValue::Bytes(x.map(|x| x.to_vec())),
+            ScalarValueRef::Json(x) => ScalarValue::Json(x.map(|x| x.to_owned())),
         }
     }
 
@@ -196,7 +204,7 @@ impl<'a> ScalarValueRef<'a> {
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
                         let is_unsigned = field_type.is_unsigned();
-                        output.write_evaluable_datum_int(*val, is_unsigned)?;
+                        output.write_evaluable_datum_int(**val, is_unsigned)?;
                     }
                 }
                 Ok(())
@@ -240,7 +248,7 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_date_time(*val, ctx)?;
+                        output.write_evaluable_datum_date_time(**val, ctx)?;
                     }
                 }
                 Ok(())
@@ -251,7 +259,7 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_duration(*val)?;
+                        output.write_evaluable_datum_duration(**val)?;
                     }
                 }
                 Ok(())
@@ -262,7 +270,7 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_json(val)?;
+                        output.write_evaluable_datum_json(*val)?;
                     }
                 }
                 Ok(())
@@ -309,7 +317,7 @@ impl<'a> ScalarValueRef<'a> {
             TT = [Real, Decimal, DateTime, Duration, Json],
             match (self, other) {
                 (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
-                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(v1, v2, &field_type),
+                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), &field_type),
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
                 (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
@@ -419,7 +427,7 @@ impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
     fn eq(&self, other: &ScalarValue) -> bool {
         match_template_evaluable! {
             TT, match (self, other) {
-                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == &v2,
+                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == v2.as_ref(),
                 _ => false
             }
         }
