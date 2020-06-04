@@ -50,7 +50,11 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
         path = path.join(Path::new(sub_path));
     }
     let path = path.to_str().unwrap_or_else(|| {
-        fatal!("failed to construct engine log dir {:?}, {:?}", path, sub_path);
+        fatal!(
+            "failed to construct engine log dir {:?}, {:?}",
+            path,
+            sub_path
+        );
     });
     config::ensure_dir_exist(path).unwrap_or_else(|e| {
         fatal!("failed to create engine log dir: {}", e);
