@@ -10,6 +10,7 @@ use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
