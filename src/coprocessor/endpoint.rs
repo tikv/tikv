@@ -417,7 +417,7 @@ impl<E: Engine> Endpoint<E> {
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
             .future_trace_may_enable(trace_enabled, tipb::Event::TiKvCoprGetRequest as u32)
-            .map(move |(spans, mut resp)| {
+            .map(|(spans, mut resp)| {
                 if let Some(span_sets) = spans {
                     resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
                 }
