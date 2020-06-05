@@ -609,16 +609,19 @@ impl StatusServer {
                         self.advertise_addr = Some(advertise_addr);
                         return;
                     }
-                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to register addr to pd"; "status code" => status.as_str(), "body" => ?resp.text());
+                    }
+                    Err(e) => warn!("failed to register addr to pd"; "error" => ?e),
                 }
             }
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
+                warn!("failed to reconnect pd client"; "err" => ?e);
             }
         }
-        error!(
+        warn!(
             "failed to register addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
@@ -642,16 +645,19 @@ impl StatusServer {
                         self.advertise_addr = None;
                         return;
                     }
-                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to unregister addr to pd"; "status code" => status.as_str(), "body" => ?resp.text());
+                    }
+                    Err(e) => warn!("failed to unregister addr to pd"; "error" => ?e),
                 }
             }
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
+                warn!("failed to reconnect pd client"; "err" => ?e);
             }
         }
-        error!(
+        warn!(
             "failed to unregister addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
