@@ -785,8 +785,7 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
@@ -832,8 +831,7 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
@@ -870,8 +868,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
@@ -1004,8 +1001,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
@@ -1047,8 +1043,7 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
         let client = Client::new();
@@ -1110,8 +1105,7 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(1, None, ConfigController::default());
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr.clone(), addr, &new_security_cfg(Some(allowed_cn)));
 
