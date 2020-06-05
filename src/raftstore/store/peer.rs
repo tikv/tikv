@@ -1395,6 +1395,44 @@ impl Peer {
         self.proposals.gc();
     }
 
+<<<<<<< HEAD:src/raftstore/store/peer.rs
+=======
+    fn response_read<T, C>(
+        &self,
+        read: &mut ReadIndexRequest,
+        ctx: &mut PollContext<T, C>,
+        replica_read: bool,
+    ) {
+        debug!(
+            "handle reads with a read index";
+            "request_id" => ?read.id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+        for (req, cb, mut read_index) in read.cmds.drain(..) {
+            if !replica_read {
+                if read_index.is_none() {
+                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
+                    // Starting from the second, all the following ones' read_index is not none.
+                    read_index = read.read_index;
+                }
+                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+                continue;
+            }
+            if req.get_header().get_replica_read() {
+                // We should check epoch since the range could be changed.
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+            } else {
+                // The request could be proposed when the peer was leader.
+                // TODO: figure out that it's necessary to notify stale or not.
+                let term = self.term();
+                apply::notify_stale_req(term, cb);
+            }
+        }
+    }
+
+>>>>>>> a65815a... raftstore: get read index independently in batch (#7995):components/raftstore/src/store/peer.rs
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
         if self.pending_reads.ready_cnt > 0 {
@@ -1976,10 +2014,15 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
+<<<<<<< HEAD:src/raftstore/store/peer.rs
                     if let Some(read) = self.pending_reads.reads.back_mut() {
+=======
+                    let committed_index = self.get_store().committed_index();
+                    if let Some(read) = self.pending_reads.back_mut() {
+>>>>>>> a65815a... raftstore: get read index independently in batch (#7995):components/raftstore/src/store/peer.rs
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.push_command(req, cb);
+                            read.push_command(req, cb, committed_index);
                             return false;
                         }
                     }
