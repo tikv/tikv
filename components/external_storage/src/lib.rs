@@ -32,6 +32,8 @@ pub use s3::S3Storage;
 mod util;
 pub use util::block_on_external_io;
 
+pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
+
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
     match &backend.backend {
