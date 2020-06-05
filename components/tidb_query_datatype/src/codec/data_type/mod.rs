@@ -70,12 +70,21 @@ pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
 /// A trait of all types that can be used during evaluation (eval type).
 pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
+
+    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
+    /// panics if the varient mismatches.
+    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
 }
 
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
         impl Evaluable for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
+
+            #[inline]
+            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
+                VectorValue::from(vec)
+            }
         }
     };
 }
