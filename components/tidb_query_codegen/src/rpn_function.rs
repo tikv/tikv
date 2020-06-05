@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn]
-//! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
+//! fn foo(x: Option<&u32>) -> Result<Option<u8>> {
 //!     Ok(None)
 //! }
 //! ```
@@ -17,16 +17,16 @@
 //!
 //! If neither `varg` or `raw_varg` are supplied, then the generated arguments
 //! follow from the supplied function's arguments. Each argument must have a type
-//! `&Option<T>` for some `T`.
+//! `Option<&T>` for some `T`.
 //!
 //! ### `varg`
 //!
 //! The RPN operator takes a variable number of arguments. The arguments are passed
-//! as a `&[&Option<T>]`. E.g.,
+//! as a `&[Option<&T>]`. E.g.,
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -99,7 +99,7 @@
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(capture = [ctx])]
-//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
+//! fn with_context(ctx: &mut EvalContext, param: Option<&Decimal>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -142,13 +142,13 @@
 //! first argument is a scalar. The code may look like:
 //!
 //! ```ignore
-//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
+//! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32>> {
 //!     // match text
 //! }
 //!
 //! #[rpn_fn]
-//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
-//!     let regex = build_regex(regex);
+//! fn regex_match(regex: Option<&Bytes>, text: Option<&Bytes>) -> Result<Option<i32>> {
+//!     let regex = build_regex(regex.cloned());
 //!     regex_match_impl(&regex, text)
 //! }
 //!
@@ -180,7 +180,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -372,6 +372,22 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
+/// Parses an evaluable type like `Option<&T>`.
+struct RpnFnRefEvaluableType {
+    eval_type: TypePath,
+}
+
+impl parse::Parse for RpnFnRefEvaluableType {
+    fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
+        input.parse::<self::kw::Option>()?;
+        input.parse::<Token![<]>()?;
+        input.parse::<Token![&]>()?;
+        let eval_type = input.parse::<TypePath>()?;
+        input.parse::<Token![>]>()?;
+        Ok(Self { eval_type })
+    }
+}
+
 /// Parses a function signature parameter like `val: &Option<T>`.
 struct RpnFnSignatureParam {
     _pat: Pat,
@@ -382,8 +398,7 @@ impl parse::Parse for RpnFnSignatureParam {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let pat = input.parse::<Pat>()?;
         input.parse::<Token![:]>()?;
-        input.parse::<Token![&]>()?;
-        let et = input.parse::<RpnFnEvaluableType>()?;
+        let et = input.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
             eval_type: et.eval_type,
@@ -404,8 +419,7 @@ impl parse::Parse for VargsRpnFnSignatureParam {
         input.parse::<Token![&]>()?;
         let slice_inner;
         bracketed!(slice_inner in input);
-        slice_inner.parse::<Token![&]>()?;
-        let et = slice_inner.parse::<RpnFnEvaluableType>()?;
+        let et = slice_inner.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
             eval_type: et.eval_type,
@@ -641,7 +655,7 @@ impl VargsRpnFn {
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[&Option<T>]`")
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`")
             })?;
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
@@ -737,11 +751,12 @@ impl VargsRpnFn {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                                vargs_buf[arg_index] = arg as *const _ as usize;
+                                let arg: Option<&#arg_type> = arg.as_ref();
+                                let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) };
+                                vargs_buf[arg_index] = arg;
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* unsafe {
-                                &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
-                            })?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
+                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<&#arg_type>]) })?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
@@ -924,7 +939,7 @@ impl NormalRpnFn {
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like `&Option<T>`")
+                    Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`")
                 })?;
             arg_types.push(arg_type.eval_type);
         }
@@ -1037,6 +1052,8 @@ impl NormalRpnFn {
             self.metadata_type.is_some() || self.metadata_mapper.is_some(),
         );
         let extract2 = extract.clone();
+        let extract3 = extract.clone();
+        let extract4 = extract.clone();
         let call_arg2 = extract.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
@@ -1046,6 +1063,7 @@ impl NormalRpnFn {
             quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
                 #(let (#extract2, arg) = arg.extract(0));*;
+                #(let #extract4 = #extract4.as_ref());*;
                 #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
             },
         );
@@ -1065,6 +1083,7 @@ impl NormalRpnFn {
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
+                        #(let #extract3 = #extract3.as_ref());*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1173,7 +1192,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(arg0: &Option<Int>, arg1: &Option<Real>) -> tidb_query_common::Result<Option<Decimal>> {
+            fn foo(arg0: Option<&Int>, arg1: Option<&Real>) -> tidb_query_common::Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1251,6 +1270,8 @@ mod tests_normal {
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1336,7 +1357,7 @@ mod tests_normal {
     fn generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
-            fn foo<A: M, B>(arg0: &Option<A::X>) -> Result<Option<B>>
+            fn foo<A: M, B>(arg0: Option<&A::X>) -> Result<Option<B>>
             where B: N<A> {
                 Ok(None)
             }
@@ -1418,6 +1439,7 @@ mod tests_normal {
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
                         result.push(foo :: <A, B> (arg0)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1515,7 +1537,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(ctx: &mut EvalContext, arg0: &Option<Int>, arg1: &Option<Real>) -> Result<Option<Decimal>> {
+            fn foo(ctx: &mut EvalContext, arg0: Option<&Int>, arg1: Option<&Real>) -> Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1565,6 +1587,8 @@ mod tests_normal {
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(ctx, arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))

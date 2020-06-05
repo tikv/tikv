@@ -2,8 +2,30 @@
 
 use configuration::ConfigValue;
 pub use rocksdb::PerfLevel;
-use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
+use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
 use std::str::FromStr;
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogLevel {
+    Error,
+    Fatal,
+    Info,
+    Warn,
+    Debug,
+}
+
+impl From<LogLevel> for DBInfoLogLevel {
+    fn from(compression_type: LogLevel) -> DBInfoLogLevel {
+        match compression_type {
+            LogLevel::Error => DBInfoLogLevel::Error,
+            LogLevel::Fatal => DBInfoLogLevel::Fatal,
+            LogLevel::Info => DBInfoLogLevel::Info,
+            LogLevel::Warn => DBInfoLogLevel::Warn,
+            LogLevel::Debug => DBInfoLogLevel::Debug,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

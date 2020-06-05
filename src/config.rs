@@ -29,14 +29,14 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
@@ -798,6 +798,8 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[config(skip)]
+    pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -884,6 +886,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
@@ -925,16 +928,6 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
-
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
@@ -957,7 +950,8 @@ impl DbConfig {
         opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
-
+        opts.set_info_log(RocksdbLogger::default());
+        opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1113,6 +1107,8 @@ pub struct RaftDbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     #[config(skip)]
+    pub info_log_level: LogLevel,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[config(skip)]
@@ -1154,6 +1150,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -1188,15 +1185,8 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
+        opts.set_info_log(RaftDBLogger::default());
+        opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
         opts.set_use_direct_io_for_flush_and_compaction(
@@ -1953,6 +1943,8 @@ mod readpool_tests {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[config(hidden)]
     pub cfg_path: String,
 
