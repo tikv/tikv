@@ -317,6 +317,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .map_err(Error::from),
                         );
                     }
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     results
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -649,10 +651,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
                     let mut results = vec![];
+                    // no scan_count for this kind of op.
+                    let mut stats = Statistics::default();
                     // TODO: optimize using seek.
                     for get in gets {
-                        results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
+                        let key = &get.key;
+                        let res = snapshot
+                            .get_cf(cf, key)
+                            .map(|v| {
+                                stats.data.flow_stats.read_keys += 1;
+                                stats.data.flow_stats.read_bytes += key.as_encoded().len()
+                                    + v.as_ref().map(|v| v.len()).unwrap_or(0);
+                                v
+                            })
+                            .map_err(Error::from);
+                        results.push(res);
                     }
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &stats);
+
                     Ok(results)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
