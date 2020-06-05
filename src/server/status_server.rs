@@ -237,10 +237,10 @@ impl StatusServer {
                 Some(val) => match val.parse() {
                     Ok(val) => val,
                     Err(err) => {
-                        return Ok(StatusServer::err_response(
+                        return Box::new(ok(StatusServer::err_response(
                             StatusCode::BAD_REQUEST,
                             err.to_string(),
-                        ));
+                        )));
                     }
                 },
                 None => false,
@@ -467,7 +467,7 @@ impl StatusServer {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                            (Method::GET, "/config") => Self::get_config(&cfg_controller),
+                            (Method::GET, "/config") => Self::get_config(req, &cfg_controller),
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req)
                             }
