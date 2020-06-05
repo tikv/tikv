@@ -188,8 +188,12 @@ pub(crate) fn db_exist(path: &str) -> bool {
     if !path.exists() || !path.is_dir() {
         return false;
     }
+    let current_file_path = path.join("CURRENT");
+    if !current_file_path.exists() || !current_file_path.is_file() {
+        return false;
+    }
 
-    // If path is not an empty directory, we say db exists. If path is not an empty directory
+    // If path is not an empty directory, and current file exists, we say db exists. If path is not an empty directory
     // but db has not been created, `DB::list_column_families` fails and we can clean up
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
