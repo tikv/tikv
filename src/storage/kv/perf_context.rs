@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::PerfContext;
+use engine::rocks::{set_perf_level, PerfContext, PerfLevel};
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
@@ -31,6 +31,7 @@ impl slog::KV for PerfStatisticsInstant {
 impl PerfStatisticsInstant {
     /// Create an instance which stores instant statistics values, retrieved at creation.
     pub fn new() -> Self {
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf_context = PerfContext::get();
         PerfStatisticsInstant(PerfStatisticsFields {
             internal_key_skipped_count: perf_context.internal_key_skipped_count() as usize,
