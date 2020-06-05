@@ -409,7 +409,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let (_guard, collector) = minitrace::trace_may_enable(
             // req.is_trace_enabled,
-                true, //TODO remove before merge
+            true, //TODO remove before merge
             tipb::Event::TiKvCoprGetRequest as u32,
         );
 
