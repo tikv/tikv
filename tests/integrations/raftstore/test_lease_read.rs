@@ -12,6 +12,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
+use pd_client::PdClient;
 use raftstore::store::Callback;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -523,4 +524,75 @@ fn test_not_leader_read_lease() {
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
     // Even the leader steps down, it should respond to read index in time.
     rx.recv_timeout(heartbeat_interval).unwrap();
+}
+
+/// Test whether read index is greater than applied index.
+/// 1. Add hearbeat msg filter.
+/// 2. Propose a read index request.
+/// 3. Put a key and get the latest applied index.
+/// 4. Propose another read index request.
+/// 5. Remove the filter and check whether the latter read index is greater than applied index.
+///
+/// In previous implementation, these two read index request will be batched and
+/// will get the same read index which breaks the correctness because the latter one
+/// is proposed after the applied index has increased and replied to client.
+#[test]
+fn test_read_index_after_write() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    let region = pd_client.get_region(b"k1").unwrap();
+    let region_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), region_on_store1.clone());
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Add heartbeat msg filter to prevent the leader to reply the read index response.
+    let filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat),
+    );
+    cluster.sim.wl().add_recv_filter(2, filter);
+
+    let mut req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
+    // Don't care about the first one's read index
+    let (cb, _) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
+
+    cluster.must_put(b"k2", b"v2");
+    let applied_index = cluster.apply_state(region.get_id(), 1).get_applied_index();
+
+    let mut req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
+    let (cb, rx) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let response = rx.recv_timeout(heartbeat_interval).unwrap();
+    assert!(
+        response.get_responses()[0]
+            .get_read_index()
+            .get_read_index()
+            >= applied_index
+    );
 }

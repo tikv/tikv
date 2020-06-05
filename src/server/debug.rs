@@ -970,13 +970,22 @@ impl MvccChecker {
             // If lock exists, check whether the records in DEFAULT and WRITE
             // match it.
             if let Some(ref l) = lock {
-                // All write records' ts should be less than lock's ts.
+                // All write records's ts should be less than the for_update_ts (if the
+                // lock is from a pessimistic transaction) or the ts of the lock.
+                let (kind, check_ts) = if l.for_update_ts >= l.ts {
+                    ("for_update_ts", l.for_update_ts)
+                } else {
+                    ("ts", l.ts)
+                };
+
                 if let Some((commit_ts, _)) = write {
-                    if l.ts <= commit_ts {
+                    if check_ts <= commit_ts {
                         v1!(
-                            "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                            "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
+                            kind,
                             hex::encode_upper(key),
+                            kind,
                             l.ts,
                             commit_ts
                         );
@@ -2071,12 +2080,12 @@ mod tests {
             (b"k5", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k1", 100, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
-            (b"k2", 100, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
-            (b"k3", 100, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
-            (b"k4", 100, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
-            (b"k5", 100, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k1", 100, 0, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
+            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
+            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
+            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
+            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value, check
@@ -2109,8 +2118,8 @@ mod tests {
             (b"k7", 90, Expect::Remove), // orphan default.
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k7", 100, LockType::Put, false, Expect::Remove), // duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k7", 100, 0, LockType::Put, false, Expect::Remove), // duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
@@ -2118,18 +2127,35 @@ mod tests {
             (b"k7", 96, 97, WriteType::Put, true, Expect::Keep),
         ]);
 
-        // Out of range.
+        // Locks from pessimistic transactions
         default.extend(vec![
             // key, start_ts
             (b"k8", 100, Expect::Keep),
+            (b"k9", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k8", 101, LockType::Put, false, Expect::Keep),
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k8", 102, 103, WriteType::Put, false, Expect::Keep),
+            (b"k8", 100, 110, WriteType::Put, false, Expect::Keep),
+            (b"k9", 100, 110, WriteType::Put, false, Expect::Keep),
+        ]);
+
+        // Out of range.
+        default.extend(vec![
+            // key, start_ts
+            (b"l0", 100, Expect::Keep),
+        ]);
+        lock.extend(vec![
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"l0", 101, 0, LockType::Put, false, Expect::Keep),
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"l0", 102, 103, WriteType::Put, false, Expect::Keep),
         ]);
 
         let mut kv = vec![];
@@ -2141,7 +2167,7 @@ mod tests {
                 expect,
             ));
         }
-        for (key, ts, tp, short_value, expect) in lock {
+        for (key, ts, for_update_ts, tp, short_value, expect) in lock {
             let v = if short_value {
                 Some(b"v".to_vec())
             } else {
@@ -2153,7 +2179,7 @@ mod tests {
                 ts.into(),
                 0,
                 v,
-                TimeStamp::zero(),
+                for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
             );
@@ -2191,7 +2217,7 @@ mod tests {
         }
         db.c().write(&wb).unwrap();
         // Fix problems.
-        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
+        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
         db.c().write(&wb).unwrap();
