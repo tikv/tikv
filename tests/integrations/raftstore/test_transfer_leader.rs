@@ -161,3 +161,83 @@ fn test_server_transfer_leader_during_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
 }
+
+#[test]
+fn test_cluster_transfer_leader_with_progress() {
+    let mut cluster = new_node_cluster(0, 5);
+
+    cluster.pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.pd_client.must_add_peer(r1, new_peer(4, 4));
+    cluster.pd_client.must_add_peer(r1, new_peer(5, 5));
+
+    // block node 4 and 5
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 4)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv)
+            .allow(0),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 5)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv)
+            .allow(0),
+    ));
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 4)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 5)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+
+    // add tons of log
+    for i in 0..10 {
+        let k = format!("k{:04}", i);
+        let v = format!("v{:04}", i);
+        cluster.async_put(k.as_bytes(), v.as_bytes()).unwrap();
+    }
+    must_get_equal(&cluster.get_engine(1), b"k0001", b"v0001");
+    must_get_equal(&cluster.get_engine(2), b"k0001", b"v0001");
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    cluster.clear_send_filters();
+
+    // block node 4 for appending log
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 4)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv)
+            .allow(0),
+    ));
+
+    cluster.run_node(4).unwrap();
+
+    must_get_none(&cluster.get_engine(4), b"k0001");
+
+    // due to non up-to-date log (node 4), transfer leader fails
+    assert_eq!(cluster.leader_of_region(r1).unwrap().get_id(), 1);
+    cluster.transfer_leader(1, new_peer(2, 2));
+    assert_eq!(cluster.leader_of_region(r1).unwrap().get_id(), 1);
+
+    // recover
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(4), b"k0001", b"v0001");
+
+    // node 4 catch up, transfer leader success
+    assert_eq!(cluster.leader_of_region(r1).unwrap().get_id(), 1);
+    cluster.transfer_leader(1, new_peer(2, 2));
+    assert_eq!(cluster.leader_of_region(r1).unwrap().get_id(), 2);
+}
