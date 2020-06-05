@@ -566,7 +566,7 @@ impl StatusServer {
         Ok(())
     }
 
-    pub fn stop(self) {
+    pub fn stop(mut self) {
         // unregister the status address to pd
         self.unregister_addr();
         let _ = self.tx.send(());
