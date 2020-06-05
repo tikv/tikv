@@ -267,6 +267,7 @@ fn test_node_merge_prerequisites_check() {
 fn test_node_check_merged_message() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -275,35 +276,14 @@ fn test_node_check_merged_message() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    // test if orphan merging peer will be gc
-    let mut region = pd_client.get_region(b"k2").unwrap();
+    // test if stale peer before conf removal is destroyed automatically
+    let mut region = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
     cluster.must_split(&region, b"k2");
     let mut left = pd_client.get_region(b"k1").unwrap();
-    pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
     let mut right = pd_client.get_region(b"k2").unwrap();
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        right.get_id(),
-        3,
-    )));
-    pd_client.must_add_peer(right.get_id(), new_peer(3, 10));
-    let left_on_store1 = find_peer(&left, 1).unwrap().to_owned();
-    cluster.must_transfer_leader(left.get_id(), left_on_store1);
-    pd_client.must_merge(left.get_id(), right.get_id());
-    region = pd_client.get_region(b"k2").unwrap();
-    must_get_none(&cluster.get_engine(3), b"k3");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    let region_on_store3 = find_peer(&region, 3).unwrap().to_owned();
-    pd_client.must_remove_peer(region.get_id(), region_on_store3);
-    must_get_none(&cluster.get_engine(3), b"k1");
-    cluster.clear_send_filters();
-    pd_client.must_add_peer(region.get_id(), new_peer(3, 11));
-
-    // test if stale peer before conf removal is destroyed automatically
-    region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    left = pd_client.get_region(b"k1").unwrap();
-    right = pd_client.get_region(b"k2").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
     cluster.add_send_filter(IsolationFilterFactory::new(4));
@@ -357,6 +337,7 @@ fn test_node_merge_slow_split_left() {
 fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
@@ -421,6 +402,7 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
 fn test_node_merge_dist_isolation() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -496,6 +478,7 @@ fn test_node_merge_dist_isolation() {
 fn test_node_merge_brain_split() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
 
@@ -896,6 +879,7 @@ fn test_request_snapshot_after_propose_merge() {
 fn test_merge_isolated_store_with_no_target_peer() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -1235,4 +1219,63 @@ fn test_merge_isloated_not_in_merge_learner_2() {
     // Then peer 2 sends the check-stale-peer msg to peer 3 and it will get a tombstone response.
     // Finally peer 2 will be destroyed.
     must_get_none(&cluster.get_engine(2), b"k1");
+}
+
+/// Test if a peer can be removed if its target peer has been removed and doesn't apply the
+/// CommitMerge log.
+#[test]
+fn test_merge_remove_target_peer_isolated() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k2").unwrap();
+    let r3 = pd_client.get_region(b"k3").unwrap();
+
+    let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
+    let r2_on_store2 = find_peer(&r2, 2).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store2);
+
+    for i in 1..4 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(3), format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Make region r2's epoch > r2 peer on store 3.
+    // r2 peer on store 3 will be removed whose epoch is staler than the epoch when r1 merge to r2.
+    pd_client.must_add_peer(r2.get_id(), new_peer(4, 4));
+    pd_client.must_remove_peer(r2.get_id(), new_peer(4, 4));
+
+    let r2_on_store3 = find_peer(&r2, 3).unwrap().to_owned();
+    let r3_on_store3 = find_peer(&r3, 3).unwrap().to_owned();
+
+    pd_client.must_merge(r1.get_id(), r2.get_id());
+
+    pd_client.must_remove_peer(r2.get_id(), r2_on_store3);
+    pd_client.must_remove_peer(r3.get_id(), r3_on_store3);
+
+    pd_client.must_merge(r2.get_id(), r3.get_id());
+
+    cluster.clear_send_filters();
+
+    for i in 1..4 {
+        must_get_none(&cluster.get_engine(3), format!("k{}", i).as_bytes());
+    }
 }

@@ -1253,6 +1253,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
         let from_store_id = msg.get_from_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
 
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
@@ -1318,6 +1319,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
+            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
             info!(
                 "tombstone peer receives a stale message";
                 "region_id" => region_id,
@@ -1360,17 +1362,24 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
             return Ok(true);
         }
-
-        if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
-            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
-            return Err(box_err!(
-                "tombstone peer [epoch: {:?}] receive an invalid \
-                 message {:?}, ignore it",
-                region_epoch,
-                msg_type
-            ));
+        // A tombstone peer may not apply the conf change log which removes itself.
+        // In this case, the local epoch is stale and the local peer can be found from region.
+        // We can compare the local peer id with to_peer_id to verify whether it is correct to create a new peer.
+        if let Some(local_peer_id) =
+            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
+        {
+            if to_peer_id <= local_peer_id {
+                self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
+                info!(
+                    "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
+                    "region_id" => region_id,
+                    "local_peer_id" => local_peer_id,
+                    "to_peer_id" => to_peer_id,
+                    "msg_type" => ?msg_type
+                );
+                return Ok(true);
+            }
         }
-
         Ok(false)
     }
 
