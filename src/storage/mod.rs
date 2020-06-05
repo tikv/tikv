@@ -319,9 +319,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-
-                    Ok(results)
-                }
+                    results
+                });
+                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                Ok(result)
             },
             priority,
             thread_rng().next_u64(),
