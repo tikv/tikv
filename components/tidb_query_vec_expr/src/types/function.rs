@@ -80,31 +80,31 @@ pub trait RpnFnArg: std::fmt::Debug {
 
 /// Represents an RPN function argument of a `ScalarValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct ScalarArg<'a, T: Evaluable>(&'a Option<T>);
+pub struct ScalarArg<'a, T: EvaluableRef<'a>>(Option<T>, PhantomData<&'a T>);
 
-impl<'a, T: Evaluable> RpnFnArg for ScalarArg<'a, T> {
-    type Type = &'a Option<T>;
+impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
+    type Type = Option<T>;
 
     /// Gets the value in the given row. All rows of a `ScalarArg` share the same value.
     #[inline]
-    fn get(&self, _row: usize) -> &'a Option<T> {
+    fn get(&self, _row: usize) -> Option<T> {
         self.0
     }
 }
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: Evaluable> {
+pub struct VectorArg<'a, T: EvaluableRef<'a>> {
     physical_col: &'a [Option<T>],
     logical_rows: &'a [usize],
 }
 
-impl<'a, T: Evaluable> RpnFnArg for VectorArg<'a, T> {
-    type Type = &'a Option<T>;
+impl<'a, T: EvaluableRef<'a>> RpnFnArg for VectorArg<'a, T> {
+    type Type = Option<T>;
 
     #[inline]
-    fn get(&self, row: usize) -> &'a Option<T> {
-        &self.physical_col[self.logical_rows[row]]
+    fn get(&self, row: usize) -> Option<T> {
+        self.physical_col[self.logical_rows[row]]
     }
 }
 
@@ -168,13 +168,13 @@ pub trait Evaluator {
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
+pub struct ArgConstructor<'a, A: EvaluableRef <'a>, E: Evaluator> {
     arg_index: usize,
     inner: E,
-    _phantom: PhantomData<A>,
+    _phantom: PhantomData<&'a A>,
 }
 
-impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
+impl<'a, A: EvaluableRef <'a>, E: Evaluator> ArgConstructor<'a, A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
         ArgConstructor {
@@ -185,7 +185,7 @@ impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
     }
 }
 
-impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
+impl<'a, A: EvaluableRef<'a>, E: Evaluator> Evaluator for ArgConstructor<'a, A, E> {
     fn eval(
         self,
         def: impl ArgDef,
