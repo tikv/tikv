@@ -19,7 +19,11 @@ const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
 pub struct ReadIndexRequest {
     pub id: Uuid,
+<<<<<<< HEAD
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
+=======
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksSnapshot>, Option<u64>)>,
+>>>>>>> a65815a... raftstore: get read index independently in batch (#7995)
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
     // `true` means it's in `ReadIndexQueue::reads`.
@@ -27,14 +31,23 @@ pub struct ReadIndexRequest {
 }
 
 impl ReadIndexRequest {
+<<<<<<< HEAD
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     pub fn binary_id(&self) -> &[u8] {
         self.id.as_bytes()
     }
 
     pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
+=======
+    pub fn push_command(
+        &mut self,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        read_index: u64,
+    ) {
+>>>>>>> a65815a... raftstore: get read index independently in batch (#7995)
         RAFT_READ_INDEX_PENDING_COUNT.inc();
-        self.cmds.push((req, cb));
+        self.cmds.push((req, cb, Some(read_index)));
     }
 
     pub fn with_command(
@@ -45,7 +58,7 @@ impl ReadIndexRequest {
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
+        cmds.push((req, cb, None));
         ReadIndexRequest {
             id,
             cmds,
@@ -113,7 +126,7 @@ impl ReadIndexQueue {
         for mut read in self.reads.drain(..) {
             removed += read.cmds.len();
             if let Some(region_id) = notify_removed {
-                for (_, cb) in read.cmds.drain(..) {
+                for (_, cb, _) in read.cmds.drain(..) {
                     apply::notify_req_region_removed(region_id, cb);
                 }
             } else {
@@ -130,7 +143,7 @@ impl ReadIndexQueue {
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
-            for (_, cb) in read.cmds.drain(..) {
+            for (_, cb, _) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
         }
