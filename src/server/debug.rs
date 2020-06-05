@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
-use engine::rocks::util::get_cf_handle;
 use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::{self, Engines};
+use engine_rocks::util::get_cf_handle;
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, SeekKey, TableProperties,
@@ -35,7 +35,6 @@ use raftstore::store::{write_initial_apply_state, write_initial_raft_state, writ
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
-use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
@@ -733,20 +732,13 @@ impl Debugger {
     pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
-        let db = &self.engines.kv;
+        let start = keys::enc_start_key(region);
+        let end = keys::enc_end_key(region);
 
-        let mut num_entries = 0;
-        let mut mvcc_properties = MvccProperties::new();
-        let start = keys::enc_start_key(&region);
-        let end = keys::enc_end_key(&region);
-        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
-        for (_, v) in collection.iter() {
-            num_entries += v.num_entries();
-            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
-            mvcc_properties.add(&mvcc);
-        }
+        let mut res = dump_mvcc_properties(&self.engines.kv, &start, &end)?;
 
-        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(self.engines.kv.c(), region))
+        {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -754,41 +746,72 @@ impl Debugger {
             None => Vec::new(),
         };
 
-        let mut res: Vec<(String, String)> = [
-            ("num_files", collection.len() as u64),
-            ("num_entries", num_entries),
-            ("num_deletes", num_entries - mvcc_properties.num_versions),
-            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
-            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
-            ("mvcc.num_rows", mvcc_properties.num_rows),
-            ("mvcc.num_puts", mvcc_properties.num_puts),
-            ("mvcc.num_deletes", mvcc_properties.num_deletes),
-            ("mvcc.num_versions", mvcc_properties.num_versions),
-            ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_string(),
-            escape(&middle_key),
+            "middle_key_by_approximate_size".to_owned(),
+            hex::encode(&middle_key),
         ));
-        res.push((
-            "sst_files".to_string(),
-            collection
-                .iter()
-                .map(|(k, _)| {
-                    Path::new(&*k)
-                        .file_name()
-                        .map(|f| f.to_str().unwrap())
-                        .unwrap_or(&*k)
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-        ));
+
         Ok(res)
     }
+
+    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        dump_mvcc_properties(
+            &self.engines.kv,
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )
+    }
+}
+
+fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut num_entries = 0; // number of Rocksdb K/V entries.
+
+    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let num_files = collection.len();
+
+    let mut mvcc_properties = MvccProperties::new();
+    for (_, v) in collection.iter() {
+        num_entries += v.num_entries();
+        let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
+        mvcc_properties.add(&mvcc);
+    }
+
+    let sst_files = collection
+        .iter()
+        .map(|(k, _)| {
+            Path::new(&*k)
+                .file_name()
+                .map(|f| f.to_str().unwrap())
+                .unwrap_or(&*k)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut res: Vec<(String, String)> = [
+        ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+        ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
+        ("mvcc.num_rows", mvcc_properties.num_rows),
+        ("mvcc.num_puts", mvcc_properties.num_puts),
+        ("mvcc.num_deletes", mvcc_properties.num_deletes),
+        ("mvcc.num_versions", mvcc_properties.num_versions),
+        ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .collect();
+
+    // Entries and delete marks of RocksDB.
+    let num_deletes = num_entries - mvcc_properties.num_versions;
+    res.push(("num_entries".to_owned(), num_entries.to_string()));
+    res.push(("num_deletes".to_owned(), num_deletes.to_string()));
+
+    // count and list of files.
+    res.push(("num_files".to_owned(), num_files.to_string()));
+    res.push(("sst_files".to_owned(), sst_files));
+
+    Ok(res)
 }
 
 fn recover_mvcc_for_range(
@@ -947,13 +970,22 @@ impl MvccChecker {
             // If lock exists, check whether the records in DEFAULT and WRITE
             // match it.
             if let Some(ref l) = lock {
-                // All write records' ts should be less than lock's ts.
+                // All write records's ts should be less than the for_update_ts (if the
+                // lock is from a pessimistic transaction) or the ts of the lock.
+                let (kind, check_ts) = if l.for_update_ts >= l.ts {
+                    ("for_update_ts", l.for_update_ts)
+                } else {
+                    ("ts", l.ts)
+                };
+
                 if let Some((commit_ts, _)) = write {
-                    if l.ts <= commit_ts {
+                    if check_ts <= commit_ts {
                         v1!(
-                            "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                            "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
+                            kind,
                             hex::encode_upper(key),
+                            kind,
                             l.ts,
                             commit_ts
                         );
@@ -1433,8 +1465,7 @@ mod tests {
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
     use engine_traits::{CFHandleExt, Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1536,7 +1567,7 @@ mod tests {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocks::util::new_engine_opt(
+            engine_rocks::raw_util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
@@ -2049,12 +2080,12 @@ mod tests {
             (b"k5", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k1", 100, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
-            (b"k2", 100, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
-            (b"k3", 100, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
-            (b"k4", 100, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
-            (b"k5", 100, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k1", 100, 0, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
+            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
+            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
+            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
+            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value, check
@@ -2087,8 +2118,8 @@ mod tests {
             (b"k7", 90, Expect::Remove), // orphan default.
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k7", 100, LockType::Put, false, Expect::Remove), // duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k7", 100, 0, LockType::Put, false, Expect::Remove), // duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
@@ -2096,18 +2127,35 @@ mod tests {
             (b"k7", 96, 97, WriteType::Put, true, Expect::Keep),
         ]);
 
-        // Out of range.
+        // Locks from pessimistic transactions
         default.extend(vec![
             // key, start_ts
             (b"k8", 100, Expect::Keep),
+            (b"k9", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k8", 101, LockType::Put, false, Expect::Keep),
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k8", 102, 103, WriteType::Put, false, Expect::Keep),
+            (b"k8", 100, 110, WriteType::Put, false, Expect::Keep),
+            (b"k9", 100, 110, WriteType::Put, false, Expect::Keep),
+        ]);
+
+        // Out of range.
+        default.extend(vec![
+            // key, start_ts
+            (b"l0", 100, Expect::Keep),
+        ]);
+        lock.extend(vec![
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"l0", 101, 0, LockType::Put, false, Expect::Keep),
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"l0", 102, 103, WriteType::Put, false, Expect::Keep),
         ]);
 
         let mut kv = vec![];
@@ -2119,7 +2167,7 @@ mod tests {
                 expect,
             ));
         }
-        for (key, ts, tp, short_value, expect) in lock {
+        for (key, ts, for_update_ts, tp, short_value, expect) in lock {
             let v = if short_value {
                 Some(b"v".to_vec())
             } else {
@@ -2131,7 +2179,7 @@ mod tests {
                 ts.into(),
                 0,
                 v,
-                TimeStamp::zero(),
+                for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
             );
@@ -2169,7 +2217,7 @@ mod tests {
         }
         db.c().write(&wb).unwrap();
         // Fix problems.
-        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
+        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
         db.c().write(&wb).unwrap();
