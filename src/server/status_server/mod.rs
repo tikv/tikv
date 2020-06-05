@@ -434,7 +434,10 @@ where
                         self.advertise_addr = Some(advertise_addr);
                         return;
                     }
-                    Ok(resp) => warn!("failed to register addr to pd"; "response" => ?resp),
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to register addr to pd"; "status code" => status.as_str(), "body" => ?resp.text());
+                    }
                     Err(e) => warn!("failed to register addr to pd"; "error" => ?e),
                 }
             }
@@ -467,7 +470,10 @@ where
                         self.advertise_addr = None;
                         return;
                     }
-                    Ok(resp) => warn!("failed to unregister addr to pd"; "response" => ?resp),
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to unregister addr to pd"; "status code" => status.as_str(), "body" => ?resp.text());
+                    }
                     Err(e) => warn!("failed to unregister addr to pd"; "error" => ?e),
                 }
             }
