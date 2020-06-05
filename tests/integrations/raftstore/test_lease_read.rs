@@ -10,15 +10,9 @@ use std::{mem, thread};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-<<<<<<< HEAD
 use engine::Peekable;
-=======
-use engine_rocks::Compat;
-use engine_traits::Peekable;
-use pd_client::PdClient;
-use raftstore::store::Callback;
->>>>>>> a65815a... raftstore: get read index independently in batch (#7995)
 use test_raftstore::*;
+use tikv::pd::PdClient;
 use tikv::raftstore::store::{keys, Callback};
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;

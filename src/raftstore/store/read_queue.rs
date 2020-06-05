@@ -18,11 +18,7 @@ const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
 pub struct ReadIndexRequest {
     pub id: Uuid,
-<<<<<<< HEAD:src/raftstore/store/read_queue.rs
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
-=======
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksSnapshot>, Option<u64>)>,
->>>>>>> a65815a... raftstore: get read index independently in batch (#7995):components/raftstore/src/store/read_queue.rs
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
     // `true` means it's in `ReadIndexQueue::reads`.
@@ -30,21 +26,7 @@ pub struct ReadIndexRequest {
 }
 
 impl ReadIndexRequest {
-<<<<<<< HEAD:src/raftstore/store/read_queue.rs
-    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
-    pub fn binary_id(&self) -> &[u8] {
-        self.id.as_bytes()
-    }
-
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
-=======
-    pub fn push_command(
-        &mut self,
-        req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
-        read_index: u64,
-    ) {
->>>>>>> a65815a... raftstore: get read index independently in batch (#7995):components/raftstore/src/store/read_queue.rs
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb, Some(read_index)));
     }
