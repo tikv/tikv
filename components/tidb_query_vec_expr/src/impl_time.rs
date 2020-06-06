@@ -794,30 +794,29 @@ mod tests {
     #[test]
     fn test_month_name() {
         let cases = vec![
-            (None, None, None),
-            (Some("0000-00-00"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
-            (Some("2019-01-17"), None, Some("January")),
-            (Some("2019-02-18"), None, Some("February")),
-            (Some("2019-03-19"), None, Some("March")),
-            (Some("2019-04-20"), None, Some("April")),
-            (Some("2019-05-17"), None, Some("May")),
-            (Some("2019-06-18"), None, Some("June")),
-            (Some("2019-07-19"), None, Some("July")),
-            (Some("2019-08-20"), None, Some("August")),
-            (Some("2019-09-21"), None, Some("September")),
-            (Some("2019-10-22"), None, Some("October")),
-            (Some("2019-11-23"), None, Some("November")),
-            (Some("2019-12-24"), None, Some("December")),
-            (Some("2019-11-00"), None, Some("November")),
-            (Some("2019-00-00"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
-            (Some("2019-00-01"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
-            (Some("2019-11-24 00:00:00.000000"), None, Some("November")),
+            (None, None),
+            (Some("0000-00-00"), None),
+            (Some("2019-01-17"), Some("January")),
+            (Some("2019-02-18"), Some("February")),
+            (Some("2019-03-19"), Some("March")),
+            (Some("2019-04-20"), Some("April")),
+            (Some("2019-05-17"), Some("May")),
+            (Some("2019-06-18"), Some("June")),
+            (Some("2019-07-19"), Some("July")),
+            (Some("2019-08-20"), Some("August")),
+            (Some("2019-09-21"), Some("September")),
+            (Some("2019-10-22"), Some("October")),
+            (Some("2019-11-23"), Some("November")),
+            (Some("2019-12-24"), Some("December")),
+            (Some("2019-11-00"), Some("November")),
+            (Some("2019-00-00"), None),
+            (Some("2019-00-01"), None),
+            (Some("2019-11-24 00:00:00.000000"), Some("November")),
         ];
-
-        for (arg, err_code, exp) in cases {
+        for (arg, exp) in cases {
             let mut ctx = EvalContext::default();
             let arg = arg.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
-            let (output, ctx) = RpnFnScalarEvaluator::new()
+            let (output, _ctx) = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .context(ctx)
                 .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::MonthName);
