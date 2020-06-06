@@ -545,6 +545,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Hour => hour_fn_meta(),
         ScalarFuncSig::Minute => minute_fn_meta(),
         ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::TimeToSec => time_to_sec_fn_meta(),
         ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::DayName => day_name_fn_meta(),
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),
