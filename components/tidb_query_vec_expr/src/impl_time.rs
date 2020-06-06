@@ -739,7 +739,7 @@ mod tests {
                 Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
-                    .push_param(duration.clone())
+                    .push_param(duration)
                     .evaluate::<Int>(sig)
                     .unwrap();
                 assert_eq!(output, Some(res));
