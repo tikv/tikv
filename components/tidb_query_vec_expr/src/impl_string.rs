@@ -1649,8 +1649,18 @@ mod tests {
 
         let null_cases = vec![
             (None, Some(-1), Some(200), Some(b"asd".to_vec())),
-            (Some(b"hello".to_vec()), None, Some(200), Some(b"asd".to_vec())),
-            (Some(b"hello".to_vec()), Some(-1), None, Some(b"asd".to_vec())),
+            (
+                Some(b"hello".to_vec()),
+                None,
+                Some(200),
+                Some(b"asd".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(-1),
+                None,
+                Some(b"asd".to_vec()),
+            ),
             (Some(b"hello".to_vec()), Some(-1), Some(200), None),
         ];
         for (s1, i1, i2, s2) in null_cases {
