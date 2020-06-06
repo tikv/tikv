@@ -12,13 +12,15 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
+use kvproto::replication_modepb::{
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+};
 use raft::eraftpb;
 
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{ConfigClient, Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::check_key_in_region;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
@@ -133,7 +135,22 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    new_pd_merge_region(region)
+                    if cluster.check_merge_target_integrity {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::default()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::SplitRegion {
@@ -229,6 +246,12 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+
+    replication_status: Option<ReplicationStatus>,
+    region_replication_status: HashMap<u64, RegionReplicationStatus>,
+
+    // for merging
+    pub check_merge_target_integrity: bool,
 }
 
 impl Cluster {
@@ -257,6 +280,9 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            replication_status: None,
+            region_replication_status: HashMap::default(),
+            check_merge_target_integrity: true,
         }
     }
 
@@ -310,6 +336,20 @@ impl Cluster {
             Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
             _ => Err(box_err!("store {} not found", store_id)),
         }
+    }
+
+    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+        Ok(self
+            .stores
+            .values()
+            .filter_map(|s| {
+                if s.store.get_id() != 0 {
+                    Some(s.store.clone())
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -591,6 +631,7 @@ impl Cluster {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -611,6 +652,10 @@ impl Cluster {
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
         self.region_last_report_term.insert(region.get_id(), term);
+
+        if let Some(status) = replication_status {
+            self.region_replication_status.insert(region.id, status);
+        }
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -944,10 +989,8 @@ impl TestPdClient {
         if right.get_start_key() != split_key {
             return false;
         }
-
-        assert!(left.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        assert!(right.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        true
+        left.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+            && right.get_region_epoch().get_version() > region.get_region_epoch().get_version()
     }
 
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
@@ -968,6 +1011,36 @@ impl TestPdClient {
 
     pub fn set_bootstrap(&self, is_bootstraped: bool) {
         self.cluster.wl().set_bootstrap(is_bootstraped);
+    }
+
+    pub fn configure_dr_auto_sync(&self, label_key: &str) {
+        let mut status = ReplicationStatus::default();
+        status.set_mode(ReplicationMode::DrAutoSync);
+        status.mut_dr_auto_sync().label_key = label_key.to_owned();
+        let mut cluster = self.cluster.wl();
+        status.mut_dr_auto_sync().state_id = cluster
+            .replication_status
+            .as_ref()
+            .map(|s| s.get_dr_auto_sync().state_id + 1)
+            .unwrap_or(1);
+        cluster.replication_status = Some(status);
+    }
+
+    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
+        let mut cluster = self.cluster.wl();
+        let status = cluster.replication_status.as_mut().unwrap();
+        let mut dr = status.mut_dr_auto_sync();
+        dr.state_id += 1;
+        dr.set_state(state);
+    }
+
+    pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
+        self.cluster
+            .rl()
+            .region_replication_status
+            .get(&region_id)
+            .unwrap()
+            .to_owned()
     }
 
     pub fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
@@ -1006,6 +1079,10 @@ impl TestPdClient {
             }
         }
     }
+
+    pub fn ignore_merge_target_integrity(&self) {
+        self.cluster.wl().check_merge_target_integrity = false;
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1013,15 +1090,19 @@ impl PdClient for TestPdClient {
         Ok(self.cluster_id)
     }
 
-    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        store: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.cluster.wl().bootstrap(store, region);
-
-        Ok(())
+        let mut cluster = self.cluster.wl();
+        cluster.bootstrap(store, region);
+        Ok(cluster.replication_status.clone())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -1032,9 +1113,16 @@ impl PdClient for TestPdClient {
         self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         self.check_bootstrap()?;
-        self.cluster.wl().put_store(store)
+        let mut cluster = self.cluster.wl();
+        cluster.put_store(store)?;
+        Ok(cluster.replication_status.clone())
+    }
+
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        self.check_bootstrap()?;
+        self.cluster.rl().get_all_stores()
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -1083,14 +1171,18 @@ impl PdClient for TestPdClient {
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
-        let resp = self
-            .cluster
-            .wl()
-            .region_heartbeat(term, region, leader.clone(), region_stat);
+        let resp = self.cluster.wl().region_heartbeat(
+            term,
+            region,
+            leader.clone(),
+            region_stat,
+            replication_status,
+        );
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
@@ -1203,16 +1295,16 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
 
         // Cache it directly now.
         let store_id = stats.get_store_id();
-        self.cluster.wl().store_stats.insert(store_id, stats);
-
-        Box::new(ok(()))
+        let mut cluster = self.cluster.wl();
+        cluster.store_stats.insert(store_id, stats);
+        Box::new(ok(cluster.replication_status.clone()))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
@@ -1262,45 +1354,5 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::new(futures::future::result(Ok(TimeStamp::new(tso as _))))
-    }
-}
-
-impl ConfigClient for TestPdClient {
-    fn register_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        cfg: String,
-    ) -> Result<configpb::CreateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::CreateResponse::default();
-        resp.set_status(status);
-        resp.set_config(cfg);
-        resp.set_version(version);
-        Ok(resp)
-    }
-
-    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::NotChange);
-        let mut resp = configpb::GetResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
-    }
-
-    fn update_config(
-        &self,
-        _id: String,
-        version: configpb::Version,
-        _entries: Vec<configpb::ConfigEntry>,
-    ) -> Result<configpb::UpdateResponse> {
-        let mut status = configpb::Status::default();
-        status.set_code(configpb::StatusCode::Ok);
-        let mut resp = configpb::UpdateResponse::default();
-        resp.set_version(version);
-        resp.set_status(status);
-        Ok(resp)
     }
 }

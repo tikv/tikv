@@ -8,7 +8,6 @@ use async_stream::try_stream;
 use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
-use rand::prelude::*;
 use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -21,8 +20,7 @@ use tipb::{DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
-use crate::storage::kv::with_tls_engine;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -182,7 +180,11 @@ impl<E: Engine> Endpoint<E> {
                 if start_ts == 0 {
                     start_ts = dag.get_start_ts_fallback();
                 }
-                let tag = if table_scan { "select" } else { "index" };
+                let tag = if table_scan {
+                    ReqTag::select
+                } else {
+                    ReqTag::index
+                };
 
                 req_ctx = ReqContext::new(
                     tag,
@@ -230,9 +232,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "analyze_table"
+                    ReqTag::analyze_table
                 } else {
-                    "analyze_index"
+                    ReqTag::analyze_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -261,9 +263,9 @@ impl<E: Engine> Endpoint<E> {
                 }
 
                 let tag = if table_scan {
-                    "checksum_table"
+                    ReqTag::checksum_table
                 } else {
-                    "checksum_index"
+                    ReqTag::checksum_index
                 };
                 req_ctx = ReqContext::new(
                     tag,
@@ -295,25 +297,13 @@ impl<E: Engine> Endpoint<E> {
             self.batch_row_limit
         }
     }
-
     #[inline]
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_std_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
-        // make engine not cross yield point
-        async move {
-            val?; // propagate error
-            let (_ctx, result) = future
-                .map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
-                .await?;
-            // map storage::kv::Error -> storage::txn::Error -> storage::Error
-            result.map_err(Error::from)
-        }
+        kv::snapshot(engine, ctx).map_err(Error::from)
     }
-
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -362,9 +352,9 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let exec_details = tracker.get_item_exec_details();
-
+        let exec_details = tracker.get_exec_details();
         tracker.on_finish_all_items();
+
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
@@ -386,9 +376,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
@@ -499,9 +487,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx
-            .txn_start_ts
-            .unwrap_or_else(|| thread_rng().next_u64());
+        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
@@ -602,6 +588,7 @@ mod tests {
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
+        yieldable: bool,
         result: Option<Result<coppb::Response>>,
     }
 
@@ -609,6 +596,7 @@ mod tests {
         pub fn new(result: Result<coppb::Response>) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis: 0,
+                yieldable: false,
                 result: Some(result),
             }
         }
@@ -619,6 +607,18 @@ mod tests {
         ) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis,
+                yieldable: false,
+                result: Some(result),
+            }
+        }
+
+        pub fn new_with_duration_yieldable(
+            result: Result<coppb::Response>,
+            handle_duration_millis: u64,
+        ) -> UnaryFixture {
+            UnaryFixture {
+                handle_duration_millis,
+                yieldable: true,
                 result: Some(result),
             }
         }
@@ -627,7 +627,17 @@ mod tests {
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            if self.yieldable {
+                // We split the task into small executions of 1 second.
+                for _ in 0..self.handle_duration_millis / 1_000 {
+                    thread::sleep(Duration::from_millis(1_000));
+                    yatp::task::future::reschedule().await;
+                }
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+            } else {
+                thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            }
+
             self.result.take().unwrap()
         }
     }
@@ -740,7 +750,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
-            "test",
+            ReqTag::test,
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
@@ -1216,6 +1226,62 @@ mod tests {
             assert_lt!(
                 resp.get_exec_details().get_handle_time().get_wait_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+        }
+
+        {
+            // Test multi-stage tasks
+            // Request 1: Unary, success response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Ok(coppb::Response::default()),
+                    PAYLOAD_SMALL as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            // Sleep a while to make sure that thread is spawn and snapshot is taken.
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Request 2: Unary, error response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Err(box_err!("foo")),
+                    PAYLOAD_LARGE as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Response 1
+            let resp = &rx.recv().unwrap()[0];
+            assert!(resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+
+            // Response 2
+            let resp = &rx.recv().unwrap()[0];
+            assert!(!resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 

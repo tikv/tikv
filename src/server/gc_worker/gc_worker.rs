@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -137,7 +137,7 @@ impl Display for GcTask {
 struct GcRunner<E: Engine> {
     engine: E,
     local_storage: Option<RocksEngine>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
@@ -153,7 +153,7 @@ impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
         local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
@@ -501,7 +501,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
 
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
@@ -515,7 +515,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn update_statistics_metrics(&mut self) {
-        let stats = mem::replace(&mut self.stats, Statistics::default());
+        let stats = mem::take(&mut self.stats);
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
@@ -658,7 +658,7 @@ pub struct GcWorker<E: Engine> {
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<RocksEngine>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
     /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
     /// This is useful to do the `need_gc` check without waking hibernatin regions up.
     /// This is not set for tests.
@@ -721,7 +721,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
         local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> GcWorker<E> {
@@ -758,7 +758,10 @@ impl<E: Engine> GcWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
+            self.config_manager
+                .0
+                .clone()
+                .tracker("gc-worker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
@@ -771,7 +774,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost,
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
@@ -939,7 +942,7 @@ mod tests {
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksEngine>;
+        type Snap = RegionSnapshot<RocksSnapshot>;
 
         fn async_write(
             &self,
@@ -1185,9 +1188,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),

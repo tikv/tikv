@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
 use std::process;
@@ -74,6 +73,13 @@ fn main() {
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Set the HTTP listening address for the status report service"),
+        )
+        .arg(
+            Arg::with_name("advertise-status-addr")
+                .long("advertise-status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the advertise listening address for the client communication of status report service"),
         )
         .arg(
             Arg::with_name("data-dir")

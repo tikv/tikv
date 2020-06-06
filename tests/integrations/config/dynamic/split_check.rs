@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine::{rocks, DB};
+use engine::DB;
 use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
@@ -14,13 +15,10 @@ use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{Scheduler, Worker};
 
-use tempfile::Builder;
-
-fn tmp_engine() -> Arc<DB> {
-    let path = Builder::new().prefix("test-config").tempdir().unwrap();
+fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     Arc::new(
-        rocks::util::new_engine(
-            path.path().join("db").to_str().unwrap(),
+        engine_rocks::raw_util::new_engine(
+            path.as_ref().to_str().unwrap(),
             None,
             &["split-check-config"],
             None,
@@ -40,7 +38,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();
 
-    let mut cfg_controller = ConfigController::new(cfg, Default::default(), false);
+    let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         Module::Coprocessor,
         Box::new(SplitCheckConfigManager(worker.scheduler())),
@@ -65,34 +63,44 @@ where
 
 #[test]
 fn test_update_split_check_config() {
-    let mut cfg = TiKvConfig::default();
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
-    let engine = tmp_engine();
-    let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
+    let engine = tmp_engine(&cfg.storage.data_dir);
+    let (cfg_controller, mut worker) = setup(cfg.clone(), engine);
     let scheduler = worker.scheduler();
 
     let cop_config = cfg.coprocessor.clone();
-    let mut incoming = cfg.clone();
-    incoming.raft_store.raft_log_gc_threshold = 2000;
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
     // update of other module's config should not effect split check config
-    assert_eq!(rollback.right(), Some(true));
+    cfg_controller
+        .update_config("raftstore.raft-log-gc-threshold", "2000")
+        .unwrap();
     validate(&scheduler, move |cfg: &Config| {
         assert_eq!(cfg, &cop_config);
     });
 
+    let change = {
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            "coprocessor.split_region_on_table".to_owned(),
+            "true".to_owned(),
+        );
+        m.insert("coprocessor.batch_split_limit".to_owned(), "123".to_owned());
+        m.insert(
+            "coprocessor.region_split_keys".to_owned(),
+            "12345".to_owned(),
+        );
+        m
+    };
+    cfg_controller.update(change).unwrap();
+
+    // config should be updated
     let cop_config = {
-        let mut cop_config = cfg.coprocessor.clone();
+        let mut cop_config = cfg.coprocessor;
         cop_config.split_region_on_table = true;
         cop_config.batch_split_limit = 123;
         cop_config.region_split_keys = 12345;
         cop_config
     };
-    let mut incoming = cfg;
-    incoming.coprocessor = cop_config.clone();
-    let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
-    // config should be updated
-    assert_eq!(rollback.right(), Some(true));
     validate(&scheduler, move |cfg: &Config| {
         assert_eq!(cfg, &cop_config);
     });

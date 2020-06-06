@@ -68,11 +68,12 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
-prometheus = { version = "0.8", features = ["nightly", "push", "process"] }
+prometheus = { version = "0.8", features = ["nightly", "push"] }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore" }
 rand = "0.7"
+security = { path = "../components/security" }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }

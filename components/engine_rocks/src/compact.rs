@@ -92,7 +92,7 @@ impl CompactExt for RocksEngine {
 
         let mut opts = CompactionOptions::new();
         opts.set_compression(output_compression);
-        let max_subcompactions = sysinfo::get_logical_cores();
+        let max_subcompactions = num_cpus::get();
         let max_subcompactions = cmp::min(max_subcompactions, 32);
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
@@ -104,8 +104,8 @@ impl CompactExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
+    use crate::raw_util::{new_engine, CFOptions};
     use crate::Compat;
-    use engine::rocks::util::{new_engine, CFOptions};
     use engine_traits::CompactExt;
     use rocksdb::{ColumnFamilyOptions, Writable};
     use std::sync::Arc;

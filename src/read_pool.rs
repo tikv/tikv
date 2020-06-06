@@ -285,15 +285,15 @@ quick_error! {
         FuturePoolFull(err: future_pool::Full) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         UnifiedReadPoolFull {
-            description("Unified read pool is full")
+            display("Unified read pool is full")
         }
         Canceled(err: oneshot::Canceled) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
     }
 }
@@ -316,15 +316,14 @@ mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
     use futures03::channel::oneshot;
-    use raftstore::store::FlowStatistics;
+    use raftstore::store::ReadStats;
     use std::thread;
-    use tikv_util::collections::HashMap;
 
     #[derive(Clone)]
     struct DummyReporter;
 
     impl FlowStatsReporter for DummyReporter {
-        fn report_read_stats(&self, _read_stats: HashMap<u64, FlowStatistics>) {}
+        fn report_read_stats(&self, _read_stats: ReadStats) {}
     }
 
     #[test]

@@ -10,11 +10,8 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use engine;
-use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::Snapshot;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{
@@ -40,7 +37,7 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, cmd: RaftCommand<RocksEngine>) {
+    fn invoke(&self, cmd: RaftCommand<RocksSnapshot>) {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
@@ -49,7 +46,7 @@ impl SyncBenchRouter {
                 let region = self.region.to_owned();
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
                 })
             }
             Callback::Write(cb) => {
@@ -64,12 +61,12 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter for SyncBenchRouter {
+impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
@@ -78,7 +75,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 
@@ -88,7 +85,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = Builder::new().prefix("bench_rafkv").tempdir().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
+    let db = engine_rocks::raw_util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 
@@ -100,14 +97,14 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
-            snapshot.into_sync(),
+            Arc::new(snapshot),
             Region::default(),
         )),
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(
-            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksEngine>>)| {
+        let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(
+            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksSnapshot>>)| {
                 assert!(res.is_ok());
             },
         );
@@ -117,8 +114,8 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                     cb1((ctx, Ok(snap)));
                 }
             });
-        let cb: Callback<RocksEngine> =
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+        let cb: Callback<RocksSnapshot> =
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2((CbContext::new(), Ok(res)));
             }));
@@ -147,7 +144,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(move |results| {
+        let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();

@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -9,44 +8,19 @@ use std::iter;
 
 use hex::{self, FromHex};
 
-use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
 use tidb_query_shared_expr::conv::i64_to_usize;
-use tidb_query_shared_expr::string::validate_target_len_for_pad;
+use tidb_query_shared_expr::string::{
+    encoded_size, line_wrap, strip_whitespace, trim, validate_target_len_for_pad, TrimDirection,
+    BASE64_ENCODED_CHUNK_LENGTH, BASE64_INPUT_CHUNK_LENGTH,
+};
 use tikv_util::try_opt_or;
 
 use crate::ScalarFunc;
-use safemem;
 use tidb_query_datatype::codec::{datum, Datum};
 use tidb_query_datatype::expr::{EvalContext, Result};
 
 const SPACE: u8 = 0o40u8;
-
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
-
-enum TrimDirection {
-    Both = 1,
-    Leading,
-    Trailing,
-}
-
-impl TrimDirection {
-    fn from_i64(i: i64) -> Option<Self> {
-        match i {
-            1 => Some(TrimDirection::Both),
-            2 => Some(TrimDirection::Leading),
-            3 => Some(TrimDirection::Trailing),
-            _ => None,
-        }
-    }
-}
 
 impl ScalarFunc {
     #[inline]
@@ -487,7 +461,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        trim(&s, " ", TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, " ", TrimDirection::Both))))
     }
 
     #[inline]
@@ -498,7 +472,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        trim(&s, &pat, TrimDirection::Both)
+        Ok(Some(Cow::Owned(trim(&s, &pat, TrimDirection::Both))))
     }
 
     #[inline]
@@ -511,7 +485,7 @@ impl ScalarFunc {
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let direction = try_opt!(self.children[2].eval_int(ctx, row));
         match TrimDirection::from_i64(direction) {
-            Some(d) => trim(&s, &pat, d),
+            Some(d) => Ok(Some(Cow::Owned(trim(&s, &pat, d)))),
             _ => Err(box_err!("invalid direction value: {}", direction)),
         }
     }
@@ -1027,51 +1001,55 @@ impl ScalarFunc {
             .map(|p| p as i64 + 1)
             .or(Some(0)))
     }
-}
 
-#[inline]
-fn strip_whitespace(input: &[u8]) -> Vec<u8> {
-    let mut input_copy = Vec::<u8>::with_capacity(input.len());
-    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
-    input_copy
-}
-
-#[inline]
-fn encoded_size(len: usize) -> Option<usize> {
-    if len == 0 {
-        return Some(0);
+    #[inline]
+    pub fn insert<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let upos: usize = pos as usize;
+        let len = try_opt!(self.children[2].eval_int(ctx, row));
+        let mut ulen: usize = len as usize;
+        let newstr = try_opt!(self.children[3].eval_string(ctx, row));
+        if pos < 1 || upos > s.len() {
+            return Ok(Some(s));
+        }
+        if ulen > s.len() - upos + 1 || len < 0 {
+            ulen = s.len() - upos + 1;
+        }
+        let mut ret: Vec<u8> = Vec::with_capacity(newstr.len() + s.len());
+        ret.extend_from_slice(&s[0..upos - 1]);
+        ret.extend_from_slice(&newstr);
+        ret.extend_from_slice(&s[upos + ulen - 1..]);
+        Ok(Some(Cow::Owned(ret)))
     }
-    // size_without_wrap = (len + (3 - 1)) / 3 * 4
-    // size = size_without_wrap + (size_withou_wrap - 1) / 76
-    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
-        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
-        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
-        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
-}
 
-// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
-// there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
-fn line_wrap(buf: &mut [u8], input_len: usize) {
-    let line_len = BASE64_LINE_WRAP_LENGTH;
-    if input_len <= line_len {
-        return;
-    }
-    let last_line_len = if input_len % line_len == 0 {
-        line_len
-    } else {
-        input_len % line_len
-    };
-    let lines_with_ending = (input_len - 1) / line_len;
-    let line_with_ending_len = line_len + 1;
-    let mut old_start = input_len - last_line_len;
-    let mut new_start = buf.len() - last_line_len;
-    safemem::copy_over(buf, old_start, new_start, last_line_len);
-    for _ in 0..lines_with_ending {
-        old_start -= line_len;
-        new_start -= line_with_ending_len;
-        safemem::copy_over(buf, old_start, new_start, line_len);
-        buf[new_start + line_len] = BASE64_LINE_WRAP;
+    #[inline]
+    pub fn make_set<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mask = try_opt!(self.children[0].eval_int(ctx, row));
+        let mut output: Vec<u8> = Vec::new();
+        let mut pow2 = 1;
+        let s = b",";
+        let mut q = false;
+        for expr in self.children.iter().skip(1) {
+            if pow2 & mask != 0 {
+                let input = try_opt!(expr.eval_string(ctx, row));
+                if q {
+                    output.extend_from_slice(s);
+                }
+                output.extend_from_slice(&input);
+                q = true;
+            }
+            pow2 <<= 1;
+        }
+        Ok(Some(Cow::Owned(output)))
     }
 }
 
@@ -1106,16 +1084,6 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
         positions.push_back(bg);
     }
     s[positions[0]..].to_string()
-}
-
-#[inline]
-fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
-    let r = match direction {
-        TrimDirection::Leading => s.trim_start_matches(pat),
-        TrimDirection::Trailing => s.trim_end_matches(pat),
-        _ => s.trim_start_matches(pat).trim_end_matches(pat),
-    };
-    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]
@@ -1580,6 +1548,42 @@ mod tests {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let expected = Datum::Null;
         assert_eq!(got, expected, "repeat(NULL, NULL)");
+    }
+
+    #[test]
+    fn test_insert() {
+        let cases = vec![
+            ("hello, world!", 1, 0, "asd", "asdhello, world!"),
+            ("hello, world!", 0, -1, "asd", "hello, world!"),
+            ("hello, world!", 0, 0, "asd", "hello, world!"),
+            ("hello, world!", -1, 0, "asd", "hello, world!"),
+            ("hello, world!", 1, -1, "asd", "asd"),
+            ("hello, world!", 1, 1, "asd", "asdello, world!"),
+            ("hello, world!", 1, 3, "asd", "asdlo, world!"),
+            ("hello, world!", 2, 2, "asd", "hasdlo, world!"),
+            ("hello", 5, 2, "asd", "hellasd"),
+            ("hello", 5, 200, "asd", "hellasd"),
+            ("hello", 2, 200, "asd", "hasd"),
+            ("hello", -1, 200, "asd", "hello"),
+            ("hello", 0, 200, "asd", "hello"),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, input_pos, input_len, newstr, expected) in cases {
+            let s = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let pos = datum_expr(Datum::I64(input_pos));
+            let len = datum_expr(Datum::I64(input_len));
+            let ns = datum_expr(Datum::Bytes(newstr.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::Insert, &[s, pos, len, ns]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let expected = Datum::Bytes(expected.as_bytes().to_vec());
+            assert_eq!(
+                got, expected,
+                "insert({:?}, {:?}, {:?}, {:?})",
+                input_str, input_pos, input_len, newstr
+            );
+        }
     }
 
     #[test]
@@ -2329,6 +2333,98 @@ mod tests {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_make_set() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::I64(0),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(1),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(2),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(5),
+                    Datum::Bytes(b"asd".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"asd,Hola".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(1 | 2 | 4 | 8),
+                    Datum::Bytes(b"asd".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes("asd,Hello,Hola,Cześć".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-1),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"a,b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-2),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(-3),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Bytes(b"c".to_vec()),
+                ],
+                Datum::Bytes(b"a,c".to_vec()),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::MakeSet, &children);
+            let e = Expression::build(&mut ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
         }
     }
 

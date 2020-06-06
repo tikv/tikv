@@ -8,8 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{DATA_KEY_PREFIX_LEN, DB};
-use engine_traits::{name_to_cf, CfName, IterOptions};
+use engine::DB;
+use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -599,7 +599,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if request.is_raw_kv {
                 Some(Key::from_encoded(request.start_key.clone()))
             } else {
-                Some(Key::from_raw(&request.start_key.clone()))
+                Some(Key::from_raw(&request.start_key))
             }
         };
         let end_key = if request.end_key.is_empty() {
@@ -608,7 +608,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if request.is_raw_kv {
                 Some(Key::from_encoded(request.end_key.clone()))
             } else {
-                Some(Key::from_raw(&request.end_key.clone()))
+                Some(Key::from_raw(&request.end_key))
             }
         };
 
@@ -704,9 +704,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
 impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool
-            .borrow_mut()
-            .check_active(pool_idle_duration.clone());
+        self.pool.borrow_mut().check_active(pool_idle_duration);
         timer.add_task(pool_idle_duration, ());
     }
 }
@@ -782,7 +780,6 @@ pub mod tests {
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
-    use rand;
     use std::thread;
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;

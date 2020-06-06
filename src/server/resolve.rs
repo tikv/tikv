@@ -1,12 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use engine_traits::Snapshot;
 use kvproto::metapb;
-
+use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
+use raftstore::store::{GlobalReplicationState, RaftRouter};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -41,12 +43,14 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient> {
+struct Runner<T: PdClient, S: Snapshot> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
+    state: Arc<Mutex<GlobalReplicationState>>,
+    router: Option<RaftRouter<S>>,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient, S: Snapshot> Runner<T, S> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -70,6 +74,20 @@ impl<T: PdClient> Runner<T> {
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = box_try!(pd_client.get_store(store_id));
+        let mut group_id = None;
+        let mut state = self.state.lock().unwrap();
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
+            }
+        } else {
+            state.group.backup_store_labels(&mut s);
+        }
+        drop(state);
+        if let (Some(group_id), Some(router)) = (group_id, &self.router) {
+            router.report_resolved(store_id, group_id);
+        }
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
             return Err(box_err!("store {} has been removed", store_id));
@@ -85,7 +103,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient, S: Snapshot> Runnable<Task> for Runner<T, S> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -106,19 +124,29 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrResolver)>
+pub fn new_resolver<T, S>(
+    pd_client: Arc<T>,
+    router: RaftRouter<S>,
+) -> Result<(
+    Worker<Task>,
+    PdStoreAddrResolver,
+    Arc<Mutex<GlobalReplicationState>>,
+)>
 where
     T: PdClient + 'static,
+    S: Snapshot,
 {
     let mut worker = Worker::new("addr-resolver");
-
+    let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
+        state: state.clone(),
+        router: Some(router),
     };
     box_try!(worker.start(runner));
     let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver))
+    Ok((worker, resolver, state))
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -139,6 +167,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use engine_rocks::RocksSnapshot;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use tikv_util::collections::HashMap;
@@ -169,7 +198,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksSnapshot> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -177,6 +206,8 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
+            state: Default::default(),
+            router: None,
         }
     }
 
