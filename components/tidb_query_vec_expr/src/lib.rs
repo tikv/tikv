@@ -565,7 +565,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
-        ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::MonthName => month_name_fn_meta(),
         ScalarFuncSig::Hour => hour_fn_meta(),
         ScalarFuncSig::Minute => minute_fn_meta(),
         ScalarFuncSig::Second => second_fn_meta(),
