@@ -155,10 +155,10 @@ pub fn make_date(
     year: Option<&Int>,
     day: Option<&Int>,
 ) -> Result<Option<Time>> {
-    if let year.is_none() {
+    if year.is_none() {
         return Ok(None);
     }
-    if let day.is_none() {
+    if day.is_none() {
         return Ok(None);
     }
     let mut year = *year.unwrap();
