@@ -345,6 +345,41 @@ fn field<T: Evaluable + PartialEq>(args: &[&Option<T>]) -> Result<Option<Int>> {
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
+pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
+    assert!(raw_args.len() >= 2);
+    let mask = raw_args[0].as_int();
+    let mut output = Vec::new();
+    let mut pow2 = 1;
+    let s = b",";
+    let mut q = false;
+    match *mask {
+        None => {
+            return Ok(None);
+        }
+        Some(mask2) => {
+            for i in 1..raw_args.len() {
+                if pow2 & mask2 != 0 {
+                    let input = raw_args[i].as_bytes();
+                    match input {
+                        None => {}
+                        Some(s2) => {
+                            if q {
+                                output.extend_from_slice(s);
+                            }
+                            output.extend_from_slice(s2);
+                            q = true;
+                        }
+                    };
+                }
+                pow2 <<= 1;
+            }
+        }
+    };
+    Ok(Some(output))
+}
+
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
     let index = raw_args[0].as_int();
@@ -1538,6 +1573,112 @@ mod tests {
                 .evaluate(ScalarFuncSig::Space)
                 .unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_make_set() {
+        let test_cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    Some(0).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(1).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    None::<Int>.into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (vec![None::<Int>.into(), None::<Bytes>.into()], None),
+            (
+                vec![
+                    Some(1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(3).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(-1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                    None::<Bytes>.into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(2).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(-1).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(-2).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(-3).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,c".to_vec()),
+            ),
+        ];
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::MakeSet)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 
