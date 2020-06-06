@@ -5,9 +5,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
-use engine_traits::{CompactExt, KvEngine};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -77,18 +76,20 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("compact failed {:?}", err)
         }
     }
 }
 
-pub struct Runner {
-    engine: RocksEngine,
+pub struct Runner<E> {
+    engine: E,
 }
 
-impl Runner {
-    pub fn new(engine: RocksEngine) -> Runner {
+impl<E> Runner<E>
+where
+    E: KvEngine,
+{
+    pub fn new(engine: E) -> Runner<E> {
         Runner { engine }
     }
 
@@ -118,7 +119,10 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<E> Runnable<Task> for Runner<E>
+where
+    E: KvEngine,
+{
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact {
@@ -127,11 +131,8 @@ impl Runnable<Task> for Runner {
                 end_key,
             } => {
                 let cf = &cf_name;
-                if let Err(e) = self.compact_range_cf(
-                    cf,
-                    start_key.as_ref().map(Vec::as_slice),
-                    end_key.as_ref().map(Vec::as_slice),
-                ) {
+                if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
+                {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -245,10 +246,11 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
+    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
+    use engine_rocks::util::get_cf_handle;
     use engine_rocks::Compat;
     use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};

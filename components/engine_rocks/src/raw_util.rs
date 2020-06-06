@@ -1,62 +1,19 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod config;
-pub mod engine_metrics;
-pub mod stats;
+//! Functions for constructing the rocksdb crate's `DB` type
+//!
+//! These are an artifact of refactoring the engine traits and will go away
+//! eventually. Prefer to use the versions in the `util` module.
 
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use self::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
-    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
-    ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
-use crate::{Error, Result};
+use engine_traits::Result;
 use rocksdb::load_latest_options;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, DBCompressionType, DBOptions, Env,
-    SliceTransform, DB,
-};
+use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
 
-pub use crate::rocks::CFHandle;
 use engine_traits::CF_DEFAULT;
-
-// Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
-    DBCompressionType::Lz4,
-    DBCompressionType::Snappy,
-    DBCompressionType::Zstd,
-];
-
-pub fn get_fastest_supported_compression_type() -> DBCompressionType {
-    let all_supported_compression = supported_compression();
-    *COMPRESSION_PRIORITY
-        .iter()
-        .find(|c| all_supported_compression.contains(c))
-        .unwrap_or(&DBCompressionType::No)
-}
-
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
-    let handle = db
-        .cf_handle(cf)
-        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
-    Ok(handle)
-}
-
-pub fn open_opt(
-    opts: DBOptions,
-    path: &str,
-    cfs: Vec<&str>,
-    cfs_opts: Vec<ColumnFamilyOptions>,
-) -> Result<DB> {
-    let db = DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())?;
-    Ok(db)
-}
 
 pub struct CFOptions<'a> {
     cf: &'a str,
@@ -226,133 +183,20 @@ pub fn new_engine_opt(
     Ok(db)
 }
 
-pub fn db_exist(path: &str) -> bool {
+pub(crate) fn db_exist(path: &str) -> bool {
     let path = Path::new(path);
     if !path.exists() || !path.is_dir() {
         return false;
     }
+    let current_file_path = path.join("CURRENT");
+    if !current_file_path.exists() || !current_file_path.is_file() {
+        return false;
+    }
 
-    // If path is not an empty directory, we say db exists. If path is not an empty directory
+    // If path is not an empty directory, and current file exists, we say db exists. If path is not an empty directory
     // but db has not been created, `DB::list_column_families` fails and we can clean up
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
-}
-
-pub(crate) fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
-    let mut cf_used_size = engine
-        .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-        .expect("rocksdb is too old, missing total-sst-files-size property");
-    // For memtable
-    if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
-        cf_used_size += mem_table;
-    }
-    // For blob files
-    if let Some(live_blob) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
-    {
-        cf_used_size += live_blob;
-    }
-    if let Some(obsolete_blob) =
-        engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
-    {
-        cf_used_size += obsolete_blob;
-    }
-
-    cf_used_size
-}
-
-/// Gets engine's compression ratio at given level.
-pub fn get_engine_compression_ratio_at_level(
-    engine: &DB,
-    handle: &CFHandle,
-    level: usize,
-) -> Option<f64> {
-    let prop = format!("{}{}", ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, level);
-    if let Some(v) = engine.get_property_value_cf(handle, &prop) {
-        if let Ok(f) = f64::from_str(&v) {
-            // RocksDB returns -1.0 if the level is empty.
-            if f >= 0.0 {
-                return Some(f);
-            }
-        }
-    }
-    None
-}
-
-/// Gets the number of files at given level of given column family.
-pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
-    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
-    engine.get_property_int_cf(handle, &prop)
-}
-
-/// Gets the number of immutable mem-table of given column family.
-pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
-    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
-}
-
-pub struct FixedSuffixSliceTransform {
-    pub suffix_len: usize,
-}
-
-impl FixedSuffixSliceTransform {
-    pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
-        FixedSuffixSliceTransform { suffix_len }
-    }
-}
-
-impl SliceTransform for FixedSuffixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        let mid = key.len() - self.suffix_len;
-        let (left, _) = key.split_at(mid);
-        left
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.suffix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct FixedPrefixSliceTransform {
-    pub prefix_len: usize,
-}
-
-impl FixedPrefixSliceTransform {
-    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
-        FixedPrefixSliceTransform { prefix_len }
-    }
-}
-
-impl SliceTransform for FixedPrefixSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        &key[..self.prefix_len]
-    }
-
-    fn in_domain(&mut self, key: &[u8]) -> bool {
-        key.len() >= self.prefix_len
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
-}
-
-pub struct NoopSliceTransform;
-
-impl SliceTransform for NoopSliceTransform {
-    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
-        key
-    }
-
-    fn in_domain(&mut self, _: &[u8]) -> bool {
-        true
-    }
-
-    fn in_range(&mut self, _: &[u8]) -> bool {
-        true
-    }
 }
 
 /// Returns a Vec of cf which is in `a' but not in `b'.
@@ -366,8 +210,8 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use engine_traits::CF_DEFAULT;
+    use rocksdb::{ColumnFamilyOptions, DBOptions, DB};
     use tempfile::Builder;
 
     #[test]
@@ -452,24 +296,5 @@ mod tests {
         let cf_test = db.cf_handle("cf_dynamic_level_bytes").unwrap();
         let tmp_cf_opts = db.get_options_cf(cf_test);
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
-    }
-
-    #[test]
-    fn test_compression_ratio() {
-        let path = Builder::new()
-            .prefix("_util_rocksdb_test_compression_ratio")
-            .tempdir()
-            .unwrap();
-        let path_str = path.path().to_str().unwrap();
-
-        let opts = DBOptions::new();
-        let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
-        let db = new_engine_opt(path_str, opts, vec![cf_opts]).unwrap();
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
-
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_none());
-        db.put_cf(cf, b"a", b"a").unwrap();
-        db.flush_cf(cf, true).unwrap();
-        assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
     }
 }

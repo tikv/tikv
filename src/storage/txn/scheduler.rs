@@ -27,11 +27,10 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
-use prometheus::HistogramTimer;
-use tikv_util::{collections::HashMap, time::Instant};
+use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
-use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
+use crate::storage::kv::{drop_snapshot_callback, with_tls_engine, Engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
@@ -120,9 +119,23 @@ struct TaskContext {
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
-    latch_timer: Option<HistogramTimer>,
+    // latch_timer: Option<Instant>,
+    latch_timer: Instant,
     // Total duration of a command.
-    _cmd_timer: HistogramTimer,
+    _cmd_timer: CmdTimer,
+}
+
+struct CmdTimer {
+    tag: metrics::CommandKind,
+    begin: Instant,
+}
+
+impl Drop for CmdTimer {
+    fn drop(&mut self) {
+        SCHED_HISTOGRAM_VEC_STATIC
+            .get(self.tag)
+            .observe(self.begin.elapsed_secs());
+    }
 }
 
 impl TaskContext {
@@ -145,13 +158,18 @@ impl TaskContext {
             cb: Some(cb),
             write_bytes,
             tag,
-            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
-            _cmd_timer: SCHED_HISTOGRAM_VEC_STATIC.get(tag).start_coarse_timer(),
+            latch_timer: Instant::now_coarse(),
+            _cmd_timer: CmdTimer {
+                tag,
+                begin: Instant::now_coarse(),
+            },
         }
     }
 
     fn on_schedule(&mut self) {
-        self.latch_timer.take();
+        SCHED_LATCH_HISTOGRAM_VEC
+            .get(self.tag)
+            .observe(self.latch_timer.elapsed_secs());
     }
 }
 
@@ -236,7 +254,7 @@ impl<L: LockManager> SchedulerInner<L> {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .map(|tctx| tctx.cb.take().unwrap())
+            .and_then(|tctx| tctx.cb.take())
     }
 
     fn too_busy(&self) -> bool {
@@ -385,9 +403,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
-        let cb = Box::new(move |(cb_ctx, snapshot)| {
-            executor.execute(cb_ctx, snapshot, task);
-        });
+        let cb = must_call(
+            move |(cb_ctx, snapshot)| {
+                executor.execute(cb_ctx, snapshot, task);
+            },
+            drop_snapshot_callback::<E>,
+        );
 
         let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {

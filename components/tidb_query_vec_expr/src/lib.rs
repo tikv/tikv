@@ -189,6 +189,14 @@ where
     Ok(mapper(rhs_is_unsigned))
 }
 
+fn truncate_int_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_int_with_uint_fn_meta()
+    } else {
+        truncate_int_with_int_fn_meta()
+    }
+}
+
 fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     if rhs_is_unsigned {
         truncate_real_with_uint_fn_meta()
@@ -310,6 +318,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLE>>(),
         ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLE>>(),
         ScalarFuncSig::LeJson => compare_fn_meta::<BasicComparer<Json, CmpOpLE>>(),
+        ScalarFuncSig::GreatestInt => greatest_int_fn_meta(),
+        ScalarFuncSig::GreatestReal => greatest_real_fn_meta(),
+        ScalarFuncSig::GreatestTime => greatest_time_fn_meta(),
         ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGT>)?,
         ScalarFuncSig::GtReal => compare_fn_meta::<BasicComparer<Real, CmpOpGT>>(),
         ScalarFuncSig::GtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGT>>(),
@@ -446,6 +457,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
@@ -472,12 +484,18 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::TimeIsNull => is_null_fn_meta::<DateTime>(),
         ScalarFuncSig::DurationIsNull => is_null_fn_meta::<Duration>(),
         ScalarFuncSig::JsonIsNull => is_null_fn_meta::<Json>(),
-        ScalarFuncSig::IntIsTrue => int_is_true_fn_meta(),
-        ScalarFuncSig::RealIsTrue => real_is_true_fn_meta(),
-        ScalarFuncSig::DecimalIsTrue => decimal_is_true_fn_meta(),
-        ScalarFuncSig::IntIsFalse => int_is_false_fn_meta(),
-        ScalarFuncSig::RealIsFalse => real_is_false_fn_meta(),
-        ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta(),
+        ScalarFuncSig::IntIsTrue => int_is_true_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::IntIsTrueWithNull => int_is_true_fn_meta::<KeepNullOn>(),
+        ScalarFuncSig::RealIsTrue => real_is_true_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::RealIsTrueWithNull => real_is_true_fn_meta::<KeepNullOn>(),
+        ScalarFuncSig::DecimalIsTrue => decimal_is_true_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::DecimalIsTrueWithNull => decimal_is_true_fn_meta::<KeepNullOn>(),
+        ScalarFuncSig::IntIsFalse => int_is_false_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::IntIsFalseWithNull => int_is_false_fn_meta::<KeepNullOn>(),
+        ScalarFuncSig::RealIsFalse => real_is_false_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::RealIsFalseWithNull => real_is_false_fn_meta::<KeepNullOn>(),
+        ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta::<KeepNullOff>(),
+        ScalarFuncSig::DecimalIsFalseWithNull => decimal_is_false_fn_meta::<KeepNullOn>(),
         ScalarFuncSig::LogicalAnd => logical_and_fn_meta(),
         ScalarFuncSig::LogicalOr => logical_or_fn_meta(),
         ScalarFuncSig::LogicalXor => logical_xor_fn_meta(),
@@ -498,6 +516,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         // impl_string
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
+        ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
@@ -509,7 +528,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Lpad => lpad_fn_meta(),
+        ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
+        ScalarFuncSig::Rpad => rpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
+        ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
+        ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
@@ -530,6 +553,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
+        ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),

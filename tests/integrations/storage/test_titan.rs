@@ -6,10 +6,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use engine::rocks;
-use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
+use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
@@ -166,7 +165,7 @@ fn test_delete_files_in_range_for_titan() {
     let shared_block_cache = false;
     let engines = Engines::new(
         Arc::new(
-            rocks::util::new_engine(
+            engine_rocks::raw_util::new_engine(
                 path.path().to_str().unwrap(),
                 Some(kv_db_opts),
                 ALL_CFS,
@@ -175,8 +174,13 @@ fn test_delete_files_in_range_for_titan() {
             .unwrap(),
         ),
         Arc::new(
-            rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
+            engine_rocks::raw_util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
         ),
         shared_block_cache,
     );
@@ -388,7 +392,7 @@ fn test_delete_files_in_range_for_titan() {
     r.mut_peers().push(Peer::default());
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
-    let snapshot = RegionSnapshot::<RocksEngine>::from_raw(engines1.kv.clone(), r);
+    let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv.clone(), r);
     let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
         .range(Some(Key::from_raw(b"a")), None)
         .build()

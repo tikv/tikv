@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
@@ -40,7 +41,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
         // 100 is the priority of the observer. CDC should have a high priority.
         coprocessor_host
             .registry

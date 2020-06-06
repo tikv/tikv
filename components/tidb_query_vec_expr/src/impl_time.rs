@@ -17,8 +17,8 @@ use tidb_query_datatype::expr::SqlMode;
 #[inline]
 pub fn date_format(
     ctx: &mut EvalContext,
-    t: &Option<DateTime>,
-    layout: &Option<Bytes>,
+    t: Option<&DateTime>,
+    layout: Option<&Bytes>,
 ) -> Result<Option<Bytes>> {
     use std::str::from_utf8;
 
@@ -44,13 +44,13 @@ pub fn date_format(
 #[inline]
 pub fn week_with_mode(
     ctx: &mut EvalContext,
-    t: &Option<DateTime>,
-    m: &Option<Int>,
+    t: Option<&DateTime>,
+    m: Option<&Int>,
 ) -> Result<Option<Int>> {
     if t.is_none() || m.is_none() {
         return Ok(None);
     }
-    let (t, m) = (t.as_ref().unwrap(), m.as_ref().unwrap());
+    let (t, m) = (t.unwrap(), m.unwrap());
     if t.invalid_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
@@ -62,7 +62,7 @@ pub fn week_with_mode(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn week_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
         return Ok(None);
     }
@@ -78,7 +78,7 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn day_of_week(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn day_of_week(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
         return Ok(None);
     }
@@ -94,7 +94,7 @@ pub fn day_of_week(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn day_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
         return Ok(None);
     }
@@ -110,7 +110,7 @@ pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn week_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     if t.is_none() {
         return Ok(None);
     }
@@ -126,7 +126,7 @@ pub fn week_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Optio
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn to_days(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
         Some(v) => v,
         _ => return Ok(None),
@@ -141,8 +141,8 @@ pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time>> {
-    arg.map_or(Ok(None), |daynr: Int| {
+pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
+    arg.cloned().map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
         Ok(Some(time))
     })
@@ -150,25 +150,25 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
 
 #[rpn_fn]
 #[inline]
-pub fn month(t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
     t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn hour(t: &Option<Duration>) -> Result<Option<Int>> {
+pub fn hour(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.hours())))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn minute(t: &Option<Duration>) -> Result<Option<Int>> {
+pub fn minute(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.minutes())))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn second(t: &Option<Duration>) -> Result<Option<Int>> {
+pub fn second(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.secs())))
 }
 
@@ -186,7 +186,7 @@ pub fn micro_second(t: &Option<Duration>) -> Result<Option<Int>> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
         Some(v) => v,
         _ => return Ok(None),
@@ -205,7 +205,7 @@ pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> 
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn day_of_month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+pub fn day_of_month(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
     let t = match t {
         Some(v) => v,
         _ => return Ok(None),
@@ -224,7 +224,7 @@ pub fn day_of_month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Optio
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
+pub fn day_name(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Bytes>> {
     match t {
         Some(t) => {
             if t.invalid_zero() {
@@ -240,7 +240,7 @@ pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<By
 
 #[rpn_fn]
 #[inline]
-pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
+pub fn period_add(p: Option<&Int>, n: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (p, n) {
         (Some(p), Some(n)) => {
             if *p == 0 {
@@ -257,7 +257,7 @@ pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
-pub fn period_diff(p1: &Option<Int>, p2: &Option<Int>) -> Result<Option<Int>> {
+pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     match (p1, p2) {
         (Some(p1), Some(p2)) => Ok(Some(
             DateTime::period_to_month(*p1 as u64) as i64
@@ -269,7 +269,7 @@ pub fn period_diff(p1: &Option<Int>, p2: &Option<Int>) -> Result<Option<Int>> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn last_day(ctx: &mut EvalContext, t: &Option<Time>) -> Result<Option<Time>> {
+pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>> {
     if t.is_none() {
         return Ok(None);
     }
@@ -350,7 +350,7 @@ mod tests {
             let expect = Some(expect.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(date.clone())
+                .push_param(date)
                 .push_param(format.clone())
                 .evaluate(ScalarFuncSig::DateFormatSig)
                 .unwrap();
@@ -411,7 +411,7 @@ mod tests {
             let format = format.map(|s| s.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(date.clone())
+                .push_param(date)
                 .push_param(format.clone())
                 .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
                 .unwrap();
@@ -452,7 +452,7 @@ mod tests {
         for (arg1, arg2, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg1, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .push_param(arg2)
                 .evaluate(ScalarFuncSig::WeekWithMode)
                 .unwrap();
@@ -484,7 +484,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::WeekDay)
                 .unwrap();
             assert_eq!(output, exp);
@@ -516,7 +516,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::WeekOfYear)
                 .unwrap();
             assert_eq!(output, exp);
@@ -547,7 +547,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::DayOfWeek)
                 .unwrap();
             assert_eq!(output, exp);
@@ -575,7 +575,7 @@ mod tests {
         for (arg, exp) in cases {
             let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(datetime.clone())
+                .push_param(datetime)
                 .evaluate(ScalarFuncSig::DayOfYear)
                 .unwrap();
             assert_eq!(output, exp);
@@ -607,7 +607,7 @@ mod tests {
                 None => None,
             };
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)
                 .unwrap();
             assert_eq!(output, exp);
@@ -699,7 +699,7 @@ mod tests {
                 Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
-                    .push_param(duration.clone())
+                    .push_param(duration)
                     .evaluate::<Int>(sig)
                     .unwrap();
                 assert_eq!(output, Some(res));
@@ -923,7 +923,7 @@ mod tests {
             let time = Some(Time::parse_date(&mut ctx, arg).unwrap());
             let exp_val = Some(Time::parse_date(&mut ctx, exp).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, exp_val);
@@ -932,7 +932,7 @@ mod tests {
         for case in none_cases {
             let time = Some(Time::parse_date(&mut ctx, case).unwrap());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(time.clone())
+                .push_param(time)
                 .evaluate::<Time>(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, None);

@@ -11,8 +11,6 @@ use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
 use kvproto::{errorpb, metapb};
-use pd_client;
-use raft;
 use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
@@ -35,27 +33,21 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
-            description("raft entry is too large")
             display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
         }
         StoreNotMatch(to_store_id: u64, my_store_id: u64) {
-            description("store is not match")
             display("to store id {}, mine {}", to_store_id, my_store_id)
         }
         RegionNotFound(region_id: u64) {
-            description("region is not found")
             display("region {} not found", region_id)
         }
         RegionNotInitialized(region_id: u64) {
-            description("region has not been initialized yet.")
             display("region {} not initialized yet", region_id)
         }
         NotLeader(region_id: u64, leader: Option<metapb::Peer>) {
-            description("peer is not leader")
             display("peer is not leader for region {}, leader may {:?}", region_id, leader)
         }
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
-            description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
                     hex::encode_upper(key),
                     hex::encode_upper(region.get_start_key()),
@@ -65,7 +57,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
 
@@ -73,82 +64,77 @@ quick_error! {
         Io(err: io::Error) {
             from()
             cause(err)
-            description(err.description())
             display("Io {}", err)
         }
         Engine(err: engine_traits::Error) {
             from()
-            description("Engine error")
             display("Engine {:?}", err)
         }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
-            description(err.description())
             display("Protobuf {}", err)
         }
         #[cfg(feature = "prost-codec")]
         ProstDecode(err: DecodeError) {
             cause(err)
-            description(err.description())
             display("DecodeError {}", err)
         }
         #[cfg(feature = "prost-codec")]
         ProstEncode(err: EncodeError) {
             cause(err)
-            description(err.description())
             display("EncodeError {}", err)
         }
         Codec(err: codec::Error) {
             from()
             cause(err)
-            description(err.description())
             display("Codec {}", err)
         }
         AddrParse(err: net::AddrParseError) {
             from()
             cause(err)
-            description(err.description())
             display("AddrParse {}", err)
         }
         Pd(err: pd_client::Error) {
             from()
             cause(err)
-            description(err.description())
             display("Pd {}", err)
         }
         Raft(err: raft::Error) {
             from()
             cause(err)
-            description(err.description())
             display("Raft {}", err)
         }
         Timeout(msg: String) {
-            description("request timeout")
             display("Timeout {}", msg)
         }
         EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
-            description("region epoch is not match")
             display("EpochNotMatch {}", msg)
         }
         StaleCommand {
-            description("stale command")
+            display("stale command")
         }
         Coprocessor(err: CopError) {
             from()
             cause(err)
-            description(err.description())
             display("Coprocessor {}", err)
         }
         Transport(reason: DiscardReason) {
-            description("failed to send a message")
             display("Discard due to {:?}", reason)
         }
         Snapshot(err: SnapError) {
             from()
             cause(err)
-            description(err.description())
             display("Snapshot {}", err)
+        }
+        SstImporter(err: sst_importer::Error) {
+            from()
+            cause(err)
+            display("SstImporter {}", err)
+        }
+        Encryption(err: encryption::Error) {
+            from()
+            display("Encryption {}", err)
         }
     }
 }

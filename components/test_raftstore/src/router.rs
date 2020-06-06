@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -13,7 +13,7 @@ use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 
 #[derive(Clone)]
 pub struct MockRaftStoreRouter {
-    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine>>>>>,
+    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksSnapshot>>>>>,
 }
 
 impl MockRaftStoreRouter {
@@ -22,14 +22,14 @@ impl MockRaftStoreRouter {
             senders: Arc::default(),
         }
     }
-    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksEngine>> {
+    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksSnapshot>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx
     }
 }
 
-impl RaftStoreRouter for MockRaftStoreRouter {
+impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
@@ -41,7 +41,11 @@ impl RaftStoreRouter for MockRaftStoreRouter {
         }
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+    fn casual_send(
+        &self,
+        region_id: u64,
+        msg: CasualMessage<RocksSnapshot>,
+    ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.try_send(PeerMsg::CasualMessage(msg))
@@ -54,7 +58,7 @@ impl RaftStoreRouter for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
         unimplemented!()
     }
     fn broadcast_unreachable(&self, _: u64) {
