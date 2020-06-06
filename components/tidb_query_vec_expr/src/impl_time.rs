@@ -148,6 +148,43 @@ pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time
     })
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn make_date(
+    ctx: &mut EvalContext,
+    year: Option<&Int>,
+    day: Option<&Int>,
+) -> Result<Option<Time>> {
+    if let None = year {
+        return Ok(None);
+    }
+    if let None = day {
+        return Ok(None);
+    }
+    let mut year = *year.unwrap();
+    let mut day = *day.unwrap();
+    if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
+        return Ok(None);
+    }
+    if year < 70 {
+        year += 2000;
+    } else if year < 100 {
+        year += 1900;
+    }
+    year -= 1;
+    let d4 = year / 4;
+    let d100 = year / 100;
+    let d400 = year / 400;
+    let leap = d4 - d100 + d400;
+    day = day + leap + year * 365 + 365;
+    let days = day as u32;
+    let ret = Time::from_days(ctx, days)?;
+    if ret.year() > 9999 || ret.is_zero() {
+        return Ok(None);
+    }
+    Ok(Some(ret))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
@@ -637,6 +674,62 @@ mod tests {
                 .evaluate(ScalarFuncSig::FromDays)
                 .unwrap();
             assert_eq!(output, datetime);
+        }
+    }
+
+    #[test]
+    fn test_make_date() {
+        let null_cases = vec![
+            (None, None),
+            (Some(2014i64), Some(0i64)),
+            (Some(10000i64), Some(1i64)),
+            (Some(9999i64), Some(366i64)),
+            (Some(-1i64), Some(1i64)),
+            (Some(-4294965282i64), Some(1i64)),
+            (Some(0i64), Some(0i64)),
+            (Some(0i64), Some(-1i64)),
+            (Some(10i64), Some(-1i64)),
+            (Some(0i64), Some(9223372036854775807i64)),
+            (Some(100i64), Some(9999 * 366i64)),
+            (Some(9999i64), Some(9999 * 366i64)),
+            (Some(100i64), Some(3615901i64)),
+        ];
+        for (arg1, arg2) in null_cases {
+            let exp: Option<Time> = None;
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)    
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::MakeDate)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let cases = vec![
+            (0, 1, "2000-01-01"),
+            (70, 1, "1970-01-01"),
+            (71, 1, "1971-01-01"),
+            (99, 1, "1999-01-01"),
+            (100, 1, "0100-01-01"),
+            (101, 1, "0101-01-01"),
+            (2014, 224234, "2627-12-07"),
+            (2014, 1, "2014-01-01"),
+            (7900, 705000, "9830-03-23"),
+            (7901, 705000, "9831-03-23"),
+            (7904, 705000, "9834-03-22"),
+            (8000, 705000, "9930-03-23"),
+            (8001, 705000, "9931-03-24"),
+            (100, 3615900, "9999-12-31"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let exp = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let arg2 = Some(arg2);
+            let arg1 = Some(arg1);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)    
+                .push_param(arg2)  
+                .evaluate(ScalarFuncSig::MakeDate)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 
