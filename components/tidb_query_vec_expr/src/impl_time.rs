@@ -697,7 +697,7 @@ mod tests {
         for (arg1, arg2) in null_cases {
             let exp: Option<Time> = None;
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg1)    
+                .push_param(arg1)
                 .push_param(arg2)
                 .evaluate(ScalarFuncSig::MakeDate)
                 .unwrap();
@@ -725,8 +725,8 @@ mod tests {
             let arg2 = Some(arg2);
             let arg1 = Some(arg1);
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg1)    
-                .push_param(arg2)  
+                .push_param(arg1)
+                .push_param(arg2)
                 .evaluate(ScalarFuncSig::MakeDate)
                 .unwrap();
             assert_eq!(output, exp);
