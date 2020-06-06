@@ -1327,9 +1327,47 @@ impl Peer {
             ctx.current_time.replace(monotonic_raw_now());
         }
 
-        // The leader can write to disk and replicate to the followers concurrently
-        // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            if let Some(hs) = ready.hs() {
+                // Correctness depends on the fact that the leader lease must be suspected before
+                // other followers know the `PrepareMerge` log is committed, i.e. sends msg to others.
+                // Because other followers may complete the merge process, if so, the source region's
+                // leader may get a stale data.
+                //
+                // Check the committed entries from the last committed index + 1 to the latest committed index.
+                let last_committed_index = self.get_store().committed_index();
+                for entry in self
+                    .raft_group
+                    .raft
+                    .raft_log
+                    .slice(last_committed_index + 1, hs.get_commit() + 1, None)
+                    .unwrap()
+                {
+                    // We care about split/merge commands that are committed in the current term.
+                    if entry.term == self.term() {
+                        let ctx = ProposalContext::from_bytes(&entry.context);
+                        if ctx.contains(ProposalContext::SPLIT) {
+                            // We don't need to suspect its lease because peers of new region that
+                            // in other store do not start election before theirs election timeout
+                            // which is longer than the max leader lease.
+                            // It's safe to read local within its current lease, however, it's not
+                            // safe to renew its lease.
+                            self.last_committed_split_idx = entry.index;
+                        } else if ctx.contains(ProposalContext::PREPARE_MERGE) {
+                            // We committed prepare merge, to prevent unsafe read index,
+                            // we must record its index.
+                            self.last_committed_prepare_merge_idx = entry.get_index();
+                            // After prepare_merge is committed, the leader can not know
+                            // when the target region merges majority of this region, also
+                            // it can not know when the target region writes new values.
+                            // To prevent unsafe local read, we suspect its leader lease.
+                            self.leader_lease.suspect(monotonic_raw_now());
+                        }
+                    }
+                }
+            }
+            // The leader can write to disk and replicate to the followers concurrently
+            // For more details, check raft thesis 10.2.1.
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
@@ -1423,8 +1461,6 @@ impl Peer {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
-            let mut split_to_be_updated = self.is_leader();
-            let mut merge_to_be_update = self.is_leader();
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
@@ -1441,31 +1477,16 @@ impl Peer {
                     }
                 }
 
-                // We care about split/merge commands that are committed in the current term.
-                if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
-                    let ctx = ProposalContext::from_bytes(&entry.context);
-                    if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
-                        // We don't need to suspect its lease because peers of new region that
-                        // in other store do not start election before theirs election timeout
-                        // which is longer than the max leader lease.
-                        // It's safe to read local within its current lease, however, it's not
-                        // safe to renew its lease.
-                        self.last_committed_split_idx = entry.index;
-                        split_to_be_updated = false;
-                    }
-                    if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
-                        fail_point!("leader_commit_prepare_merge");
-                        // We committed prepare merge, to prevent unsafe read index,
-                        // we must record its index.
-                        self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_merge is committed, the leader can not know
-                        // when the target region merges majority of this region, also
-                        // it can not know when the target region writes new values.
-                        // To prevent unsafe local read, we suspect its leader lease.
-                        self.leader_lease.suspect(monotonic_raw_now());
-                        merge_to_be_update = false;
-                    }
-                }
+                fail_point!(
+                    "leader_commit_prepare_merge",
+                    {
+                        let ctx = ProposalContext::from_bytes(&entry.context);
+                        self.is_leader()
+                            && entry.term == self.term()
+                            && ctx.contains(ProposalContext::PREPARE_MERGE)
+                    },
+                    |_| {}
+                );
 
                 fail_point!(
                     "before_send_rollback_merge_1003",

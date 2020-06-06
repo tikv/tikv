@@ -468,6 +468,8 @@ fn test_read_after_peer_destroyed() {
     );
 }
 
+/// In previous implementation, we suspect the leader lease at the position of `leader_commit_prepare_merge`
+/// failpoint when `PrepareMerge` log is committed, which is too late to prevent stale read.
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);
@@ -507,13 +509,14 @@ fn test_stale_read_during_merging_2() {
         left.clone(),
         b"k1",
         false,
-        Duration::from_secs(1),
+        Duration::from_millis(200),
     );
-    if let Ok(response) = value {
-        if !response.get_header().has_error() {
-            println!("value {:?}", std::str::from_utf8(response.get_responses()[0].get_get().get_value()).unwrap());
-        }
-    }
-    
+    // The leader lease must be suspected so the local read is forbidden.
+    // The result should be Error::Timeout because the leader is paused at
+    // the position of `leader_commit_prepare_merge` failpoint.
+    // In previous implementation, the result is ok and the value is "v"
+    // but the right answer is "v1".
+    value.unwrap_err();
+
     fail::remove(leader_commit_prepare_merge_fp);
 }
