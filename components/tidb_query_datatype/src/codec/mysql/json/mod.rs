@@ -370,17 +370,23 @@ impl ConvertTo<f64> for Json {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let d = match self.as_ref().get_type() {
+        self.as_ref().convert(ctx)
+    }
+}
+
+impl<'a> ConvertTo<f64> for JsonRef<'a> {
+    ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        let d = match self.get_type() {
             JsonType::Array | JsonType::Object => 0f64,
-            JsonType::U64 => self.as_ref().get_u64() as f64,
-            JsonType::I64 => self.as_ref().get_i64() as f64,
-            JsonType::Double => self.as_ref().get_double(),
-            JsonType::Literal => {
-                self.as_ref()
-                    .get_literal()
-                    .map_or(0f64, |x| if x { 1f64 } else { 0f64 })
-            }
-            JsonType::String => self.as_ref().get_str_bytes()?.convert(ctx)?,
+            JsonType::U64 => self.get_u64() as f64,
+            JsonType::I64 => self.get_i64() as f64,
+            JsonType::Double => self.get_double(),
+            JsonType::Literal => self
+                .get_literal()
+                .map_or(0f64, |x| if x { 1f64 } else { 0f64 }),
+            JsonType::String => self.get_str_bytes()?.convert(ctx)?,
         };
         Ok(d)
     }
