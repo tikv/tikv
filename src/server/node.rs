@@ -12,18 +12,19 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
+use kvproto::replication_modepb::ReplicationStatus;
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::SplitCheckTask;
+use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{DynamicConfig, PdTask};
+use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::FutureWorker;
 use tikv_util::worker::Worker;
@@ -41,7 +42,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter + 'static,
+    S: RaftStoreRouter<RocksSnapshot> + 'static,
 {
     let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
@@ -49,7 +50,7 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + ConfigClient + 'static> {
+pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
@@ -57,11 +58,12 @@ pub struct Node<C: PdClient + ConfigClient + 'static> {
     has_started: bool,
 
     pd_client: Arc<C>,
+    state: Arc<Mutex<GlobalReplicationState>>,
 }
 
 impl<C> Node<C>
 where
-    C: PdClient + ConfigClient,
+    C: PdClient,
 {
     /// Creates a new Node.
     pub fn new(
@@ -69,6 +71,7 @@ where
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
+        state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -77,11 +80,17 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
-            store.set_binary_path(path.to_string_lossy().to_string());
+            if let Some(path) = path.parent() {
+                store.set_deploy_path(path.to_string_lossy().to_string());
+            }
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
@@ -107,6 +116,7 @@ where
             pd_client,
             system,
             has_started: false,
+            state,
         }
     }
 
@@ -118,13 +128,13 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
-        dyn_cfg: Box<dyn DynamicConfig>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -150,6 +160,11 @@ where
             self.bootstrap_cluster(&engines, first_region)?;
         }
 
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        let status = self.pd_client.put_store(self.store.clone())?;
+        self.load_all_stores(status);
+
         self.start_store(
             store_id,
             engines,
@@ -160,12 +175,8 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
-            dyn_cfg,
+            auto_split_controller,
         )?;
-
-        // Put store only if the cluster is bootstrapped.
-        info!("put store to PD"; "store" => ?&self.store);
-        self.pd_client.put_store(self.store.clone())?;
 
         Ok(())
     }
@@ -177,7 +188,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<RocksSnapshot> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -218,11 +229,28 @@ where
         Ok(id)
     }
 
+    fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
+        info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
+        let stores = match self.pd_client.get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => panic!("failed to load all stores: {:?}", e),
+        };
+        let mut state = self.state.lock().unwrap();
+        if let Some(s) = status {
+            state.set_status(s);
+        }
+        for mut store in stores {
+            state
+                .group
+                .register_store(store.id, store.take_labels().into());
+        }
+    }
+
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
-        store::bootstrap_store(engines, self.cluster_id, store_id)?;
+        store::bootstrap_store(&engines.c(), self.cluster_id, store_id)?;
 
         Ok(store_id)
     }
@@ -249,7 +277,7 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(engines, &region)?;
+        store::prepare_bootstrap_cluster(&engines.c(), &region)?;
         Ok(region)
     }
 
@@ -282,17 +310,17 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_prepare_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(engines)?;
+                    store::clear_prepare_bootstrap_key(&engines.c())?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(engines)?;
+                            store::clear_prepare_bootstrap_key(&engines.c())?;
                             return Ok(());
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(&engines.c(), region_id)?;
                             return Ok(());
                         }
                     }
@@ -334,13 +362,13 @@ where
         store_id: u64,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask>,
+        snap_mgr: SnapManager<RocksEngine>,
+        pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
-        dyn_cfg: Box<dyn DynamicConfig>,
+        auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -357,7 +385,7 @@ where
         self.system.spawn(
             store,
             cfg,
-            engines,
+            engines.c(),
             trans,
             pd_client,
             snap_mgr,
@@ -366,7 +394,8 @@ where
             coprocessor_host,
             importer,
             split_check_worker,
-            dyn_cfg,
+            auto_split_controller,
+            self.state.clone(),
         )?;
         Ok(())
     }

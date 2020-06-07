@@ -49,11 +49,11 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV provides two types of APIs for developers:
 
-- [The Raw Key-Value API](clients/go-client-api.md#try-the-raw-key-value-api)
+- [The Raw Key-Value API](reference/clients/go-client-api.md#try-the-raw-key-value-api)
 
     If your application scenario does not need distributed transactions or MVCC (Multi-Version Concurrency Control) and only need to guarantee the atomicity towards one key, you can use the Raw Key-Value API.
 
-- [The Transactional Key-Value API](clients/go-client-api.md#try-the-transactional-key-value-api)
+- [The Transactional Key-Value API](reference/clients/go-client-api.md#try-the-transactional-key-value-api)
 
     If your application scenario requires distributed ACID transactions and the atomicity of multiple keys within a transaction, you can use the Transactional Key-Value API.
 

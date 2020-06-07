@@ -19,7 +19,9 @@ use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
-/// The suffix appended to the end of rotated log files by datetime log rotator
+// The suffix appended to the end of rotated log files by datetime log rotator
+// Warning: Diagnostics service parses log files by file name format.
+//          Remember to update the corresponding code when suffix layout is changed.
 pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.
@@ -59,7 +61,7 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            let module = record.module().splitn(2, "::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true
@@ -323,28 +325,42 @@ impl slog::Value for LogCost {
 }
 
 /// Dispatches logs to a normal `Drain` or a slow-log specialized `Drain` by tag
-pub struct LogDispatcher<N: Drain, S: Drain> {
+pub struct LogDispatcher<N: Drain, R: Drain, S: Drain, T: Drain> {
     normal: N,
-    slow: S,
+    rocksdb: R,
+    raftdb: T,
+    slow: Option<S>,
 }
 
-impl<N: Drain, S: Drain> LogDispatcher<N, S> {
-    pub fn new(normal: N, slow: S) -> Self {
-        Self { normal, slow }
+impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
+    pub fn new(normal: N, rocksdb: R, raftdb: T, slow: Option<S>) -> Self {
+        Self {
+            normal,
+            rocksdb,
+            slow,
+            raftdb,
+        }
     }
 }
 
-impl<N, S> Drain for LogDispatcher<N, S>
+impl<N, R, S, T> Drain for LogDispatcher<N, R, S, T>
 where
     N: Drain<Ok = (), Err = io::Error>,
+    R: Drain<Ok = (), Err = io::Error>,
     S: Drain<Ok = (), Err = io::Error>,
+    T: Drain<Ok = (), Err = io::Error>,
 {
     type Ok = ();
     type Err = io::Error;
 
     fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.tag().starts_with("slow_log") {
-            self.slow.log(record, values)
+        let tag = record.tag();
+        if self.slow.is_some() && tag.starts_with("slow_log") {
+            self.slow.as_ref().unwrap().log(record, values)
+        } else if tag.starts_with("rocksdb_log") {
+            self.rocksdb.log(record, values)
+        } else if tag.starts_with("raftdb_log") {
+            self.raftdb.log(record, values)
         } else {
             self.normal.log(record, values)
         }
@@ -687,7 +703,9 @@ mod tests {
 
     thread_local! {
         static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
         static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static RAFTDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
     }
 
     struct NormalWriter;
@@ -697,6 +715,16 @@ mod tests {
         }
         fn flush(&mut self) -> io::Result<()> {
             NORMAL_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
+    struct RocksdbLogWriter;
+    impl Write for RocksdbLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            ROCKSDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
         }
     }
 
@@ -710,11 +738,23 @@ mod tests {
         }
     }
 
+    struct RaftDBWriter;
+    impl Write for RaftDBWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().flush())
+        }
+    }
+
     #[test]
     fn test_slow_log_dispatcher() {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let drain = LogDispatcher::new(normal, slow).fuse();
+        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
+        let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
             inner: drain,

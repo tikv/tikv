@@ -9,8 +9,6 @@ use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use num;
-
 use codec::prelude::*;
 use tikv_util::escape;
 
@@ -1589,7 +1587,7 @@ impl Decimal {
         let mut end_idx = int_idx;
         let mut frac_cnt = if int_idx < bs.len() && bs[int_idx] == b'.' {
             end_idx = first_non_digit(bs, int_idx + 1);
-            (end_idx - int_idx - 1)
+            end_idx - int_idx - 1
         } else {
             0
         };
@@ -1829,9 +1827,17 @@ impl ConvertTo<Decimal> for Json {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self.as_ref().get_type() {
+        self.as_ref().convert(ctx)
+    }
+}
+
+impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self.get_type() {
             JsonType::String => {
-                Decimal::from_str(self.as_ref().get_str()?).or_else(|e| {
+                Decimal::from_str(self.get_str()?).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
                     // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str
@@ -1926,8 +1932,8 @@ impl Display for Decimal {
 
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
-        Ok(ConvertTo::<f64>::convert(self, ctx)?.round() != 0f64)
+    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
+        Ok(!self.is_zero())
     }
 }
 

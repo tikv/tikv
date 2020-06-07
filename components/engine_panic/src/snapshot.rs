@@ -3,23 +3,15 @@
 use crate::db_vector::PanicDBVector;
 use crate::engine::PanicEngine;
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot, SyncSnapshot,
+    IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot,
 };
 use std::ops::Deref;
 
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
 
-impl Snapshot<PanicEngine> for PanicSnapshot {
-    type SyncSnapshot = PanicSyncSnapshot;
-
+impl Snapshot for PanicSnapshot {
     fn cf_names(&self) -> Vec<&str> {
-        panic!()
-    }
-    fn into_sync(self) -> Self::SyncSnapshot {
-        panic!()
-    }
-    fn get_db(&self) -> &PanicEngine {
         panic!()
     }
 }
@@ -76,19 +68,6 @@ impl Iterator for PanicSnapshotIterator {
     }
 
     fn valid(&self) -> Result<bool> {
-        panic!()
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PanicSyncSnapshot;
-
-impl SyncSnapshot<PanicSnapshot> for PanicSyncSnapshot {}
-
-impl Deref for PanicSyncSnapshot {
-    type Target = PanicSnapshot;
-
-    fn deref(&self) -> &Self::Target {
         panic!()
     }
 }

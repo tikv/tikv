@@ -1,27 +1,31 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
-use engine::rocks::DB;
-use engine_traits::{name_to_cf, CF_DEFAULT};
+use engine_traits::{name_to_cf, CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
+
+#[cfg(feature = "prost-codec")]
+use kvproto::import_sstpb::write_request::*;
+#[cfg(feature = "protobuf-codec")]
+use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
+
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
+use security::{check_common_name, SecurityManager};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;
@@ -37,19 +41,19 @@ use sst_importer::{error_inc, Config, Error, SSTImporter};
 pub struct ImportSSTService<Router> {
     cfg: Config,
     router: Router,
-    engine: Arc<DB>,
+    engine: RocksEngine,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
-    switcher: Arc<Mutex<ImportModeSwitcher>>,
+    switcher: ImportModeSwitcher<RocksEngine>,
     limiter: Limiter,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
-        engine: Arc<DB>,
+        engine: RocksEngine,
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
@@ -57,20 +61,21 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
+        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
         ImportSSTService {
             cfg,
             router,
             engine,
             threads,
             importer,
-            switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            switcher,
             limiter: Limiter::new(INFINITY),
             security_mgr,
         }
     }
 }
 
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -84,18 +89,13 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
 
         let res = {
-            let mut switcher = self.switcher.lock().unwrap();
             fn mf(cf: &str, name: &str, v: f64) {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => {
-                    switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
-                SwitchMode::Import => {
-                    switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
+                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
+                SwitchMode::Import => self.switcher.enter_import_mode(mf),
             }
         };
         match res {
@@ -178,14 +178,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
-        let engine = Arc::clone(&self.engine);
         let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(RocksEngine::from_ref(&engine))
+            .set_db(&self.engine)
             .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
             .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
             .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // FIXME: download() should be an async fn, to allow BR to cancel
+            // a download task.
+            // Unfortunately, this currently can't happen because the S3Storage
+            // is not Send + Sync. See the documentation of S3Storage for reason.
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_storage_backend(),
@@ -232,8 +235,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
-        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
-            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+        if self.switcher.get_mode() == SwitchMode::Normal
+            && self
+                .engine
+                .ingest_maybe_slowdown_writes(CF_DEFAULT)
+                .expect("cf")
         {
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -300,7 +306,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         }
         let label = "compact";
         let timer = Instant::now_coarse();
-        let engine = Arc::clone(&self.engine);
+        let engine = self.engine.clone();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let (start, end) = if !req.has_range() {
@@ -317,7 +323,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 Some(req.get_output_level())
             };
 
-            let res = compact_files_in_range(&engine, start, end, output_level);
+            let res = engine.compact_files_in_range(start, end, output_level);
             match res {
                 Ok(_) => info!(
                     "compact files in range";
@@ -362,6 +368,82 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         ctx.spawn(
             future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
+    }
+
+    fn write(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<WriteRequest>,
+        sink: ClientStreamingSink<WriteResponse>,
+    ) {
+        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
+            return;
+        }
+        let label = "write";
+        let timer = Instant::now_coarse();
+        let import = Arc::clone(&self.importer);
+        let engine = self.engine.clone();
+        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
+        ctx.spawn(
+            self.threads.spawn(
+                bounded_stream
+                    .into_future()
+                    .map_err(|(e, _)| Error::from(e))
+                    .and_then(move |(req, stream)| {
+                        let meta = match req {
+                            Some(r) => match r.chunk {
+                                Some(Chunk::Meta(m)) => m,
+                                _ => return Err(Error::InvalidChunk),
+                            },
+                            _ => return Err(Error::InvalidChunk),
+                        };
+                        let name = import.get_path(&meta);
+
+                        let default = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                            .set_in_memory(true)
+                            .set_db(&engine)
+                            .set_cf(CF_DEFAULT)
+                            .build(&name.to_str().unwrap())?;
+                        let write = <RocksEngine as SstExt>::SstWriterBuilder::new()
+                            .set_in_memory(true)
+                            .set_db(&engine)
+                            .set_cf(CF_WRITE)
+                            .build(&name.to_str().unwrap())?;
+                        let writer = match import.new_writer::<RocksEngine>(default, write, meta) {
+                            Ok(w) => w,
+                            Err(e) => {
+                                error!("build writer failed {:?}", e);
+                                return Err(Error::InvalidChunk);
+                            }
+                        };
+                        Ok((writer, stream))
+                    })
+                    .and_then(move |(writer, stream)| {
+                        stream
+                            .map_err(Error::from)
+                            .fold(writer, |mut writer, req| {
+                                let start = Instant::now_coarse();
+                                let batch = match req.chunk {
+                                    Some(Chunk::Batch(b)) => b,
+                                    _ => return Err(Error::InvalidChunk),
+                                };
+                                writer.write(batch)?;
+                                IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                                Ok(writer)
+                            })
+                            .and_then(|writer| writer.finish())
+                    })
+                    .then(move |res| match res {
+                        Ok(metas) => {
+                            let mut resp = WriteResponse::default();
+                            resp.set_metas(metas.into());
+                            Ok(resp)
+                        }
+                        Err(e) => Err(e),
+                    })
+                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
+            ),
         )
     }
 }

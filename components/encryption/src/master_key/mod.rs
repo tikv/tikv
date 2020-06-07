@@ -2,8 +2,11 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
-use crate::{MasterKeyConfig, Result};
+#[cfg(test)]
+use crate::config::Mock;
+use crate::{Error, MasterKeyConfig, Result};
 
+use std::path::Path;
 use std::sync::Arc;
 
 /// Provide API to encrypt/decrypt key dictionary content.
@@ -19,11 +22,17 @@ pub trait Backend: Sync + Send + 'static {
     fn is_secure(&self) -> bool;
 }
 
-mod file;
-mod metadata;
+mod mem;
+use self::mem::MemAesGcmBackend;
 
+mod file;
 pub use self::file::FileBackend;
-// TODO support KMS
+
+mod kms;
+pub use self::kms::KmsBackend;
+
+mod metadata;
+use self::metadata::*;
 
 #[derive(Default)]
 pub(crate) struct PlaintextBackend {}
@@ -31,10 +40,30 @@ pub(crate) struct PlaintextBackend {}
 impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
         let mut content = EncryptedContent::default();
+        content.mut_metadata().insert(
+            MetadataKey::Method.as_str().to_owned(),
+            MetadataMethod::Plaintext.as_slice().to_vec(),
+        );
         content.set_content(plaintext.to_owned());
         Ok(content)
     }
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        let method = ciphertext
+            .get_metadata()
+            .get(MetadataKey::Method.as_str())
+            .ok_or_else(|| {
+                Error::Other(box_err!(
+                    "metadata {} not found",
+                    MetadataKey::Method.as_str()
+                ))
+            })?;
+        if method.as_slice() != MetadataMethod::Plaintext.as_slice() {
+            return Err(Error::WrongMasterKey(box_err!(
+                "encryption method mismatch, expected {:?} vs actual {:?}",
+                MetadataMethod::Plaintext.as_slice(),
+                method
+            )));
+        }
         Ok(ciphertext.get_content().to_owned())
     }
     fn is_secure(&self) -> bool {
@@ -46,9 +75,12 @@ impl Backend for PlaintextBackend {
 pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
     Ok(match config {
         MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
-        MasterKeyConfig::File { method, path } => Arc::new(FileBackend::new(*method, path)?) as _,
+        MasterKeyConfig::File { config } => {
+            Arc::new(FileBackend::new(Path::new(&config.path))?) as _
+        }
+        MasterKeyConfig::Kms { config } => Arc::new(KmsBackend::new(config.clone())?) as _,
         #[cfg(test)]
-        MasterKeyConfig::Mock(mock) => mock.clone() as _,
+        MasterKeyConfig::Mock(Mock(mock)) => mock.clone() as _,
     })
 }
 
@@ -92,7 +124,7 @@ pub mod tests {
             let mut mock = self.lock().unwrap();
             mock.encrypt_called += 1;
             if mock.encrypt_fail {
-                return Err(Error::Other("".to_owned().into()));
+                return Err(box_err!("mock error"));
             }
             mock.inner.encrypt(plaintext)
         }

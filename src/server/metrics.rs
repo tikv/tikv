@@ -35,6 +35,12 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        ver_get,
+        ver_batch_get,
+        ver_mut,
+        ver_batch_mut,
+        ver_scan,
+        ver_delete_range,
         unsafe_destroy_range,
         physical_scan_lock,
         register_lock_observer,
@@ -124,8 +130,22 @@ make_static_metric! {
         kv_get,
     }
 
+    pub label_enum BatchableRequestKind {
+        point_get,
+        prewrite,
+        commit,
+    }
+
     pub struct GrpcMsgHistogramGlobal: Histogram {
         "type" => GlobalGrpcTypeKind,
+    }
+
+    pub struct RequestBatchSizeHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
+    }
+
+    pub struct RequestBatchRatioHistogramVec: Histogram {
+        "type" => BatchableRequestKind,
     }
 }
 
@@ -293,20 +313,24 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
-    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_size",
-        "Size of request batch input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
-    )
-    .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_server_request_batch_ratio",
-        "Ratio of request batch output to input",
-        &["type"],
-        exponential_buckets(1f64, 5f64, 10).unwrap()
-    )
-    .unwrap();
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: RequestBatchSizeHistogramVec =
+        register_static_histogram_vec!(
+            RequestBatchSizeHistogramVec,
+            "tikv_server_request_batch_size",
+            "Size of request batch input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
+        register_static_histogram_vec!(
+            RequestBatchRatioHistogramVec,
+            "tikv_server_request_batch_ratio",
+            "Ratio of request batch output to input",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
 }
 
 make_auto_flush_static_metric! {

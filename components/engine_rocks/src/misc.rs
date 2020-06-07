@@ -2,11 +2,16 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::{MiscExt, Range, Result};
+use engine_traits::{CFNamesExt, MiscExt, Range, Result, ALL_CFS};
+use rocksdb::Range as RocksRange;
 
 impl MiscExt for RocksEngine {
     fn is_titan(&self) -> bool {
         self.as_inner().is_titan()
+    }
+
+    fn flush(&self, sync: bool) -> Result<()> {
+        Ok(self.as_inner().flush(sync)?)
     }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
@@ -34,6 +39,106 @@ impl MiscExt for RocksEngine {
             .as_inner()
             .get_approximate_memtable_stats_cf(handle, &range))
     }
+
+    fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
+            let options = self.as_inner().get_options_cf(handle);
+            let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+            // Leave enough buffer to tolerate heavy write workload,
+            // which may flush some memtables in a short time.
+            if n > u64::from(slowdown_trigger) / 2 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn get_engine_used_size(&self) -> Result<u64> {
+        let mut used_size: u64 = 0;
+        for cf in ALL_CFS {
+            let handle = util::get_cf_handle(self.as_inner(), cf)?;
+            used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
+        }
+        Ok(used_size)
+    }
+
+    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        let db = self.as_inner();
+        let mut delete_ranges = Vec::new();
+        for &(ref start, ref end) in ranges {
+            if start == end {
+                continue;
+            }
+            assert!(start < end);
+            delete_ranges.push(RocksRange::new(start, end));
+        }
+        if delete_ranges.is_empty() {
+            return Ok(());
+        }
+
+        for cf in db.cf_names() {
+            let handle = util::get_cf_handle(db, cf)?;
+            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
+        }
+
+        Ok(())
+    }
+
+    fn path(&self) -> &str {
+        self.as_inner().path()
+    }
+
+    fn sync_wal(&self) -> Result<()> {
+        Ok(self.as_inner().sync_wal()?)
+    }
+
+    fn exists(path: &str) -> bool {
+        crate::raw_util::db_exist(path)
+    }
+
+    fn dump_stats(&self) -> Result<String> {
+        const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
+        const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";
+
+        let mut s = Vec::with_capacity(1024);
+        // common rocksdb stats.
+        for name in self.cf_names() {
+            let handler = util::get_cf_handle(self.as_inner(), name)?;
+            if let Some(v) = self
+                .as_inner()
+                .get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY)
+            {
+                s.extend_from_slice(v.as_bytes());
+            }
+        }
+
+        if let Some(v) = self.as_inner().get_property_value(ROCKSDB_DB_STATS_KEY) {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        // more stats if enable_statistics is true.
+        if let Some(v) = self.as_inner().get_statistics() {
+            s.extend_from_slice(v.as_bytes());
+        }
+
+        Ok(box_try!(String::from_utf8(s)))
+    }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        match self
+            .as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -41,8 +146,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use crate::raw_util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
     use std::sync::Arc;
@@ -180,7 +284,7 @@ mod tests {
         cf_opts
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
-                Box::new(rocks::util::FixedSuffixSliceTransform::new(8)),
+                Box::new(crate::util::FixedSuffixSliceTransform::new(8)),
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.

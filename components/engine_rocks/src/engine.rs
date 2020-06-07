@@ -16,7 +16,9 @@ use crate::rocks_metrics::{
     flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
     flush_engine_ticker_metrics,
 };
-use crate::rocks_metrics_defs::{ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES};
+use crate::rocks_metrics_defs::{
+    ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
+};
 use crate::util::get_cf_handle;
 use crate::{RocksEngineIterator, RocksSnapshot};
 
@@ -73,6 +75,17 @@ impl KvEngine for RocksEngine {
         for t in ENGINE_HIST_TYPES {
             if let Some(v) = self.0.get_statistics_histogram(*t) {
                 flush_engine_histogram_metrics(*t, v, instance);
+            }
+        }
+        if self.0.is_titan() {
+            for t in TITAN_ENGINE_TICKER_TYPES {
+                let v = self.0.get_and_reset_statistics_ticker_count(*t);
+                flush_engine_ticker_metrics(*t, v, instance);
+            }
+            for t in TITAN_ENGINE_HIST_TYPES {
+                if let Some(v) = self.0.get_statistics_histogram(*t) {
+                    flush_engine_histogram_metrics(*t, v, instance);
+                }
             }
         }
         flush_engine_properties(&self.0, instance, shared_block_cache);
@@ -162,7 +175,7 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine::rocks::util;
+    use crate::raw_util;
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
@@ -175,7 +188,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         let mut r = Region::default();
@@ -212,7 +225,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         engine.put(b"k1", b"v1").unwrap();
@@ -228,7 +241,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         engine.put(b"a1", b"v1").unwrap();

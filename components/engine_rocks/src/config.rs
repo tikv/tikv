@@ -1,7 +1,31 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
 use configuration::ConfigValue;
+pub use rocksdb::PerfLevel;
+use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use std::str::FromStr;
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogLevel {
+    Error,
+    Fatal,
+    Info,
+    Warn,
+    Debug,
+}
+
+impl From<LogLevel> for DBInfoLogLevel {
+    fn from(compression_type: LogLevel) -> DBInfoLogLevel {
+        match compression_type {
+            LogLevel::Error => DBInfoLogLevel::Error,
+            LogLevel::Fatal => DBInfoLogLevel::Fatal,
+            LogLevel::Info => DBInfoLogLevel::Info,
+            LogLevel::Warn => DBInfoLogLevel::Warn,
+            LogLevel::Debug => DBInfoLogLevel::Debug,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -38,7 +62,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use crate::rocks::DBCompressionType;
+    use rocksdb::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -127,13 +151,13 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::Other(format!("k{:?}", mode))
+        ConfigValue::BlobRunMode(format!("k{:?}", mode))
     }
 }
 
 impl Into<BlobRunMode> for ConfigValue {
     fn into(self) -> BlobRunMode {
-        if let ConfigValue::Other(s) = self {
+        if let ConfigValue::BlobRunMode(s) = self {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -141,7 +165,22 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::Other, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+        }
+    }
+}
+
+impl FromStr for BlobRunMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<BlobRunMode, String> {
+        match s {
+            "normal" => Ok(BlobRunMode::Normal),
+            "read-only" => Ok(BlobRunMode::ReadOnly),
+            "fallback" => Ok(BlobRunMode::Fallback),
+            m => Err(format!(
+                "expect: normal, read-only or fallback, got: {:?}",
+                m
+            )),
         }
     }
 }
@@ -163,7 +202,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use crate::rocks::$enum;
+            use rocksdb::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -199,7 +238,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use crate::rocks::$enum;
+                use rocksdb::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -251,10 +290,20 @@ numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     SkipAnyCorruptedRecords = 3,
 }}
 
+numeric_enum_mod! {perf_level_serde PerfLevel {
+    Uninitialized = 0,
+    Disable = 1,
+    EnableCount = 2,
+    EnableTimeExceptForMutex = 3,
+    EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTime = 5,
+    OutOfBounds = 6,
+}}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::DBCompressionType;
+    use rocksdb::DBCompressionType;
 
     #[test]
     fn test_parse_compression_type() {

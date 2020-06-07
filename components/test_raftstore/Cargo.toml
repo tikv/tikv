@@ -6,7 +6,6 @@ publish = false
 
 [features]
 protobuf-codec = [
-  "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -17,7 +16,6 @@ protobuf-codec = [
   "tikv/protobuf-codec",
 ]
 prost-codec = [
-  "engine/prost-codec",
   "engine_rocks/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -42,6 +40,7 @@ pd_client = { path = "../pd_client" }
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore" }
 rand = "0.7"
+security = { path = "../security" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
@@ -52,3 +51,4 @@ tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
+encryption = { path = "../encryption" }

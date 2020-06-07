@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(cell_update)]
 #![feature(shrink_to)]
+#![feature(div_duration)]
 
 #[macro_use]
 extern crate bitflags;
@@ -16,6 +17,8 @@ extern crate prometheus;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate serde_with;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]

@@ -26,10 +26,11 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
+use security::SecurityManager;
 use tikv_util::collections::HashSet;
-use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
 
@@ -182,7 +183,7 @@ impl LockManager {
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
-    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost) {
+    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost<RocksEngine>) {
         let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
@@ -248,17 +249,15 @@ impl LockManagerTrait for LockManager {
     fn wake_up(
         &self,
         lock_ts: TimeStamp,
-        hashes: Option<Vec<u64>>,
+        hashes: Vec<u64>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     ) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
         // Try to wake up them.
-        if self.has_waiter() {
-            if let Some(hashes) = hashes {
-                self.waiter_mgr_scheduler
-                    .wake_up(lock_ts, hashes, commit_ts);
-            }
+        if !hashes.is_empty() && self.has_waiter() {
+            self.waiter_mgr_scheduler
+                .wake_up(lock_ts, hashes, commit_ts);
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.
@@ -279,8 +278,8 @@ mod tests {
     use self::waiter_manager::tests::*;
     use super::*;
     use raftstore::coprocessor::RegionChangeEvent;
+    use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::security::SecurityConfig;
 
     use std::thread;
     use std::time::Duration;
@@ -340,8 +339,8 @@ mod tests {
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
-            2900,
-            3200,
+            2500,
+            3500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -363,11 +362,11 @@ mod tests {
             Some(WaitTimeout::Default),
         );
         assert!(lock_mgr.has_waiter());
-        lock_mgr.wake_up(lock.ts, Some(vec![lock.hash]), 30.into(), false);
+        lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, 30.into()),
             0,
-            200,
+            500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -395,14 +394,14 @@ mod tests {
         assert_elapsed(
             || expect_deadlock(f2.wait().unwrap(), 20.into(), lock_info2, 20),
             0,
-            200,
+            500,
         );
         // Waiter2 releases its lock.
-        lock_mgr.wake_up(20.into(), Some(vec![20]), 20.into(), true);
+        lock_mgr.wake_up(20.into(), vec![20], 20.into(), true);
         assert_elapsed(
             || expect_write_conflict(f1.wait().unwrap(), 10.into(), lock_info1, 20.into()),
             0,
-            200,
+            500,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -420,35 +419,29 @@ mod tests {
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
-            lock_mgr.wake_up(40.into(), Some(vec![40]), 40.into(), false);
+            lock_mgr.wake_up(40.into(), vec![40], 40.into(), false);
             f.wait().unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
-        // If key_hashes is none, no wake up.
-        let prev_wake_up = TASK_COUNTER_METRICS.with(|m| m.wake_up.get());
-        lock_mgr.wake_up(10.into(), None, 10.into(), false);
-        assert_eq!(TASK_COUNTER_METRICS.with(|m| m.wake_up.get()), prev_wake_up);
+        // If key_hashes is empty, no wake up.
+        let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
-        lock_mgr.wake_up(10.into(), None, 10.into(), false);
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
-            prev_clean_up
-        );
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If the txn doesn't wait for locks, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
-        lock_mgr.wake_up(10.into(), None, 10.into(), true);
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
-            prev_clean_up
-        );
+        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
+        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
-        // If timeout is negative, no wait for.
+        // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        let prev_wait_for = TASK_COUNTER_METRICS.with(|m| m.wait_for.get());
+        let prev_wait_for = TASK_COUNTER_METRICS.wait_for.get();
         lock_mgr.wait_for(
             waiter.start_ts,
             waiter.cb,
@@ -460,12 +453,9 @@ mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap(), lock_info),
             0,
-            200,
+            500,
         );
-        assert_eq!(
-            TASK_COUNTER_METRICS.with(|m| m.wait_for.get()),
-            prev_wait_for,
-        );
+        assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
     }
 
     #[bench]

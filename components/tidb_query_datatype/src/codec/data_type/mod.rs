@@ -7,15 +7,16 @@ mod vector;
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
-pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTime};
+pub type BytesRef<'a> = &'a [u8];
+pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-use crate::{EvalType, FieldTypeTp};
+use crate::EvalType;
 
-use crate::codec::convert::ToInt;
+use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
 use tidb_query_common::error::Result;
 
@@ -36,14 +37,14 @@ impl AsMySQLBool for Int {
 impl AsMySQLBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        Ok(self.round() != 0f64)
+        Ok(self.into_inner() != 0f64)
     }
 }
 
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty() && self.to_int(context, FieldTypeTp::LongLong)? != 0)
+        Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
@@ -122,3 +123,134 @@ impl_evaluable_type! { Bytes }
 impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 impl_evaluable_type! { Json }
+
+pub trait IntoEvaluableRef<T>: Sized {
+    /// Performs the conversion.
+    fn into_evaluable_ref(self) -> T;
+}
+
+macro_rules! impl_into_evaluable_ref {
+    ($ty:tt) => {
+        impl<'a> IntoEvaluableRef<Option<&'a $ty>> for Option<&'a $ty> {
+            fn into_evaluable_ref(self) -> Option<&'a $ty> {
+                self
+            }
+        }
+    };
+}
+
+impl_into_evaluable_ref! { Int }
+impl_into_evaluable_ref! { Real }
+impl_into_evaluable_ref! { Decimal }
+impl_into_evaluable_ref! { DateTime }
+impl_into_evaluable_ref! { Duration }
+
+impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
+    fn into_evaluable_ref(self) -> Option<BytesRef<'a>> {
+        self.map(|x| x.as_slice())
+    }
+}
+
+impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
+    fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
+        self.map(|x| x.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64;
+
+    #[test]
+    fn test_bytes_as_bool() {
+        let tests: Vec<(&'static [u8], Option<bool>)> = vec![
+            (b"", Some(false)),
+            (b" 23", Some(true)),
+            (b"-1", Some(true)),
+            (b"1.11", Some(true)),
+            (b"1.11.00", None),
+            (b"xx", None),
+            (b"0x00", None),
+            (b"11.xx", None),
+            (b"xx.11", None),
+            (
+                b".0000000000000000000000000000000000000000000000000000001",
+                Some(true),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (i, (v, expect)) in tests.into_iter().enumerate() {
+            let rb: Result<bool> = v.to_vec().as_mysql_bool(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(rb.unwrap(), val);
+                }
+                None => {
+                    assert!(
+                        rb.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        rb
+                    );
+                }
+            }
+        }
+
+        // test overflow
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+
+        let mut ctx = EvalContext::default();
+        let val: Result<bool> = f64::NEG_INFINITY
+            .to_string()
+            .as_bytes()
+            .to_vec()
+            .as_mysql_bool(&mut ctx);
+        assert!(val.is_err());
+    }
+
+    #[test]
+    fn test_real_as_bool() {
+        let tests: Vec<(f64, Option<bool>)> = vec![
+            (0.0, Some(false)),
+            (1.3, Some(true)),
+            (-1.234, Some(true)),
+            (0.000000000000000000000000000000001, Some(true)),
+            (-0.00000000000000000000000000000001, Some(true)),
+            (f64::MAX, Some(true)),
+            (f64::MIN, Some(true)),
+            (f64::MIN_POSITIVE, Some(true)),
+            (f64::INFINITY, Some(true)),
+            (f64::NEG_INFINITY, Some(true)),
+            (f64::NAN, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (f, expected) in tests {
+            match Real::new(f) {
+                Ok(b) => {
+                    let r = b.as_mysql_bool(&mut ctx).unwrap();
+                    assert_eq!(r, expected.unwrap());
+                }
+                Err(_) => assert!(expected.is_none(), "{} to bool should fail", f,),
+            }
+        }
+    }
+
+    #[test]
+    fn test_into_evaluable_ref() {
+        let x: Option<&Int> = Some(&1);
+        assert_eq!(x.into_evaluable_ref(), Some(&1));
+        let y = vec![1, 2, 3];
+        let x: Option<&Bytes> = Some(&y);
+        assert_eq!(x.into_evaluable_ref(), Some(vec![1, 2, 3].as_slice()));
+    }
+}

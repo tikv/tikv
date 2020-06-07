@@ -443,18 +443,32 @@ impl ToInt for Json {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        self.as_ref().to_int(ctx, tp)
+    }
+
+    // Port from TiDB's types.ConvertJSONToInt
+    #[inline]
+    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
+        self.as_ref().to_uint(ctx, tp)
+    }
+}
+
+impl<'a> ToInt for JsonRef<'a> {
+    // Port from TiDB's types.ConvertJSONToInt
+    #[inline]
+    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // Casts json to int has different behavior in TiDB/MySQL when the json
         // value is a `Json::from_f64` and we will keep compatible with TiDB
         // **Note**: select cast(cast('4.5' as json) as signed)
         // TiDB:  5
         // MySQL: 4
-        let val = match self.as_ref().get_type() {
+        let val = match self.get_type() {
             JsonType::Object | JsonType::Array => Ok(0),
-            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as i64)),
-            JsonType::I64 => Ok(self.as_ref().get_i64()),
-            JsonType::U64 => Ok(self.as_ref().get_u64() as i64),
-            JsonType::Double => self.as_ref().get_double().to_int(ctx, tp),
-            JsonType::String => self.as_ref().get_str_bytes()?.to_int(ctx, tp),
+            JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as i64)),
+            JsonType::I64 => Ok(self.get_i64()),
+            JsonType::U64 => Ok(self.get_u64() as i64),
+            JsonType::Double => self.get_double().to_int(ctx, tp),
+            JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
         }?;
         val.to_int(ctx, tp)
     }
@@ -462,13 +476,13 @@ impl ToInt for Json {
     // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = match self.as_ref().get_type() {
+        let val = match self.get_type() {
             JsonType::Object | JsonType::Array => Ok(0),
-            JsonType::Literal => Ok(self.as_ref().get_literal().map_or(0, |x| x as u64)),
-            JsonType::I64 => Ok(self.as_ref().get_i64() as u64),
-            JsonType::U64 => Ok(self.as_ref().get_u64()),
-            JsonType::Double => self.as_ref().get_double().to_uint(ctx, tp),
-            JsonType::String => self.as_ref().get_str_bytes()?.to_uint(ctx, tp),
+            JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as u64)),
+            JsonType::I64 => Ok(self.get_i64() as u64),
+            JsonType::U64 => Ok(self.get_u64()),
+            JsonType::Double => self.get_double().to_uint(ctx, tp),
+            JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
         }?;
         val.to_uint(ctx, tp)
     }
@@ -1251,7 +1265,7 @@ mod tests {
     fn test_datatype_to_int_overflow() {
         fn test_overflow<T: Debug + Clone + ToInt>(raw: T, dst: i64, tp: FieldTypeTp) {
             let mut ctx = EvalContext::default();
-            let val = raw.clone().to_int(&mut ctx, tp);
+            let val = raw.to_int(&mut ctx, tp);
             match val {
                 Err(e) => assert_eq!(
                     e.code(),
@@ -1636,7 +1650,7 @@ mod tests {
     fn test_datatype_to_uint_overflow() {
         fn test_overflow<T: Debug + Clone + ToInt>(raw: T, dst: u64, tp: FieldTypeTp) {
             let mut ctx = EvalContext::default();
-            let val = raw.clone().to_uint(&mut ctx, tp);
+            let val = raw.to_uint(&mut ctx, tp);
             match val {
                 Err(e) => assert_eq!(
                     e.code(),
@@ -1651,7 +1665,7 @@ mod tests {
             // OVERFLOW_AS_WARNING
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-            let val = raw.clone().to_uint(&mut ctx, tp);
+            let val = raw.to_uint(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst, "{:?} => {}", raw, dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }

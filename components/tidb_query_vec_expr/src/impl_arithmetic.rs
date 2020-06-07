@@ -11,8 +11,8 @@ use tidb_query_datatype::expr::EvalContext;
 #[rpn_fn]
 #[inline]
 pub fn arithmetic<A: ArithmeticOp>(
-    arg0: &Option<A::T>,
-    arg1: &Option<A::T>,
+    arg0: Option<&A::T>,
+    arg1: Option<&A::T>,
 ) -> Result<Option<A::T>> {
     if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
         A::calc(lhs, rhs)
@@ -26,8 +26,8 @@ pub fn arithmetic<A: ArithmeticOp>(
 #[inline]
 pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     ctx: &mut EvalContext,
-    arg0: &Option<A::T>,
-    arg1: &Option<A::T>,
+    arg0: Option<&A::T>,
+    arg1: Option<&A::T>,
 ) -> Result<Option<A::T>> {
     if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
         A::calc(ctx, lhs, rhs)
@@ -459,8 +459,8 @@ impl ArithmeticOp for UintDivideInt {
 #[inline]
 fn int_divide_decimal(
     ctx: &mut EvalContext,
-    lhs: &Option<Decimal>,
-    rhs: &Option<Decimal>,
+    lhs: Option<&Decimal>,
+    rhs: Option<&Decimal>,
 ) -> Result<Option<Int>> {
     let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)).as_i64();
 
@@ -1016,8 +1016,8 @@ mod tests {
 
         for (lhs, rhs) in test_cases {
             let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
-                .push_param(lhs.clone())
-                .push_param(rhs.clone())
+                .push_param(lhs)
+                .push_param(rhs)
                 .evaluate(ScalarFuncSig::IntDivideDecimal);
 
             assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);

@@ -6,15 +6,17 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use encryption::{EncryptionConfig, MasterKeyConfig};
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
+use batch_system::Config as BatchSystemConfig;
+use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::{Config as RaftstoreConfig, QuorumAlgorithm};
+use raftstore::store::Config as RaftstoreConfig;
+use security::SecurityConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::server::config::GrpcCompressionType;
@@ -24,7 +26,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
 use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::security::SecurityConfig;
 
 mod dynamic;
 mod test_config_client;
@@ -62,7 +63,9 @@ fn test_serde_custom_tikv_config() {
         labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
+        advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
+        max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -89,7 +92,7 @@ fn test_serde_custom_tikv_config() {
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
-        request_batch_enable_cross_command: false,
+        request_batch_enable_cross_command: true,
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
@@ -125,6 +128,14 @@ fn test_serde_custom_tikv_config() {
         address: "example.com:443".to_owned(),
         job: "tikv_1".to_owned(),
     };
+    let mut apply_batch_system = BatchSystemConfig::default();
+    apply_batch_system.max_batch_size = 22;
+    apply_batch_system.pool_size = 4;
+    apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
+    let mut store_batch_system = BatchSystemConfig::default();
+    store_batch_system.max_batch_size = 21;
+    store_batch_system.pool_size = 3;
+    store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
         sync_log: false,
         prevote: false,
@@ -147,7 +158,7 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
-        clean_stale_peer_delay: ReadableDuration::secs(13),
+        clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
@@ -177,14 +188,14 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
-        apply_max_batch_size: 22,
-        apply_pool_size: 4,
-        store_max_batch_size: 21,
-        store_pool_size: 3,
+        apply_batch_system,
+        store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
         early_apply: false,
-        quorum_algorithm: QuorumAlgorithm::IntegrationOnHalfFail,
+        dev_assert: true,
+        apply_yield_duration: ReadableDuration::millis(333),
+        perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -226,6 +237,7 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
+        info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
@@ -455,9 +467,54 @@ fn test_serde_custom_tikv_config() {
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
+        ver_defaultcf: VersionCfConfig {
+            block_size: ReadableSize::kb(12),
+            block_cache_size: ReadableSize::gb(12),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: false,
+            pin_l0_filter_and_index_blocks: false,
+            use_bloom_filter: false,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 123,
+            block_based_bloom_filter: true,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+                DBCompressionType::No,
+                DBCompressionType::Zstd,
+                DBCompressionType::Lz4,
+            ],
+            write_buffer_size: ReadableSize::mb(1),
+            max_write_buffer_number: 12,
+            min_write_buffer_number_to_merge: 12,
+            max_bytes_for_level_base: ReadableSize::kb(12),
+            target_file_size_base: ReadableSize::kb(123),
+            level0_file_num_compaction_trigger: 123,
+            level0_slowdown_writes_trigger: 123,
+            level0_stop_writes_trigger: 123,
+            max_compaction_bytes: ReadableSize::gb(1),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 4,
+            max_bytes_for_level_multiplier: 8,
+            compaction_style: DBCompactionStyle::Universal,
+            disable_auto_compactions: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
+            titan: titan_cf_config.clone(),
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
+        },
         titan: titan_db_config.clone(),
     };
     value.raftdb = RaftDbConfig {
+        info_log_level: LogLevel::Info,
         wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
@@ -479,7 +536,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_unordered_write: false,
-        allow_concurrent_memtable_write: true,
+        allow_concurrent_memtable_write: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         defaultcf: RaftDefaultCfConfig {
@@ -561,19 +618,21 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-    };
-    value.encryption = EncryptionConfig {
-        method: EncryptionMethod::Aes128Ctr,
-        data_key_rotation_period: ReadableDuration::days(14),
-        master_key: MasterKeyConfig::File {
-            method: EncryptionMethod::Aes256Ctr,
-            path: "/master/key/path".to_owned(),
+        encryption: EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            data_key_rotation_period: ReadableDuration::days(14),
+            master_key: MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "/master/key/path".to_owned(),
+                },
+            },
+            previous_master_key: MasterKeyConfig::Plaintext,
         },
-        previous_master_key: MasterKeyConfig::Plaintext,
     };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
+        import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
     value.gc = GcConfig {

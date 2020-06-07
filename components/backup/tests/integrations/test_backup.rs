@@ -13,9 +13,8 @@ use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
-use engine::*;
 use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use kvproto::backup::*;
 use kvproto::import_sstpb::*;
@@ -253,9 +252,10 @@ impl TestSuite {
             IsolationLevel::Si,
             false,
             Default::default(),
+            false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::from(snap_store),
+            storage: TiKVStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,

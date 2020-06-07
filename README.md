@@ -48,7 +48,7 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
@@ -94,7 +94,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/how-to/deploy/orchestrated/ansible.md)
 - [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
 
 ## Client drivers
@@ -110,11 +110,27 @@ These are the clients for TiKV:
 
 If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
 
+## Community Meeting
+
+The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 07.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk01UVqm3BLWjN2AJxMSG73KiUqUdDw%3A1589771998935&ei=3v7BXuDQOJSl-QaKq62ICQ&q=7pm+PST&oq=7pm+PST&gs_lcp=CgZwc3ktYWIQAzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzICCAAyAggAMgYIABAHEB4yAggAOgQIABBHOggIABAHEAoQHlDQWFicXGC-ZWgAcAF4AIABmwGIAa4CkgEDMC4ymAEAoAEBqgEHZ3dzLXdpeg&sclient=psy-ab&ved=0ahUKEwjgt5SaurzpAhWUUt4KHYpVC5EQ4dUDCAw&uact=5)).
+
+Quick links:
+
+*   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
+*   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+*   [Recorded videos](https://www.youtube.com/playlist?list=PLj6h78yzYM2PveKciToM4JeQlvenS538V)
+
 ## Security
 
 ### Security Audit
 
 A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to [TiKV-security](tikv-security@lists.cncf.io) group.
+
+See [Security](./SECURITY.md) for the process and policy followed by the TiKV project. 
 
 ## Communication
 

@@ -1,26 +1,45 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
+use std::str;
 
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::Error;
+use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn]
 #[inline]
-pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>>
+pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
 where
     C: Comparer,
 {
     C::compare(lhs, rhs)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn compare_bytes<C: Collator, F: CmpOp>(
+    lhs: Option<BytesRef>,
+    rhs: Option<BytesRef>,
+) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => {
+            let ord = C::sort_compare(lhs, rhs)?;
+            Some(F::compare_order(ord) as i64)
+        }
+    })
+}
+
 pub trait Comparer {
     type T: Evaluable;
 
-    fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
+    fn compare(lhs: Option<&Self::T>, rhs: Option<&Self::T>) -> Result<Option<i64>>;
 }
 
 pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
@@ -31,31 +50,11 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
     #[inline]
-    fn compare(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&T>, rhs: Option<&T>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(rhs)) as i64),
-        })
-    }
-}
-
-pub struct StringComparer<C: Collator, F: CmpOp> {
-    _phantom: std::marker::PhantomData<(C, F)>,
-}
-
-impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
-    type T = Bytes;
-
-    #[inline]
-    fn compare(lhs: &Option<Bytes>, rhs: &Option<Bytes>) -> Result<Option<i64>> {
-        Ok(match (lhs, rhs) {
-            (None, None) => F::compare_null(),
-            (None, _) | (_, None) => F::compare_partial_null(),
-            (Some(lhs), Some(rhs)) => {
-                let ord = C::sort_compare(lhs, rhs)?;
-                Some(F::compare_order(ord) as i64)
-            }
         })
     }
 }
@@ -68,7 +67,7 @@ impl<F: CmpOp> Comparer for UintUintComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -89,7 +88,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -113,7 +112,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -218,13 +217,84 @@ impl CmpOp for CmpOpNullEQ {
 
 #[rpn_fn(varg)]
 #[inline]
-pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
+pub fn coalesce<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
         if arg.is_some() {
-            return Ok((*arg).clone());
+            return Ok(arg.cloned());
         }
     }
     Ok(None)
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
+    do_get_extremum(args, |x, y| x.max(y))
+}
+
+#[rpn_fn(varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                    Ok(t) => greatest = max(greatest, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[inline]
+fn do_get_extremum<T, E>(args: &[Option<&T>], chooser: E) -> Result<Option<T>>
+where
+    T: Ord + Copy,
+    E: Fn(T, T) -> T,
+{
+    let first = args[0];
+    match first {
+        None => Ok(None),
+        Some(first_val) => {
+            let mut res = *first_val;
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        return Ok(None);
+                    }
+                    Some(v) => {
+                        res = chooser(res, **v);
+                    }
+                }
+            }
+            Ok(Some(res))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -632,7 +702,7 @@ mod tests {
                 let output = RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(lhs, lhs_field_type.clone())
                     .push_param_with_field_type(rhs, rhs_field_type.clone())
-                    .evaluate(sig.clone())
+                    .evaluate(*sig)
                     .unwrap();
                 if accept_orderings.iter().any(|&x| x == ordering) {
                     assert_eq!(output, Some(1));
@@ -845,6 +915,130 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(args)
                 .evaluate(ScalarFuncSig::CoalesceInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_int() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some(1), Some(1)], Some(1)),
+            (vec![Some(1), Some(-1), None], None),
+            (vec![Some(-2), Some(-1), Some(1), Some(2)], Some(2)),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MAX),
+            ),
+            (vec![Some(0), Some(4), Some(8), Some(8)], Some(8)),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_real() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Real::new(1.0).ok(), Real::new(-1.0).ok(), None], None),
+            (
+                vec![
+                    Real::new(1.0).ok(),
+                    Real::new(-1.0).ok(),
+                    Real::new(-2.0).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(1.0).ok(),
+            ),
+            (
+                vec![
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                    Real::new(0f64).ok(),
+                ],
+                Real::new(f64::MAX).ok(),
+            ),
+            (vec![Real::new(f64::NAN).ok(), Real::new(0f64).ok()], None),
+            (
+                vec![
+                    Real::new(f64::INFINITY).ok(),
+                    Real::new(f64::NEG_INFINITY).ok(),
+                    Real::new(f64::MAX).ok(),
+                    Real::new(f64::MIN).ok(),
+                ],
+                Real::new(f64::INFINITY).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestReal)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_time() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-24 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
+                    Some(b"2012-12-12 12:00:38.12003800000".to_owned().to_vec()),
+                    Some(b"2012-12-31 12:00:39.120050".to_owned().to_vec()),
+                    Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+                ],
+                Some(b"2018-04-03 00:00:00.000000".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestTime)
                 .unwrap();
             assert_eq!(output, expected);
         }
