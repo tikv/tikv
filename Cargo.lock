@@ -1862,7 +1862,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6a4d5c264a8bb3d3dbd1d3346d195f163659b16c"
+source = "git+https://github.com/pingcap/kvproto.git#6f5f6ae6671fe18f2e5521e6eb28ba9e359b6e59"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1885,6 +1885,24 @@ name = "libc"
 version = "0.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+
+[[package]]
+name = "libflate"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "784f4ec5908a9d7f4e53658906386667e8b02e9389a47cfebf45d324ba9e8d25"
+dependencies = [
+ "adler32",
+ "crc32fast",
+ "libflate_lz77",
+ "rle-decode-fast",
+]
+
+[[package]]
+name = "libflate_lz77"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3286f09f7d4926fc486334f28d8d2e6ebe4f7f9994494b6dab27ddfad2c9b11b"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1919,7 +1937,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#188acd9f48d61642863a1c1fed70d9de964f3a0f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d57530c9f5cf346c63d629e8eb3972afa7e66a94"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1938,7 +1956,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#188acd9f48d61642863a1c1fed70d9de964f3a0f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d57530c9f5cf346c63d629e8eb3972afa7e66a94"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2102,6 +2120,29 @@ checksum = "1a0ed03949aef72dbdf3116a383d7b38b4768e6f960528cd6a6044aa9ed68599"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "minitrace"
+version = "0.1.0"
+source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+dependencies = [
+ "crossbeam",
+ "futures 0.1.29",
+ "futures 0.3.4",
+ "lazy_static",
+ "minitrace-attribute",
+ "pin-project",
+]
+
+[[package]]
+name = "minitrace-attribute"
+version = "0.1.0"
+source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+dependencies = [
+ "proc-macro-error 1.0.2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2663,7 +2704,20 @@ version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7959c6467d962050d639361f7703b2051c43036d03493c36f01d440fdd3138a"
 dependencies = [
- "proc-macro-error-attr",
+ "proc-macro-error-attr 0.4.11",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "version_check 0.9.1",
+]
+
+[[package]]
+name = "proc-macro-error"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98e9e4b82e0ef281812565ea4751049f1bdcdfccda7d3f459f2e138a40c08678"
+dependencies = [
+ "proc-macro-error-attr 1.0.2",
  "proc-macro2",
  "quote",
  "syn",
@@ -2675,6 +2729,19 @@ name = "proc-macro-error-attr"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4002d9f55991d5e019fb940a90e1a95eb80c24e77cb2462dd4dc869604d543a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "syn-mid",
+ "version_check 0.9.1",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f5444ead4e9935abd7f27dc51f7e852a0569ac888096d5ec2499470794e2e53"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2707,6 +2774,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c09721c6781493a2a492a96b5a5bf19b65917fe6728884e7c44dd0c60ca3435"
 dependencies = [
  "unicode-xid",
+]
+
+[[package]]
+name = "procfs"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c434e93ef69c216e68e4f417c927b4f31502c3560b72cfdb6827e2321c5c6b3e"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "chrono",
+ "hex 0.4.2",
+ "lazy_static",
+ "libc",
+ "libflate",
 ]
 
 [[package]]
@@ -3186,9 +3268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rle-decode-fast"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
+
+[[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#188acd9f48d61642863a1c1fed70d9de964f3a0f"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d57530c9f5cf346c63d629e8eb3972afa7e66a94"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3838,7 +3926,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6e79c80e0f4efd86ca960218d4e056249be189ff1c42824dcd9a7f51a56f0bd"
 dependencies = [
  "heck",
- "proc-macro-error",
+ "proc-macro-error 0.4.11",
  "proc-macro2",
  "quote",
  "syn",
@@ -4425,6 +4513,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "mime",
+ "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -4526,12 +4615,15 @@ dependencies = [
  "fxhash",
  "grpcio",
  "hex 0.4.2",
+ "kvproto",
  "lazy_static",
  "libc",
  "log",
+ "minitrace",
  "num_cpus",
  "openssl",
  "panic_hook",
+ "procfs",
  "procinfo",
  "prometheus",
  "protobuf",
@@ -4549,6 +4641,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
+ "tipb",
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
@@ -4620,7 +4713,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#7316d94df1eed974822e2f3e70dc3e0aea1a6b0a"
+source = "git+https://github.com/pingcap/tipb.git#85b2ef9503b5c69709871403bb8378139e4bb47f"
 dependencies = [
  "lazy_static",
  "prost",
