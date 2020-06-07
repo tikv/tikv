@@ -125,6 +125,7 @@ impl DAGHandler {
 
 #[async_trait]
 impl RequestHandler for DAGHandler {
+    #[minitrace::trace_async(tipb::Event::TiKvCoprExecuteDagRunner as u32)]
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request();
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
@@ -167,6 +168,7 @@ impl BatchDAGHandler {
 
 #[async_trait]
 impl RequestHandler for BatchDAGHandler {
+    #[minitrace::trace_async(tipb::Event::TiKvCoprExecuteBatchDagRunner as u32)]
     async fn handle_request(&mut self) -> Result<Response> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version)
