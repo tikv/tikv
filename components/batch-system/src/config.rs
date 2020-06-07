@@ -16,7 +16,7 @@ impl Default for Config {
         Config {
             max_batch_size: 256,
             pool_size: 2,
-            reschedule_duration: ReadableDuration::secs(5),
+            reschedule_duration: ReadableDuration::secs(1),
         }
     }
 }

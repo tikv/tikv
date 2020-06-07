@@ -245,7 +245,7 @@ impl Default for Config {
             hibernate_regions: true,
             early_apply: true,
             dev_assert: false,
-            apply_yield_duration: ReadableDuration::millis(500),
+            apply_yield_duration: ReadableDuration::millis(100),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
