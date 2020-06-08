@@ -196,8 +196,6 @@ impl ScalarFunc {
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
-                    } else {
-                        return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
                     }
                 }
             }
@@ -238,6 +236,7 @@ impl ScalarFunc {
         let mut res = None;
         let mut least =
             Time::parse_datetime(ctx, "9999-12-31 23:59:59.999999", mysql::MAX_FSP, false)?;
+        let mut invalid_time = None;
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
@@ -245,13 +244,20 @@ impl ScalarFunc {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
-                    _ => return Ok(Some(Cow::Owned(s.to_string().into_bytes()))),
+                    _ => {
+                        if invalid_time == None {
+                            invalid_time = Some(Cow::Owned(s.to_string().into_bytes()));
+                        }
+                    }
                 },
             }
         }
 
         if res == None {
             res = Some(Cow::Owned(least.to_string().into_bytes()));
+        }
+        if invalid_time != None {
+            res = invalid_time;
         }
         Ok(res)
     }
@@ -861,8 +867,8 @@ mod tests {
                     Datum::Bytes(t3.clone()),
                     Datum::Bytes(t4.clone()),
                 ],
-                Datum::Null,
-                Datum::Null,
+                Datum::Bytes(t3.clone()),
+                Datum::Bytes(t4.clone()),
             ),
             (
                 vec![
@@ -875,6 +881,11 @@ mod tests {
                 ],
                 Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
+            ),
+            (
+                vec![Datum::Bytes(t4.clone()), Datum::Bytes(t4.clone())],
+                Datum::Null,
+                Datum::Bytes(t4.clone()),
             ),
         ];
 
