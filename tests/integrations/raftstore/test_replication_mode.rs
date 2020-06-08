@@ -19,6 +19,7 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
     cluster.pd_client.configure_dr_auto_sync("zone");
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    cluster.cfg.raft_store.group_consistent_log_gap = 0;
     cluster.add_label(1, "zone", "ES");
     cluster.add_label(2, "zone", "ES");
     cluster.add_label(3, "zone", "WS");

@@ -479,12 +479,12 @@ impl Peer {
             // otherwise `maximal_committed_index` will return the committed index
             // based on majorty instead of commit group
             self.raft_group.raft.enable_group_commit(true);
-            let (index, _) = self.raft_group.raft.mut_prs().maximal_committed_index();
+            let (index, mut group_consistent) =
+                self.raft_group.raft.mut_prs().maximal_committed_index();
             if self.raft_group.raft.raft_log.committed > index {
-                Some(self.raft_group.raft.raft_log.committed - index <= allow_gap)
-            } else {
-                Some(true)
+                group_consistent &= self.raft_group.raft.raft_log.committed - index <= allow_gap;
             }
+            Some(group_consistent)
         };
         self.raft_group.raft.enable_group_commit(original);
         res
