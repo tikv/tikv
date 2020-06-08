@@ -2243,7 +2243,6 @@ mod tests {
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(..)))) => {
-                    ()
                 }
                 e => panic!("unexpected error chain: {:?}", e),
             },
