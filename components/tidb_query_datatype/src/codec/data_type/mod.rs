@@ -7,7 +7,8 @@ mod vector;
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
-pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTime};
+pub type BytesRef<'a> = &'a [u8];
+pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -292,5 +293,14 @@ mod tests {
                 Err(_) => assert!(expected.is_none(), "{} to bool should fail", f,),
             }
         }
+    }
+
+    #[test]
+    fn test_into_evaluable_ref() {
+        let x: Option<&Int> = Some(&1);
+        assert_eq!(x.into_evaluable_ref(), Some(&1));
+        let y = vec![1, 2, 3];
+        let x: Option<&Bytes> = Some(&y);
+        assert_eq!(x.into_evaluable_ref(), Some(vec![1, 2, 3].as_slice()));
     }
 }
