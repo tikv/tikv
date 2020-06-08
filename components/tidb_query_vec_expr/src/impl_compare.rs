@@ -244,7 +244,7 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn greatest_decimal(args: &[&Option<Decimal>]) -> Result<Option<Decimal>> {
+pub fn greatest_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
     do_get_extremum(args, |x, y| x.max(y))
 }
 
@@ -266,9 +266,8 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<O
                 match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
-                        return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
-                            .map(|_| Ok(Some(s.to_owned().into_bytes())))?;
+                        ctx.handle_invalid_time_error(Error::invalid_time_format(&s))?;
+                        continue;
                     }
                 }
             }
@@ -283,7 +282,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<O
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_string(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+pub fn greatest_string(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {
@@ -309,25 +308,25 @@ pub fn greatest_string(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn least_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+pub fn least_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, min)
 }
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn least_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
+pub fn least_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.min(y))
 }
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn least_decimal(args: &[&Option<Decimal>]) -> Result<Option<Decimal>> {
+pub fn least_decimal(args: &[Option<&Decimal>]) -> Result<Option<Decimal>> {
     do_get_extremum(args, |x, y| x.min(y))
 }
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn least_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+pub fn least_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
     use tidb_query_datatype::codec::mysql;
     let mut least = Some(Time::parse_datetime(
         ctx,
@@ -335,23 +334,17 @@ pub fn least_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Opti
         mysql::MAX_FSP,
         false,
     )?);
+    let mut invalid_time = None;
+
     for arg in args {
         match arg {
             Some(arg_val) => {
-                let s = match str::from_utf8(arg_val) {
-                    Ok(s) => s,
-                    Err(err) => {
-                        return ctx
-                            .handle_invalid_time_error(Error::Encoding(err))
-                            .map(|_| Ok(None))?;
-                    }
-                };
+                let s = str::from_utf8(arg_val).map_err(tidb_query_datatype::codec::Error::from)?;
                 match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
-                        return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
-                            .map(|_| Ok(Some(s.to_owned().into_bytes())))?;
+                        ctx.handle_invalid_time_error(Error::invalid_time_format(&s))?;
+                        invalid_time = Some(s.to_string().into_bytes());
                     }
                 }
             }
@@ -361,12 +354,15 @@ pub fn least_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Opti
         }
     }
 
+    if invalid_time != None {
+        return Ok(invalid_time);
+    }
     Ok(least.map(|time| time.to_string().into_bytes()))
 }
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn least_string(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+pub fn least_string(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
     let mut least = None;
     for arg in args {
         match arg {
