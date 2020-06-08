@@ -1069,7 +1069,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
 /// After this tikv restarts, a new leader may send logs to this target peer, then the panic may happen
 /// because it can not find its source peers when applying `CommitMerge` log.
 ///
-/// This test is to reproduce this situation.
+/// This test is to reproduce above situation.
 #[test]
 fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
     let mut cluster = new_node_cluster(0, 3);

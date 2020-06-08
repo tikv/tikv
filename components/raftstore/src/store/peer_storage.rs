@@ -1073,7 +1073,7 @@ where
         snap: &Snapshot,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::WriteBatch,
-        destroy_regions: &Option<Vec<metapb::Region>>,
+        destroy_regions: &Vec<metapb::Region>,
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -1100,10 +1100,8 @@ where
             self.clear_meta(kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
-        if let Some(regions) = destroy_regions {
-            for r in regions {
-                write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
-            }
+        for r in destroy_regions {
+            write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
@@ -1314,13 +1312,13 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
-    /// Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
-    /// a requirement to advance the ready object properly later.
+    // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
+    // a requirement to advance the ready object properly later.
     pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>>(
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
-        destroy_regions: Option<Vec<metapb::Region>>,
+        destroy_regions: Vec<metapb::Region>,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
         let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
@@ -1331,9 +1329,7 @@ where
             self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb, &destroy_regions)?;
             fail_point!("raft_after_apply_snap");
 
-            if let Some(regions) = destroy_regions {
-                ctx.destroyed_regions = regions;
-            }
+            ctx.destroyed_regions = destroy_regions;
 
             last_index(&ctx.raft_state)
         };
@@ -1401,6 +1397,14 @@ where
             }
         }
 
+        // Note that the correctness depends on the fact that these source regions MUST NOT
+        // serve read request otherwise a corrupt data may be returned.
+        // For now, it is ensured by
+        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
+        //    suspected immediately which makes local reader invalid to serve read request.
+        // 2. No read request can be responsed during merging.
+        // These conditions are used to prevent reading **stale** data in the past.
+        // At present, they are used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
             if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
                 error!(
@@ -2394,7 +2398,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s2.engines.kv.write_batch();
         let mut raft_wb = s2.engines.raft.write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &None)
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &vec![])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2412,7 +2416,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s3.engines.kv.write_batch();
         let mut raft_wb = s3.engines.raft.write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &None)
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &vec![])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

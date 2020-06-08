@@ -2492,6 +2492,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
+                // `merge_by_target` is true because this region's range already belongs to
+                // its target region so we must not clear data otherwise its target region's
+                // data will corrupt.
                 self.destroy_peer(true);
             }
             MergeResultKind::Stale => {

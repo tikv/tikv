@@ -1224,7 +1224,7 @@ impl Peer {
             ctx.need_flush_trans = true;
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
-        let mut destroy_regions: Option<Vec<metapb::Region>> = None;
+        let mut destroy_regions = vec![];
         if self.get_pending_snapshot().is_some() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
@@ -1240,11 +1240,10 @@ impl Peer {
             }
 
             let meta = ctx.store_meta.lock().unwrap();
-            // For merge process, when applying snapshot or create new peer the stale source
-            // peer is destroyed asynchronously. So here checks whether there is any overlap, if
-            // so, wait and do not handle raft ready.
+            // For merge process, the stale source peer is destroyed asynchronously when applying
+            // snapshot or creating new peer. So here checks whether there is any overlap, if so,
+            // wait and do not handle raft ready.
             if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
-                destroy_regions = Some(vec![]);
                 for (source_region_id, is_ready) in wait_destroy_regions {
                     if !is_ready {
                         info!(
@@ -1257,10 +1256,7 @@ impl Peer {
                         );
                         return None;
                     }
-                    destroy_regions
-                        .as_mut()
-                        .unwrap()
-                        .push(meta.regions[source_region_id].clone());
+                    destroy_regions.push(meta.regions[source_region_id].clone());
                 }
             }
         }
@@ -1516,7 +1512,6 @@ impl Peer {
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
         if !raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(self.get_store().is_applying_snapshot());
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
