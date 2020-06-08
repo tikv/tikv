@@ -431,17 +431,21 @@ impl parse::Parse for RpnFnRefEvaluableType {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         input.parse::<self::kw::Option>()?;
         input.parse::<Token![<]>()?;
-        input.parse::<Token![&]>()?;
-        let eval_type = input.parse::<TypePath>()?;
+        let lookahead = input.lookahead1();
+        let eval_type = if lookahead.peek(Token![&]) {
+            Self::parse_type_ref(input)?
+        } else {
+            Self::parse_type_path(input)?
+        };
         input.parse::<Token![>]>()?;
-        Ok(Self { eval_type })
+        Ok(eval_type)
     }
 }
 
 /// Parses a function signature parameter like `val: &Option<T>`.
 struct RpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for RpnFnSignatureParam {
@@ -451,7 +455,7 @@ impl parse::Parse for RpnFnSignatureParam {
         let et = input.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -459,7 +463,7 @@ impl parse::Parse for RpnFnSignatureParam {
 /// Parses a function signature parameter like `val: &[&Option<T>]`.
 struct VargsRpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for VargsRpnFnSignatureParam {
@@ -472,7 +476,7 @@ impl parse::Parse for VargsRpnFnSignatureParam {
         let et = slice_inner.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -679,6 +683,78 @@ fn generate_metadata_type_checker(
     }
 }
 
+/// Checks if parameter type is Json or Bytes
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_ref_type(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Json" || *x == "Bytes",
+        None => false,
+    }
+}
+
+/// Checks if parameter type is Json
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_json(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Json",
+        None => false,
+    }
+}
+
+/// Checks if parameter type is Bytes
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_bytes(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Bytes",
+        None => false,
+    }
+}
+
+/// Get corresponding VARGS buffer
+/// Json or JsonRef will be stored in `VARG_PARAM_BUF_JSON_REF`
+/// Bytes or BytesRef will be stored in `VARG_PARAM_BUF_BYTES_REF`
+fn get_vargs_buf(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if *x == "Json" {
+                quote! { VARG_PARAM_BUF_JSON_REF }
+            } else if *x == "Bytes" {
+                quote! { VARG_PARAM_BUF_BYTES_REF }
+            } else {
+                quote! { VARG_PARAM_BUF }
+            }
+        }
+        None => quote! { VARG_PARAM_BUF },
+    }
+}
+
+/// Transform copr framework type into vectorized function type
+/// For example, `Json` in copr framework will be transformed into
+/// `JsonRef` before passing to vectorized functions.
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn get_vectoried_type(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if *x == "Json" {
+                quote! { JsonRef }
+            } else if *x == "Bytes" {
+                quote! { BytesRef }
+            } else {
+                quote! { &#ty }
+            }
+        }
+        None => quote! { &#ty },
+    }
+}
+
 /// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
@@ -705,7 +781,7 @@ impl VargsRpnFn {
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`")
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`")
             })?;
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
@@ -725,7 +801,7 @@ impl VargsRpnFn {
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
             item_fn,
-            arg_type: arg_type.eval_type,
+            arg_type: arg_type.eval_type.get_type_path(),
             ret_type: ret_type.eval_type,
         })
     }
@@ -777,6 +853,22 @@ impl VargsRpnFn {
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
+        let transmute_ref = if is_json(arg_type) {
+            quote! {
+                let arg: Option<JsonRef> = arg.into_evaluable_ref();
+                let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
+            }
+        } else if is_bytes(arg_type) {
+            quote! {
+                let arg: Option<BytesRef> = arg.into_evaluable_ref();
+                let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
+            }
+        } else {
+            quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
+        };
+        let varg_buf = get_vargs_buf(arg_type);
+        let vectorized_type = get_vectoried_type(arg_type);
+
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> crate::RpnFnMeta
@@ -796,7 +888,7 @@ impl VargsRpnFn {
 
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        vargs_buf.resize(args_len, 0);
+                        vargs_buf.resize(args_len, Default::default());
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
@@ -806,7 +898,7 @@ impl VargsRpnFn {
                                 vargs_buf[arg_index] = arg;
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
-                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<&#arg_type>]) })?);
+                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
@@ -993,7 +1085,7 @@ impl NormalRpnFn {
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`")
+                    Error::new_spanned(fn_arg, "Expect parameter type to be like Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>")
                 })?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
@@ -1319,6 +1411,7 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
@@ -1492,6 +1585,7 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
