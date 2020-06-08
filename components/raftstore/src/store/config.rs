@@ -159,6 +159,9 @@ pub struct Config {
     pub hibernate_timeout: ReadableDuration,
     #[config(hidden)]
     pub early_apply: bool,
+    #[doc(hidden)]
+    #[config(hidden)]
+    pub dev_assert: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
@@ -243,6 +246,7 @@ impl Default for Config {
             hibernate_regions: true,
             hibernate_timeout: ReadableDuration::minutes(10),
             early_apply: true,
+            dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
             // They are preserved for compatibility check.

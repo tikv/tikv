@@ -35,6 +35,7 @@ stack-size = "12MB"
 addr = "example.com:443"
 advertise-addr = "example.com:443"
 status-addr = "example.com:443"
+advertise-status-addr = "example.com:443"
 status-thread-pool-size = 1
 max-grpc-send-msg-len = 6291456
 grpc-compression-type = "gzip"
@@ -153,6 +154,7 @@ future-poll-size = 2
 hibernate-regions = false
 hibernate-timeout = "10m"
 early-apply = false
+dev-assert = true
 perf-level = 5
 
 [coprocessor]
@@ -552,6 +554,7 @@ type = "plaintext"
 [import]
 num-threads = 123
 stream-channel-window = 123
+import-mode-timeout = "1453s"
 
 [gc]
 ratio-threshold = 1.2

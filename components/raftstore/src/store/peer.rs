@@ -903,7 +903,7 @@ impl Peer {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<T, C>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -934,6 +934,16 @@ impl Peer {
                             "time" => ?now,
                         );
                     }
+                } else {
+                    if ctx.cfg.dev_assert {
+                        panic!("{} failed to get peer {} from cache", self.tag, id);
+                    }
+                    error!(
+                        "failed to get peer from cache";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "get_peer_id" => id,
+                    );
                 }
             }
         }
@@ -1537,14 +1547,19 @@ impl Peer {
     ) {
         debug!(
             "handle reads with a read index";
-            "request_id" => ?read.binary_id(),
+            "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-        for (req, cb) in read.cmds.drain(..) {
+        for (req, cb, mut read_index) in read.cmds.drain(..) {
             if !replica_read {
-                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                if read_index.is_none() {
+                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
+                    // Starting from the second, all the following ones' read_index is not none.
+                    read_index = read.read_index;
+                }
+                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
             }
             if req.get_header().get_replica_read() {
@@ -2107,10 +2122,11 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
+                    let committed_index = self.get_store().committed_index();
                     if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.push_command(req, cb);
+                            read.push_command(req, cb, committed_index);
                             return false;
                         }
                     }
@@ -2648,7 +2664,7 @@ impl Peer {
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
-            pending_peers: self.collect_pending_peers(),
+            pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
@@ -2806,7 +2822,11 @@ impl Peer {
         }
     }
 
-    pub fn send_want_rollback_merge<T: Transport>(&self, premerge_commit: u64, trans: &mut T) {
+    pub fn send_want_rollback_merge<T: Transport, C>(
+        &self,
+        premerge_commit: u64,
+        ctx: &mut PollContext<T, C>,
+    ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         send_msg.set_from_peer(self.peer.clone());
@@ -2827,7 +2847,7 @@ impl Peer {
         let extra_msg = send_msg.mut_extra_msg();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             error!(
                 "failed to send want rollback merge message";
                 "region_id" => self.region_id,
@@ -2836,6 +2856,8 @@ impl Peer {
                 "target_store_id" => to_peer.get_store_id(),
                 "err" => ?e
             );
+        } else {
+            ctx.need_flush_trans = true;
         }
     }
 }

@@ -15,10 +15,10 @@ use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use engine::rocks::util::{new_engine, CFOptions};
 use engine::rocks::{
     ColumnFamilyOptions, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
 };
+use engine_rocks::raw_util::{new_engine, CFOptions};
 use std::sync::Arc;
 
 pub use engine_rocks::RocksEngine as TestEngine;
