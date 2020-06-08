@@ -18,7 +18,7 @@ use tidb_query_datatype::expr::SqlMode;
 pub fn date_format(
     ctx: &mut EvalContext,
     t: Option<&DateTime>,
-    layout: Option<&Bytes>,
+    layout: Option<BytesRef>,
 ) -> Result<Option<Bytes>> {
     use std::str::from_utf8;
 
@@ -32,7 +32,7 @@ pub fn date_format(
             .map(|_| Ok(None))?;
     }
 
-    let t = t.date_format(from_utf8(layout.as_slice()).map_err(Error::Encoding)?);
+    let t = t.date_format(from_utf8(layout).map_err(Error::Encoding)?);
     if let Err(err) = t {
         return ctx.handle_invalid_time_error(err).map(|_| Ok(None))?;
     }
