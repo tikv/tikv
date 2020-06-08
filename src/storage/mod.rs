@@ -327,7 +327,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(ctx.get_region_id(), &stat);
                                     statistics.add(&stat);
-                                    results.push(v.map_err(txn::Error::from).map_err(Error::from));
+                                    results.push(v.map_err(Error::from));
                                 }
                                 Err(e) => results.push(Err(Error::from(e))),
                             }
@@ -1638,11 +1638,9 @@ mod tests {
         for v in x {
             expect_error(
                 |e| match e {
-                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
-                            ..,
-                        ))),
-                    ))))) => {}
+                    Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                        EngineError(box EngineErrorInner::Request(..)),
+                    )))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
@@ -2244,9 +2242,9 @@ mod tests {
             .unwrap();
         expect_error(
             |e| match e {
-                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                    box mvcc::ErrorInner::KeyIsLocked(..),
-                ))))) => (),
+                Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(..)))) => {
+                    ()
+                }
                 e => panic!("unexpected error chain: {:?}", e),
             },
             x.remove(0),
