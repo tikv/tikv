@@ -164,7 +164,7 @@ pub struct Config {
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
-    // Max log gap allowed to consider group consistent
+    // Max log gap allowed when consider group consistent
     #[config(skip)]
     pub group_consistent_log_gap: u64,
 
