@@ -455,10 +455,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_update_replication_mode(&mut self) {
-        self.fsm.peer.switch_replication_mode(
-            &self.ctx.global_replication_state,
-            self.ctx.cfg.group_consistent_log_gap,
-        );
+        self.fsm.peer.switch_replication_mode(&self.ctx);
         if self.fsm.peer.is_leader() {
             self.reset_raft_tick(GroupState::Ordered);
             self.register_pd_heartbeat_tick();

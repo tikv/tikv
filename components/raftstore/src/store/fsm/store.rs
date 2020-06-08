@@ -20,6 +20,7 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
+use std::cell::RefCell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -70,7 +71,7 @@ use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant, SharedInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -258,7 +259,11 @@ pub struct PollContext<T, C: 'static> {
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
-    pub current_time: Option<Timespec>,
+    /// `Instant` shared by FSMs within same batch, the underlying value will be seted at
+    /// its first use and will be cleared at `PollHandler::end`. For the same FSM, this
+    /// `Instant` will be monotonic, because a FSM will not be handled in diffrent batch
+    /// at the same time.
+    pub current_time: RefCell<SharedInstant>,
     pub perf_context_statistics: PerfContextStatistics,
 }
 
@@ -723,7 +728,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
-        self.poll_ctx.current_time = None;
+        self.poll_ctx.current_time.borrow_mut().clear();
         if !self.poll_ctx.queued_snapshot.is_empty() {
             let mut meta = self.poll_ctx.store_meta.lock().unwrap();
             meta.pending_snapshot_regions
@@ -979,7 +984,7 @@ where
             ready_res: Vec::new(),
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
-            current_time: None,
+            current_time: RefCell::new(SharedInstant::new()),
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
