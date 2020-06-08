@@ -164,6 +164,10 @@ pub struct Config {
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
+    // Max log gap allowed to consider group consistent
+    #[config(skip)]
+    pub group_consistent_log_gap: u64,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -246,6 +250,7 @@ impl Default for Config {
             early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            group_consistent_log_gap: 10,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
