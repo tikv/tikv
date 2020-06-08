@@ -162,7 +162,16 @@ fn test_serde_custom_tikv_config() {
         store_max_batch_size: 21,
         store_pool_size: 3,
         future_poll_size: 2,
+<<<<<<< HEAD
         hibernate_regions: true,
+=======
+        hibernate_regions: false,
+        hibernate_timeout: ReadableDuration::minutes(10),
+        early_apply: false,
+        dev_assert: true,
+        apply_yield_duration: ReadableDuration::millis(333),
+        perf_level: PerfLevel::EnableTime,
+>>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     value.rocksdb = DbConfig {
