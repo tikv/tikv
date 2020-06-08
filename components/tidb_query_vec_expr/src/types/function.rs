@@ -82,13 +82,19 @@ pub trait RpnFnArg: std::fmt::Debug {
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarArg<'a, T: EvaluableRef<'a>>(Option<T>, PhantomData<&'a T>);
 
+impl <'a, T : EvaluableRef<'a>> ScalarArg<'a, T> {
+    pub fn new(data: Option<T>) -> Self {
+        Self(data, PhantomData)
+    }
+}
+
 impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
     type Type = Option<T>;
 
     /// Gets the value in the given row. All rows of a `ScalarArg` share the same value.
     #[inline]
     fn get(&self, _row: usize) -> Option<T> {
-        self.0
+        self.0.clone()
     }
 }
 
@@ -104,7 +110,7 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for VectorArg<'a, T> {
 
     #[inline]
     fn get(&self, row: usize) -> Option<T> {
-        self.physical_col[self.logical_rows[row]]
+        self.physical_col[self.logical_rows[row]].clone()
     }
 }
 
@@ -156,25 +162,25 @@ impl ArgDef for Null {}
 /// - Custom evaluators which do the actual execution of the RPN function. The `def` parameter of
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
 ///   arguments, execute the RPN function and fill the result vector.
-pub trait Evaluator {
+pub trait Evaluator <'a>{
     fn eval(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'_>],
+        args: &[RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<'a, A: EvaluableRef <'a>, E: Evaluator> {
+pub struct ArgConstructor<'a, A: EvaluableRef <'a>, E: Evaluator<'a>> {
     arg_index: usize,
     inner: E,
     _phantom: PhantomData<&'a A>,
 }
 
-impl<'a, A: EvaluableRef <'a>, E: Evaluator> ArgConstructor<'a, A, E> {
+impl<'a, A: EvaluableRef <'a>, E: Evaluator<'a>> ArgConstructor<'a, A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
         ArgConstructor {
@@ -185,21 +191,21 @@ impl<'a, A: EvaluableRef <'a>, E: Evaluator> ArgConstructor<'a, A, E> {
     }
 }
 
-impl<'a, A: EvaluableRef<'a>, E: Evaluator> Evaluator for ArgConstructor<'a, A, E> {
+impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor<'a, A, E> {
     fn eval(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'_>],
+        args: &[RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                let v = A::borrow_scalar_value(value);
+                let v = A::borrow_scalar_value_ref(value.as_scalar_value_ref());
                 let new_def = Arg {
-                    arg: ScalarArg(v),
+                    arg: ScalarArg::new(v),
                     rem: def,
                 };
                 self.inner
@@ -207,6 +213,7 @@ impl<'a, A: EvaluableRef<'a>, E: Evaluator> Evaluator for ArgConstructor<'a, A, 
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
+                
                 let v = A::borrow_vector_value(value.as_ref());
                 let new_def = Arg {
                     arg: VectorArg {
