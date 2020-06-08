@@ -733,6 +733,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
         let res = match res {
             // hibernate_region is false.
             None => {
@@ -742,6 +743,23 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             Some(res) => res,
         };
         if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+=======
+
+        // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
+        if res.is_none() /* hibernate_region is false */ ||
+            (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout()) ||
+            !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+        {
+            self.register_raft_base_tick();
+            return;
+        }
+
+        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        self.fsm.group_state = GroupState::Idle;
+        // Followers will stop ticking at L789. Keep ticking for followers
+        // to allow it to campaign quickly when abnormal situation is detected.
+        if !self.fsm.peer.is_leader() {
+>>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955):components/raftstore/src/store/fsm/peer.rs
             self.register_raft_base_tick();
         } else {
             debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);

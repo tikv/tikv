@@ -231,6 +231,7 @@ pub struct PollContext<T, C: 'static> {
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub node_start_time: Option<Instant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -269,6 +270,20 @@ impl<T, C> PollContext<T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Timeout is calculated from TiKV start, the node should not become
+    /// hibernated if it still within the hibernate timeout, see
+    /// https://github.com/tikv/tikv/issues/7747
+    pub fn is_hibernate_timeout(&mut self) -> bool {
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
+        }
+        timeout
     }
 }
 
@@ -911,7 +926,12 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
             perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
+=======
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            node_start_time: Some(Instant::now()),
+>>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955):components/raftstore/src/store/fsm/store.rs
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

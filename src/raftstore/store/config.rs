@@ -122,6 +122,12 @@ pub struct Config {
     pub store_pool_size: usize,
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
+<<<<<<< HEAD:src/raftstore/store/config.rs
+=======
+    pub hibernate_timeout: ReadableDuration,
+    #[config(hidden)]
+    pub early_apply: bool,
+>>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955):components/raftstore/src/store/config.rs
     #[doc(hidden)]
     pub dev_assert: bool,
 
@@ -199,7 +205,13 @@ impl Default for Config {
             store_max_batch_size: 1024,
             store_pool_size: 2,
             future_poll_size: 1,
+<<<<<<< HEAD:src/raftstore/store/config.rs
             hibernate_regions: false,
+=======
+            hibernate_regions: true,
+            hibernate_timeout: ReadableDuration::minutes(10),
+            early_apply: true,
+>>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955):components/raftstore/src/store/config.rs
             dev_assert: false,
 
             // They are preserved for compatibility check.
