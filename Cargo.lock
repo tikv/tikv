@@ -1973,7 +1973,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/cdc-aware-min-commit-ts#c6b1755e93827c3b0dcca18828bc9d01b88be4e1"
+source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/cdc-aware-min-commit-ts#babe7a4311be27d8e2c5b180386e9b19258af29a"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
