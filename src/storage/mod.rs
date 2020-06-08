@@ -327,7 +327,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(ctx.get_region_id(), &stat);
                                     statistics.add(&stat);
-                                    results.push(v.map_err(Error::from));
+                                    results.push(v.map_err(txn::Error::from).map_err(Error::from));
                                 }
                                 Err(e) => results.push(Err(Error::from(e))),
                             }
