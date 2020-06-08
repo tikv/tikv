@@ -71,7 +71,7 @@ impl Resolver {
         primary: Vec<u8>,
     ) {
         if min_commit_ts < start_ts {
-            min_commit_ts = start_ts;
+            min_commit_ts = start_ts.next();
         }
         debug!(
             "track lock {}@{}-{}, region {}",
@@ -216,13 +216,13 @@ impl Resolver {
     pub fn resolve(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         let old_resolved_ts = self.resolved_ts?;
 
-        // Find the min start ts.
+        // Find the min_commit_ts.
         let min_lock = self.txn_min_commit_ts.keys().next().cloned();
         let has_lock = min_lock.is_some();
-        let min_commit_ts = min_lock.unwrap_or(min_ts);
+        let min_lock_ts = min_lock.map(TimeStamp::prev).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let new_resolved_ts = cmp::min(min_commit_ts, min_ts);
+        let new_resolved_ts = cmp::min(min_lock_ts, min_ts);
         // Resolved ts never decrease.
         self.resolved_ts = Some(cmp::max(old_resolved_ts, new_resolved_ts));
 
@@ -230,7 +230,7 @@ impl Resolver {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than
             // any late arriving commit ts.
-            new_resolved_ts // cmp::min(min_commit_ts, min_ts)
+            new_resolved_ts // cmp::min(min_lock_ts - 1, min_ts)
         } else {
             min_ts
         };
@@ -338,6 +338,14 @@ mod tests {
                 Event::Unlock(1, None, Key::from_raw(b"b")),
                 Event::Unlock(1, None, Key::from_raw(b"a")),
             ],
+            // Lock may be updated.up
+            vec![
+                Event::Lock(1, 0, Key::from_raw(b"a")),
+                Event::Lock(1, 3, Key::from_raw(b"a")),
+                Event::Lock(1, 5, Key::from_raw(b"a")),
+                Event::Lock(1, 7, Key::from_raw(b"a")),
+                Event::Resolve(10, 6),
+            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
@@ -399,17 +407,17 @@ mod tests {
                 expected_result: vec![],
             },
             Case {
-                locks: vec![(10, 10, b"a", b"a"), (11, 11, b"c", b"d")],
-                ts: 12,
+                locks: vec![(10, 11, b"a", b"a"), (11, 12, b"c", b"d")],
+                ts: 13,
                 expected_result: vec![(10, b"a"), (11, b"d")],
             },
             Case {
                 locks: vec![
-                    (10, 15, b"a", b"a"),
-                    (11, 11, b"c", b"d"),
-                    (12, 13, b"e", b"f"),
+                    (10, 16, b"a", b"a"),
+                    (11, 12, b"c", b"d"),
+                    (12, 14, b"e", b"f"),
                 ],
-                ts: 14,
+                ts: 15,
                 expected_result: vec![(11, b"d"), (12, b"f")],
             },
             Case {
@@ -442,7 +450,7 @@ mod tests {
                     (11, 0, b"b", b"b"),
                     (12, 0, b"c", b"c"),
                 ],
-                ts: 11,
+                ts: 12,
                 expected_result: vec![(10, b"a")],
             },
         ];
