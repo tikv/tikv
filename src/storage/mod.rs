@@ -38,6 +38,7 @@ use crate::storage::{
     kv::{with_tls_engine, Modify},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
+    mvcc::PointGetterBuilder,
     txn::{
         commands::{Command, TypedCommand},
         scheduler::Scheduler as TxnScheduler,
@@ -314,16 +315,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                     match snap.await {
                         Ok(snapshot) => {
-                            let snap_store = SnapshotStore::new(
-                                snapshot,
-                                req.get_version().into(),
-                                isolation_level,
-                                fill_cache,
-                                bypass_locks,
-                                false,
-                            );
-                            results
-                                .push(snap_store.get(&key, &mut statistics).map_err(Error::from));
+                            match PointGetterBuilder::new(snapshot, req.get_version().into())
+                                .fill_cache(fill_cache)
+                                .isolation_level(isolation_level)
+                                .multi(false)
+                                .bypass_locks(bypass_locks)
+                                .build()
+                            {
+                                Ok(mut point_getter) => {
+                                    let v = point_getter.get(&key);
+                                    let stat = point_getter.take_statistics();
+                                    metrics::tls_collect_read_flow(ctx.get_region_id(), &stat);
+                                    statistics.add(&stat);
+                                    results.push(v.map_err(Error::from));
+                                }
+                                Err(e) => results.push(Err(Error::from(e))),
+                            }
                         }
                         Err(e) => {
                             results.push(Err(e));
@@ -331,7 +338,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                 }
                 metrics::tls_collect_scan_details(CMD, &statistics);
-                // KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc_by(batch_count);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
                     .observe(command_duration.elapsed_secs());
@@ -611,8 +617,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    fn raw_get_key_value(
-        snapshot: &E::Snap,
+    fn raw_get_key_value<S: Snapshot>(
+        snapshot: &S,
         cf: String,
         key: Vec<u8>,
         stats: &mut Statistics,
@@ -621,12 +627,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // no scan_count for this kind of op.
 
         let key_len = key.len();
-        let r = snapshot.get_cf(cf, &Key::from_encoded(key)).map(|value|
-            stats.data.flow_stats.read_keys = 1;
-            stats.data.flow_stats.read_bytes = key_len + value.len();
-            value
-        );
-        Ok(r)
+        snapshot
+            .get_cf(cf, &Key::from_encoded(key))
+            .map(|value| {
+                stats.data.flow_stats.read_keys = 1;
+                stats.data.flow_stats.read_bytes =
+                    key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
+                value
+            })
+            .map_err(Error::from)
     }
 
     /// Get the value of a raw key.
