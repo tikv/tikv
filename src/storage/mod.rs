@@ -330,6 +330,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     }
                 }
+                metrics::tls_collect_scan_details(CMD, &statistics);
                 // KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc_by(batch_count);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
@@ -620,11 +621,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // no scan_count for this kind of op.
 
         let key_len = key.len();
-        let r = snapshot.get_cf(cf, &Key::from_encoded(key))?;
-        if let Some(ref value) = r {
+        let r = snapshot.get_cf(cf, &Key::from_encoded(key)).map(|value|
             stats.data.flow_stats.read_keys = 1;
             stats.data.flow_stats.read_bytes = key_len + value.len();
-        }
+            value
+        );
         Ok(r)
     }
 

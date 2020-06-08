@@ -20,6 +20,7 @@
 //! For more information on the procedural macro, see the documentation in
 //! `components/tidb_query_codegen/src/rpn_function`.
 
+use static_assertions::assert_eq_size;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
@@ -29,7 +30,7 @@ use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::{Evaluable, ScalarValueRef, VectorValue};
+use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
 
 /// Metadata of an RPN function.
@@ -273,8 +274,26 @@ pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
     }
 }
 
+// `VARG_PARAM_BUF` is a thread-local cache for evaluating vargs
+// `rpn_fn`. In this way, we can reduce overhead of allocating new Vec.
+// According to https://doc.rust-lang.org/std/mem/fn.size_of.html ,
+// &T and Option<&T> has the same size.
+assert_eq_size!(usize, Option<&Int>);
+assert_eq_size!(usize, Option<&Real>);
+assert_eq_size!(usize, Option<&Decimal>);
+assert_eq_size!(usize, Option<&Bytes>);
+assert_eq_size!(usize, Option<&DateTime>);
+assert_eq_size!(usize, Option<&Duration>);
+assert_eq_size!(usize, Option<&Json>);
+
 thread_local! {
     pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
+    pub static VARG_PARAM_BUF_BYTES_REF: std::cell::RefCell<Vec<Option<BytesRef<'static>>>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
+    pub static VARG_PARAM_BUF_JSON_REF: std::cell::RefCell<Vec<Option<JsonRef<'static>>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =

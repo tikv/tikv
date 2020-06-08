@@ -69,7 +69,7 @@ use self::impl_time::*;
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
-            Collation::TT => compare_fn_meta::<StringComparer<TT, Cmp>>()
+            Collation::TT => compare_bytes_fn_meta::<TT, Cmp>()
         }
     })
 }

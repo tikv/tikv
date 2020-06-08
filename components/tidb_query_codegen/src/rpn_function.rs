@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn]
-//! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
+//! fn foo(x: Option<&u32>) -> Result<Option<u8>> {
 //!     Ok(None)
 //! }
 //! ```
@@ -17,16 +17,16 @@
 //!
 //! If neither `varg` or `raw_varg` are supplied, then the generated arguments
 //! follow from the supplied function's arguments. Each argument must have a type
-//! `&Option<T>` for some `T`.
+//! `Option<&T>` for some `T`.
 //!
 //! ### `varg`
 //!
 //! The RPN operator takes a variable number of arguments. The arguments are passed
-//! as a `&[&Option<T>]`. E.g.,
+//! as a `&[Option<&T>]`. E.g.,
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -99,7 +99,7 @@
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(capture = [ctx])]
-//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
+//! fn with_context(ctx: &mut EvalContext, param: Option<&Decimal>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -142,13 +142,13 @@
 //! first argument is a scalar. The code may look like:
 //!
 //! ```ignore
-//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
+//! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32>> {
 //!     // match text
 //! }
 //!
 //! #[rpn_fn]
-//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
-//!     let regex = build_regex(regex);
+//! fn regex_match(regex: Option<&Bytes>, text: Option<&Bytes>) -> Result<Option<i32>> {
+//!     let regex = build_regex(regex.cloned());
 //!     regex_match_impl(&regex, text)
 //! }
 //!
@@ -180,7 +180,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -372,21 +372,80 @@ impl parse::Parse for RpnFnEvaluableType {
     }
 }
 
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`.
+/// Option<&T> corresponds to `Ref`.
+/// Option<JsonRef> corresponds to `Type`.
+enum RpnFnRefEvaluableType {
+    Type(TypePath),
+    Ref(TypePath),
+}
+
+impl RpnFnRefEvaluableType {
+    /// Parse type like `JsonRef`
+    fn parse_type_path(input: parse::ParseStream<'_>) -> Result<Self> {
+        let eval_type = input.parse::<TypePath>()?;
+        Ok(Self::Type(eval_type))
+    }
+
+    /// Parse type like `&T`
+    fn parse_type_ref(input: parse::ParseStream<'_>) -> Result<Self> {
+        input.parse::<Token![&]>()?;
+        let eval_type = input.parse::<TypePath>()?;
+        Ok(Self::Ref(eval_type))
+    }
+
+    /// Transform new `JsonRef`-like style type to old `&Json` type.
+    ///
+    /// Note: this is a workaround for current copr framework.
+    /// After full migration, this function should be deprecated.
+    fn get_type_path(&self) -> TypePath {
+        match self {
+            Self::Type(x) => match x.path.get_ident() {
+                Some(id) => {
+                    if *id == "JsonRef" {
+                        return parse_quote! { Json };
+                    }
+                    if *id == "BytesRef" {
+                        return parse_quote! { Bytes };
+                    }
+                    x.clone()
+                }
+                None => x.clone(),
+            },
+            Self::Ref(x) => x.clone(),
+        }
+    }
+}
+
+impl parse::Parse for RpnFnRefEvaluableType {
+    fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
+        input.parse::<self::kw::Option>()?;
+        input.parse::<Token![<]>()?;
+        let lookahead = input.lookahead1();
+        let eval_type = if lookahead.peek(Token![&]) {
+            Self::parse_type_ref(input)?
+        } else {
+            Self::parse_type_path(input)?
+        };
+        input.parse::<Token![>]>()?;
+        Ok(eval_type)
+    }
+}
+
 /// Parses a function signature parameter like `val: &Option<T>`.
 struct RpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for RpnFnSignatureParam {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let pat = input.parse::<Pat>()?;
         input.parse::<Token![:]>()?;
-        input.parse::<Token![&]>()?;
-        let et = input.parse::<RpnFnEvaluableType>()?;
+        let et = input.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -394,7 +453,7 @@ impl parse::Parse for RpnFnSignatureParam {
 /// Parses a function signature parameter like `val: &[&Option<T>]`.
 struct VargsRpnFnSignatureParam {
     _pat: Pat,
-    eval_type: TypePath,
+    eval_type: RpnFnRefEvaluableType,
 }
 
 impl parse::Parse for VargsRpnFnSignatureParam {
@@ -404,11 +463,10 @@ impl parse::Parse for VargsRpnFnSignatureParam {
         input.parse::<Token![&]>()?;
         let slice_inner;
         bracketed!(slice_inner in input);
-        slice_inner.parse::<Token![&]>()?;
-        let et = slice_inner.parse::<RpnFnEvaluableType>()?;
+        let et = slice_inner.parse::<RpnFnRefEvaluableType>()?;
         Ok(Self {
             _pat: pat,
-            eval_type: et.eval_type,
+            eval_type: et,
         })
     }
 }
@@ -615,6 +673,78 @@ fn generate_metadata_type_checker(
     }
 }
 
+/// Checks if parameter type is Json or Bytes
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_ref_type(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Json" || *x == "Bytes",
+        None => false,
+    }
+}
+
+/// Checks if parameter type is Json
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_json(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Json",
+        None => false,
+    }
+}
+
+/// Checks if parameter type is Bytes
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn is_bytes(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "Bytes",
+        None => false,
+    }
+}
+
+/// Get corresponding VARGS buffer
+/// Json or JsonRef will be stored in `VARG_PARAM_BUF_JSON_REF`
+/// Bytes or BytesRef will be stored in `VARG_PARAM_BUF_BYTES_REF`
+fn get_vargs_buf(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if *x == "Json" {
+                quote! { VARG_PARAM_BUF_JSON_REF }
+            } else if *x == "Bytes" {
+                quote! { VARG_PARAM_BUF_BYTES_REF }
+            } else {
+                quote! { VARG_PARAM_BUF }
+            }
+        }
+        None => quote! { VARG_PARAM_BUF },
+    }
+}
+
+/// Transform copr framework type into vectorized function type
+/// For example, `Json` in copr framework will be transformed into
+/// `JsonRef` before passing to vectorized functions.
+///
+/// Note: this is a workaround for current copr framework.
+/// After full migration, this function should be deprecated.
+fn get_vectoried_type(ty: &TypePath) -> TokenStream {
+    match ty.path.get_ident() {
+        Some(x) => {
+            if *x == "Json" {
+                quote! { JsonRef }
+            } else if *x == "Bytes" {
+                quote! { BytesRef }
+            } else {
+                quote! { &#ty }
+            }
+        }
+        None => quote! { &#ty },
+    }
+}
+
 /// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
@@ -641,7 +771,7 @@ impl VargsRpnFn {
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[&Option<T>]`")
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`")
             })?;
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
@@ -661,7 +791,7 @@ impl VargsRpnFn {
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
             item_fn,
-            arg_type: arg_type.eval_type,
+            arg_type: arg_type.eval_type.get_type_path(),
             ret_type: ret_type.eval_type,
         })
     }
@@ -713,6 +843,22 @@ impl VargsRpnFn {
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
+        let transmute_ref = if is_json(arg_type) {
+            quote! {
+                let arg: Option<JsonRef> = arg.into_evaluable_ref();
+                let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
+            }
+        } else if is_bytes(arg_type) {
+            quote! {
+                let arg: Option<BytesRef> = arg.into_evaluable_ref();
+                let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
+            }
+        } else {
+            quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
+        };
+        let varg_buf = get_vargs_buf(arg_type);
+        let vectorized_type = get_vectoried_type(arg_type);
+
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> crate::RpnFnMeta
@@ -727,21 +873,23 @@ impl VargsRpnFn {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
-                    crate::function::VARG_PARAM_BUF.with(|vargs_buf| {
-                        use tidb_query_datatype::codec::data_type::Evaluable;
+                    crate::function::#varg_buf.with(|vargs_buf| {
+                        use tidb_query_datatype::codec::data_type::{Evaluable, IntoEvaluableRef};
+
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        vargs_buf.resize(args_len, 0);
+                        vargs_buf.resize(args_len, Default::default());
                         let mut result = Vec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                                vargs_buf[arg_index] = arg as *const _ as usize;
+                                let arg: Option<&#arg_type> = arg.as_ref();
+                                #transmute_ref
+                                vargs_buf[arg_index] = arg;
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* unsafe {
-                                &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
-                            })?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
+                                unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
@@ -924,9 +1072,9 @@ impl NormalRpnFn {
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like `&Option<T>`")
+                    Error::new_spanned(fn_arg, "Expect parameter type to be like Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>")
                 })?;
-            arg_types.push(arg_type.eval_type);
+            arg_types.push(arg_type.eval_type.get_type_path());
         }
         let ret_type = parse2::<RpnFnSignatureReturnType>(
             (&item_fn.sig.output).into_token_stream(),
@@ -1037,7 +1185,15 @@ impl NormalRpnFn {
             self.metadata_type.is_some() || self.metadata_mapper.is_some(),
         );
         let extract2 = extract.clone();
+        let extract3 = extract.clone();
+        let extract4 = extract.clone();
         let call_arg2 = extract.clone();
+        let extract_ref = extract
+            .clone()
+            .enumerate()
+            .filter(|(id, _)| is_ref_type(&self.arg_types[*id]))
+            .map(|(_, ident)| ident);
+        let extract_ref_2 = extract_ref.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,
@@ -1046,6 +1202,8 @@ impl NormalRpnFn {
             quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
                 #(let (#extract2, arg) = arg.extract(0));*;
+                #(let #extract4 = #extract4.as_ref());*;
+                #(let #extract_ref_2 = #extract_ref_2.into_evaluable_ref());*;
                 #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
             },
         );
@@ -1060,11 +1218,15 @@ impl NormalRpnFn {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
+
                     #downcast_metadata
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
+                        #(let #extract3 = #extract3.as_ref());*;
+                        #(let #extract_ref = #extract_ref.into_evaluable_ref();)*
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1173,7 +1335,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(arg0: &Option<Int>, arg1: &Option<Real>) -> tidb_query_common::Result<Option<Decimal>> {
+            fn foo(arg0: Option<&Int>, arg1: Option<&Real>) -> tidb_query_common::Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1246,11 +1408,14 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1336,7 +1501,7 @@ mod tests_normal {
     fn generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
-            fn foo<A: M, B>(arg0: &Option<A::X>) -> Result<Option<B>>
+            fn foo<A: M, B>(arg0: Option<&A::X>) -> Result<Option<B>>
             where B: N<A> {
                 Ok(None)
             }
@@ -1414,10 +1579,12 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
                         result.push(foo :: <A, B> (arg0)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1515,7 +1682,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(ctx: &mut EvalContext, arg0: &Option<Int>, arg1: &Option<Real>) -> Result<Option<Decimal>> {
+            fn foo(ctx: &mut EvalContext, arg0: Option<&Int>, arg1: Option<&Real>) -> Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1560,11 +1727,14 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
+                        let arg0 = arg0.as_ref();
+                        let arg1 = arg1.as_ref();
                         result.push(foo(ctx, arg0, arg1)?);
                     }
                     Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
@@ -1575,5 +1745,83 @@ mod tests_normal {
             expected.to_string(),
             gen.generate_real_fn_trait_impl().to_string()
         );
+    }
+
+    #[test]
+    fn test_get_type_path_ref() {
+        let input = quote! { Option<&Int> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        let expected = quote! { Int };
+        assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+    }
+
+    #[test]
+    fn test_get_type_path_type() {
+        {
+            let input = quote! { Option<JsonRef> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { Json };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { Option<BytesRef> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { Bytes };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { Option<C::T> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { C::T };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { Option<T> };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { T };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+    }
+
+    #[test]
+    fn test_is_ref_type() {
+        let input = quote! { Option<&A::T> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_ref_type(&type_path));
+        let input = quote! { Option<&Int> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_ref_type(&type_path));
+        let input = quote! { Option<JsonRef> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_ref_type(&type_path));
+    }
+
+    #[test]
+    fn test_is_json_or_bytes() {
+        let input = quote! { Option<&Bytes> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_bytes(&type_path));
+        assert!(!is_json(&type_path));
+
+        let input = quote! { Option<&Int> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_bytes(&type_path));
+        assert!(!is_json(&type_path));
+
+        let input = quote! { Option<&Json> };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_bytes(&type_path));
+        assert!(is_json(&type_path));
     }
 }
