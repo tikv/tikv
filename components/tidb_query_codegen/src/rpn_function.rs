@@ -807,14 +807,12 @@ impl VargsRpnFn {
     }
 
     fn generate(self) -> TokenStream {
-        let x = vec![
+        vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
         ]
         .into_iter()
-        .collect();
-        println!("{}", x);
-        x
+        .collect()
     }
 
     fn generate_constructor(&self) -> TokenStream {
