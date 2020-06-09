@@ -89,7 +89,9 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<Self>>;
 }
 
-pub trait IntoVectorValue: Clone + std::fmt::Debug + Send + Sync + 'static {
+pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
+    const EVAL_TYPE: EvalType;
+
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
     fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
@@ -133,9 +135,11 @@ impl_evaluable_type! { Decimal }
 impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 
-macro_rules! impl_into_vector_value {
+macro_rules! impl_evaluable_ret {
     ($ty:tt) => {
-        impl IntoVectorValue for $ty {
+        impl EvaluableRet for $ty {
+            const EVAL_TYPE: EvalType = EvalType::$ty;
+
             #[inline]
             fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
@@ -144,13 +148,13 @@ macro_rules! impl_into_vector_value {
     }
 }
 
-impl_into_vector_value! { Int }
-impl_into_vector_value! { Real }
-impl_into_vector_value! { Decimal }
-impl_into_vector_value! { Bytes }
-impl_into_vector_value! { DateTime }
-impl_into_vector_value! { Duration }
-impl_into_vector_value! { Json }
+impl_evaluable_ret! { Int }
+impl_evaluable_ret! { Real }
+impl_evaluable_ret! { Decimal }
+impl_evaluable_ret! { Bytes }
+impl_evaluable_ret! { DateTime }
+impl_evaluable_ret! { Duration }
+impl_evaluable_ret! { Json }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
@@ -366,14 +370,5 @@ mod tests {
                 Err(_) => assert!(expected.is_none(), "{} to bool should fail", f,),
             }
         }
-    }
-
-    #[test]
-    fn test_into_evaluable_ref() {
-        let x: Option<&Int> = Some(&1);
-        assert_eq!(x.into_evaluable_ref(), Some(&1));
-        let y = vec![1, 2, 3];
-        let x: Option<&Bytes> = Some(&y);
-        assert_eq!(x.into_evaluable_ref(), Some(vec![1, 2, 3].as_slice()));
     }
 }
