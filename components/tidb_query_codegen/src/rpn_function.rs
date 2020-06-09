@@ -400,18 +400,7 @@ impl RpnFnRefEvaluableType {
     /// After full migration, this function should be deprecated.
     fn get_type_path(&self) -> TypePath {
         match self {
-            Self::Type(x) => match x.path.get_ident() {
-                Some(id) => {
-                    if *id == "JsonRef" {
-                        return parse_quote! { Json };
-                    }
-                    if *id == "BytesRef" {
-                        return parse_quote! { Bytes };
-                    }
-                    x.clone()
-                }
-                None => x.clone(),
-            },
+            Self::Type(x) => x.clone(),
             Self::Ref(x) => x.clone(),
         }
     }
@@ -552,10 +541,10 @@ impl ValidatorFnGenerator {
         self
     }
 
-    fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
+    fn validate_args_identical_type(mut self, args_evaluable: &TokenStream) -> Self {
         self.tokens.push(quote! {
             for child in expr.get_children() {
-                function::validate_expr_return_type(child, <#args_evaluable as EvaluableRet>::EVAL_TYPE)?;
+                function::validate_expr_return_type(child, <#args_evaluable as EvaluableRef>::EVAL_TYPE)?;
             }
         });
         self
@@ -700,7 +689,7 @@ fn is_ref_type(ty: &TypePath) -> bool {
 /// After full migration, this function should be deprecated.
 fn is_json(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => *x == "Json",
+        Some(x) => *x == "JsonRef",
         None => false,
     }
 }
@@ -711,7 +700,7 @@ fn is_json(ty: &TypePath) -> bool {
 /// After full migration, this function should be deprecated.
 fn is_bytes(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => *x == "Bytes",
+        Some(x) => *x == "BytesRef",
         None => false,
     }
 }
@@ -722,9 +711,9 @@ fn is_bytes(ty: &TypePath) -> bool {
 fn get_vargs_buf(ty: &TypePath) -> TokenStream {
     match ty.path.get_ident() {
         Some(x) => {
-            if *x == "Json" {
+            if *x == "JsonRef" {
                 quote! { VARG_PARAM_BUF_JSON_REF }
-            } else if *x == "Bytes" {
+            } else if *x == "BytesRef" {
                 quote! { VARG_PARAM_BUF_BYTES_REF }
             } else {
                 quote! { VARG_PARAM_BUF }
@@ -743,9 +732,9 @@ fn get_vargs_buf(ty: &TypePath) -> TokenStream {
 fn get_vectoried_type(ty: &TypePath) -> TokenStream {
     match ty.path.get_ident() {
         Some(x) => {
-            if *x == "Json" {
+            if *x == "JsonRef" {
                 quote! { JsonRef }
-            } else if *x == "Bytes" {
+            } else if *x == "BytesRef" {
                 quote! { BytesRef }
             } else {
                 quote! { &#ty }
@@ -766,6 +755,7 @@ struct VargsRpnFn {
     metadata_mapper: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
+    arg_type_anonymous: TokenStream,
     ret_type: TypePath,
 }
 
@@ -783,6 +773,8 @@ impl VargsRpnFn {
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
                 Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`")
             })?;
+        
+        let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(
             (&item_fn.sig.output).into_token_stream(),
@@ -802,6 +794,7 @@ impl VargsRpnFn {
             metadata_mapper: attr.metadata_mapper,
             item_fn,
             arg_type: arg_type.eval_type.get_type_path(),
+            arg_type_anonymous,
             ret_type: ret_type.eval_type,
         })
     }
@@ -849,7 +842,7 @@ impl VargsRpnFn {
             .validate_return_type(&self.ret_type)
             .validate_max_args(self.max_args)
             .validate_min_args(self.min_args)
-            .validate_args_identical_type(&self.arg_type)
+            .validate_args_identical_type(&self.arg_type_anonymous)
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
@@ -1817,7 +1810,7 @@ mod tests_normal {
 
     #[test]
     fn test_is_json_or_bytes() {
-        let input = quote! { Option<&Bytes> };
+        let input = quote! { Option<BytesRef> };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(is_bytes(&type_path));
@@ -1829,7 +1822,7 @@ mod tests_normal {
         assert!(!is_bytes(&type_path));
         assert!(!is_json(&type_path));
 
-        let input = quote! { Option<&Json> };
+        let input = quote! { Option<JsonRef> };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(!is_bytes(&type_path));
