@@ -10,6 +10,7 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
+<<<<<<< HEAD
 use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempdir::TempDir;
 
@@ -18,6 +19,23 @@ use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_DEFAULT;
+=======
+use kvproto::raft_serverpb::{
+    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+};
+use raft::eraftpb::ConfChangeType;
+use tempfile::TempDir;
+
+use encryption::DataKeyManager;
+use engine::{Engines, DB};
+use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_RAFT};
+use pd_client::PdClient;
+use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::transport::CasualRouter;
+use raftstore::store::*;
+use raftstore::{Error, Result};
+>>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
@@ -799,11 +817,131 @@ impl<T: Simulator> Cluster<T> {
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
+<<<<<<< HEAD
             .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &key)
+=======
+            .c()
+            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
             .unwrap()
     }
 
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
+        let key = keys::raft_state_key(region_id);
+        self.get_raft_engine(store_id)
+            .c()
+            .get_msg::<raft_serverpb::RaftLocalState>(&key)
+>>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
+            .unwrap()
+            .unwrap()
+    }
+
+<<<<<<< HEAD
+=======
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .c()
+            .get_msg_cf::<RegionLocalState>(
+                engine_traits::CF_RAFT,
+                &keys::region_state_key(region_id),
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn wait_last_index(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let timer = Instant::now();
+        loop {
+            let raft_state = self.raft_local_state(region_id, store_id);
+            let cur_index = raft_state.get_last_index();
+            if cur_index >= expected {
+                return;
+            }
+            if timer.elapsed() >= timeout {
+                panic!(
+                    "[region {}] last index still not reach {}: {:?}",
+                    region_id, expected, raft_state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn restore_kv_meta(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
+        let (meta_start, meta_end) = (
+            keys::region_meta_prefix(region_id),
+            keys::region_meta_prefix(region_id + 1),
+        );
+        let mut kv_wb = self.engines[&store_id].kv.c().write_batch();
+        RocksEngine::from_ref(&self.engines[&store_id].kv)
+            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
+                kv_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, v| {
+            kv_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+
+        let (raft_start, raft_end) = (
+            keys::region_raft_prefix(region_id),
+            keys::region_raft_prefix(region_id + 1),
+        );
+        RocksEngine::from_ref(&self.engines[&store_id].kv)
+            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
+                kv_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, v| {
+            kv_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+        self.engines[&store_id].kv.write(kv_wb.as_inner()).unwrap();
+    }
+
+    pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
+        let (raft_start, raft_end) = (
+            keys::region_raft_prefix(region_id),
+            keys::region_raft_prefix(region_id + 1),
+        );
+        let mut raft_wb = self.engines[&store_id].raft.c().write_batch();
+        RocksEngine::from_ref(&self.engines[&store_id].raft)
+            .scan(&raft_start, &raft_end, false, |k, _| {
+                raft_wb.delete(k).unwrap();
+                Ok(true)
+            })
+            .unwrap();
+        snap.scan(&raft_start, &raft_end, false, |k, v| {
+            raft_wb.put(k, v).unwrap();
+            Ok(true)
+        })
+        .unwrap();
+        self.engines[&store_id]
+            .raft
+            .write(raft_wb.as_inner())
+            .unwrap();
+    }
+
+    pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_send_filter(node_id, filter);
+            }
+        }
+    }
+
+>>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
