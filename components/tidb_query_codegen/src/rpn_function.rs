@@ -421,8 +421,8 @@ impl RpnFnRefEvaluableType {
     /// `Int` -> `&'arg_ Int`
     fn get_type_with_lifetime(&self, lifetime: TokenStream) -> TokenStream {
         match self {
-            RpnFnRefEvaluableType::Ref(x) => quote!{ &#lifetime #x },
-            RpnFnRefEvaluableType::Type(x) => quote!{ #x <#lifetime> },
+            RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
+            RpnFnRefEvaluableType::Type(x) => quote! { #x <#lifetime> },
         }
     }
 }
@@ -1232,7 +1232,7 @@ impl NormalRpnFn {
                         #(let (#extract, arg) = arg.extract(row_index));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::IntoVectorValue::into_vector_value(result))
                 }
             }
 
@@ -1241,8 +1241,12 @@ impl NormalRpnFn {
     }
 
     fn generate_evaluator(&self) -> TokenStream {
-        let generics = &self.item_fn.sig.generics;
+        let generics = self.item_fn.sig.generics.clone();
+        let mut impl_evaluator_generics = self.item_fn.sig.generics.clone();
+        impl_evaluator_generics.params.push(parse_quote! { 'arg_ });
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+        let (impl_eval_generics, _, _) = impl_evaluator_generics.split_for_impl();
+
         let evaluator_ident = &self.evaluator_ident;
         let fn_trait_ident = &self.fn_trait_ident;
         let ty_generics_turbofish = ty_generics.as_turbofish();
@@ -1253,7 +1257,7 @@ impl NormalRpnFn {
                 std::marker::PhantomData <(#(#generic_types),*)>
             ) #where_clause ;
 
-            impl #impl_generics crate::function::Evaluator
+            impl #impl_eval_generics crate::function::Evaluator <'arg_>
                 for #evaluator_ident #ty_generics #where_clause {
                 #[inline]
                 fn eval(
@@ -1411,7 +1415,6 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
-                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
@@ -1421,7 +1424,7 @@ mod tests_normal {
                         let arg1 = arg1.as_ref();
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::IntoVectorValue::into_vector_value(result))
                 }
             }
         };
@@ -1835,18 +1838,18 @@ mod tests_normal {
 
     #[test]
     fn test_add_lifetime_ref() {
-        let input = quote!{ Option<&Int> };
+        let input = quote! { Option<&Int> };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
-        let parsed_type = x.get_type_with_lifetime(quote!{ 'arg_ });
+        let parsed_type = x.get_type_with_lifetime(quote! { 'arg_ });
         let expected = quote! { &'arg_ Int };
         assert_eq!(expected.to_string(), parsed_type.to_string());
     }
 
     #[test]
     fn test_add_lifetime_type() {
-        let input = quote!{ Option<JsonRef> };
+        let input = quote! { Option<JsonRef> };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
-        let parsed_type = x.get_type_with_lifetime(quote!{ 'arg_ });
+        let parsed_type = x.get_type_with_lifetime(quote! { 'arg_ });
         let expected = quote! { JsonRef <'arg_> };
         assert_eq!(expected.to_string(), parsed_type.to_string());
     }
