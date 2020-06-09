@@ -100,17 +100,18 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: EvaluableRef<'a>> {
-    physical_col: &'a [Option<T>],
+pub struct VectorArg<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> {
+    physical_col: &'a C,
     logical_rows: &'a [usize],
+    _phantom: PhantomData<T>
 }
 
-impl<'a, T: EvaluableRef<'a>> RpnFnArg for VectorArg<'a, T> {
+impl<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> RpnFnArg for VectorArg<'a, T, C> {
     type Type = Option<T>;
 
     #[inline]
     fn get(&self, row: usize) -> Option<T> {
-        self.physical_col[self.logical_rows[row]].clone()
+        self.physical_col.get_option_ref(self.logical_rows[row])
     }
 }
 
@@ -168,7 +169,7 @@ pub trait Evaluator <'a>{
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'a>],
+        args: &'a [RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>;
@@ -197,7 +198,7 @@ impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'a>],
+        args: &'a [RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue> {
@@ -215,10 +216,12 @@ impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor
                 let logical_rows = value.logical_rows();
                 
                 let v = A::borrow_vector_value(value.as_ref());
+                
                 let new_def = Arg {
                     arg: VectorArg {
                         physical_col: v,
                         logical_rows,
+                        _phantom: PhantomData
                     },
                     rem: def,
                 };
