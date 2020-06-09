@@ -737,23 +737,20 @@ mod tests {
         for (arg, fsp, s) in cases {
             let duration =
                 Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
-            let test_case_func = |sig, res| {
-                let output = RpnFnScalarEvaluator::new()
-                    .push_param(duration)
-                    .evaluate::<Int>(sig)
-                    .unwrap();
-                assert_eq!(output, Some(res));
-            };
+            
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .evaluate::<Int>(sig)
+                .unwrap();
+            assert_eq!(output, Some(s));
         }
 
         // test NULL case
-        let test_null_case = |sig| {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(None::<Duration>)
-                .evaluate::<Int>(sig)
-                .unwrap();
-            assert_eq!(output, None);
-        };
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Duration>)
+            .evaluate::<Int>(sig)
+            .unwrap();
+        assert_eq!(output, None);   
     }
 
     #[test]
