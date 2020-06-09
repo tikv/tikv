@@ -247,6 +247,39 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 }
 
+pub trait IntoEvaluableRef<T>: Sized {
+    /// Performs the conversion.
+    fn into_evaluable_ref(self) -> T;
+}
+
+macro_rules! impl_into_evaluable_ref {
+    ($ty:tt) => {
+        impl<'a> IntoEvaluableRef<Option<&'a $ty>> for Option<&'a $ty> {
+            fn into_evaluable_ref(self) -> Option<&'a $ty> {
+                self
+            }
+        }
+    };
+}
+
+impl_into_evaluable_ref! { Int }
+impl_into_evaluable_ref! { Real }
+impl_into_evaluable_ref! { Decimal }
+impl_into_evaluable_ref! { DateTime }
+impl_into_evaluable_ref! { Duration }
+
+impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
+    fn into_evaluable_ref(self) -> Option<BytesRef<'a>> {
+        self.map(|x| x.as_slice())
+    }
+}
+
+impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
+    fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
+        self.map(|x| x.as_ref())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
