@@ -989,7 +989,8 @@ mod tests {
             expected_locks
                 .entry(ts)
                 .or_insert_with(|| TrackedTxn {
-                    min_commit_ts: ts,
+                    // The default min_commit_ts is start_ts + 1
+                    min_commit_ts: ts.next(),
                     primary: k.to_vec(),
                     locked_keys: Default::default(),
                 })
