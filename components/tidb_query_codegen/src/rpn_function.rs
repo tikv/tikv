@@ -529,7 +529,7 @@ impl ValidatorFnGenerator {
 
     fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
         self.tokens.push(quote! {
-            function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
+            function::validate_expr_return_type(expr, <#evaluable as EvaluableRet>::EVAL_TYPE)?;
         });
         self
     }
@@ -555,7 +555,7 @@ impl ValidatorFnGenerator {
     fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
         self.tokens.push(quote! {
             for child in expr.get_children() {
-                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
+                function::validate_expr_return_type(child, <#args_evaluable as EvaluableRet>::EVAL_TYPE)?;
             }
         });
         self
@@ -570,7 +570,7 @@ impl ValidatorFnGenerator {
             #(
                 function::validate_expr_return_type(
                     &children[#args_n],
-                    <#args_evaluables>::EVAL_TYPE
+                    <#args_evaluables as EvaluableRef>::EVAL_TYPE
                 )?;
             )*
         });
@@ -807,12 +807,14 @@ impl VargsRpnFn {
     }
 
     fn generate(self) -> TokenStream {
-        vec![
+        let x = vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
         ]
         .into_iter()
-        .collect()
+        .collect();
+        println!("{}", x);
+        x
     }
 
     fn generate_constructor(&self) -> TokenStream {
@@ -855,12 +857,10 @@ impl VargsRpnFn {
 
         let transmute_ref = if is_json(arg_type) {
             quote! {
-                let arg: Option<JsonRef> = arg.into_evaluable_ref();
                 let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
             }
         } else if is_bytes(arg_type) {
             quote! {
-                let arg: Option<BytesRef> = arg.into_evaluable_ref();
                 let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
             }
         } else {
@@ -884,7 +884,7 @@ impl VargsRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> #where_clause {
                     #downcast_metadata
                     crate::function::#varg_buf.with(|vargs_buf| {
-                        use tidb_query_datatype::codec::data_type::{Evaluable, IntoEvaluableRef, EvaluableRef};
+                        use tidb_query_datatype::codec::data_type::{Evaluable, EvaluableRef, EvaluableRet};
 
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
@@ -900,7 +900,7 @@ impl VargsRpnFn {
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
                                 unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
-                        Ok(Evaluable::into_vector_value(result))
+                        Ok(EvaluableRet::into_vector_value(result))
                     })
                 }
 
@@ -1040,7 +1040,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(Evaluable::into_vector_value(result))
+                        Ok(EvaluableRet::into_vector_value(result))
                     })
                 }
 
@@ -1203,12 +1203,6 @@ impl NormalRpnFn {
         );
         let extract2 = extract.clone();
         let call_arg2 = extract.clone();
-        let extract_ref = extract
-            .clone()
-            .enumerate()
-            .filter(|(id, _)| is_ref_type(&self.arg_types[*id]))
-            .map(|(_, ident)| ident);
-        let extract_ref_2 = extract_ref.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,
@@ -1240,7 +1234,7 @@ impl NormalRpnFn {
                         #(let (#extract, arg) = arg.extract(row_index));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::IntoVectorValue::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
                 }
             }
 
@@ -1433,7 +1427,7 @@ mod tests_normal {
                         let arg1 = arg1.as_ref();
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::IntoVectorValue::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
                 }
             }
         };
@@ -1597,15 +1591,13 @@ mod tests_normal {
                     extra: &mut crate::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
-                    use tidb_query_datatype::codec::data_type::IntoEvaluableRef;
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
-                        let arg0 = arg0.as_ref();
                         result.push(foo :: <A, B> (arg0)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
                 }
             }
         };
