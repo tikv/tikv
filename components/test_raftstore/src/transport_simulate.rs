@@ -349,21 +349,22 @@ impl Filter for RegionPacketFilter {
                 && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
                 && !self.skip_type.contains(&msg_type)
             {
-                if let Some(f) = self.msg_callback.as_ref() {
-                    f(m)
-                }
-                return match self.block {
+                let res = match self.block {
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
                         if left == 0 {
-                            return false;
+                            break false;
                         }
                         if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
-                            return true;
+                            break true;
                         }
                     },
                     Either::Right(ref block) => !block.load(Ordering::SeqCst),
                 };
+                if let Some(f) = self.msg_callback.as_ref() {
+                    f(m)
+                }
+                return res;
             }
             true
         };

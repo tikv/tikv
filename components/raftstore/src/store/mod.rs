@@ -26,7 +26,7 @@ pub use self::bootstrap::{
 pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, ExtCallback, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
+    Callback, CasualMessage, ExtCallback, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
     ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
