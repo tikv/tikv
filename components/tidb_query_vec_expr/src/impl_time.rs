@@ -733,24 +733,21 @@ mod tests {
             ("-11:30:45.1233456", 0, -41445),
             ("272:59:59.14", 0, 982799),
         ];
-
         for (arg, fsp, s) in cases {
             let duration =
                 Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
-            
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .evaluate::<Int>(ScalarFuncSig::TimeToSec)
                 .unwrap();
             assert_eq!(output, Some(s));
         }
-
         // test NULL case
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<Duration>)
             .evaluate::<Int>(ScalarFuncSig::TimeToSec)
             .unwrap();
-        assert_eq!(output, None);   
+        assert_eq!(output, None);
     }
 
     #[test]
