@@ -440,13 +440,11 @@ impl ToInt for Duration {
 }
 
 impl ToInt for Json {
-    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         self.as_ref().to_int(ctx, tp)
     }
 
-    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         self.as_ref().to_uint(ctx, tp)
