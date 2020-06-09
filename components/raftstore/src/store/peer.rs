@@ -429,6 +429,7 @@ impl Peer {
                 // If we can't reach groups consistent immediately, let's delay the time
                 // to enable group commit
                 if timeout > 0
+                    && self.is_leader()
                     && !self
                         .check_group_commit_consistent(ctx.cfg.group_consistent_log_gap)
                         .unwrap_or(false)
