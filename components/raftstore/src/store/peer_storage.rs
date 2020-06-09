@@ -1073,7 +1073,7 @@ where
         snap: &Snapshot,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::WriteBatch,
-        destroy_regions: &Vec<metapb::Region>,
+        destroy_regions: &[metapb::Region],
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -1351,9 +1351,9 @@ where
         }
 
         // Save raft state if it has changed or peer has applied a snapshot.
-        if ctx.raft_state != self.raft_state || snapshot_index != 0 {
+        if ctx.raft_state != self.raft_state || snapshot_index > 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
-            if snapshot_index != 0 {
+            if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
                 // we write raft state to default rocksdb, with last index set to snap index,
@@ -1363,7 +1363,7 @@ where
         }
 
         // only when apply snapshot
-        if snapshot_index != 0 {
+        if snapshot_index > 0 {
             ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
         }
 
@@ -2398,7 +2398,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s2.engines.kv.write_batch();
         let mut raft_wb = s2.engines.raft.write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &vec![])
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2416,7 +2416,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s3.engines.kv.write_batch();
         let mut raft_wb = s3.engines.raft.write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &vec![])
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
