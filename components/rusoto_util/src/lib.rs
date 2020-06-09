@@ -8,7 +8,7 @@ use rusoto_core::{
 };
 use rusoto_credential::{
     AutoRefreshingProvider, AwsCredentials, ChainProvider, CredentialsError, ProvideAwsCredentials,
-    StaticProvider, 
+    StaticProvider,
 };
 use rusoto_sts::WebIdentityProvider;
 
