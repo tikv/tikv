@@ -175,7 +175,7 @@ pub fn second(t: Option<&Duration>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn time_to_sec(t: Option<&Duration>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.to_secs())))
+    Ok(t.as_ref().map(|t| t.to_secs()))
 }
 
 #[rpn_fn]
