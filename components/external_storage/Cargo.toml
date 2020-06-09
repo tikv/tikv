@@ -19,13 +19,8 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.
 hyper = "0.13.3"
 hyper-tls = "0.4.1"
 rand = "0.7"
-<<<<<<< HEAD
-rusoto_core = "0.43.0"
-rusoto_s3 = "0.43.0"
-=======
 rusoto_core = "0.45.0"
 rusoto_s3 = "0.45.0"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 rusoto_util = { path = "../rusoto_util" }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -39,10 +34,6 @@ url = "2.0"
 
 [dev-dependencies]
 structopt = "0.3"
-<<<<<<< HEAD
-rusoto_mock = "0.43.0"
-=======
 rusoto_mock = "0.45.0"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 tempfile = "3.1"
 rust-ini = "0.14.0"

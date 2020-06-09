@@ -6,12 +6,6 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-<<<<<<< HEAD
-rusoto_core = "0.43.0"
-rusoto_credential = "0.43.0"
-rusoto_sts = "0.43.0"
-=======
 rusoto_core = "0.45.0"
 rusoto_credential = "0.45.0"
 rusoto_sts = "0.45.0"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)

@@ -663,6 +663,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_fn"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce90df4c658c62f12d78f7508cf92f9173e5184a539c10bfe54a3107b3ffd0f2"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3370,26 +3376,15 @@ dependencies = [
 
 [[package]]
 name = "rusoto_core"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a8d624cb48fcaca612329e4dd544380aa329ef338e83d3a90f5b7897e631971"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e977941ee0658df96fca7291ecc6fc9a754600b21ad84b959eb1dbbc9d5abcc7"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "base64 0.12.0",
  "bytes 0.5.3",
-<<<<<<< HEAD
- "futures 0.3.4",
- "hmac",
-=======
  "crc32fast",
- "futures 0.3.5",
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
+ "futures 0.3.4",
  "http",
  "hyper",
  "hyper-tls",
@@ -3403,26 +3398,15 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
-<<<<<<< HEAD
- "sha2",
  "tokio 0.2.13",
-=======
- "tokio",
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
  "xml-rs",
 ]
 
 [[package]]
 name = "rusoto_credential"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba3e7cdf483d7198d9bca7414746d3ba656239e89e467b715d0571912f0b492f"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ac05563f83489b19b4d413607a30821ab08bbd9007d14fa05618da3ef09d8b"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "chrono",
@@ -3440,15 +3424,9 @@ dependencies = [
 
 [[package]]
 name = "rusoto_kms"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167c735c81ca560f7cd9914f99eabada7b5b66b3b14d7e4401507c68ebca02bb"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "111b99b940b1b02f5a98a5fcc96467a24ab899c43c1caff60d4a863342798c6e"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -3460,15 +3438,9 @@ dependencies = [
 
 [[package]]
 name = "rusoto_mock"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20617d47af0e8ce5c46f4b8243b13f6e72b67c1c2853a2a1bb9af8729f79f8eb"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ff14fcb9ae32511e705349da464e117bac945b541ec87283ad5dc93c1280250"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "chrono",
@@ -3481,15 +3453,9 @@ dependencies = [
 
 [[package]]
 name = "rusoto_s3"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b6bc3221ae5a2c036d5757eee68a2ffb6b7f87b8a83adbf4271c8133fdee01c"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1146e37a7c1df56471ea67825fe09bbbd37984b5f6e201d8b2e0be4ee15643d8"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -3500,15 +3466,9 @@ dependencies = [
 
 [[package]]
 name = "rusoto_signature"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62940a2bd479900a1bf8935b8f254d3e19368ac3ac4570eb4bd48eb46551a1b7"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97a740a88dde8ded81b6f2cff9cd5e054a5a2e38a38397260f7acdd2c85d17dd"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
@@ -3525,21 +3485,15 @@ dependencies = [
  "rustc_version",
  "serde",
  "sha2",
- "time 0.2.9",
+ "time 0.2.22",
  "tokio 0.2.13",
 ]
 
 [[package]]
 name = "rusoto_sts"
-<<<<<<< HEAD
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e83d166cfb294672db98a60159c4a81a8169c6c91054a275cb812158c73815e5"
-=======
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3815b8c0fc1c50caf9e87603f23daadfedb18d854de287b361c69f68dc9d49e0"
->>>>>>> e7be4b808... rusoto_util: keep the original error in DefaultCredentialsProvider (#8766)
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -3604,17 +3558,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustversion"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3bba175698996010c4f6dce5e7f173b6eb781fce25d2cfc45e27091ce0b79f6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -3984,9 +3927,9 @@ dependencies = [
 
 [[package]]
 name = "standback"
-version = "0.2.1"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4edf667ea8f60afc06d6aeec079d20d5800351109addec1faea678a8663da4e1"
+checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
 
 [[package]]
 name = "static_assertions"
@@ -4732,16 +4675,16 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.9"
+version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6329a7835505d46f5f3a9a2c237f8d6bf5ca6f0015decb3698ba57fcdbb609ba"
+checksum = "55b7151c9065e80917fbf285d9a5d1432f60db41d170ccafc749a136b41a93af"
 dependencies = [
- "cfg-if",
+ "const_fn",
  "libc",
- "rustversion",
  "standback",
  "stdweb",
  "time-macros",
+ "version_check 0.9.1",
  "winapi 0.3.8",
 ]
 
