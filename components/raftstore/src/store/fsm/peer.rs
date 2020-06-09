@@ -1653,7 +1653,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
-        // Some places use `force_send().unwrap()` if the StoreMeta lock is hold.
+        // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
