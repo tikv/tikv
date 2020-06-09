@@ -740,7 +740,7 @@ mod tests {
             
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
-                .evaluate::<Int>(sig)
+                .evaluate::<Int>(ScalarFuncSig::TimeToSec)
                 .unwrap();
             assert_eq!(output, Some(s));
         }
@@ -748,7 +748,7 @@ mod tests {
         // test NULL case
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<Duration>)
-            .evaluate::<Int>(sig)
+            .evaluate::<Int>(ScalarFuncSig::TimeToSec)
             .unwrap();
         assert_eq!(output, None);   
     }
