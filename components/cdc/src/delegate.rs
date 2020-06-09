@@ -520,7 +520,9 @@ impl Delegate {
         resolver.update_txn_status(
             txn_status
                 .into_iter()
-                .map(|t| (t.get_start_ts().into(), t.get_min_commit_ts().into())),
+                .map(|t| (t.get_start_ts().into(), t.get_min_commit_ts().into()))
+                // Only update unfinished transactions
+                .filter(|(_, min_commit_ts)| !min_commit_ts.is_zero()),
         );
     }
 
