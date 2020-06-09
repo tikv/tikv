@@ -715,7 +715,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
                             },
                         |_| unreachable!()
                     );
-                    self.peer_msg_buf.push(msg)
+                    self.peer_msg_buf.push(msg);
                 }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
