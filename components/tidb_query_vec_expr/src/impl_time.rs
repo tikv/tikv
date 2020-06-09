@@ -744,7 +744,6 @@ mod tests {
                     .unwrap();
                 assert_eq!(output, Some(res));
             };
-            test_case_func(ScalarFuncSig::TimeToSec, s);
         }
 
         // test NULL case
@@ -755,8 +754,6 @@ mod tests {
                 .unwrap();
             assert_eq!(output, None);
         };
-
-        test_null_case(ScalarFuncSig::Hour);
     }
 
     #[test]
