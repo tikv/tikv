@@ -1083,7 +1083,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if msg.has_merge_target() {
             fail_point!("on_has_merge_target", |_| Ok(()));
             if self.need_gc_merge(&msg)? {
-                self.on_stale_merge();
+                self.on_stale_merge(msg.get_merge_target().get_id());
             }
             return Ok(());
         }
@@ -1533,6 +1533,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         assert!(!meta.atomic_snap_regions.contains_key(&region_id));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
+            info!(
+                "source region destroy due to target region's snapshot";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "source_region_id" => source_region_id,
+                "need_atomic" => merge_to_this_peer,
+            );
             meta.atomic_snap_regions
                 .entry(region_id)
                 .or_default()
@@ -1545,6 +1552,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             } else {
                 MergeResultKind::Stale
             };
+            // Use `unwrap` is ok because the StoreMeta lock is held and these source peers still
+            // exist in regions and region_ranges map.
+            // It depends on the implementation of `destroy_peer`
             self.ctx
                 .router
                 .force_send(
@@ -1643,6 +1653,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        // Some places use `force_send().unwrap()` if the StoreMeta lock is hold.
+        // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
@@ -1668,13 +1680,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             } else {
                 let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                let flag = meta
+                let is_ready = meta
                     .atomic_snap_regions
                     .get_mut(&target_region_id)
                     .unwrap()
                     .get_mut(&region_id)
                     .unwrap();
-                *flag = true;
+                *is_ready = true;
             }
         }
 
@@ -2365,6 +2377,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         reader.mark_invalid();
 
         drop(meta);
+
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
@@ -2387,14 +2400,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 result: MergeResultKind::FromTargetLog,
             }),
         ) {
-            // TODO: need to remove "are we shutting down", it should panic
-            // if we are not in shut-down state
-            info!(
-                "failed to send merge result, are we shutting down?";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
+            if !self.ctx.router.is_shutdown() {
+                panic!(
+                    "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
+                    self.fsm.peer.tag,
+                    source.get_id(),
+                    e
+                );
+            }
         }
     }
 
@@ -2499,12 +2512,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.destroy_peer(true);
             }
             MergeResultKind::Stale => {
-                self.on_stale_merge();
+                self.on_stale_merge(target_region_id);
             }
         };
     }
 
-    fn on_stale_merge(&mut self) {
+    fn on_stale_merge(&mut self, target_region_id: u64) {
         if self.fsm.peer.pending_remove {
             return;
         }
@@ -2512,6 +2525,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "successful merge can't be continued, try to gc stale peer";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "target_region_id" => target_region_id,
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
         // It must succeed so here using `unwrap`
@@ -2600,18 +2614,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let prev = meta.regions.insert(region.get_id(), region);
         assert_eq!(prev, Some(prev_region));
 
+        drop(meta);
+
         for r in &apply_result.destroyed_regions {
-            self.ctx
-                .router
-                .force_send(
-                    r.get_id(),
-                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                        target_region_id: self.fsm.region_id(),
-                        target: self.fsm.peer.peer.clone(),
-                        result: MergeResultKind::FromTargetSnapshotStep2,
-                    }),
-                )
-                .unwrap();
+            if let Err(e) = self.ctx.router.force_send(
+                r.get_id(),
+                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    target_region_id: self.fsm.region_id(),
+                    target: self.fsm.peer.peer.clone(),
+                    result: MergeResultKind::FromTargetSnapshotStep2,
+                }),
+            ) {
+                if !self.ctx.router.is_shutdown() {
+                    panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}", self.fsm.peer.tag, r.get_id(), e);
+                }
+            }
         }
     }
 
