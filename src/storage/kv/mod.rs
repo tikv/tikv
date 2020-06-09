@@ -18,7 +18,7 @@ use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraRead};
 use tikv_util::collections::HashMap;
-use txn_types::{Key, TimeStamp, Value};
+use txn_types::{Extra, Key, TimeStamp, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -78,19 +78,16 @@ impl Modify {
 #[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
-    pub extra: Option<HashMap<Key, (Option<Value>, TimeStamp)>>,
+    pub extra: Extra,
 }
 
 impl WriteData {
-    pub fn new(
-        modifies: Vec<Modify>,
-        extra: Option<HashMap<Key, (Option<Value>, TimeStamp)>>,
-    ) -> Self {
+    pub fn new(modifies: Vec<Modify>, extra: Extra) -> Self {
         Self { modifies, extra }
     }
 
     pub fn with_modifies(modifies: Vec<Modify>) -> Self {
-        Self::new(modifies, None)
+        Self::new(modifies, Extra::default())
     }
 }
 

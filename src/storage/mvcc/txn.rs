@@ -3,9 +3,9 @@
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
 use std::fmt;
-use tikv_util::collections::HashMap;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, MutationType, TimeStamp, Value, Write, WriteType,
+    is_short_value, Extra, Key, Lock, LockType, Mutation, MutationType, TimeStamp, Value, Write,
+    WriteType,
 };
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
@@ -101,15 +101,10 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn set_extra_read(&mut self, extra_read: ExtraRead) {
         self.extra_read = extra_read;
-        if let ExtraRead::Noop = extra_read {
-            self.writes.extra = None;
-        } else {
-            self.writes.extra = Some(HashMap::default());
-        }
     }
 
-    pub fn take_extra(&mut self) -> Option<HashMap<Key, (Option<Value>, TimeStamp)>> {
-        self.writes.extra.take()
+    pub fn take_extra(&mut self) -> Extra {
+        std::mem::take(&mut self.writes.extra)
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
@@ -558,6 +553,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
+        let mut write_op = None;
         // Check whether there is a newer version.
         if !skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
@@ -577,30 +573,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                if need_extra_read(self.extra_read, mutation_type) {
-                    match write.write_type {
-                        WriteType::Put | WriteType::Delete => {
-                            self.writes.extra.as_mut().unwrap().insert(
-                                key.clone().append_ts(self.start_ts),
-                                (write.short_value, write.start_ts),
-                            );
-                        }
-                        _ => loop {
-                            if let Some((_, prev_write)) = self.reader.prev_write(&key)? {
-                                match prev_write.write_type {
-                                    WriteType::Put | WriteType::Delete => {
-                                        self.writes.extra.as_mut().unwrap().insert(
-                                            key.clone().append_ts(self.start_ts),
-                                            (write.short_value, write.start_ts),
-                                        );
-                                    }
-                                    _ => continue,
-                                }
-                            }
-                            break;
-                        },
-                    }
-                }
+                write_op = Some(write);
             }
         }
         if should_not_write {
@@ -626,6 +599,8 @@ impl<S: Snapshot> MvccTxn<S> {
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
         }
+
+        self.check_extra_op(&key, mutation_type, write_op)?;
 
         self.prewrite_key_value(
             key,
@@ -1047,6 +1022,45 @@ impl<S: Snapshot> MvccTxn<S> {
             is_completed,
         })
     }
+
+    fn check_extra_op(
+        &mut self,
+        key: &Key,
+        mutation_type: MutationType,
+        write: Option<Write>,
+    ) -> Result<()> {
+        if need_extra_read(self.extra_read, mutation_type) {
+            if let Some(write) = write {
+                match write.write_type {
+                    WriteType::Put | WriteType::Delete => {
+                        self.writes.extra.add_old_value(
+                            key.clone().append_ts(self.start_ts),
+                            Some((write.short_value, write.start_ts)),
+                        );
+                    }
+                    WriteType::Lock | WriteType::Rollback => loop {
+                        if let Some((_, prev_write)) = self.reader.prev_write(&key)? {
+                            match prev_write.write_type {
+                                WriteType::Put | WriteType::Delete => {
+                                    self.writes.extra.add_old_value(
+                                        key.clone().append_ts(self.start_ts),
+                                        Some((write.short_value, write.start_ts)),
+                                    );
+                                }
+                                WriteType::Lock | WriteType::Rollback => continue,
+                            }
+                        }
+                        break;
+                    },
+                }
+            } else {
+                self.writes
+                    .extra
+                    .add_old_value(key.clone().append_ts(self.start_ts), None);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
@@ -1133,7 +1147,9 @@ macro_rules! new_txn {
 fn need_extra_read(extra_read: ExtraRead, mutation_type: MutationType) -> bool {
     if (extra_read == ExtraRead::Deleted && mutation_type == MutationType::Delete)
         || (extra_read == ExtraRead::Updated
-            && (mutation_type == MutationType::Delete || mutation_type == MutationType::Put))
+            && (mutation_type == MutationType::Delete
+                || mutation_type == MutationType::Put
+                || mutation_type == MutationType::Insert))
     {
         true
     } else {

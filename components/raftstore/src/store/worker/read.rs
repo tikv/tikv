@@ -58,7 +58,7 @@ impl ReadDelegate {
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
-            extra_read: peer.extra_read.clone(),
+            extra_read: peer.txn_extra_op.clone(),
         }
     }
 
@@ -224,7 +224,7 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
-            extra_read: ExtraRead::Noop,
+            txn_extra_op: ExtraRead::Noop,
         };
 
         cmd.callback.invoke_read(read_resp);
@@ -319,7 +319,7 @@ where
                     if let Some(mut resp) =
                         delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
                     {
-                        resp.extra_read = delegate.extra_read.load();
+                        resp.txn_extra_op = delegate.extra_read.load();
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -354,7 +354,7 @@ where
                     cmd.callback.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
-                        extra_read: ExtraRead::Noop,
+                        txn_extra_op: ExtraRead::Noop,
                     });
                     self.delegates.borrow_mut().remove(&region_id);
                     return;

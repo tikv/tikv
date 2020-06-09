@@ -15,7 +15,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
-use txn_types::{Key, Value};
+use txn_types::{Extra as TxnExtra, Key, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -25,7 +25,7 @@ use crate::storage::kv::{
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback as StoreCallback, Extra, ReadResponse, WriteResponse};
+use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
 
@@ -149,7 +149,7 @@ fn on_read_result(
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
     let mut cb_ctx = new_ctx(&read_resp.response);
-    cb_ctx.extra_read = read_resp.extra_read;
+    cb_ctx.extra_read = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
@@ -207,7 +207,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -239,9 +239,9 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command_with_extra(
+            .send_command_txn_extra(
                 cmd,
-                extra,
+                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -280,11 +280,6 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         }
 
         let mut reqs = Vec::with_capacity(batch.modifies.len());
-        let extra = batch.extra.map(|e| {
-            e.into_iter()
-                .map(|(k, (v, ts))| (k.into_encoded(), (v, ts.into_inner())))
-                .collect()
-        });
         for m in batch.modifies {
             let mut req = Request::default();
             match m {
@@ -326,7 +321,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         self.exec_write_requests(
             ctx,
             reqs,
-            extra,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

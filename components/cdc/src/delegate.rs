@@ -32,13 +32,13 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Re
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
-use raftstore::store::Extra;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
-use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
+use tikv_util::Either;
+use txn_types::{Extra as TxnExtra, Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::metrics::*;
 use crate::service::ConnID;
@@ -198,7 +198,7 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
-    extra_read: ExtraRead,
+    extra_op: ExtraRead,
 }
 
 impl Delegate {
@@ -213,7 +213,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
-            extra_read: ExtraRead::default(),
+            extra_op: ExtraRead::default(),
         }
     }
 
@@ -268,8 +268,8 @@ impl Delegate {
         }
     }
 
-    pub fn set_extra_read(&mut self, extra_read: ExtraRead) {
-        self.extra_read = extra_read;
+    pub fn set_extra_op(&mut self, extra_op: ExtraRead) {
+        self.extra_op = extra_op;
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
@@ -410,7 +410,7 @@ impl Delegate {
     pub fn on_batch(
         &mut self,
         batch: CmdBatch,
-        extra_map: &mut Extra,
+        txn_extra: &mut TxnExtra,
         kv_engine: &RocksEngine,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
@@ -425,7 +425,7 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into(), extra_map, kv_engine);
+                    self.sink_data(index, request.requests.into(), txn_extra, kv_engine);
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -456,7 +456,7 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite { default, lock }) => {
+                Some(TxnEntry::Prewrite { default, lock, .. }) => {
                     let mut row = EventRow::default();
                     let l = Lock::parse(&lock.1).unwrap();
                     let skip = decode_lock(lock.0, l, &mut row);
@@ -473,7 +473,7 @@ impl Delegate {
                     current_rows_size += row_size;
                     rows.last_mut().unwrap().1.push(row);
                 }
-                Some(TxnEntry::Commit { default, write }) => {
+                Some(TxnEntry::Commit { default, write, .. }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row);
                     if skip {
@@ -528,11 +528,10 @@ impl Delegate {
         &mut self,
         index: u64,
         requests: Vec<Request>,
-        extra: &mut Extra,
+        txn_extra: &mut TxnExtra,
         kv_engine: &RocksEngine,
     ) {
         let mut rows = HashMap::default();
-        let mut to_read_previous = BTreeSet::default();
         let mut total_size = 0;
         for mut req in requests {
             // CDC cares about put requests only.
@@ -591,33 +590,15 @@ impl Delegate {
                     let lock = Lock::parse(put.get_value()).unwrap();
                     let key = put.take_key();
 
-                    if (self.extra_read == ExtraRead::Deleted && LockType::Delete == lock.lock_type)
-                        || (self.extra_read == ExtraRead::Updated
-                            && (lock.lock_type == LockType::Put
-                                || lock.lock_type == LockType::Delete))
-                    {
-                        let encoded = Key::from_encoded(key.clone())
-                            .append_ts(lock.ts)
-                            .into_encoded();
-                        match extra.remove(&encoded) {
-                            Some((value, ts)) => {
-                                let previous_encoded = Key::from_encoded(key.clone())
-                                    .append_ts(TimeStamp::new(ts))
-                                    .into_encoded();
-                                let mut opts = ReadOptions::new();
-                                opts.set_fill_cache(false);
-                                row.previous_value = value.unwrap_or_else(|| {
-                                    kv_engine
-                                        .snapshot()
-                                        .get_value_opt(&opts, &keys::data_key(&previous_encoded))
-                                        .unwrap()
-                                        .map_or_else(Vec::default, |v| v.deref().to_vec())
-                                })
-                            }
-                            None => {
-                                // If the previous value wasn't in extra values, try to read it.
-                                to_read_previous.insert(encoded);
-                            }
+                    if read_old_value(self.extra_op, lock.lock_type) {
+                        match self.check_old_value(
+                            Key::from_encoded(key.clone()),
+                            &lock,
+                            txn_extra,
+                            kv_engine,
+                        ) {
+                            Either::Left(_key) => { /* TODO: seek the value for the key */ }
+                            Either::Right(value) => row.previous_value = value.unwrap_or_default(),
                         }
                     }
 
@@ -701,6 +682,42 @@ impl Delegate {
         self.mark_failed();
         Err(Error::Request(store_err.into()))
     }
+
+    fn check_old_value(
+        &mut self,
+        mut key: Key,
+        lock: &Lock,
+        txn_extra: &mut TxnExtra,
+        kv_engine: &RocksEngine,
+    ) -> Either<Key, Option<Value>> {
+        let old_values = txn_extra.mut_old_values();
+        key = key.append_ts(lock.ts);
+        if let Some(old_values) = old_values {
+            match old_values.remove(&key) {
+                Some(Some((value, ts))) => {
+                    return Either::Right(value.or_else(|| {
+                        let old_key = key.truncate_ts().unwrap().append_ts(ts).into_encoded();
+                        let mut opts = ReadOptions::new();
+                        opts.set_fill_cache(false);
+                        kv_engine
+                            .snapshot()
+                            .get_value_opt(&opts, &keys::data_key(&old_key))
+                            .unwrap()
+                            .map(|v| v.deref().to_vec())
+                    }));
+                }
+                Some(None) => return Either::Right(None),
+                None => (),
+            }
+        }
+        Either::Left(key)
+    }
+}
+
+fn read_old_value(extra_op: ExtraRead, lock_type: LockType) -> bool {
+    (extra_op == ExtraRead::Deleted && LockType::Delete == lock_type)
+        || (extra_op == ExtraRead::Updated
+            && (lock_type == LockType::Put || lock_type == LockType::Delete))
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {

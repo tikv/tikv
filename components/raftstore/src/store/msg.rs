@@ -6,7 +6,7 @@ use std::time::Instant;
 use engine_rocks::{CompactedEvent, RocksSnapshot};
 use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraRead as TxnExtraRead;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -14,8 +14,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
-use tikv_util::collections::HashMap;
 use tikv_util::escape;
+use txn_types::Extra as TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -30,7 +30,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
-    pub extra_read: ExtraRead,
+    pub txn_extra_op: TxnExtraRead,
 }
 
 #[derive(Debug)]
@@ -49,7 +49,7 @@ where
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
-            extra_read: self.extra_read.clone(),
+            txn_extra_op: self.txn_extra_op.clone(),
         }
     }
 }
@@ -82,7 +82,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
-                    extra_read: ExtraRead::Noop,
+                    txn_extra_op: TxnExtraRead::Noop,
                 };
                 read(resp);
             }
@@ -120,8 +120,6 @@ where
         }
     }
 }
-
-pub type Extra = HashMap<Vec<u8>, (Option<Vec<u8>>, u64)>;
 
 bitflags! {
     pub struct PeerTicks: u8 {
@@ -311,22 +309,25 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub extra: Option<Extra>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
-    #[inline]
-    pub fn new(
+    pub fn with_txn_extra(
         request: RaftCmdRequest,
         callback: Callback<S>,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
     ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
-            extra,
+            txn_extra,
             send_time: Instant::now(),
         }
+    }
+
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

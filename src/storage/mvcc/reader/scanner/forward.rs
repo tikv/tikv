@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -488,6 +488,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                     break Some(TxnEntry::Commit {
                         default: entry_default,
                         write: entry_write,
+                        old_value: None,
                     });
                 }
                 WriteType::Delete => {
@@ -495,6 +496,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         break Some(TxnEntry::Commit {
                             default: (Vec::new(), Vec::new()),
                             write: (write_key.to_vec(), write_value.to_vec()),
+                            old_value: None,
                         });
                     } else {
                         break None;
@@ -558,11 +560,15 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 /// (or locks' `start_ts`s) in range (`from_ts`, `cfg.ts`].
 pub struct DeltaEntryPolicy {
     from_ts: TimeStamp,
+    extra_read: ExtraRead,
 }
 
 impl DeltaEntryPolicy {
-    pub fn new(from_ts: TimeStamp) -> Self {
-        Self { from_ts }
+    pub fn new(from_ts: TimeStamp, extra_read: ExtraRead) -> Self {
+        Self {
+            from_ts,
+            extra_read,
+        }
     }
 }
 
@@ -571,7 +577,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
     fn handle_lock(
         &mut self,
-        current_user_key: Key,
+        mut current_user_key: Key,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -598,10 +604,64 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             } else {
                 Ok((vec![], vec![]))
             };
+            let mut old_value = None;
+            if (self.extra_read == ExtraRead::Updated
+                && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete))
+                || (self.extra_read == ExtraRead::Deleted && lock.lock_type == LockType::Delete)
+            {
+                let seek_key = current_user_key.append_ts(lock.ts);
+                let mut next_count = 0;
+                // Find the first key which is bigger than seek_key.
+                loop {
+                    if cursors.write.key(&mut statistics.write) > seek_key.as_encoded().as_slice()
+                        || !cursors.write.next(&mut statistics.write)
+                    {
+                        break;
+                    }
+                    next_count += 1;
+                }
+                cursors.write.prev(&mut statistics.write);
+                next_count -= 1;
+                current_user_key = seek_key.truncate_ts()?;
+                loop {
+                    let wkey = cursors.write.key(&mut statistics.write);
+                    if Key::is_user_key_eq(wkey, current_user_key.as_encoded().as_slice()) {
+                        assert_ge!(lock.ts, Key::decode_ts_from(wkey)?);
+                        let write_ref =
+                            WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+                        match write_ref.write_type {
+                            WriteType::Put => {
+                                if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
+                                    old_value = Some(v);
+                                } else {
+                                    let default_cursor = cursors.default.as_mut().unwrap();
+                                    old_value = Some(super::near_load_data_by_write(
+                                        default_cursor,
+                                        &current_user_key,
+                                        lock.ts,
+                                        statistics,
+                                    )?);
+                                }
+                            }
+                            WriteType::Delete => break,
+                            WriteType::Lock | WriteType::Rollback => (),
+                        }
+                    } else {
+                        break;
+                    }
+                    cursors.write.prev(&mut statistics.write);
+                    next_count -= 1;
+                }
+                while next_count > 0 {
+                    cursors.write.prev(&mut statistics.write);
+                    next_count -= 1;
+                }
+            }
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
                     lock: (current_user_key.into_encoded(), lock_value.to_owned()),
+                    old_value,
                 })
             })
         };
@@ -675,6 +735,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.write.key(&mut statistics.write).to_owned(),
                     cursors.write.value(&mut statistics.write).to_owned(),
                 ),
+                old_value: None,
             }));
 
             cursors.write.next(&mut statistics.write);
@@ -772,6 +833,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+                old_value: None,
             }
         }
         pub fn build_prewrite(&self, lt: LockType, is_short_value: bool) -> TxnEntry {
@@ -806,6 +868,7 @@ pub mod test_util {
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
+                old_value: None,
             }
         }
         pub fn build_rollback(&self) -> TxnEntry {
@@ -815,6 +878,7 @@ pub mod test_util {
             TxnEntry::Commit {
                 default: (vec![], vec![]),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+                old_value: None,
             }
         }
     }

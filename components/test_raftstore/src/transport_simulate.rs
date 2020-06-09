@@ -13,10 +13,11 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage, Extra, SignificantMsg, Transport};
+use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
+use txn_types::Extra as TxnExtra;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -195,13 +196,13 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.send_command(req, cb)
     }
 
-    fn send_command_with_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
-        self.ch.send_command_with_extra(req, extra, cb)
+        self.ch.send_command_txn_extra(req, txn_extra, cb)
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksSnapshot>) -> Result<()> {

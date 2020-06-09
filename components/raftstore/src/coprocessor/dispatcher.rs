@@ -5,6 +5,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::marker::PhantomData;
+use txn_types::Extra as TxnExtra;
 
 use std::mem;
 use std::ops::Deref;
@@ -468,7 +469,7 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self, extra: Extra) {
+    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
         assert!(
             !self.registry.cmd_observers.is_empty(),
             "CmdObserver is not registered"
@@ -480,7 +481,7 @@ where
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(extra.clone())
+                .on_flush_apply(txn_extras.clone())
         }
         self.registry
             .cmd_observers
@@ -488,7 +489,7 @@ where
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(extra)
+            .on_flush_apply(txn_extras)
     }
 
     pub fn shutdown(&self) {

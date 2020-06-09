@@ -9,6 +9,7 @@ use kvproto::raft_cmdpb::{
     AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use raft::StateRole;
+use txn_types::Extra as TxnExtra;
 
 pub mod config;
 pub mod dispatcher;
@@ -35,7 +36,6 @@ pub use self::split_check::{
 };
 
 use crate::store::fsm::ObserveID;
-use crate::store::Extra;
 pub use crate::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -244,5 +244,5 @@ pub trait CmdObserver: Coprocessor {
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self, extra: Extra);
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>);
 }

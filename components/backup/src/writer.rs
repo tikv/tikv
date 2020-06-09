@@ -148,7 +148,7 @@ impl BackupWriter {
         for e in entries {
             let mut value_in_default = false;
             match &e {
-                TxnEntry::Commit { default, write } => {
+                TxnEntry::Commit { default, write, .. } => {
                     // Default may be empty if value is small.
                     if !default.0.is_empty() {
                         self.default.write(&default.0, &default.1)?;

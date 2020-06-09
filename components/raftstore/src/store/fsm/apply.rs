@@ -21,7 +21,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraRead as TxnExtraRead;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -39,7 +39,7 @@ use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, Extra, PeerMsg, ReadResponse, SignificantMsg};
+use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
@@ -60,6 +60,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
+use txn_types::Extra as TxnExtra;
 
 use super::metrics::*;
 
@@ -78,18 +79,18 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Option<Callback<S>>,
-    pub extra: Option<Extra>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<S> PendingCmd<S>
 where
     S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<S>, extra: Option<Extra>) -> PendingCmd<S> {
+    fn new(index: u64, term: u64, cb: Callback<S>, txn_extra: TxnExtra) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
-            extra,
+            txn_extra,
             cb: Some(cb),
         }
     }
@@ -352,7 +353,7 @@ where
     notifier: Notifier<E::Snapshot>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
-    extra: Extra,
+    txn_extras: MustConsumeVec<TxnExtra>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -401,7 +402,7 @@ where
             notifier,
             kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
-            extra: HashMap::default(),
+            txn_extras: MustConsumeVec::new("extra data from txn"),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -477,8 +478,6 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
-        use std::mem;
-
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
@@ -507,7 +506,8 @@ where
             self.kv_wb_last_keys = 0;
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply(mem::take(&mut self.extra));
+        self.host
+            .on_flush_apply(std::mem::take(&mut self.txn_extras));
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -1009,22 +1009,28 @@ where
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> (Option<Callback<E::Snapshot>>, Option<Extra>) {
+    ) -> (Option<Callback<E::Snapshot>>, TxnExtra) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
-                    return (Some(cmd.cb.take().unwrap()), cmd.extra.take());
+                    return (
+                        Some(cmd.cb.take().unwrap()),
+                        std::mem::take(&mut cmd.txn_extra),
+                    );
                 } else {
                     notify_stale_command(region_id, peer_id, self.term, cmd);
                 }
             }
-            return (None, None);
+            return (None, TxnExtra::default());
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
             if head.term == term {
                 if head.index == index {
-                    return (Some(head.cb.take().unwrap()), head.extra.take());
+                    return (
+                        Some(head.cb.take().unwrap()),
+                        std::mem::take(&mut head.txn_extra),
+                    );
                 } else {
                     panic!(
                         "{} unexpected callback at term {}, found index {}, expected {}",
@@ -1037,7 +1043,7 @@ where
                 notify_stale_command(region_id, peer_id, self.term, head);
             }
         }
-        (None, None)
+        (None, TxnExtra::default())
     }
 
     fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -1074,16 +1080,11 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let (cmd_cb, cmd_extra) = self.find_pending(index, term, is_conf_change);
+        let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
 
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
-            match cmd_extra {
-                Some(extra) => extra.into_iter().for_each(|(k, v)| {
-                    apply_ctx.extra.insert(k, v);
-                }),
-                None => (),
-            }
+            apply_ctx.txn_extras.push(txn_extra);
             apply_ctx
                 .host
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
@@ -2380,7 +2381,7 @@ where
     pub cb: Callback<S>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
-    pub extra: Option<Extra>,
+    pub txn_extra: TxnExtra,
 }
 
 pub struct Destroy {
@@ -2712,13 +2713,13 @@ where
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.extra);
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in props_drainer {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb, p.extra);
+            let cmd = PendingCmd::new(p.index, p.term, p.cb, p.txn_extra);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -2951,7 +2952,7 @@ where
                         Arc::new(apply_ctx.engine.snapshot()),
                         self.delegate.region.clone(),
                     )),
-                    extra_read: ExtraRead::Noop,
+                    txn_extra_op: TxnExtraRead::Noop,
                 }
             }
             Err(e) => {
@@ -2959,7 +2960,7 @@ where
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    extra_read: ExtraRead::Noop,
+                    txn_extra_op: TxnExtraRead::Noop,
                 });
                 return;
             }
@@ -3263,7 +3264,8 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.extra);
+                        let cmd =
+                            PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3305,7 +3307,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
-                        extra_read: ExtraRead::Noop,
+                        txn_extra_op: TxnExtraRead::Noop,
                     };
                     cb.invoke_read(resp);
                     return;
@@ -3530,6 +3532,7 @@ mod tests {
             term,
             cb,
             renew_lease_time: None,
+            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -3898,7 +3901,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, _: Extra) {
+        fn on_flush_apply(&self, _: TxnExtra) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {

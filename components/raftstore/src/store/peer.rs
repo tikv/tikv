@@ -11,7 +11,7 @@ use std::{cmp, mem, u64, usize};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraRead as TxnExtraRead;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -42,7 +42,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{
-    Callback, Config, Extra, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
+    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
 };
 use crate::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
@@ -51,6 +51,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
+use txn_types::Extra as TxnExtra;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -281,7 +282,7 @@ pub struct Peer {
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
 
-    pub extra_read: Arc<AtomicCell<ExtraRead>>,
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraRead>>,
 }
 
 impl Peer {
@@ -365,7 +366,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
-            extra_read: Arc::new(AtomicCell::new(ExtraRead::Noop)),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraRead::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1781,7 +1782,7 @@ impl Peer {
         cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1829,7 +1830,7 @@ impl Peer {
                     index: idx,
                     term: self.term(),
                     cb,
-                    extra,
+                    txn_extra,
                     renew_lease_time: None,
                 };
                 self.post_propose(ctx, p);
@@ -2206,7 +2207,7 @@ impl Peer {
                     index,
                     term: self.term(),
                     cb: Callback::None,
-                    extra: None,
+                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, p);
@@ -2559,7 +2560,7 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
-        resp.extra_read = self.extra_read.load();
+        resp.txn_extra_op = self.txn_extra_op.load();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3069,7 +3070,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    extra_read: ExtraRead::Noop,
+                    txn_extra_op: TxnExtraRead::Noop,
                 };
             }
         }
@@ -3091,7 +3092,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
-                            extra_read: ExtraRead::Noop,
+                            txn_extra_op: TxnExtraRead::Noop,
                         };
                     }
                 },
@@ -3134,7 +3135,7 @@ where
         ReadResponse {
             response,
             snapshot,
-            extra_read: ExtraRead::Noop,
+            txn_extra_op: TxnExtraRead::Noop,
         }
     }
 }

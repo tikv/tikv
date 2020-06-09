@@ -6,11 +6,12 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
-    Callback, CasualMessage, Extra, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
+use txn_types::Extra as TxnExtra;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<S>: Send + Clone
@@ -22,13 +23,13 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()> {
-        self.send_command_with_extra(req, None, cb)
+        self.send_command_txn_extra(req, TxnExtra::default(), cb)
     }
 
-    fn send_command_with_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
         cb: Callback<S>,
     ) -> RaftStoreResult<()>;
 
@@ -81,10 +82,10 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command_with_extra(
+    fn send_command_txn_extra(
         &self,
         _: RaftCmdRequest,
-        _: Option<Extra>,
+        _: TxnExtra,
         _: Callback<S>,
     ) -> RaftStoreResult<()> {
         Ok(())
@@ -167,13 +168,13 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command_with_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb, extra);
+        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
         if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())

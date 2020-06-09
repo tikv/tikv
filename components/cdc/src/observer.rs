@@ -7,10 +7,10 @@ use engine_rocks::RocksEngine;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
-use raftstore::store::Extra;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
+use txn_types::Extra as TxnExtra;
 
 use crate::endpoint::{Deregister, Task};
 use crate::Error as CdcError;
@@ -107,13 +107,13 @@ impl CmdObserver for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    fn on_flush_apply(&self, extra: Extra) {
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
         fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
-                extra,
+                txn_extras,
             }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
@@ -185,7 +185,7 @@ mod tests {
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply(HashMap::default());
+        observer.on_flush_apply(Vec::default());
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {

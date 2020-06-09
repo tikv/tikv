@@ -7,9 +7,10 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
 use raftstore::router::{handle_send_error, RaftStoreRouter};
-use raftstore::store::msg::{Callback, CasualMessage, Extra, PeerMsg, SignificantMsg};
+use raftstore::store::msg::{Callback, CasualMessage, PeerMsg, SignificantMsg};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use txn_types::Extra as TxnExtra;
 
 #[derive(Clone)]
 pub struct MockRaftStoreRouter {
@@ -58,10 +59,10 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command_with_extra(
+    fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
         cb: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
         unimplemented!()

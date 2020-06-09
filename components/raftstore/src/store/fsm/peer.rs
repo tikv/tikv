@@ -33,6 +33,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use txn_types::Extra as TxnExtra;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -53,8 +54,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, Extra, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
-    StoreMsg,
+    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
@@ -254,7 +254,7 @@ pub struct BatchRaftCmdRequestBuilder {
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
-    extra: Option<Extra>,
+    txn_extra: TxnExtra,
 }
 
 impl BatchRaftCmdRequestBuilder {
@@ -264,7 +264,7 @@ impl BatchRaftCmdRequestBuilder {
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
-            extra: None,
+            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -297,8 +297,8 @@ impl BatchRaftCmdRequestBuilder {
         let RaftCommand {
             mut request,
             callback,
-            extra,
-            send_time: _send_time,
+            mut txn_extra,
+            ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
@@ -310,14 +310,7 @@ impl BatchRaftCmdRequestBuilder {
         };
         self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size;
-        if let Some(extra) = extra {
-            match self.extra {
-                Some(ref mut e) => extra.into_iter().for_each(|(k, v)| {
-                    e.insert(k, v);
-                }),
-                None => self.extra = Some(extra),
-            }
-        }
+        self.txn_extra.append(&mut txn_extra);
     }
 
     fn should_finish(&self) -> bool {
@@ -339,7 +332,11 @@ impl BatchRaftCmdRequestBuilder {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some(RaftCommand::new(req, cb, self.extra.take()));
+                return Some(RaftCommand::with_txn_extra(
+                    req,
+                    cb,
+                    std::mem::take(&mut self.txn_extra),
+                ));
             }
             metric.batch += self.callbacks.len() - 1;
             let cbs = std::mem::replace(&mut self.callbacks, vec![]);
@@ -359,7 +356,11 @@ impl BatchRaftCmdRequestBuilder {
                     last_index = next_index;
                 }
             }));
-            return Some(RaftCommand::new(req, cb, self.extra.take()));
+            return Some(RaftCommand::with_txn_extra(
+                req,
+                cb,
+                std::mem::take(&mut self.txn_extra),
+            ));
         }
         None
     }
@@ -433,7 +434,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback, cmd.extra)
+                        self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -462,7 +463,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback, cmd.extra)
+            self.propose_raft_command(cmd.request, cmd.callback, cmd.txn_extra)
         }
     }
 
@@ -689,7 +690,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     },
                 )
             })),
-            None,
+            TxnExtra::default(),
         );
     }
 
@@ -783,7 +784,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb, None);
+        self.propose_raft_command(msg, cb, TxnExtra::default());
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -2117,7 +2118,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .router
             .force_send(
                 target_id,
-                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None, None)),
+                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
             )
             .map_err(|_| Error::RegionNotFound(target_id))
     }
@@ -2136,7 +2137,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None, None);
+        self.propose_raft_command(req, Callback::None, TxnExtra::default());
     }
 
     fn on_check_merge(&mut self) {
@@ -2676,7 +2677,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         mut msg: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
-        extra: Option<Extra>,
+        txn_extra: TxnExtra,
     ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
@@ -2722,7 +2723,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, extra) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, txn_extra) {
             self.fsm.has_ready = true;
         }
 
@@ -2855,7 +2856,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.fsm.peer.region().get_id();
         let request =
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None, None);
+        self.propose_raft_command(request, Callback::None, TxnExtra::default());
 
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
@@ -3245,7 +3246,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None, None);
+        self.propose_raft_command(req, Callback::None, TxnExtra::default());
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
