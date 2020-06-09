@@ -458,8 +458,8 @@ mod tests {
     fn test_eval_unary_function_scalar() {
         /// foo(v) performs v * 2.
         #[rpn_fn]
-        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.0))
+        fn foo(v: Option<&Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| *v * 2.0))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -488,7 +488,7 @@ mod tests {
     fn test_eval_unary_function_vector() {
         /// foo(v) performs v + 5.
         #[rpn_fn]
-        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(v: Option<&i64>) -> Result<Option<i64>> {
             Ok(v.map(|v| v + 5))
         }
 
@@ -522,7 +522,7 @@ mod tests {
     fn test_eval_unary_function_raw_column() {
         /// foo(v) performs v + 5.
         #[rpn_fn]
-        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(v: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v.unwrap() + 5))
         }
 
@@ -573,8 +573,8 @@ mod tests {
     fn test_eval_binary_function_scalar_scalar() {
         /// foo(v) performs v1 + float(v2) - 1.
         #[rpn_fn]
-        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
+        fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
+            Ok(Some(*v1.unwrap() + *v2.unwrap() as f64 - 1.0))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -604,8 +604,8 @@ mod tests {
     fn test_eval_binary_function_vector_scalar() {
         /// foo(v) performs v1 - v2.
         #[rpn_fn]
-        fn foo(v1: &Option<Real>, v2: &Option<Real>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() - v2.unwrap()))
+        fn foo(v1: Option<&Real>, v2: Option<&Real>) -> Result<Option<Real>> {
+            Ok(Some(*v1.unwrap() - *v2.unwrap()))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -642,8 +642,8 @@ mod tests {
     fn test_eval_binary_function_scalar_vector() {
         /// foo(v) performs v1 - float(v2).
         #[rpn_fn]
-        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() - v2.unwrap() as f64))
+        fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<Real>> {
+            Ok(Some(*v1.unwrap() - *v2.unwrap() as f64))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -680,9 +680,9 @@ mod tests {
     fn test_eval_binary_function_vector_vector() {
         /// foo(v) performs int(v1*2.5 - float(v2)*3.5).
         #[rpn_fn]
-        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(v1: Option<&Real>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(
-                (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
+                (v1.unwrap().into_inner() * 2.5 - (*v2.unwrap() as f64) * 3.5) as i64,
             ))
         }
 
@@ -732,7 +732,7 @@ mod tests {
     fn test_eval_binary_function_raw_column() {
         /// foo(v1, v2) performs v1 * v2.
         #[rpn_fn]
-        fn foo(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() * v2.unwrap()))
         }
 
@@ -784,7 +784,7 @@ mod tests {
     fn test_eval_ternary_function() {
         /// foo(v) performs v1 - v2 * v3.
         #[rpn_fn]
-        fn foo(v1: &Option<i64>, v2: &Option<i64>, v3: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(v1: Option<&i64>, v2: Option<&i64>, v3: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() - v2.unwrap() * v3.unwrap()))
         }
 
@@ -830,8 +830,8 @@ mod tests {
     fn test_eval_comprehensive() {
         /// fn_a(v1, v2, v3) performs v1 * v2 - v3.
         #[rpn_fn]
-        fn fn_a(v1: &Option<Real>, v2: &Option<Real>, v3: &Option<Real>) -> Result<Option<Real>> {
-            Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
+        fn fn_a(v1: Option<&Real>, v2: Option<&Real>, v3: Option<&Real>) -> Result<Option<Real>> {
+            Ok(Some(*v1.unwrap() * *v2.unwrap() - *v3.unwrap()))
         }
 
         /// fn_b() returns 42.0.
@@ -842,13 +842,13 @@ mod tests {
 
         /// fn_c(v1, v2) performs float(v2 - v1).
         #[rpn_fn]
-        fn fn_c(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<Real>> {
+        fn fn_c(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<Real>> {
             Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
         }
 
         /// fn_d(v1, v2) performs v1 + v2 * 2.
         #[rpn_fn]
-        fn fn_d(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<i64>> {
+        fn fn_d(v1: Option<&i64>, v2: Option<&i64>) -> Result<Option<i64>> {
             Ok(Some(v1.unwrap() + v2.unwrap() * 2))
         }
 
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn test_eval_fail_1() {
         #[rpn_fn]
-        fn foo(_v: &Option<i64>) -> Result<Option<i64>> {
+        fn foo(_v: Option<&i64>) -> Result<Option<i64>> {
             unreachable!()
         }
 
@@ -928,8 +928,8 @@ mod tests {
     fn test_eval_fail_2() {
         /// foo(v) performs v * 2.
         #[rpn_fn]
-        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.0))
+        fn foo(v: Option<&Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| *v * 2.0))
         }
 
         // foo() only accepts 1 parameter but we will give 2.
@@ -953,8 +953,8 @@ mod tests {
     fn test_eval_fail_3() {
         /// Expects real argument, receives int argument.
         #[rpn_fn]
-        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
-            Ok(v.map(|v| v * 2.5))
+        fn foo(v: Option<&Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| *v * 2.5))
         }
 
         let exp = RpnExpressionBuilder::new_for_test()
@@ -985,14 +985,14 @@ mod tests {
 
         /// fn_a(a: int, b: float, c: int) performs: float(a) - b * float(c)
         #[rpn_fn]
-        fn fn_a(a: &Option<i64>, b: &Option<Real>, c: &Option<i64>) -> Result<Option<Real>> {
-            Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
+        fn fn_a(a: Option<&i64>, b: Option<&Real>, c: Option<&i64>) -> Result<Option<Real>> {
+            Ok(Real::new(*a.unwrap() as f64 - b.unwrap().into_inner() * *c.unwrap() as f64).ok())
         }
 
         /// fn_b(a: float, b: int) performs: a * (float(b) - 1.5)
         #[rpn_fn]
-        fn fn_b(a: &Option<Real>, b: &Option<i64>) -> Result<Option<Real>> {
-            Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
+        fn fn_b(a: Option<&Real>, b: Option<&i64>) -> Result<Option<Real>> {
+            Ok(Real::new(a.unwrap().into_inner() * (*b.unwrap() as f64 - 1.5)).ok())
         }
 
         /// fn_c() returns: int(42)
@@ -1003,7 +1003,7 @@ mod tests {
 
         /// fn_d(a: float) performs: int(a)
         #[rpn_fn]
-        fn fn_d(a: &Option<Real>) -> Result<Option<i64>> {
+        fn fn_d(a: Option<&Real>) -> Result<Option<i64>> {
             Ok(Some(a.unwrap().into_inner() as i64))
         }
 
@@ -1082,7 +1082,7 @@ mod tests {
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
         #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
-        fn fn_a<T: Evaluable>(metadata: &i64, v: &Option<Int>) -> Result<Option<Int>> {
+        fn fn_a<T: Evaluable>(metadata: &i64, v: Option<&Int>) -> Result<Option<Int>> {
             assert_eq!(*metadata, 42);
             Ok(v.map(|v| v + *metadata))
         }
@@ -1093,9 +1093,9 @@ mod tests {
 
         #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
         #[rpn_fn(varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
-        fn fn_b<T: Evaluable>(metadata: &String, v: &[&Option<T>]) -> Result<Option<T>> {
+        fn fn_b<T: Evaluable>(metadata: &String, v: &[Option<&T>]) -> Result<Option<T>> {
             assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
-            Ok(v[0].clone())
+            Ok(v[0].cloned())
         }
 
         fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> Result<String> {

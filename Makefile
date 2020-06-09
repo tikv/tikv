@@ -232,7 +232,9 @@ run-test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
@@ -274,9 +276,9 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
+	@cargo clippy --workspace --all-targets --no-default-features \
+		--exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
 		cd $$pkg && \
@@ -284,14 +286,16 @@ clippy: pre-clippy
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null;\
 	done
-	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+	@for pkg in "fuzz"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
 else
 clippy: pre-clippy
-	@cargo clippy --workspace --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+	@cargo clippy --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 endif
 
 pre-audit:

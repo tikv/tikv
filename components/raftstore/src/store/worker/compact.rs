@@ -246,10 +246,11 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
+    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
+    use engine_rocks::util::get_cf_handle;
     use engine_rocks::Compat;
     use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};

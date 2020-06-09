@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -1020,7 +1020,7 @@ impl Write for Snap {
 
             let file = AllowStdIo::new(&mut file_for_recving.file);
             let mut file = self.mgr.limiter.clone().limit(file);
-            if plain_file_used(cf_file.cf) || file_for_recving.encrypter.is_none() {
+            if file_for_recving.encrypter.is_none() {
                 block_on(file.write_all(&next_buf[0..write_len]))?;
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
@@ -1098,7 +1098,7 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<impl KvEngine>>) {
+fn notify_stats(ch: Option<&RaftRouter<impl EngineSnapshot>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -1110,19 +1110,37 @@ fn notify_stats(ch: Option<&RaftRouter<impl KvEngine>>) {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-#[derive(Clone)]
 pub struct SnapManager<E: KvEngine> {
     core: SnapManagerCore,
-    router: Option<RaftRouter<E>>,
+    router: Option<RaftRouter<E::Snapshot>>,
     max_total_size: u64,
 }
 
+impl<E> Clone for SnapManager<E>
+where
+    E: KvEngine,
+{
+    fn clone(&self) -> Self {
+        SnapManager {
+            core: self.core.clone(),
+            router: self.router.clone(),
+            max_total_size: self.max_total_size,
+        }
+    }
+}
+
 impl<E: KvEngine> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E>>) -> Self {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E::Snapshot>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
     pub fn init(&self) -> io::Result<()> {
+        let enc_enabled = self.core.encryption_key_manager.is_some();
+        info!(
+            "Initializing SnapManager, encryption is enabled: {}",
+            enc_enabled
+        );
+
         // Use write lock so only one thread initialize the directory at a time.
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);
@@ -1483,7 +1501,7 @@ impl SnapManagerBuilder {
     pub fn build<T: Into<String>, E: KvEngine>(
         self,
         path: T,
-        router: Option<RaftRouter<E>>,
+        router: Option<RaftRouter<E::Snapshot>>,
     ) -> SnapManager<E> {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
@@ -1519,9 +1537,9 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine::rocks::util::CFOptions;
-    use engine::rocks::{self, DBOptions, Env, DB};
+    use engine::rocks::{DBOptions, Env, DB};
     use engine::Engines;
+    use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1564,7 +1582,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = engine_rocks::raw_util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(Arc::new(db))
     }
 
@@ -1574,7 +1592,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = engine_rocks::raw_util::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let db = Arc::new(db);
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
@@ -1855,8 +1873,9 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db =
-            Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
+        let dst_db = Arc::new(
+            engine_rocks::raw_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap(),
+        );
         let options = ApplyOptions {
             db: dst_db.c().clone(),
             region,

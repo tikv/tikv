@@ -3,17 +3,68 @@
 use crate::cf_options::RocksColumnFamilyOptions;
 use crate::db_options::RocksDBOptions;
 use crate::engine::RocksEngine;
+use crate::raw_util::new_engine as new_engine_raw;
+use crate::raw_util::new_engine_opt as new_engine_opt_raw;
+use crate::raw_util::CFOptions;
 use crate::rocks_metrics_defs::*;
-use engine::rocks::util::new_engine as new_engine_raw;
-use engine::rocks::util::new_engine_opt as new_engine_opt_raw;
-use engine::rocks::util::CFOptions;
 use engine_traits::Range;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
 use rocksdb::Range as RocksRange;
-use rocksdb::{CFHandle, DB};
+use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
+
+pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
+    let engine =
+        new_engine_raw(path, None, &[CF_DEFAULT], None).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
+
+pub struct RocksCFOptions<'a> {
+    cf: &'a str,
+    options: RocksColumnFamilyOptions,
+}
+
+impl<'a> RocksCFOptions<'a> {
+    pub fn new(cf: &'a str, options: RocksColumnFamilyOptions) -> RocksCFOptions<'a> {
+        RocksCFOptions { cf, options }
+    }
+
+    pub fn into_raw(self) -> CFOptions<'a> {
+        CFOptions::new(self.cf, self.options.into_raw())
+    }
+}
+
+pub fn new_engine(
+    path: &str,
+    db_opts: Option<RocksDBOptions>,
+    cfs: &[&str],
+    opts: Option<Vec<RocksCFOptions<'_>>>,
+) -> Result<RocksEngine> {
+    let db_opts = db_opts.map(RocksDBOptions::into_raw);
+    let opts = opts.map(|o| o.into_iter().map(RocksCFOptions::into_raw).collect());
+    let engine = new_engine_raw(path, db_opts, cfs, opts).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
+
+pub fn new_engine_opt(
+    path: &str,
+    db_opt: RocksDBOptions,
+    cfs_opts: Vec<RocksCFOptions<'_>>,
+) -> Result<RocksEngine> {
+    let db_opt = db_opt.into_raw();
+    let cfs_opts = cfs_opts.into_iter().map(RocksCFOptions::into_raw).collect();
+    let engine =
+        new_engine_opt_raw(path, db_opt, cfs_opts).map_err(|e| Error::Other(box_err!(e)))?;
+    let engine = Arc::new(engine);
+    let engine = RocksEngine::from_db(engine);
+    Ok(engine)
+}
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     let handle = db
@@ -22,12 +73,8 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     Ok(handle)
 }
 
-pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
-    let engine =
-        new_engine_raw(path, None, &[CF_DEFAULT], None).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
+pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
+    RocksRange::new(range.start_key, range.end_key)
 }
 
 pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
@@ -87,49 +134,68 @@ pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
-pub struct RocksCFOptions<'a> {
-    cf: &'a str,
-    options: RocksColumnFamilyOptions,
+pub struct FixedSuffixSliceTransform {
+    pub suffix_len: usize,
 }
 
-impl<'a> RocksCFOptions<'a> {
-    pub fn new(cf: &'a str, options: RocksColumnFamilyOptions) -> RocksCFOptions<'a> {
-        RocksCFOptions { cf, options }
-    }
-
-    pub fn into_raw(self) -> CFOptions<'a> {
-        CFOptions::new(self.cf, self.options.into_raw())
+impl FixedSuffixSliceTransform {
+    pub fn new(suffix_len: usize) -> FixedSuffixSliceTransform {
+        FixedSuffixSliceTransform { suffix_len }
     }
 }
 
-pub fn new_engine(
-    path: &str,
-    db_opts: Option<RocksDBOptions>,
-    cfs: &[&str],
-    opts: Option<Vec<RocksCFOptions<'_>>>,
-) -> Result<RocksEngine> {
-    let db_opts = db_opts.map(RocksDBOptions::into_raw);
-    let opts = opts.map(|o| o.into_iter().map(RocksCFOptions::into_raw).collect());
-    let engine = new_engine_raw(path, db_opts, cfs, opts).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
+impl SliceTransform for FixedSuffixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        let mid = key.len() - self.suffix_len;
+        let (left, _) = key.split_at(mid);
+        left
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.suffix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
 }
 
-pub fn new_engine_opt(
-    path: &str,
-    db_opt: RocksDBOptions,
-    cfs_opts: Vec<RocksCFOptions<'_>>,
-) -> Result<RocksEngine> {
-    let db_opt = db_opt.into_raw();
-    let cfs_opts = cfs_opts.into_iter().map(RocksCFOptions::into_raw).collect();
-    let engine =
-        new_engine_opt_raw(path, db_opt, cfs_opts).map_err(|e| Error::Other(box_err!(e)))?;
-    let engine = Arc::new(engine);
-    let engine = RocksEngine::from_db(engine);
-    Ok(engine)
+pub struct FixedPrefixSliceTransform {
+    pub prefix_len: usize,
 }
 
-pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
-    RocksRange::new(range.start_key, range.end_key)
+impl FixedPrefixSliceTransform {
+    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
+        FixedPrefixSliceTransform { prefix_len }
+    }
+}
+
+impl SliceTransform for FixedPrefixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        &key[..self.prefix_len]
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.prefix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
+pub struct NoopSliceTransform;
+
+impl SliceTransform for NoopSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        key
+    }
+
+    fn in_domain(&mut self, _: &[u8]) -> bool {
+        true
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
 }

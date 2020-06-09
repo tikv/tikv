@@ -6,10 +6,9 @@ publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
 [dependencies]
-base64 = "0.10"
+base64 = "0.12"
 byteorder = "1.2"
 codec = { path = "../codec" }
-derive_more = "0.15.0"
 hex = "0.3"
 match_template = { path = "../match_template" }
 num = { version = "0.2", default-features = false }
@@ -24,6 +23,7 @@ tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
+static_assertions = { version = "1.0", features = ["nightly"] }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

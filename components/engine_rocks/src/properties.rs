@@ -495,7 +495,10 @@ impl MvccPropertiesCollector {
 
 impl TablePropertiesCollector for MvccPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
+        // TsFilter filters sst based on max_ts and min_ts during iterating.
+        // To prevent seeing outdated (GC) records, we should consider
+        // RocksDB delete entry type.
+        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
             return;
         }
 
@@ -514,6 +517,11 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        if entry_type == DBEntryType::Delete {
+            // Empty value for delete entry type, skip following properties.
+            return;
+        }
+
         self.props.num_versions += 1;
 
         if k != self.last_row.as_slice() {
@@ -624,8 +632,7 @@ mod tests {
     use test::Bencher;
 
     use crate::compat::Compat;
-    use engine::rocks;
-    use engine::rocks::util::CFOptions;
+    use crate::raw_util::CFOptions;
     use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
@@ -803,7 +810,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = ["a", "b", "c"];
         for &key in &cases {

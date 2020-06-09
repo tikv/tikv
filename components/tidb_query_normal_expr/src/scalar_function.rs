@@ -310,6 +310,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
@@ -339,6 +340,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Locate3ArgsUtf8
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::Replace => (3, 3),
+
+            ScalarFuncSig::Insert => (4, 4),
 
             ScalarFuncSig::JsonArraySig
             | ScalarFuncSig::IntAnyValue
@@ -392,6 +395,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::Elt
+            | ScalarFuncSig::MakeSet
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -664,6 +668,7 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         ToSeconds => to_seconds,
+        TimeToSec => time_to_sec,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -878,6 +883,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         MonthName => month_name,
+        MakeSet => make_set,
         DayName => day_name,
         Bin => bin,
         Concat => concat,
@@ -894,6 +900,7 @@ dispatch_call! {
         InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
+        Insert => insert,
         Md5 => md5,
         Uuid => uuid,
         Sha1 => sha1,

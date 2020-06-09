@@ -112,7 +112,7 @@ If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/refe
 
 ## Community Meeting
 
-The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 06.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk02SmvBBaYBXqhMbPnrJ05YKvGfBzQ%3A1584965273869&ei=maZ4XtXbNI61mAXs4oSIBQ&q=6pm+PST&oq=6pm+PST&gs_l=psy-ab.3..0l2j0i20i263j0l7.27953.27953..28837...0.2..0.261.261.2-1......0....1..gws-wiz.......0i71.FHU-fAZ7FLU&ved=0ahUKEwiVjIXhx7DoAhWOGqYKHWwxAVEQ4dUDCAs&uact=5)).
+The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 07.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk01UVqm3BLWjN2AJxMSG73KiUqUdDw%3A1589771998935&ei=3v7BXuDQOJSl-QaKq62ICQ&q=7pm+PST&oq=7pm+PST&gs_lcp=CgZwc3ktYWIQAzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzIECAAQQzICCAAyAggAMgYIABAHEB4yAggAOgQIABBHOggIABAHEAoQHlDQWFicXGC-ZWgAcAF4AIABmwGIAa4CkgEDMC4ymAEAoAEBqgEHZ3dzLXdpeg&sclient=psy-ab&ved=0ahUKEwjgt5SaurzpAhWUUt4KHYpVC5EQ4dUDCAw&uact=5)).
 
 Quick links:
 
