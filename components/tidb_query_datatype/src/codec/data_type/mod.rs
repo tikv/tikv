@@ -159,6 +159,7 @@ impl_evaluable_ret! { Json }
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
     type ChunkedType: ChunkRef <'a, Self>;
+    type EvaluableType;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
     /// panics if the varient mismatches.
@@ -176,6 +177,7 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
 impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
     const EVAL_TYPE: EvalType = T::EVAL_TYPE;
     type ChunkedType = Vec<Option<T>>;
+    type EvaluableType = T;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -195,6 +197,7 @@ impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
 
 impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Bytes;
+    type EvaluableType = Bytes;
     type ChunkedType = Vec<Option<Bytes>>;
 
     #[inline]
@@ -224,6 +227,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
 
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
+    type EvaluableType = Json;
     type ChunkedType = Vec<Option<Json>>;
 
     #[inline]
