@@ -623,6 +623,7 @@ where
                                 Self::get_config(req, &cfg_controller).await
                             }
                             (Method::POST, "/config") => {
+                                // The operation will modify the configuration of TiKV.
                                 if check_cert(security_config, x509) {
                                     Self::update_config(cfg_controller.clone(), req).await
                                 } else {
@@ -636,6 +637,8 @@ where
                                 Self::dump_rsperf_to_resp(req).await
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
+                                // The operation will get start key and end key. These keys could be actual
+                                // user data since in some cases the data itself is stored in the key.
                                 if check_cert(security_config, x509) {
                                     Self::dump_region_meta(req, router).await
                                 } else {
@@ -711,7 +714,10 @@ impl ServerConnection for AddrStream {
     }
 }
 
-// Check common name in peer cert
+// Check if the peer's x509 certificate meets the requirements, this should
+// be called where the access should be controlled.
+//
+// For now, the check only verifies the role of the peer certificate.
 fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
     // if `cert_allowed_cn` is empty, skip check and return true
     if !security_config.cert_allowed_cn.is_empty() {
@@ -722,6 +728,7 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
                 .next()
             {
                 let data = name.data().as_slice();
+                // Check common name in peer cert
                 return security::match_peer_names(
                     &security_config.cert_allowed_cn,
                     std::str::from_utf8(data).unwrap(),
