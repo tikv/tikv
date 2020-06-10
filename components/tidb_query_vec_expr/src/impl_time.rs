@@ -211,6 +211,12 @@ pub fn second(t: Option<&Duration>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
+pub fn time_to_sec(t: Option<&Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| t.to_secs()))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn micro_second(t: Option<&Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
 }
@@ -810,6 +816,31 @@ mod tests {
         test_null_case(ScalarFuncSig::Minute);
         test_null_case(ScalarFuncSig::Second);
         test_null_case(ScalarFuncSig::MicroSecond);
+    }
+
+    #[test]
+    fn test_time_to_sec() {
+        let cases: Vec<(&str, i8, i64)> = vec![
+            ("31 11:30:45", 0, 2719845),
+            ("11:30:45.123345", 3, 41445),
+            ("-11:30:45.1233456", 0, -41445),
+            ("272:59:59.14", 0, 982799),
+        ];
+        for (arg, fsp, s) in cases {
+            let duration =
+                Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .evaluate::<Int>(ScalarFuncSig::TimeToSec)
+                .unwrap();
+            assert_eq!(output, Some(s));
+        }
+        // test NULL case
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Duration>)
+            .evaluate::<Int>(ScalarFuncSig::TimeToSec)
+            .unwrap();
+        assert_eq!(output, None);
     }
 
     #[test]
