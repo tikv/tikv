@@ -417,7 +417,7 @@ impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_json(&'a self) -> Option<JsonRef<'a>> {
         match self {
-            ScalarValueRef::Json(v) => v.clone(),
+            ScalarValueRef::Json(v) => *v,
             other => panic!(
                 "Cannot cast {} scalar value into {}",
                 other.eval_type(),
@@ -445,7 +445,7 @@ impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_bytes(&'a self) -> Option<BytesRef<'a>> {
         match self {
-            ScalarValueRef::Bytes(v) => v.clone(),
+            ScalarValueRef::Bytes(v) => *v,
             other => panic!(
                 "Cannot cast {} scalar value into {}",
                 other.eval_type(),

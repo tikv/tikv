@@ -1416,7 +1416,7 @@ mod tests_normal {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::eval(def, ctx, output_rows, args, extra, metadata)
                 }
-            }        
+            }
         };
         assert_eq!(expected.to_string(), gen.generate_evaluator().to_string());
     }
@@ -1591,7 +1591,7 @@ mod tests_normal {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, metadata)
                 }
-            }                     
+            }
         };
         assert_eq!(expected.to_string(), gen.generate_evaluator().to_string());
     }
@@ -1646,7 +1646,7 @@ mod tests_normal {
                     validator_ptr: validate::<A, B>,
                     fn_ptr: run::<A, B>,
                 }
-            }            
+            }
         };
         assert_eq!(expected.to_string(), gen.generate_constructor().to_string());
     }

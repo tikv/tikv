@@ -156,7 +156,7 @@ impl VectorValue {
             VectorValue::DateTime(v) => ScalarValueRef::DateTime(v[index].as_ref()),
             VectorValue::Real(v) => ScalarValueRef::Real(v[index].as_ref()),
             VectorValue::Decimal(v) => ScalarValueRef::Decimal(v[index].as_ref()),
-            VectorValue::Bytes(v) => ScalarValueRef::Bytes(v[index].as_ref().map(|x| x.as_slice())),
+            VectorValue::Bytes(v) => ScalarValueRef::Bytes(v[index].as_deref()),
             VectorValue::Json(v) => ScalarValueRef::Json(v[index].as_ref().map(|x| x.as_ref())),
         }
     }

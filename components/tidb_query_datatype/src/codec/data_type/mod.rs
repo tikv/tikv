@@ -82,7 +82,7 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Borrows this concrete type from a `ScalarValueRef` in the same type;
     /// panics if the varient mismatches.
-    fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self>;
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.

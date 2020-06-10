@@ -10,7 +10,7 @@ impl<'a, T: Evaluable> ChunkRef<'a, &'a T> for Vec<Option<T>> {
 
 impl<'a> ChunkRef<'a, BytesRef<'a>> for Vec<Option<Bytes>> {
     fn get_option_ref(&'a self, idx: usize) -> Option<BytesRef<'a>> {
-        self[idx].as_ref().map(|x| x.as_slice())
+        self[idx].as_deref()
     }
 }
 
