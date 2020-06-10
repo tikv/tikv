@@ -133,6 +133,20 @@ impl From<Option<f64>> for ScalarValue {
     }
 }
 
+impl <'a> From<Option<JsonRef<'a>>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<JsonRef<'a>>) -> ScalarValue {
+        ScalarValue::Json(s.map(|x| x.to_owned()))
+    }
+}
+
+impl <'a> From<Option<BytesRef<'a>>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<BytesRef<'a>>) -> ScalarValue {
+        ScalarValue::Bytes(s.map(|x| x.to_vec()))
+    }
+}
+
 impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
