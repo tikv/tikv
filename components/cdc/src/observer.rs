@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_register_and_deregister() {
         let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
-        let observer = CdcObserver::new(scheduler);
+        let mut observer = CdcObserver::new(scheduler);
         let observe_id = ObserveID::new();
 
         observer.on_prepare_for_apply(observe_id, 0);
@@ -225,7 +225,7 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveID::new();
-        observer.subscribe_region(1, oid);
+        observer.subscribe_region(1, oid, Arc::new(AtomicBool::new(true)));
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {

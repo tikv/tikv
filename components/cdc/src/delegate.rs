@@ -459,7 +459,11 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite { default, lock, .. }) => {
+                Some(TxnEntry::Prewrite {
+                    default,
+                    lock,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let l = Lock::parse(&lock.1).unwrap();
                     let skip = decode_lock(lock.0, l, &mut row);
@@ -467,6 +471,7 @@ impl Delegate {
                         continue;
                     }
                     decode_default(default.1, &mut row);
+                    row.previous_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -476,7 +481,11 @@ impl Delegate {
                     current_rows_size += row_size;
                     rows.last_mut().unwrap().1.push(row);
                 }
-                Some(TxnEntry::Commit { default, write, .. }) => {
+                Some(TxnEntry::Commit {
+                    default,
+                    write,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row);
                     if skip {
@@ -496,6 +505,7 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
+                    row.previous_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -602,7 +612,6 @@ impl Delegate {
                             kv_engine,
                         ) {
                             Either::Left(key) => {
-                                /* TODO: seek the value for the key */
                                 // Key is not in txn_extra, should seek the old value for it later.
                                 to_read_old.insert(key);
                             }
@@ -661,13 +670,15 @@ impl Delegate {
                 }
             }
         }
-        // TODO: add metric for statistics.
-        self.seek_old_value(
-            to_read_old,
-            &mut rows,
-            &kv_engine,
-            &mut Statistics::default(),
-        )?;
+        if to_read_old.len() > 0 {
+            // TODO: add metric for statistics.
+            self.seek_old_value(
+                to_read_old,
+                &mut rows,
+                &kv_engine,
+                &mut Statistics::default(),
+            )?;
+        }
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
             entries.push(v);
@@ -904,7 +915,7 @@ mod tests {
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let mut delegate = Delegate::new(region_id, Arc::new(AtomicBool::new(true)));
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
@@ -1031,7 +1042,7 @@ mod tests {
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let mut delegate = Delegate::new(region_id, Arc::new(AtomicBool::new(true)));
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));

@@ -61,9 +61,9 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
     }
     fn send_command_txn_extra(
         &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<RocksSnapshot>,
+        _: RaftCmdRequest,
+        _: TxnExtra,
+        _: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
         unimplemented!()
     }

@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
-use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
@@ -561,7 +561,6 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 pub struct DeltaEntryPolicy {
     from_ts: TimeStamp,
     extra_read: ExtraRead,
-    prev_commit_kv: KvPair,
 }
 
 impl DeltaEntryPolicy {
@@ -569,7 +568,6 @@ impl DeltaEntryPolicy {
         Self {
             from_ts,
             extra_read,
-            prev_commit_kv: (Vec::default(), Vec::default()),
         }
     }
 }
@@ -579,7 +577,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
     fn handle_lock(
         &mut self,
-        mut current_user_key: Key,
+        current_user_key: Key,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -607,56 +605,36 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 Ok((vec![], vec![]))
             };
             let mut old_value = None;
-            if (self.extra_read == ExtraRead::Updated
-                && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete))
-                || (self.extra_read == ExtraRead::Deleted && lock.lock_type == LockType::Delete)
-            {
-                let seek_key = current_user_key.append_ts(lock.ts);
-                let mut next_count = 0;
-                // Find the first key which is bigger than seek_key.
-                loop {
-                    if cursors.write.key(&mut statistics.write) > seek_key.as_encoded().as_slice()
-                        || !cursors.write.next(&mut statistics.write)
-                    {
-                        break;
-                    }
-                    next_count += 1;
-                }
-                cursors.write.prev(&mut statistics.write);
-                next_count -= 1;
-                current_user_key = seek_key.truncate_ts()?;
-                loop {
-                    let wkey = cursors.write.key(&mut statistics.write);
-                    if Key::is_user_key_eq(wkey, current_user_key.as_encoded().as_slice()) {
-                        assert_ge!(lock.ts, Key::decode_ts_from(wkey)?);
-                        let write_ref =
-                            WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-                        match write_ref.write_type {
-                            WriteType::Put => {
-                                if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
-                                    old_value = Some(v);
-                                } else {
-                                    let default_cursor = cursors.default.as_mut().unwrap();
-                                    old_value = Some(super::near_load_data_by_write(
-                                        default_cursor,
-                                        &current_user_key,
-                                        lock.ts,
-                                        statistics,
-                                    )?);
-                                }
-                            }
-                            WriteType::Delete => break,
-                            WriteType::Lock | WriteType::Rollback => (),
+            if check_lock_extra_read(self.extra_read, lock.lock_type) {
+                while Key::is_user_key_eq(
+                    cursors.write.key(&mut statistics.write),
+                    current_user_key.as_encoded(),
+                ) {
+                    assert_ge!(
+                        lock.ts,
+                        Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
+                    );
+                    let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+                    match write_ref.write_type {
+                        WriteType::Put => {
+                            old_value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
+                                Some(v)
+                            } else {
+                                let default_cursor = cursors.default.as_mut().unwrap();
+                                Some(super::near_load_data_by_write(
+                                    default_cursor,
+                                    &current_user_key,
+                                    lock.ts,
+                                    statistics,
+                                )?)
+                            };
+                            break;
                         }
-                    } else {
-                        break;
+                        WriteType::Delete => break,
+                        WriteType::Lock | WriteType::Rollback => {
+                            cursors.write.next(&mut statistics.write);
+                        }
                     }
-                    cursors.write.prev(&mut statistics.write);
-                    next_count -= 1;
-                }
-                while next_count > 0 {
-                    cursors.write.prev(&mut statistics.write);
-                    next_count -= 1;
                 }
             }
             load_default_res.map(|default| {
@@ -716,22 +694,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
                 continue;
             }
-
-            let mut old_value = None;
-            if self.extra_read != ExtraRead::Noop {
-                if Key::is_user_key_eq(&self.prev_commit_kv.0, current_user_key.as_encoded()) {
-                    old_value = Some(std::mem::take(&mut self.prev_commit_kv.1));
-                }
-            }
-
-            self.prev_commit_kv = (
-                current_user_key.clone().into_encoded(),
-                short_value
-                    .clone()
-                    .map_or_else(Vec::default, |v| v.to_vec()),
-            );
-
-            let default = if write_type == WriteType::Put && !short_value.is_some() {
+            let default = if write_type == WriteType::Put && short_value.is_none() {
                 let default_cursor = cursors.default.as_mut().unwrap();
                 let value = super::near_load_data_by_write(
                     default_cursor,
@@ -740,25 +703,71 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     statistics,
                 )?;
                 let key = default_cursor.key(&mut statistics.data).to_vec();
-                self.prev_commit_kv.1 = value.clone();
                 (key, value)
             } else {
                 (vec![], vec![])
             };
 
+            let write = (
+                cursors.write.key(&mut statistics.write).to_owned(),
+                cursors.write.value(&mut statistics.write).to_owned(),
+            );
+            cursors.write.next(&mut statistics.write);
+
+            let mut old_value = None;
+            if check_write_extra_read(self.extra_read, write_type) {
+                loop {
+                    if !cursors.write.valid()?
+                        || !Key::is_user_key_eq(
+                            cursors.write.key(&mut statistics.write),
+                            current_user_key.as_encoded(),
+                        )
+                    {
+                        break;
+                    }
+                    let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+                    if !(write_ref.write_type == WriteType::Rollback
+                        || write_ref.write_type == WriteType::Lock)
+                    {
+                        old_value =
+                            if write_type == WriteType::Put && write_ref.short_value.is_none() {
+                                let default_cursor = cursors.default.as_mut().unwrap();
+                                Some(super::near_load_data_by_write(
+                                    default_cursor,
+                                    &current_user_key,
+                                    start_ts,
+                                    statistics,
+                                )?)
+                            } else {
+                                write_ref.short_value.map(|v| v.to_vec())
+                            };
+                        break;
+                    }
+                    cursors.write.next(&mut statistics.write);
+                }
+            }
+
             let res = Ok(HandleRes::Return(TxnEntry::Commit {
                 default,
-                write: (
-                    cursors.write.key(&mut statistics.write).to_owned(),
-                    cursors.write.value(&mut statistics.write).to_owned(),
-                ),
+                write,
                 old_value,
             }));
 
-            cursors.write.next(&mut statistics.write);
             return res;
         }
     }
+}
+
+fn check_lock_extra_read(extra_read: ExtraRead, lock_type: LockType) -> bool {
+    (extra_read == ExtraRead::Updated
+        && (lock_type == LockType::Put || lock_type == LockType::Delete))
+        || (extra_read == ExtraRead::Deleted && lock_type == LockType::Delete)
+}
+
+fn check_write_extra_read(extra_read: ExtraRead, write_type: WriteType) -> bool {
+    (extra_read == ExtraRead::Updated
+        && (write_type == WriteType::Put || write_type == WriteType::Delete))
+        || (extra_read == ExtraRead::Deleted && write_type == WriteType::Delete)
 }
 
 /// This type can be used to scan keys starting from the given user key (greater than or equal).

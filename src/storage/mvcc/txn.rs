@@ -1039,8 +1039,8 @@ impl<S: Snapshot> MvccTxn<S> {
                         );
                     }
                     WriteType::Lock | WriteType::Rollback => loop {
-                        if let Some((_, prev_write)) = self.reader.prev_write(&key)? {
-                            match prev_write.write_type {
+                        if let Some((_, next_write)) = self.reader.next_write(&key)? {
+                            match next_write.write_type {
                                 WriteType::Put | WriteType::Delete => {
                                     self.writes.extra.add_old_value(
                                         key.clone().append_ts(self.start_ts),

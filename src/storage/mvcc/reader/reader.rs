@@ -17,7 +17,7 @@ pub struct MvccReader<S: Snapshot> {
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,
     lock_cursor: Option<Cursor<S::Iter>>,
-    write_cursor: Option<Cursor<S::Iter>>,
+    pub write_cursor: Option<Cursor<S::Iter>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -159,9 +159,9 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    pub fn prev_write(&mut self, key: &Key) -> Result<Option<(TimeStamp, Write)>> {
+    pub fn next_write(&mut self, key: &Key) -> Result<Option<(TimeStamp, Write)>> {
         let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = cursor.prev(&mut self.statistics.write);
+        let ok = cursor.next(&mut self.statistics.write);
         if !ok {
             return Ok(None);
         }
