@@ -32,12 +32,12 @@ pub trait ConvertTo<T> {
     fn convert(&self, ctx: &mut EvalContext) -> Result<T>;
 }
 
-pub trait ConvertFrom<T> : Sized {
+pub trait ConvertFrom<T>: Sized {
     /// Converts the given value from `T` value
     fn convert_from(ctx: &mut EvalContext, from: T) -> Result<Self>;
 }
 
-impl <V, W: ConvertTo<V>> ConvertFrom<W> for V {
+impl<V, W: ConvertTo<V>> ConvertFrom<W> for V {
     fn convert_from(ctx: &mut EvalContext, from: W) -> Result<Self> {
         from.convert(ctx)
     }
@@ -96,8 +96,7 @@ where
     }
 }
 
-impl<'a> ConvertTo<Real> for JsonRef<'a>
-{
+impl<'a> ConvertTo<Real> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
@@ -106,8 +105,7 @@ impl<'a> ConvertTo<Real> for JsonRef<'a>
     }
 }
 
-impl<'a> ConvertTo<String> for JsonRef<'a>
-{
+impl<'a> ConvertTo<String> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
         // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
@@ -115,8 +113,7 @@ impl<'a> ConvertTo<String> for JsonRef<'a>
     }
 }
 
-impl<'a> ConvertTo<Bytes> for JsonRef<'a>
-{
+impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
         Ok(self.to_string().into_bytes())

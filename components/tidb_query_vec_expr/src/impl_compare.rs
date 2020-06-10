@@ -22,8 +22,7 @@ where
 
 #[rpn_fn]
 #[inline]
-pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>>
-{
+pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
         (None, None) => F::compare_null(),
         (None, _) | (_, None) => F::compare_partial_null(),

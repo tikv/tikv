@@ -82,7 +82,7 @@ pub trait RpnFnArg: std::fmt::Debug {
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarArg<'a, T: EvaluableRef<'a>>(Option<T>, PhantomData<&'a T>);
 
-impl <'a, T : EvaluableRef<'a>> ScalarArg<'a, T> {
+impl<'a, T: EvaluableRef<'a>> ScalarArg<'a, T> {
     pub fn new(data: Option<T>) -> Self {
         Self(data, PhantomData)
     }
@@ -103,7 +103,7 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
 pub struct VectorArg<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> {
     physical_col: &'a C,
     logical_rows: &'a [usize],
-    _phantom: PhantomData<T>
+    _phantom: PhantomData<T>,
 }
 
 impl<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> RpnFnArg for VectorArg<'a, T, C> {
@@ -163,7 +163,7 @@ impl ArgDef for Null {}
 /// - Custom evaluators which do the actual execution of the RPN function. The `def` parameter of
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
 ///   arguments, execute the RPN function and fill the result vector.
-pub trait Evaluator <'a>{
+pub trait Evaluator<'a> {
     fn eval(
         self,
         def: impl ArgDef,
@@ -175,13 +175,13 @@ pub trait Evaluator <'a>{
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<'a, A: EvaluableRef <'a>, E: Evaluator<'a>> {
+pub struct ArgConstructor<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> {
     arg_index: usize,
     inner: E,
     _phantom: PhantomData<&'a A>,
 }
 
-impl<'a, A: EvaluableRef <'a>, E: Evaluator<'a>> ArgConstructor<'a, A, E> {
+impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> ArgConstructor<'a, A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
         ArgConstructor {
@@ -214,14 +214,14 @@ impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
-                
+
                 let v = A::borrow_vector_value(value.as_ref());
-                
+
                 let new_def = Arg {
                     arg: VectorArg {
                         physical_col: v,
                         logical_rows,
-                        _phantom: PhantomData
+                        _phantom: PhantomData,
                     },
                     rem: def,
                 };

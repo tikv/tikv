@@ -49,8 +49,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     assert!(args.len() >= 2);
     // base Json argument
     let base: Option<JsonRef> = args[0].as_json();
-    let base = base
-        .map_or(Json::none(), |json| Ok(json.to_owned()))?;
+    let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
     let buf_size = args.len() / 2;
 

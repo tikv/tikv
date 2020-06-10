@@ -201,8 +201,7 @@ where
 pub fn compare_in_by_hash_bytes<C: Collator>(
     metadata: &CompareInMeta<SortKey<Bytes, C>>,
     args: &[Option<BytesRef>],
-) -> Result<Option<Int>>
-{
+) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {

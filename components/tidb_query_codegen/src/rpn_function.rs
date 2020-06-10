@@ -773,7 +773,7 @@ impl VargsRpnFn {
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
                 Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`")
             })?;
-        
+
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = parse2::<RpnFnSignatureReturnType>(

@@ -1241,10 +1241,7 @@ fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable>(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_json_as_bytes(
-    ctx: &mut EvalContext,
-    val: Option<JsonRef>,
-) -> Result<Option<Bytes>> {
+fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {

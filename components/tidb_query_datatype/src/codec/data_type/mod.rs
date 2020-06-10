@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod not_chunked_vec;
 mod scalar;
 mod vector;
-mod not_chunked_vec;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
@@ -82,7 +82,7 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Borrows this concrete type from a `ScalarValueRef` in the same type;
     /// panics if the varient mismatches.
-    fn borrow_scalar_value_ref <'a> (v: ScalarValueRef<'a>) -> Option<&'a Self>;
+    fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
@@ -111,7 +111,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn borrow_scalar_value_ref <'a> (v: ScalarValueRef<'a>) -> Option<&'a Self> {
+            fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self> {
                 match v {
                     ScalarValueRef::$ty(x) => x,
                     _ => unimplemented!(),
@@ -145,7 +145,7 @@ macro_rules! impl_evaluable_ret {
                 VectorValue::from(vec)
             }
         }
-    }
+    };
 }
 
 impl_evaluable_ret! { Int }
@@ -158,7 +158,7 @@ impl_evaluable_ret! { Json }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
-    type ChunkedType: ChunkRef <'a, Self>;
+    type ChunkedType: ChunkRef<'a, Self>;
     type EvaluableType;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;

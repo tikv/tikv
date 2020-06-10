@@ -133,14 +133,14 @@ impl From<Option<f64>> for ScalarValue {
     }
 }
 
-impl <'a> From<Option<JsonRef<'a>>> for ScalarValue {
+impl<'a> From<Option<JsonRef<'a>>> for ScalarValue {
     #[inline]
     fn from(s: Option<JsonRef<'a>>) -> ScalarValue {
         ScalarValue::Json(s.map(|x| x.to_owned()))
     }
 }
 
-impl <'a> From<Option<BytesRef<'a>>> for ScalarValue {
+impl<'a> From<Option<BytesRef<'a>>> for ScalarValue {
     #[inline]
     fn from(s: Option<BytesRef<'a>>) -> ScalarValue {
         ScalarValue::Bytes(s.map(|x| x.to_vec()))
@@ -398,7 +398,6 @@ impl_as_ref! { Real, as_real }
 impl_as_ref! { Decimal, as_decimal }
 impl_as_ref! { DateTime, as_date_time }
 impl_as_ref! { Duration, as_duration }
-
 
 impl ScalarValue {
     #[inline]
