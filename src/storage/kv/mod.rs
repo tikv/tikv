@@ -17,8 +17,7 @@ use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraRead};
-use tikv_util::collections::HashMap;
-use txn_types::{Extra, Key, TimeStamp, Value};
+use txn_types::{Extra, Key, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};

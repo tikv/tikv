@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, RwLock};
 
 use engine_rocks::RocksEngine;
@@ -26,6 +27,7 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+    region_states: HashMap<u64, Arc<AtomicBool>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
 }
 
@@ -38,6 +40,7 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
+            region_states: HashMap::default(),
             cmd_batches: RefCell::default(),
         }
     }
@@ -59,7 +62,13 @@ impl CdcObserver {
     /// its scheduler.
     ///
     /// Return pervious ObserveID if there is one.
-    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    pub fn subscribe_region(
+        &mut self,
+        region_id: u64,
+        observe_id: ObserveID,
+        region_available: Arc<AtomicBool>,
+    ) -> Option<ObserveID> {
+        self.region_states.insert(region_id, region_available);
         self.observe_regions
             .write()
             .unwrap()
@@ -69,11 +78,16 @@ impl CdcObserver {
     /// Stops observe the region.
     ///
     /// Return ObserverID if unsubscribe successfully.
-    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    pub fn unsubscribe_region(
+        &mut self,
+        region_id: u64,
+        observe_id: ObserveID,
+    ) -> Option<ObserveID> {
         let mut regions = self.observe_regions.write().unwrap();
         // To avoid ABA problem, we must check the unique ObserveID.
         if let Some(oid) = regions.get(&region_id) {
             if *oid == observe_id {
+                self.region_states.remove(&region_id);
                 return regions.remove(&region_id);
             }
         }
@@ -148,18 +162,26 @@ impl RegionChangeObserver for CdcObserver {
         event: RegionChangeEvent,
         _: StateRole,
     ) {
-        if let RegionChangeEvent::Destroy = event {
-            let region_id = ctx.region().get_id();
-            if let Some(observe_id) = self.is_subscribed(region_id) {
-                // Unregister all downstreams.
-                let store_err = RaftStoreError::RegionNotFound(region_id);
-                let deregister = Deregister::Region {
-                    region_id,
-                    observe_id,
-                    err: CdcError::Request(store_err.into()),
-                };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+        let region_id = ctx.region().get_id();
+        match event {
+            RegionChangeEvent::Destroy => {
+                self.region_states[&region_id].store(false, atomic::Ordering::Release);
+                if let Some(observe_id) = self.is_subscribed(region_id) {
+                    // Unregister all downstreams.
+                    let store_err = RaftStoreError::RegionNotFound(region_id);
+                    let deregister = Deregister::Region {
+                        region_id,
+                        observe_id,
+                        err: CdcError::Request(store_err.into()),
+                    };
+                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e);
+                    }
+                }
+            }
+            RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                if let Some(region_state) = self.region_states.get(&region_id) {
+                    region_state.store(true, atomic::Ordering::Release);
                 }
             }
         }

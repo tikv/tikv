@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -395,7 +396,8 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             "downstream_id" => ?downstream.get_id());
         let mut is_new_delegate = false;
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
-            let d = Delegate::new(region_id);
+            let region_available = Arc::new(AtomicBool::new(true));
+            let d = Delegate::new(region_id, region_available);
             is_new_delegate = true;
             d
         });
@@ -430,7 +432,11 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         let change_cmd = if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
-            let old_id = self.observer.subscribe_region(region_id, delegate.id);
+            let old_id = self.observer.subscribe_region(
+                region_id,
+                delegate.id,
+                delegate.region_available.clone(),
+            );
             assert!(
                 old_id.is_none(),
                 "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",

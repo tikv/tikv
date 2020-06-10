@@ -35,9 +35,7 @@ use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
-    kv::{
-        with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify, WriteData,
-    },
+    kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{

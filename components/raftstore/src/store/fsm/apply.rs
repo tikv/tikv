@@ -31,7 +31,6 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use tikv_util::collections::HashMap;
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 

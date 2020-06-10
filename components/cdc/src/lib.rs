@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
+#![feature(map_first_last)]
 
 #[macro_use]
 extern crate slog_global;

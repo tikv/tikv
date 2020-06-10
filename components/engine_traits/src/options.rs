@@ -60,6 +60,7 @@ pub enum SeekMode {
     Prefix,
 }
 
+#[derive(Clone)]
 pub struct IterOptions {
     lower_bound: Option<KeyBuilder>,
     upper_bound: Option<KeyBuilder>,

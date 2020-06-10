@@ -20,21 +20,22 @@ use kvproto::cdcpb::{
     Error as EventError, ErrorDuplicateRequest, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
-use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraRead;
-use tikv::storage::mvcc::ScannerBuilder;
 
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngine, Peekable, ReadOptions, Snapshot, CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, KvEngine, Peekable, ReadOptions, CF_DEFAULT, CF_WRITE};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::ExtraRead;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
+use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
+use tikv::storage::{Cursor, ScanMode, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::Either;
@@ -199,13 +200,15 @@ pub struct Delegate {
     enabled: Arc<AtomicBool>,
     failed: bool,
     extra_op: ExtraRead,
+    pub region_available: Arc<AtomicBool>,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64) -> Delegate {
+    pub fn new(region_id: u64, region_available: Arc<AtomicBool>) -> Delegate {
         Delegate {
             region_id,
+            region_available,
             id: ObserveID::new(),
             downstreams: Vec::new(),
             resolver: None,
@@ -425,7 +428,7 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into(), txn_extra, kv_engine);
+                    self.sink_data(index, request.requests.into(), txn_extra, kv_engine)?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -530,9 +533,10 @@ impl Delegate {
         requests: Vec<Request>,
         txn_extra: &mut TxnExtra,
         kv_engine: &RocksEngine,
-    ) {
+    ) -> Result<()> {
         let mut rows = HashMap::default();
         let mut total_size = 0;
+        let mut to_read_old = BTreeSet::new();
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -590,15 +594,26 @@ impl Delegate {
                     let lock = Lock::parse(put.get_value()).unwrap();
                     let key = put.take_key();
 
-                    if read_old_value(self.extra_op, lock.lock_type) {
-                        match self.check_old_value(
+                    if need_old_value(self.extra_op, lock.lock_type) {
+                        match self.try_to_get_old_value(
                             Key::from_encoded(key.clone()),
                             &lock,
                             txn_extra,
                             kv_engine,
                         ) {
-                            Either::Left(_key) => { /* TODO: seek the value for the key */ }
-                            Either::Right(value) => row.previous_value = value.unwrap_or_default(),
+                            Either::Left(key) => {
+                                /* TODO: seek the value for the key */
+                                // Key is not in txn_extra, should seek the old value for it later.
+                                to_read_old.insert(key);
+                            }
+                            Either::Right(Some(value)) => row.previous_value = value,
+                            Either::Right(None) => {
+                                // Key exists in txn_extra but cannot get value, the region should be destroyed.
+                                // TOOD: add a log here.
+                                self.mark_failed();
+                                let store_err = RaftStoreError::RegionNotFound(self.region_id);
+                                return Err(Error::Request(store_err.into()));
+                            }
                         }
                     }
 
@@ -646,6 +661,13 @@ impl Delegate {
                 }
             }
         }
+        // TODO: add metric for statistics.
+        self.seek_old_value(
+            to_read_old,
+            &mut rows,
+            &kv_engine,
+            &mut Statistics::default(),
+        )?;
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
             entries.push(v);
@@ -657,6 +679,7 @@ impl Delegate {
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
         self.broadcast(change_data_event, total_size, true);
+        Ok(())
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
@@ -683,7 +706,7 @@ impl Delegate {
         Err(Error::Request(store_err.into()))
     }
 
-    fn check_old_value(
+    fn try_to_get_old_value(
         &mut self,
         mut key: Key,
         lock: &Lock,
@@ -706,15 +729,79 @@ impl Delegate {
                             .map(|v| v.deref().to_vec())
                     }));
                 }
-                Some(None) => return Either::Right(None),
+                Some(None) => return Either::Right(Some(Vec::default())),
                 None => (),
             }
         }
         Either::Left(key)
     }
+
+    fn seek_old_value(
+        &mut self,
+        to_read_old: BTreeSet<Key>,
+        rows: &mut HashMap<Vec<u8>, EventRow>,
+        kv_engine: &RocksEngine,
+        statistics: &mut Statistics,
+    ) -> Result<()> {
+        let snapshot =
+            RegionSnapshot::from_snapshot(Arc::new(kv_engine.snapshot()), Region::default());
+        let mut iter_opts = IterOptions::default();
+        iter_opts.set_lower_bound(to_read_old.first().unwrap().as_encoded().as_slice(), 0);
+        iter_opts.set_fill_cache(false);
+        let mut write_cursor = Cursor::new(
+            snapshot.iter_cf(CF_WRITE, iter_opts.clone()).unwrap(),
+            ScanMode::Mixed,
+        );
+        let mut default_cursor = Cursor::new(
+            snapshot.iter_cf(CF_DEFAULT, iter_opts).unwrap(),
+            ScanMode::Mixed,
+        );
+        for mut key in to_read_old {
+            write_cursor.near_seek_for_prev(&key, &mut statistics.write)?;
+            let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
+            let mut old_value = None;
+            loop {
+                if Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
+                    let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
+                    let v = match write.write_type {
+                        WriteType::Put => match write.short_value {
+                            Some(short_value) => short_value.to_vec(),
+                            None => {
+                                key = key.truncate_ts().unwrap().append_ts(write.start_ts);
+                                default_cursor
+                                    .get(&key, &mut statistics.write)
+                                    .unwrap()
+                                    .map_or_else(Vec::default, |v| v.to_vec())
+                            }
+                        },
+                        WriteType::Delete => Vec::default(),
+                        WriteType::Rollback | WriteType::Lock => {
+                            if !write_cursor.prev(&mut statistics.write) {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    old_value = Some(v)
+                }
+                break;
+            }
+            let raw_key = key.truncate_ts().unwrap().into_raw().unwrap();
+            if let Some(old_value) = old_value {
+                rows.get_mut(&raw_key).unwrap().previous_value = old_value;
+            } else if self.region_available.load(Ordering::Acquire) {
+                rows.get_mut(&raw_key).unwrap().previous_value = Vec::default();
+            } else {
+                self.mark_failed();
+                let store_err = RaftStoreError::RegionNotFound(self.region_id);
+                return Err(Error::Request(store_err.into()));
+            }
+        }
+        Ok(())
+    }
 }
 
-fn read_old_value(extra_op: ExtraRead, lock_type: LockType) -> bool {
+fn need_old_value(extra_op: ExtraRead, lock_type: LockType) -> bool {
     (extra_op == ExtraRead::Deleted && LockType::Delete == lock_type)
         || (extra_op == ExtraRead::Updated
             && (lock_type == LockType::Put || lock_type == LockType::Delete))

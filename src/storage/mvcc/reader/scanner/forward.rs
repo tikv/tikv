@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
@@ -561,6 +561,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 pub struct DeltaEntryPolicy {
     from_ts: TimeStamp,
     extra_read: ExtraRead,
+    prev_commit_kv: KvPair,
 }
 
 impl DeltaEntryPolicy {
@@ -568,6 +569,7 @@ impl DeltaEntryPolicy {
         Self {
             from_ts,
             extra_read,
+            prev_commit_kv: (Vec::default(), Vec::default()),
         }
     }
 }
@@ -690,16 +692,16 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 return Ok(HandleRes::Skip(current_user_key));
             }
 
-            let (write_type, start_ts, has_short_value) = {
+            let (write_type, start_ts, short_value) = {
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,
                     write_ref.start_ts,
-                    write_ref.short_value.is_some(),
+                    write_ref.short_value,
                 )
             };
 
-            if write_type == WriteType::Rollback {
+            if write_type == WriteType::Rollback || write_type == WriteType::Lock {
                 // Skip it and try the next record.
                 cursors.write.next(&mut statistics.write);
                 if !cursors.write.valid()? {
@@ -715,7 +717,21 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 continue;
             }
 
-            let default = if write_type == WriteType::Put && !has_short_value {
+            let mut old_value = None;
+            if self.extra_read != ExtraRead::Noop {
+                if Key::is_user_key_eq(&self.prev_commit_kv.0, current_user_key.as_encoded()) {
+                    old_value = Some(std::mem::take(&mut self.prev_commit_kv.1));
+                }
+            }
+
+            self.prev_commit_kv = (
+                current_user_key.clone().into_encoded(),
+                short_value
+                    .clone()
+                    .map_or_else(Vec::default, |v| v.to_vec()),
+            );
+
+            let default = if write_type == WriteType::Put && !short_value.is_some() {
                 let default_cursor = cursors.default.as_mut().unwrap();
                 let value = super::near_load_data_by_write(
                     default_cursor,
@@ -724,6 +740,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     statistics,
                 )?;
                 let key = default_cursor.key(&mut statistics.data).to_vec();
+                self.prev_commit_kv.1 = value.clone();
                 (key, value)
             } else {
                 (vec![], vec![])
@@ -735,7 +752,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.write.key(&mut statistics.write).to_owned(),
                     cursors.write.value(&mut statistics.write).to_owned(),
                 ),
-                old_value: None,
+                old_value,
             }));
 
             cursors.write.next(&mut statistics.write);
