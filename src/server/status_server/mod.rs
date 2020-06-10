@@ -636,7 +636,14 @@ where
                                 Self::dump_rsperf_to_resp(req).await
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
-                                Self::dump_region_meta(req, router).await
+                                if check_cert(security_config, x509) {
+                                    Self::dump_region_meta(req, router).await
+                                } else {
+                                    Ok(StatusServer::err_response(
+                                        StatusCode::FORBIDDEN,
+                                        "certificate role error",
+                                    ))
+                                }
                             }
                             _ => Ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
