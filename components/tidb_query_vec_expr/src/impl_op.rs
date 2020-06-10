@@ -101,6 +101,7 @@ pub fn unary_minus_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
     Ok(arg.map(|val| -*val))
 }
 
+#[inline]
 pub fn is_null_ref<'a, T: EvaluableRef<'a>>(arg: Option<T>) -> Result<Option<i64>> {
     Ok(Some(arg.is_none() as i64))
 }
