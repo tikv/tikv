@@ -7,8 +7,13 @@ use hyper::server::Builder as HyperBuilder;
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+<<<<<<< HEAD:src/server/status_server.rs
 use openssl::x509::X509StoreContextRef;
 use pprof;
+=======
+use openssl::x509::X509;
+use pin_project::pin_project;
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
 use pprof::protos::Message;
 use regex::Regex;
 use reqwest::{self, blocking::Client};
@@ -95,6 +100,12 @@ pub struct StatusServer {
     advertise_addr: Option<String>,
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
+<<<<<<< HEAD:src/server/status_server.rs
+=======
+    router: R,
+    security_config: Arc<SecurityConfig>,
+    _snap: PhantomData<S>,
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
 }
 
 impl StatusServer {
@@ -102,7 +113,13 @@ impl StatusServer {
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
+<<<<<<< HEAD:src/server/status_server.rs
     ) -> Self {
+=======
+        security_config: Arc<SecurityConfig>,
+        router: R,
+    ) -> Result<Self> {
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
@@ -122,7 +139,14 @@ impl StatusServer {
             advertise_addr: None,
             pd_client,
             cfg_controller,
+<<<<<<< HEAD:src/server/status_server.rs
         }
+=======
+            router,
+            security_config,
+            _snap: PhantomData,
+        })
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
@@ -664,6 +688,301 @@ impl StatusServer {
     }
 }
 
+<<<<<<< HEAD:src/server/status_server.rs
+=======
+impl<S, R> StatusServer<S, R>
+where
+    S: Snapshot,
+    R: 'static + Send + CasualRouter<S> + Clone,
+{
+    pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
+        lazy_static! {
+            static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
+        }
+
+        fn err_resp(
+            status_code: StatusCode,
+            msg: impl Into<Body>,
+        ) -> hyper::Result<Response<Body>> {
+            Ok(StatusServer::err_response(status_code, msg))
+        }
+
+        fn not_found(msg: impl Into<Body>) -> hyper::Result<Response<Body>> {
+            err_resp(StatusCode::NOT_FOUND, msg)
+        }
+
+        let cap = match REGION.captures(req.uri().path()) {
+            Some(cap) => cap,
+            None => return not_found(format!("path {} not found", req.uri().path())),
+        };
+
+        let id: u64 = match cap["id"].parse() {
+            Ok(id) => id,
+            Err(err) => {
+                return err_resp(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid region id: {}", err),
+                );
+            }
+        };
+        let (tx, rx) = oneshot::channel();
+        match router.send(
+            id,
+            CasualMessage::AccessPeer(Box::new(move |peer| {
+                if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                    error!("receiver dropped, region meta: {:?}", meta)
+                }
+            })),
+        ) {
+            Ok(_) => (),
+            Err(raftstore::Error::RegionNotFound(_)) => {
+                return not_found(format!("region({}) not found", id));
+            }
+            Err(err) => {
+                return err_resp(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("channel pending or disconnect: {}", err),
+                );
+            }
+        }
+
+        let meta = match rx.await {
+            Ok(meta) => meta,
+            Err(_) => {
+                return Ok(StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "query cancelled",
+                ))
+            }
+        };
+
+        let body = match serde_json::to_vec(&meta) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ))
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
+    fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
+    where
+        I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
+        I::Error: Into<Box<dyn StdError + Send + Sync>>,
+        I::Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        C: ServerConnection,
+    {
+        let security_config = self.security_config.clone();
+        let cfg_controller = self.cfg_controller.clone();
+        let router = self.router.clone();
+        // Start to serve.
+        let server = builder.serve(make_service_fn(move |conn: &C| {
+            let x509 = conn.get_x509();
+            let security_config = security_config.clone();
+            let cfg_controller = cfg_controller.clone();
+            let router = router.clone();
+            async move {
+                // Create a status service.
+                Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+                    let x509 = x509.clone();
+                    let security_config = security_config.clone();
+                    let cfg_controller = cfg_controller.clone();
+                    let router = router.clone();
+                    async move {
+                        let path = req.uri().path().to_owned();
+                        let method = req.method().to_owned();
+
+                        #[cfg(feature = "failpoints")]
+                        {
+                            if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
+                                return handle_fail_points_request(req).await;
+                            }
+                        }
+
+                        let should_check_cert = match (&method, path.as_ref()) {
+                            (&Method::GET, "/metrics") => false,
+                            (&Method::GET, "/status") => false,
+                            (&Method::GET, "/config") => false,
+                            (&Method::GET, "/debug/pprof/profile") => false,
+                            // 1. POST "/config" will modify the configuration of TiKV.
+                            // 2. GET "/region" will get start key and end key. These keys could be actual
+                            // user data since in some cases the data itself is stored in the key.
+                            _ => true,
+                        };
+
+                        if should_check_cert {
+                            if !check_cert(security_config, x509) {
+                                return Ok(StatusServer::err_response(
+                                    StatusCode::FORBIDDEN,
+                                    "certificate role error",
+                                ));
+                            }
+                        }
+
+                        match (method, path.as_ref()) {
+                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/debug/pprof/heap") => {
+                                Self::dump_prof_to_resp(req).await
+                            }
+                            (Method::GET, "/config") => {
+                                Self::get_config(req, &cfg_controller).await
+                            }
+                            (Method::POST, "/config") => {
+                                Self::update_config(cfg_controller.clone(), req).await
+                            }
+                            (Method::GET, "/debug/pprof/profile") => {
+                                Self::dump_rsperf_to_resp(req).await
+                            }
+                            (Method::GET, path) if path.starts_with("/region") => {
+                                Self::dump_region_meta(req, router).await
+                            }
+                            _ => Ok(StatusServer::err_response(
+                                StatusCode::NOT_FOUND,
+                                "path not found",
+                            )),
+                        }
+                    }
+                }))
+            }
+        }));
+
+        let rx = self.rx.take().unwrap();
+        let graceful = server
+            .with_graceful_shutdown(async move {
+                let _ = rx.await;
+            })
+            .map_err(|e| error!("Status server error: {:?}", e));
+        self.thread_pool.spawn(graceful);
+    }
+
+    pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
+        let addr = SocketAddr::from_str(&status_addr)?;
+
+        let incoming = self.thread_pool.enter(|| AddrIncoming::bind(&addr))?;
+        self.addr = Some(incoming.local_addr());
+        if !self.security_config.cert_path.is_empty()
+            && !self.security_config.key_path.is_empty()
+            && !self.security_config.ca_path.is_empty()
+        {
+            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
+            acceptor.set_ca_file(&self.security_config.ca_path)?;
+            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
+            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
+            if !self.security_config.cert_allowed_cn.is_empty() {
+                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+            }
+            let acceptor = acceptor.build();
+            let tls_incoming = tls_incoming(acceptor, incoming);
+            let server = Server::builder(tls_incoming);
+            self.start_serve(server);
+        } else {
+            let server = Server::builder(incoming);
+            self.start_serve(server);
+        }
+        // register the advertise status address to pd
+        self.register_addr(advertise_status_addr);
+        Ok(())
+    }
+}
+
+// To unify TLS/Plain connection usage in start_serve function
+trait ServerConnection {
+    fn get_x509(&self) -> Option<X509>;
+}
+
+impl ServerConnection for SslStream<AddrStream> {
+    fn get_x509(&self) -> Option<X509> {
+        self.ssl().peer_certificate()
+    }
+}
+
+impl ServerConnection for AddrStream {
+    fn get_x509(&self) -> Option<X509> {
+        None
+    }
+}
+
+// Check if the peer's x509 certificate meets the requirements, this should
+// be called where the access should be controlled.
+//
+// For now, the check only verifies the role of the peer certificate.
+fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
+    // if `cert_allowed_cn` is empty, skip check and return true
+    if !security_config.cert_allowed_cn.is_empty() {
+        if let Some(x509) = cert {
+            if let Some(name) = x509
+                .subject_name()
+                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                .next()
+            {
+                let data = name.data().as_slice();
+                // Check common name in peer cert
+                return security::match_peer_names(
+                    &security_config.cert_allowed_cn,
+                    std::str::from_utf8(data).unwrap(),
+                );
+            }
+        }
+        false
+    } else {
+        true
+    }
+}
+
+fn tls_incoming(
+    acceptor: SslAcceptor,
+    mut incoming: AddrIncoming,
+) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
+    let s = stream! {
+        loop {
+            let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
+                Some(Ok(stream)) => stream,
+                Some(Err(e)) => {
+                    yield Err(e);
+                    continue;
+                }
+                None => break,
+            };
+            yield tokio_openssl::accept(&acceptor, stream)
+                .await
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "TLS handshake error"));
+        }
+    };
+    TlsIncoming(s)
+}
+
+#[pin_project]
+struct TlsIncoming<S>(#[pin] S);
+
+impl<S> Accept for TlsIncoming<S>
+where
+    S: Stream<Item = std::io::Result<SslStream<AddrStream>>>,
+{
+    type Conn = SslStream<AddrStream>;
+    type Error = std::io::Error;
+
+    fn poll_accept(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+    ) -> Poll<Option<std::io::Result<Self::Conn>>> {
+        self.project().0.poll_next(cx)
+    }
+}
+
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
 // For handling fail points related requests
 #[cfg(feature = "failpoints")]
 fn handle_fail_points_request(
@@ -775,6 +1094,7 @@ mod tests {
 
     use std::env;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
@@ -785,9 +1105,20 @@ mod tests {
 
     #[test]
     fn test_status_service() {
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -831,9 +1162,20 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -868,9 +1210,20 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1001,9 +1354,20 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1043,9 +1407,20 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1105,9 +1480,20 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+<<<<<<< HEAD:src/server/status_server.rs
         let mut status_server = StatusServer::new(1, None, ConfigController::default());
+=======
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(new_security_cfg(Some(allowed_cn))),
+            MockRouter,
+        )
+        .unwrap();
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &new_security_cfg(Some(allowed_cn)));
+        let _ = status_server.start(addr.clone(), addr);
 
         let mut connector = HttpConnector::new(1);
         connector.enforce_http(false);
@@ -1177,4 +1563,64 @@ mod tests {
         }
         status_server.stop();
     }
+<<<<<<< HEAD:src/server/status_server.rs
+=======
+
+    #[cfg(feature = "mem-profiling")]
+    #[test]
+    fn test_pprof_heap_service() {
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/heap?seconds=1")
+            .build()
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(uri).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_pprof_profile_service() {
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
+        let client = Client::new();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/profile?seconds=1&frequency=99")
+            .build()
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(uri).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        status_server.stop();
+    }
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064):src/server/status_server/mod.rs
 }

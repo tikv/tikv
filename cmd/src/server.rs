@@ -768,12 +768,26 @@ impl TiKVServer {
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
+<<<<<<< HEAD
             ));
+=======
+                Arc::new(self.config.security.clone()),
+                self.router.clone(),
+            ) {
+                Ok(status_server) => Box::new(status_server),
+                Err(e) => {
+                    error!(
+                        "failed to start runtime for status service";
+                        "err" => %e
+                    );
+                    return;
+                }
+            };
+>>>>>>> 6de2474... Status server: make CN check more fine-grained (#8064)
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
-                &self.config.security,
             ) {
                 error!(
                     "failed to bind addr for status service";
