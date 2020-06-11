@@ -59,6 +59,28 @@ pub fn sha2(
     }
 }
 
+// https://dev.mysql.com/doc/refman/5.7/en/password-hashing.html
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn password(ctx: &mut EvalContext, input: &Option<Bytes>) -> Result<Option<Bytes>> {
+    ctx.warnings.append_warning(Error::Other(box_err!(
+        "Warning: Deprecated syntax PASSWORD"
+    )));
+    match input {
+        Some(bytes) => {
+            if bytes.is_empty() {
+                Ok(Some(Vec::new()))
+            } else {
+                let hash1 = hex_digest(MessageDigest::sha1(), bytes.as_slice())?;
+                let mut hash2 = hex_digest(MessageDigest::sha1(), hash1.as_slice())?;
+                hash2.insert(0, b'*');
+                Ok(Some(hash2))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 #[inline]
 fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
     hash::hash(hashtype, input)
@@ -300,5 +322,31 @@ mod tests {
             .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
             .unwrap()
             .is_none())
+    }
+
+    #[test]
+    fn test_password() {
+        let cases = vec![
+            ("TiKV", "*cca644408381f962dba8dfb9889db1371ee74208"),
+            ("Pingcap", "*f33bc75eac70ac317621fbbfa560d6251c43cf8a"),
+            ("rust", "*090c2b08e0c1776910e777b917c2185be6554c2e"),
+            ("database", "*02e86b4af5219d0ba6c974908aea62d42eb7da24"),
+            ("raft", "*b23a77787ed44e62ef2570f03ce8982d119fb699"),
+        ];
+
+        for (input, output) in cases {
+            let res = RpnFnScalarEvaluator::new()
+                .push_param(Some(Bytes::from(input)))
+                .evaluate::<Bytes>(ScalarFuncSig::Password)
+                .unwrap();
+            assert_eq!(res, Some(Bytes::from(output)))
+        }
+
+        // test for null
+        let res = RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Bytes(None))
+            .evaluate::<Bytes>(ScalarFuncSig::Password)
+            .unwrap();
+        assert_eq!(None, res)
     }
 }
