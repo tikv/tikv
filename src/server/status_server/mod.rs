@@ -691,6 +691,9 @@ where
                             (&Method::GET, "/status") => false,
                             (&Method::GET, "/config") => false,
                             (&Method::GET, "/debug/pprof/profile") => false,
+                            // 1. POST "/config" will modify the configuration of TiKV.
+                            // 2. GET "/region" will get start key and end key. These keys could be actual
+                            // user data since in some cases the data itself is stored in the key.
                             _ => true,
                         };
 
