@@ -69,7 +69,7 @@ use self::impl_time::*;
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
-            Collation::TT => compare_fn_meta::<StringComparer<TT, Cmp>>()
+            Collation::TT => compare_bytes_fn_meta::<TT, Cmp>()
         }
     })
 }
@@ -566,9 +566,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::MakeDate => make_date_fn_meta(),
         ScalarFuncSig::Hour => hour_fn_meta(),
         ScalarFuncSig::Minute => minute_fn_meta(),
         ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::TimeToSec => time_to_sec_fn_meta(),
         ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::DayName => day_name_fn_meta(),
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),

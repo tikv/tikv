@@ -40,7 +40,7 @@ pub fn pi() -> Result<Option<Real>> {
 
 #[rpn_fn]
 #[inline]
-pub fn crc32(arg: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(arg
         .as_ref()
         .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
@@ -442,7 +442,7 @@ pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Re
 #[inline]
 #[rpn_fn]
 pub fn conv(
-    n: Option<&Bytes>,
+    n: Option<BytesRef>,
     from_base: Option<&Int>,
     to_base: Option<&Int>,
 ) -> Result<Option<Bytes>> {
