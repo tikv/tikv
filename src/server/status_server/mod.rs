@@ -11,7 +11,7 @@ use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use openssl::x509::X509StoreContextRef;
+use openssl::x509::X509;
 use pin_project::pin_project;
 use pprof::protos::Message;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
@@ -93,6 +93,7 @@ pub struct StatusServer<S, R> {
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
     router: R,
+    security_config: Arc<SecurityConfig>,
     _snap: PhantomData<S>,
 }
 
@@ -143,6 +144,7 @@ where
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
+        security_config: Arc<SecurityConfig>,
         router: R,
     ) -> Result<Self> {
         let thread_pool = Builder::new()
@@ -167,6 +169,7 @@ where
             pd_client,
             cfg_controller,
             router,
+            security_config,
             _snap: PhantomData,
         })
     }
@@ -576,21 +579,27 @@ where
         }
     }
 
-    fn start_serve<I>(&mut self, builder: HyperBuilder<I>)
+    fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
-        I: Accept + Send + 'static,
+        I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        C: ServerConnection,
     {
+        let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         // Start to serve.
-        let server = builder.serve(make_service_fn(move |_| {
+        let server = builder.serve(make_service_fn(move |conn: &C| {
+            let x509 = conn.get_x509();
+            let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+                    let x509 = x509.clone();
+                    let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     async move {
@@ -601,6 +610,26 @@ where
                         {
                             if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
                                 return handle_fail_points_request(req).await;
+                            }
+                        }
+
+                        let should_check_cert = match (&method, path.as_ref()) {
+                            (&Method::GET, "/metrics") => false,
+                            (&Method::GET, "/status") => false,
+                            (&Method::GET, "/config") => false,
+                            (&Method::GET, "/debug/pprof/profile") => false,
+                            // 1. POST "/config" will modify the configuration of TiKV.
+                            // 2. GET "/region" will get start key and end key. These keys could be actual
+                            // user data since in some cases the data itself is stored in the key.
+                            _ => true,
+                        };
+
+                        if should_check_cert {
+                            if !check_cert(security_config, x509) {
+                                return Ok(StatusServer::err_response(
+                                    StatusCode::FORBIDDEN,
+                                    "certificate role error",
+                                ));
                             }
                         }
 
@@ -641,55 +670,21 @@ where
         self.thread_pool.spawn(graceful);
     }
 
-    pub fn start(
-        &mut self,
-        status_addr: String,
-        advertise_status_addr: String,
-        security_config: &SecurityConfig,
-    ) -> Result<()> {
+    pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
         let incoming = self.thread_pool.enter(|| AddrIncoming::bind(&addr))?;
         self.addr = Some(incoming.local_addr());
-        if !security_config.cert_path.is_empty()
-            && !security_config.key_path.is_empty()
-            && !security_config.ca_path.is_empty()
+        if !self.security_config.cert_path.is_empty()
+            && !self.security_config.key_path.is_empty()
+            && !self.security_config.ca_path.is_empty()
         {
             let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&security_config.cert_path)?;
-            acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
-            if !security_config.cert_allowed_cn.is_empty() {
-                let allowed_cn = security_config.cert_allowed_cn.clone();
-                // The verification callback to check if the peer CN is allowed.
-                let verify_cb = move |flag: bool, x509_ctx: &mut X509StoreContextRef| {
-                    if !flag || x509_ctx.error_depth() != 0 {
-                        return flag;
-                    }
-                    if let Some(chains) = x509_ctx.chain() {
-                        if chains.len() != 0 {
-                            if let Some(pattern) = chains
-                                .get(0)
-                                .unwrap()
-                                .subject_name()
-                                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                                .next()
-                            {
-                                let data = pattern.data().as_slice();
-                                return security::match_peer_names(
-                                    &allowed_cn,
-                                    std::str::from_utf8(data).unwrap(),
-                                );
-                            }
-                        }
-                    }
-                    false
-                };
-                // Request and require cert from client-side.
-                acceptor.set_verify_callback(
-                    SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
-                    verify_cb,
-                );
+            acceptor.set_ca_file(&self.security_config.ca_path)?;
+            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
+            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
+            if !self.security_config.cert_allowed_cn.is_empty() {
+                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
             }
             let acceptor = acceptor.build();
             let tls_incoming = tls_incoming(acceptor, incoming);
@@ -702,6 +697,50 @@ where
         // register the advertise status address to pd
         self.register_addr(advertise_status_addr);
         Ok(())
+    }
+}
+
+// To unify TLS/Plain connection usage in start_serve function
+trait ServerConnection {
+    fn get_x509(&self) -> Option<X509>;
+}
+
+impl ServerConnection for SslStream<AddrStream> {
+    fn get_x509(&self) -> Option<X509> {
+        self.ssl().peer_certificate()
+    }
+}
+
+impl ServerConnection for AddrStream {
+    fn get_x509(&self) -> Option<X509> {
+        None
+    }
+}
+
+// Check if the peer's x509 certificate meets the requirements, this should
+// be called where the access should be controlled.
+//
+// For now, the check only verifies the role of the peer certificate.
+fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
+    // if `cert_allowed_cn` is empty, skip check and return true
+    if !security_config.cert_allowed_cn.is_empty() {
+        if let Some(x509) = cert {
+            if let Some(name) = x509
+                .subject_name()
+                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                .next()
+            {
+                let data = name.data().as_slice();
+                // Check common name in peer cert
+                return security::match_peer_names(
+                    &security_config.cert_allowed_cn,
+                    std::str::from_utf8(data).unwrap(),
+                );
+            }
+        }
+        false
+    } else {
+        true
     }
 }
 
@@ -861,6 +900,7 @@ mod tests {
 
     use std::env;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
@@ -883,10 +923,16 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -924,10 +970,16 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -962,10 +1014,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1071,10 +1129,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1108,10 +1172,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1165,10 +1235,16 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(new_security_cfg(Some(allowed_cn))),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &new_security_cfg(Some(allowed_cn)));
+        let _ = status_server.start(addr.clone(), addr);
 
         let mut connector = HttpConnector::new();
         connector.enforce_http(false);
@@ -1232,10 +1308,16 @@ mod tests {
     #[cfg(feature = "mem-profiling")]
     #[test]
     fn test_pprof_heap_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1254,10 +1336,16 @@ mod tests {
 
     #[test]
     fn test_pprof_profile_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
-        let _ = status_server.start(addr.clone(), addr, &SecurityConfig::default());
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
