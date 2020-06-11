@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn]
-//! fn foo(x: Option<&u32>) -> Result<Option<u8> > {
+//! fn foo(x: Option<&u32>) -> Result<Option<u8>> {
 //!     Ok(None)
 //! }
 //! ```
@@ -26,7 +26,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real> > {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -38,7 +38,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(raw_varg)]
-//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real> > {
+//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -99,7 +99,7 @@
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(capture = [ctx])]
-//! fn with_context(ctx: &mut EvalContext, param: Option<&Decimal>) -> Result<Option<Int> > {
+//! fn with_context(ctx: &mut EvalContext, param: Option<&Decimal>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -133,7 +133,7 @@
 //!
 //! The supported argument type is represented as a type-level list, for example, a
 //! a function which takes two unsigned ints has an argument representation
-//! something like `Arg<UInt, Arg<UInt, Null> >`. See documentation in
+//! something like `Arg<UInt, Arg<UInt, Null>>`. See documentation in
 //! `components/tidb_query_vec_expr/src/types/function.rs` for more details.
 //!
 //! The `_Fn` trait can be customised by implementing it manually.
@@ -142,19 +142,19 @@
 //! first argument is a scalar. The code may look like:
 //!
 //! ```ignore
-//! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32> > {
+//! fn regex_match_impl(regex: &Regex, text: Option<&Bytes>) -> Result<Option<i32>> {
 //!     // match text
 //! }
 //!
 //! #[rpn_fn]
-//! fn regex_match(regex: Option<&Bytes>, text: Option<&Bytes>) -> Result<Option<i32> > {
+//! fn regex_match(regex: Option<&Bytes>, text: Option<&Bytes>) -> Result<Option<i32>> {
 //!     let regex = build_regex(regex.cloned());
 //!     regex_match_impl(&regex, text)
 //! }
 //!
 //! // Pay attention that the first argument is specialized to `ScalarArg`
-//! impl<'a, Arg1> RegexMatch_Fn for Arg<ScalarArg<'a, Bytes>, Arg<Arg1, Null> >
-//! where Arg1: RpnFnArg<Type = &'a Option<Bytes> > {
+//! impl<'a, Arg1> RegexMatch_Fn for Arg<ScalarArg<'a, Bytes>, Arg<Arg1, Null>>
+//! where Arg1: RpnFnArg<Type = &'a Option<Bytes>> {
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
@@ -180,7 +180,7 @@
 //!
 //! ```ignore
 //! #[rpn_fn(varg)]
-//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real> > {
+//! pub fn foo(args: &[Option<&Int>]) -> Result<Option<Real>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -470,7 +470,7 @@ impl parse::Parse for VargsRpnFnSignatureParam {
     }
 }
 
-/// Parses a function signature return type like `Result<Option<T> >`.
+/// Parses a function signature return type like `Result<Option<T>>`.
 struct RpnFnSignatureReturnType {
     eval_type: TypePath,
 }
@@ -619,7 +619,7 @@ fn generate_init_metadata_fn(
     };
     quote! {
         fn init_metadata #impl_generics (expr: &mut ::tipb::Expr)
-            -> Result<Box<dyn std::any::Any + Send> > #where_clause {
+            -> Result<Box<dyn std::any::Any + Send>> #where_clause {
             #fn_body
         }
     }
@@ -762,7 +762,7 @@ impl VargsRpnFn {
         .map_err(|_| {
             Error::new_spanned(
                 &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T> >`",
+                "Expect return type to be like `Result<Option<T>>`",
             )
         })?;
         Ok(Self {
@@ -828,11 +828,11 @@ impl VargsRpnFn {
 
         let transmute_ref = if is_json(arg_type) {
             quote! {
-                let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static> >>(arg) };
+                let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
             }
         } else if is_bytes(arg_type) {
             quote! {
-                let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static> >>(arg) };
+                let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
             }
         } else {
             quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
@@ -920,7 +920,7 @@ impl RawVargsRpnFn {
         .map_err(|_| {
             Error::new_spanned(
                 &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T> >`",
+                "Expect return type to be like `Result<Option<T>>`",
             )
         })?;
         Ok(Self {
@@ -1003,7 +1003,7 @@ impl RawVargsRpnFn {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
                                 let scalar_arg = unsafe {
-                                    std::mem::transmute::<ScalarValueRef<'_>, ScalarValueRef<'static> >(
+                                    std::mem::transmute::<ScalarValueRef<'_>, ScalarValueRef<'static>>(
                                         scalar_arg,
                                     )
                                 };
@@ -1068,7 +1068,7 @@ impl NormalRpnFn {
         .map_err(|_| {
             Error::new_spanned(
                 &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T> >`",
+                "Expect return type to be like `Result<Option<T>>`",
             )
         })?;
         let camel_name = item_fn.sig.ident.to_string().to_camel_case();
@@ -1257,7 +1257,7 @@ impl NormalRpnFn {
         let mut evaluator =
             quote! { #evaluator_ident #ty_generics_turbofish (std::marker::PhantomData) };
         for (arg_index, arg_type) in self.arg_types_anonymous.iter().enumerate() {
-            evaluator = quote! { <ArgConstructor<#arg_type, _> >::new(#arg_index, #evaluator) };
+            evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
         let init_metadata_fn = generate_init_metadata_fn(
@@ -1313,7 +1313,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(arg0: Option<&Int>, arg1: Option<&Real>) -> tidb_query_common::Result<Option<Decimal> > {
+            fn foo(arg0: Option<&Int>, arg1: Option<&Real>) -> tidb_query_common::Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
@@ -1435,13 +1435,13 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     use crate::function::{ArgConstructor, Evaluator, Null};
-                    <ArgConstructor<&'_ Real, _> >::new(
+                    <ArgConstructor<&'_ Real, _>>::new(
                         1usize,
-                        <ArgConstructor<&'_ Int, _> >::new(0usize, Foo_Evaluator(std::marker::PhantomData))
+                        <ArgConstructor<&'_ Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
                     )
                     .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata(expr: &mut ::tipb::Expr) -> Result<Box<dyn std::any::Any + Send> > {
+                fn init_metadata(expr: &mut ::tipb::Expr) -> Result<Box<dyn std::any::Any + Send>> {
                     Ok(Box::new(()))
                 }
                 fn validate(expr: &tipb::Expr) -> tidb_query_common::Result<()> {
@@ -1474,7 +1474,7 @@ mod tests_normal {
     fn generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
-            fn foo<A: M, B>(arg0: Option<&A::X>) -> Result<Option<B> >
+            fn foo<A: M, B>(arg0: Option<&A::X>) -> Result<Option<B>>
             where B: N<A> {
                 Ok(None)
             }
@@ -1616,10 +1616,10 @@ mod tests_normal {
                     B: N<A>
                 {
                     use crate::function::{ArgConstructor, Evaluator, Null};
-                    <ArgConstructor<&'_ A::X, _> >::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
+                    <ArgConstructor<&'_ A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
                         .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata<A: M, B>(expr: &mut ::tipb::Expr) -> Result<Box<dyn std::any::Any + Send> >
+                fn init_metadata<A: M, B>(expr: &mut ::tipb::Expr) -> Result<Box<dyn std::any::Any + Send>>
                 where
                     B: N<A>
                 {
@@ -1655,7 +1655,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             #[inline]
-            fn foo(ctx: &mut EvalContext, arg0: Option<&Int>, arg1: Option<&Real>, arg2: Option<JsonRef>) -> Result<Option<Decimal> > {
+            fn foo(ctx: &mut EvalContext, arg0: Option<&Int>, arg1: Option<&Real>, arg2: Option<JsonRef>) -> Result<Option<Decimal>> {
                 Ok(None)
             }
         "#,
