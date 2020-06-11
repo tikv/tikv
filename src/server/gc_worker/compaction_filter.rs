@@ -16,6 +16,7 @@ use tikv_util::collections::HashMap;
 use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
+const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
 struct GcContext {
     db: Arc<DB>,
@@ -126,7 +127,7 @@ impl WriteCompactionFilter {
     }
 
     fn flush_pending_writes_if_need(&mut self) {
-        if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
+        if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
             let mut opts = WriteOptions::new();
             opts.set_sync(false);
             let raw_batch = self.write_batch.as_inner();
@@ -185,7 +186,7 @@ impl Drop for WriteCompactionFilter {
             let raw_batch = self.write_batch.as_inner();
             self.db.write_opt(raw_batch, &opts).unwrap();
         } else {
-            self.db.flush(true).unwrap();
+            self.db.sync_wal().unwrap();
         }
 
         info!(
