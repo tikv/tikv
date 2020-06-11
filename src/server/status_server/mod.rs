@@ -618,6 +618,9 @@ where
                             (&Method::GET, "/status") => false,
                             (&Method::GET, "/config") => false,
                             (&Method::GET, "/debug/pprof/profile") => false,
+                            // 1. POST "/config" will modify the configuration of TiKV.
+                            // 2. GET "/region" will get start key and end key. These keys could be actual
+                            // user data since in some cases the data itself is stored in the key.
                             _ => true,
                         };
 
@@ -639,15 +642,12 @@ where
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
-                            // Check cert since the operation will modify the configuration of TiKV.
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_rsperf_to_resp(req).await
                             }
-                            // Check cert since the operation will get start key and end key. These keys could
-                            // be actual user data since in some cases the data itself is stored in the key.
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
                             }
