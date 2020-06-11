@@ -416,22 +416,44 @@ where
     }
 
     // Conveniently generate ssl connector according to SecurityConfig for https client
-    fn generate_ssl_connector(&self) -> SslConnectorBuilder {
-        let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        ssl.set_ca_file(&self.security_config.ca_path).unwrap();
-        ssl.set_certificate_file(&self.security_config.cert_path, SslFiletype::PEM)
-            .unwrap();
-        ssl.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)
-            .unwrap();
-        ssl
+    // Return `None` if SecurityConfig is not set up.
+    fn generate_ssl_connector(&self) -> Option<SslConnectorBuilder> {
+        if !self.security_config.cert_path.is_empty()
+            && !self.security_config.key_path.is_empty()
+            && !self.security_config.ca_path.is_empty()
+        {
+            let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+            ssl.set_ca_file(&self.security_config.ca_path).unwrap();
+            ssl.set_certificate_file(&self.security_config.cert_path, SslFiletype::PEM)
+                .unwrap();
+            ssl.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)
+                .unwrap();
+            Some(ssl)
+        } else {
+            None
+        }
+    }
+
+    fn register_addr(&mut self, advertise_addr: String) {
+        if let Some(ssl) = self.generate_ssl_connector() {
+            let mut connector = HttpConnector::new();
+            connector.enforce_http(false);
+            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
+            self.register_addr_core(https_conn, advertise_addr);
+        } else {
+            self.register_addr_core(HttpConnector::new(), advertise_addr);
+        }
     }
 
     fn register_addr_core<C>(&mut self, conn: C, advertise_addr: String)
     where
         C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
     {
+        if self.pd_client.is_none() {
+            return;
+        }
         let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::builder().build::<C, Body>(conn);
+        let client = Client::builder().build::<_, Body>(conn);
 
         let json = {
             let mut body = std::collections::HashMap::new();
@@ -452,7 +474,6 @@ where
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(json.clone()))
                     .expect("construct post request failed");
-
                 let req_handle = self
                     .thread_pool
                     .spawn(async move { client.request(req).await });
@@ -464,7 +485,7 @@ where
                     }
                     Ok(resp) => {
                         let status = resp.status();
-                        warn!("failed to register addr to pd"; "status code" => status.as_str());
+                        warn!("failed to register addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
                     }
                     Err(e) => warn!("failed to register addr to pd"; "error" => ?e),
                 }
@@ -480,22 +501,14 @@ where
         );
     }
 
-    fn register_addr(&mut self, advertise_addr: String) {
-        if self.pd_client.is_none() {
-            return;
-        }
-
-        if !self.security_config.cert_path.is_empty()
-            && !self.security_config.key_path.is_empty()
-            && !self.security_config.ca_path.is_empty()
-        {
+    fn unregister_addr(&mut self) {
+        if let Some(ssl) = self.generate_ssl_connector() {
             let mut connector = HttpConnector::new();
             connector.enforce_http(false);
-            let https_conn =
-                HttpsConnector::with_connector(connector, self.generate_ssl_connector()).unwrap();
-            self.register_addr_core(https_conn, advertise_addr);
+            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
+            self.unregister_addr_core(https_conn);
         } else {
-            self.register_addr_core(HttpConnector::new(), advertise_addr);
+            self.unregister_addr_core(HttpConnector::new());
         }
     }
 
@@ -503,9 +516,12 @@ where
     where
         C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
     {
+        if self.pd_client.is_none() || self.advertise_addr.is_none() {
+            return;
+        }
         let advertise_addr = self.advertise_addr.as_ref().unwrap().to_owned();
         let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::builder().build::<C, Body>(conn);
+        let client = Client::builder().build::<_, Body>(conn);
 
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
@@ -517,7 +533,6 @@ where
                 let req = Request::delete(uri)
                     .body(Body::empty())
                     .expect("construct delete request failed");
-
                 let req_handle = self
                     .thread_pool
                     .spawn(async move { client.request(req).await });
@@ -529,7 +544,7 @@ where
                     }
                     Ok(resp) => {
                         let status = resp.status();
-                        warn!("failed to unregister addr to pd"; "status code" => status.as_str());
+                        warn!("failed to unregister addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
                     }
                     Err(e) => warn!("failed to unregister addr to pd"; "error" => ?e),
                 }
@@ -543,25 +558,6 @@ where
             "failed to unregister addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
-    }
-
-    fn unregister_addr(&mut self) {
-        if self.pd_client.is_none() || self.advertise_addr.is_none() {
-            return;
-        }
-
-        if !self.security_config.cert_path.is_empty()
-            && !self.security_config.key_path.is_empty()
-            && !self.security_config.ca_path.is_empty()
-        {
-            let mut connector = HttpConnector::new();
-            connector.enforce_http(false);
-            let https_conn =
-                HttpsConnector::with_connector(connector, self.generate_ssl_connector()).unwrap();
-            self.unregister_addr_core(https_conn);
-        } else {
-            self.unregister_addr_core(HttpConnector::new());
-        }
     }
 }
 
