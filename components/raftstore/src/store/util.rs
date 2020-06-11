@@ -409,6 +409,13 @@ impl Lease {
         self.bound = Some(Either::Left(bound));
     }
 
+    pub fn is_suspect(&self) -> bool {
+        match self.bound {
+            Some(Either::Left(_)) => true,
+            _ => false,
+        }
+    }
+
     /// Inspect the lease state for the ts or now.
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {

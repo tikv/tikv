@@ -194,7 +194,7 @@ pub struct Peer {
 
     proposals: ProposalQueue<RocksSnapshot>,
     leader_missing_time: Option<Instant>,
-    leader_lease: Lease,
+    pub leader_lease: Lease,
     pub pending_reads: ReadIndexQueue,
 
     /// If it fails to send messages to leader.
@@ -835,7 +835,7 @@ impl Peer {
         if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
             // If the leader hasn't committed any entries in its term, it can't response read only
             // requests. Please also take a look at raft-rs.
-            let state = self.inspect_lease();
+            let state = self.inspect_lease(None);
             if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
@@ -1614,9 +1614,7 @@ impl Peer {
         }
 
         if let Some(propose_time) = propose_time {
-            // `propose_time` is a placeholder, here cares about `Suspect` only,
-            // and if it is in `Suspect` phase, the actual timestamp is useless.
-            if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
+            if self.leader_lease.is_suspect() {
                 return;
             }
             self.maybe_renew_leader_lease(propose_time, ctx, None);
@@ -2100,7 +2098,7 @@ impl Peer {
 
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
-            match self.inspect_lease() {
+            match self.inspect_lease(Some(renew_lease_time)) {
                 // Here combine the new read request with the previous one even if the lease expired is
                 // ok because in this case, the previous read index must be sent out with a valid
                 // lease instead of a suspect lease. So there must no pending transfer-leader proposals
@@ -2146,23 +2144,12 @@ impl Peer {
             return false;
         }
 
-        // Should we call pre_propose here?
-        let last_pending_read_count = self.raft_group.raft.pending_read_count();
-        let last_ready_read_count = self.raft_group.raft.ready_read_count();
-
         poll_ctx.raft_metrics.propose.read_index += 1;
-
         self.bcast_wake_up_time = None;
-        let id = Uuid::new_v4();
-        self.raft_group.read_index(id.as_bytes().to_vec());
 
-        let pending_read_count = self.raft_group.raft.pending_read_count();
-        let ready_read_count = self.raft_group.raft.ready_read_count();
-
-        if pending_read_count == last_pending_read_count
-            && ready_read_count == last_ready_read_count
-            && self.is_leader()
-        {
+        // Should we call pre_propose here?
+        let (id, dropped) = self.propose_read_index();
+        if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
             return false;
@@ -2182,7 +2169,7 @@ impl Peer {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
+        if self.leader_lease.is_suspect() {
             let req = RaftCmdRequest::default();
             if let Ok(index) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
@@ -2197,6 +2184,24 @@ impl Peer {
         }
 
         true
+    }
+
+    // Propose a read index request to the raft group, return the request id and
+    // whether this request had dropped silently
+    pub fn propose_read_index(&mut self) -> (Uuid, bool) {
+        let last_pending_read_count = self.raft_group.raft.pending_read_count();
+        let last_ready_read_count = self.raft_group.raft.ready_read_count();
+
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
+
+        let pending_read_count = self.raft_group.raft.pending_read_count();
+        let ready_read_count = self.raft_group.raft.ready_read_count();
+        (
+            id,
+            pending_read_count == last_pending_read_count
+                && ready_read_count == last_ready_read_count,
+        )
     }
 
     // For now, it is only used in merge.
@@ -2864,7 +2869,7 @@ pub trait RequestInspector {
     /// Has the current term been applied?
     fn has_applied_to_current_term(&mut self) -> bool;
     /// Inspects its lease.
-    fn inspect_lease(&mut self) -> LeaseState;
+    fn inspect_lease(&mut self, ts: Option<Timespec>) -> LeaseState;
 
     /// Inspect a request, return a policy that tells us how to
     /// handle the request.
@@ -2916,7 +2921,7 @@ pub trait RequestInspector {
 
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
-        match self.inspect_lease() {
+        match self.inspect_lease(None) {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -2931,12 +2936,11 @@ impl RequestInspector for Peer {
         self.get_store().applied_index_term() == self.term()
     }
 
-    fn inspect_lease(&mut self) -> LeaseState {
+    fn inspect_lease(&mut self, ts: Option<Timespec>) -> LeaseState {
         if !self.raft_group.raft.in_lease() {
             return LeaseState::Suspect;
         }
-        // None means now.
-        let state = self.leader_lease.inspect(None);
+        let state = self.leader_lease.inspect(ts);
         if LeaseState::Expired == state {
             debug!(
                 "leader lease is expired";
@@ -3263,7 +3267,7 @@ mod tests {
             fn has_applied_to_current_term(&mut self) -> bool {
                 self.applied_to_index_term
             }
-            fn inspect_lease(&mut self) -> LeaseState {
+            fn inspect_lease(&mut self, _: Option<Timespec>) -> LeaseState {
                 self.lease_state
             }
         }

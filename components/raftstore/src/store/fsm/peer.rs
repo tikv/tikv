@@ -33,7 +33,6 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
-use uuid::Uuid;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -44,10 +43,11 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
+use crate::store::peer::{ConsistencyState, Peer, RequestInspector, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
+use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
     CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
@@ -985,24 +985,33 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         // If lease expired, we will send a noop read index to renew lease.
-        if self.fsm.peer.is_leader() && LeaseState::Expired == self.fsm.peer.inspect_lease() {
-            let last_pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
-            let last_ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
-
-            let id = Uuid::new_v4();
-            self.fsm.peer.raft_group.read_index(id.as_bytes().to_vec());
-
-            let pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
-            let ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
-            // MsgReadIndex may be dropped silently
-            if pending_read_count != last_pending_read_count
-                || ready_read_count != last_ready_read_count
-            {
-                if self.ctx.current_time.is_none() {
+        if self.fsm.peer.is_leader() {
+            let current_time = match self.ctx.current_time {
+                None => {
                     self.ctx.current_time = Some(monotonic_raw_now());
+                    self.ctx.current_time.unwrap()
                 }
-                let read_proposal = ReadIndexRequest::noop(id, self.ctx.current_time.unwrap());
-                self.fsm.peer.pending_reads.reads.push_back(read_proposal);
+                Some(t) => t,
+            };
+            let next_tick = current_time + self.ctx.cfg.raft_base_tick_interval();
+            // We need to propose a read index request if current lease can't cover till next tick
+            let mut need_propose =
+                self.fsm.peer.inspect_lease(Some(next_tick)) == LeaseState::Expired;
+            if need_propose && !self.fsm.peer.leader_lease.is_suspect() {
+                if let Some(read) = self.fsm.peer.pending_reads.back_mut() {
+                    let lease_bound =
+                        read.renew_lease_time + self.ctx.cfg.raft_store_max_leader_lease();
+                    // If there are read index whose lease can cover till next tick
+                    // then we don't need to propose a new one
+                    need_propose = lease_bound < next_tick;
+                }
+            }
+            if need_propose {
+                let (id, dropped) = self.fsm.peer.propose_read_index();
+                if !dropped {
+                    let read_proposal = ReadIndexRequest::noop(id, current_time);
+                    self.fsm.peer.pending_reads.push_back(read_proposal, true);
+                }
             }
         }
 

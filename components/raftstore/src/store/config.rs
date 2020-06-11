@@ -267,6 +267,10 @@ impl Config {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
 
+    pub fn raft_base_tick_interval(&self) -> TimeDuration {
+        TimeDuration::from_std(self.raft_base_tick_interval.0).unwrap()
+    }
+
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
