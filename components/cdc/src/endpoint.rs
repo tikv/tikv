@@ -9,7 +9,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
 use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraOp;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
@@ -401,14 +401,14 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             is_new_delegate = true;
             d
         });
-        delegate.set_extra_op(request.get_extra_read());
+        delegate.set_extra_op(request.get_extra_op());
 
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
         let batch_size = self.scan_batch_size;
-        let extra_read = request.get_extra_read();
+        let extra_op = request.get_extra_op();
 
         let init = Initializer {
             sched,
@@ -416,7 +416,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             conn_id,
             downstream_id,
             batch_size,
-            extra_read,
+            extra_op,
             observe_id: delegate.id,
             downstream_state: downstream_state.clone(),
             checkpoint_ts: checkpoint_ts.into(),
@@ -458,7 +458,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         };
         {
             if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                reader.extra_read.store(extra_read);
+                reader.extra_op.store(extra_op);
             }
         }
         let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -663,7 +663,7 @@ struct Initializer {
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
-    extra_read: ExtraRead,
+    extra_op: ExtraOp,
 
     build_resolver: bool,
 }
@@ -714,7 +714,7 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
-            .build_delta_scanner(self.checkpoint_ts, self.extra_read)
+            .build_delta_scanner(self.checkpoint_ts, self.extra_op)
             .unwrap();
         let mut done = false;
         while !done {

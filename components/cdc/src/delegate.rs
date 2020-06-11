@@ -25,7 +25,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, KvEngine, Peekable, ReadOptions, CF_DEFAULT, CF_WRITE};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -199,7 +199,7 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
-    extra_op: ExtraRead,
+    extra_op: ExtraOp,
     pub region_available: Arc<AtomicBool>,
 }
 
@@ -216,7 +216,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
-            extra_op: ExtraRead::default(),
+            extra_op: ExtraOp::default(),
         }
     }
 
@@ -271,7 +271,7 @@ impl Delegate {
         }
     }
 
-    pub fn set_extra_op(&mut self, extra_op: ExtraRead) {
+    pub fn set_extra_op(&mut self, extra_op: ExtraOp) {
         self.extra_op = extra_op;
     }
 
@@ -471,7 +471,7 @@ impl Delegate {
                         continue;
                     }
                     decode_default(default.1, &mut row);
-                    row.previous_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -505,7 +505,7 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    row.previous_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -615,7 +615,7 @@ impl Delegate {
                                 // Key is not in txn_extra, should seek the old value for it later.
                                 to_read_old.insert(key);
                             }
-                            Either::Right(Some(value)) => row.previous_value = value,
+                            Either::Right(Some(value)) => row.old_value = value,
                             Either::Right(None) => {
                                 // Key exists in txn_extra but cannot get value, the region should be destroyed.
                                 // TOOD: add a log here.
@@ -801,9 +801,9 @@ impl Delegate {
             }
             let raw_key = key.truncate_ts().unwrap().into_raw().unwrap();
             if let Some(old_value) = old_value {
-                rows.get_mut(&raw_key).unwrap().previous_value = old_value;
+                rows.get_mut(&raw_key).unwrap().old_value = old_value;
             } else if self.region_available.load(Ordering::Acquire) {
-                rows.get_mut(&raw_key).unwrap().previous_value = Vec::default();
+                rows.get_mut(&raw_key).unwrap().old_value = Vec::default();
             } else {
                 self.mark_failed();
                 let store_err = RaftStoreError::RegionNotFound(self.region_id);
@@ -814,9 +814,9 @@ impl Delegate {
     }
 }
 
-fn need_old_value(extra_op: ExtraRead, lock_type: LockType) -> bool {
-    (extra_op == ExtraRead::Deleted && LockType::Delete == lock_type)
-        || (extra_op == ExtraRead::Updated
+fn need_old_value(extra_op: ExtraOp, lock_type: LockType) -> bool {
+    (extra_op == ExtraOp::ReadDeleted && LockType::Delete == lock_type)
+        || (extra_op == ExtraOp::ReadOldValue
             && (lock_type == LockType::Put || lock_type == LockType::Delete))
 }
 

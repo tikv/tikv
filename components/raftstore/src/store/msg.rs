@@ -6,7 +6,7 @@ use std::time::Instant;
 use engine_rocks::{CompactedEvent, RocksSnapshot};
 use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraRead as TxnExtraRead;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -30,7 +30,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
-    pub txn_extra_op: TxnExtraRead,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 #[derive(Debug)]
@@ -82,7 +82,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
-                    txn_extra_op: TxnExtraRead::Noop,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
             }

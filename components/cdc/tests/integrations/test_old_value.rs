@@ -21,7 +21,7 @@ fn test_old_value_basic() {
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    req.set_extra_read(ExtraRead::Updated);
+    req.set_extra_op(ExtraOp::ReadOldValue);
     let (req_tx, event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
@@ -80,13 +80,13 @@ fn test_old_value_basic() {
                     for row in es.take_entries() {
                         if row.get_type() == EventLogType::Prewrite {
                             if row.get_start_ts() == m2_start_ts.into_inner() {
-                                assert_eq!(row.get_previous_value(), b"v1");
+                                assert_eq!(row.get_old_value(), b"v1");
                                 event_count += 1;
                             } else if row.get_start_ts() == m3_start_ts.into_inner() {
-                                assert_eq!(row.get_previous_value(), b"v1");
+                                assert_eq!(row.get_old_value(), b"v1");
                                 event_count += 1;
                             } else if row.get_start_ts() == m5_start_ts.into_inner() {
-                                assert_eq!(row.get_previous_value(), b"v3");
+                                assert_eq!(row.get_old_value(), b"v3");
                                 event_count += 1;
                             }
                         }
@@ -115,17 +115,17 @@ fn test_old_value_basic() {
                         if row.get_type() == EventLogType::Committed
                             && row.get_start_ts() == m1_start_ts.into_inner()
                         {
-                            assert_eq!(row.get_previous_value(), b"");
+                            assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Committed
                             && row.get_start_ts() == m3_start_ts.into_inner()
                         {
-                            assert_eq!(row.get_previous_value(), b"v1");
+                            assert_eq!(row.get_old_value(), b"v1");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Prewrite
                             && row.get_start_ts() == m5_start_ts.into_inner()
                         {
-                            assert_eq!(row.get_previous_value(), b"v3");
+                            assert_eq!(row.get_old_value(), b"v3");
                             event_count += 1;
                         }
                     }

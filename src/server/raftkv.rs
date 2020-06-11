@@ -149,7 +149,7 @@ fn on_read_result(
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
     let mut cb_ctx = new_ctx(&read_resp.response);
-    cb_ctx.extra_read = read_resp.txn_extra_op;
+    cb_ctx.extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }

@@ -172,7 +172,7 @@ zipf = "6.1.0"
 hyper-openssl = "0.8"
 
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = { git = "https://github.com/5kbpers/kvproto.git", rev = "0c73e174d9911b683b362c1319df8e4f9953b268" }
+kvproto = { git = "https://github.com/5kbpers/kvproto.git", rev = "e3482197ac63998072bdfb7aa674b41d027c887c" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.

@@ -5,7 +5,7 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
-use kvproto::kvrpcpb::{CommandPri, Context, ExtraRead, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
@@ -173,7 +173,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         }
         let sched_pool = self.clone_pool();
         let readonly = task.cmd.readonly();
-        let extra_read = cb_ctx.extra_read;
+        let extra_op = cb_ctx.extra_op;
         sched_pool
             .pool
             .spawn(async move {
@@ -191,7 +191,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
                     unsafe {
                         with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, extra_read)
+                            self.process_write(engine, snapshot, task, extra_op)
                         })
                     }
                 };
@@ -232,7 +232,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         engine: &E,
         snapshot: E::Snap,
         task: Task,
-        extra_read: ExtraRead,
+        extra_op: ExtraOp,
     ) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
@@ -246,7 +246,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
             task.cmd,
             snapshot,
             lock_mgr,
-            extra_read,
+            extra_op,
             &mut statistics,
             self.pipelined_pessimistic_lock,
         ) {
@@ -540,7 +540,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
     lock_mgr: Option<L>,
-    extra_read: ExtraRead,
+    extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
@@ -584,7 +584,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             } else {
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
-            txn.set_extra_read(extra_read);
+            txn.set_extra_op(extra_op);
 
             let mut locks = vec![];
             for m in mutations {

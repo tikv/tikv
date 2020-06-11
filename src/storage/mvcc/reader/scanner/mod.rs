@@ -4,7 +4,7 @@ mod backward;
 mod forward;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardKvScanner;
@@ -149,7 +149,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     pub fn build_delta_scanner(
         mut self,
         from_ts: TimeStamp,
-        extra_read: ExtraRead,
+        extra_op: ExtraOp,
     ) -> Result<DeltaScanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
@@ -163,7 +163,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
             lock_cursor,
             write_cursor,
             Some(default_cursor),
-            DeltaEntryPolicy::new(from_ts, extra_read),
+            DeltaEntryPolicy::new(from_ts, extra_op),
         ))
     }
 }

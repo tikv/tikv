@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -560,15 +560,12 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 /// (or locks' `start_ts`s) in range (`from_ts`, `cfg.ts`].
 pub struct DeltaEntryPolicy {
     from_ts: TimeStamp,
-    extra_read: ExtraRead,
+    extra_op: ExtraOp,
 }
 
 impl DeltaEntryPolicy {
-    pub fn new(from_ts: TimeStamp, extra_read: ExtraRead) -> Self {
-        Self {
-            from_ts,
-            extra_read,
-        }
+    pub fn new(from_ts: TimeStamp, extra_op: ExtraOp) -> Self {
+        Self { from_ts, extra_op }
     }
 }
 
@@ -605,7 +602,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 Ok((vec![], vec![]))
             };
             let mut old_value = None;
-            if check_lock_extra_read(self.extra_read, lock.lock_type) {
+            if check_lock_extra_op(self.extra_op, lock.lock_type) {
                 while Key::is_user_key_eq(
                     cursors.write.key(&mut statistics.write),
                     current_user_key.as_encoded(),
@@ -715,7 +712,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             cursors.write.next(&mut statistics.write);
 
             let mut old_value = None;
-            if check_write_extra_read(self.extra_read, write_type) {
+            if check_write_extra_op(self.extra_op, write_type) {
                 loop {
                     if !cursors.write.valid()?
                         || !Key::is_user_key_eq(
@@ -758,16 +755,16 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     }
 }
 
-fn check_lock_extra_read(extra_read: ExtraRead, lock_type: LockType) -> bool {
-    (extra_read == ExtraRead::Updated
+fn check_lock_extra_op(extra_op: ExtraOp, lock_type: LockType) -> bool {
+    (extra_op == ExtraOp::ReadOldValue
         && (lock_type == LockType::Put || lock_type == LockType::Delete))
-        || (extra_read == ExtraRead::Deleted && lock_type == LockType::Delete)
+        || (extra_op == ExtraOp::ReadDeleted && lock_type == LockType::Delete)
 }
 
-fn check_write_extra_read(extra_read: ExtraRead, write_type: WriteType) -> bool {
-    (extra_read == ExtraRead::Updated
+fn check_write_extra_op(extra_op: ExtraOp, write_type: WriteType) -> bool {
+    (extra_op == ExtraOp::ReadOldValue
         && (write_type == WriteType::Put || write_type == WriteType::Delete))
-        || (extra_read == ExtraRead::Deleted && write_type == WriteType::Delete)
+        || (extra_op == ExtraOp::ReadDeleted && write_type == WriteType::Delete)
 }
 
 /// This type can be used to scan keys starting from the given user key (greater than or equal).

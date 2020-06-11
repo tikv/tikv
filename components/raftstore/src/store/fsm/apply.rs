@@ -21,7 +21,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraRead as TxnExtraRead;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -2951,7 +2951,7 @@ where
                         Arc::new(apply_ctx.engine.snapshot()),
                         self.delegate.region.clone(),
                     )),
-                    txn_extra_op: TxnExtraRead::Noop,
+                    txn_extra_op: TxnExtraOp::Noop,
                 }
             }
             Err(e) => {
@@ -2959,7 +2959,7 @@ where
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
-                    txn_extra_op: TxnExtraRead::Noop,
+                    txn_extra_op: TxnExtraOp::Noop,
                 });
                 return;
             }
@@ -3306,7 +3306,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
-                        txn_extra_op: TxnExtraRead::Noop,
+                        txn_extra_op: TxnExtraOp::Noop,
                     };
                     cb.invoke_read(resp);
                     return;

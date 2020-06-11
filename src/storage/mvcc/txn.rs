@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{ExtraRead, IsolationLevel};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
 use txn_types::{
     is_short_value, Extra, Key, Lock, LockType, Mutation, MutationType, TimeStamp, Value, Write,
@@ -46,7 +46,7 @@ pub struct MvccTxn<S: Snapshot> {
     writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
-    extra_read: ExtraRead,
+    extra_op: ExtraOp,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -84,7 +84,7 @@ impl<S: Snapshot> MvccTxn<S> {
         MvccTxn {
             reader,
             start_ts,
-            extra_read: ExtraRead::Noop,
+            extra_op: ExtraOp::Noop,
             write_size: 0,
             writes: WriteData::default(),
             collapse_rollback: true,
@@ -99,8 +99,8 @@ impl<S: Snapshot> MvccTxn<S> {
         self.start_ts = start_ts;
     }
 
-    pub fn set_extra_read(&mut self, extra_read: ExtraRead) {
-        self.extra_read = extra_read;
+    pub fn set_extra_op(&mut self, extra_op: ExtraOp) {
+        self.extra_op = extra_op;
     }
 
     pub fn take_extra(&mut self) -> Extra {
@@ -1029,7 +1029,7 @@ impl<S: Snapshot> MvccTxn<S> {
         mutation_type: MutationType,
         write: Option<Write>,
     ) -> Result<()> {
-        if need_extra_read(self.extra_read, mutation_type) {
+        if need_extra_op(self.extra_op, mutation_type) {
             if let Some(mut write) = write {
                 loop {
                     match write.write_type {
@@ -1140,9 +1140,9 @@ macro_rules! new_txn {
     };
 }
 
-fn need_extra_read(extra_read: ExtraRead, mutation_type: MutationType) -> bool {
-    if (extra_read == ExtraRead::Deleted && mutation_type == MutationType::Delete)
-        || (extra_read == ExtraRead::Updated
+fn need_extra_op(extra_op: ExtraOp, mutation_type: MutationType) -> bool {
+    if (extra_op == ExtraOp::ReadDeleted && mutation_type == MutationType::Delete)
+        || (extra_op == ExtraOp::ReadOldValue
             && (mutation_type == MutationType::Delete
                 || mutation_type == MutationType::Put
                 || mutation_type == MutationType::Insert))

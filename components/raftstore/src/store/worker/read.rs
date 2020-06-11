@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraRead;
+use kvproto::kvrpcpb::ExtraOp;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use time::Timespec;
@@ -41,7 +41,7 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
-    pub extra_read: Arc<AtomicCell<ExtraRead>>,
+    pub extra_op: Arc<AtomicCell<ExtraOp>>,
 }
 
 impl ReadDelegate {
@@ -58,7 +58,7 @@ impl ReadDelegate {
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
-            extra_read: peer.txn_extra_op.clone(),
+            extra_op: peer.txn_extra_op.clone(),
         }
     }
 
@@ -224,7 +224,7 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
-            txn_extra_op: ExtraRead::Noop,
+            txn_extra_op: ExtraOp::Noop,
         };
 
         cmd.callback.invoke_read(read_resp);
@@ -319,7 +319,7 @@ where
                     if let Some(mut resp) =
                         delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
                     {
-                        resp.txn_extra_op = delegate.extra_read.load();
+                        resp.txn_extra_op = delegate.extra_op.load();
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -354,7 +354,7 @@ where
                     cmd.callback.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
-                        txn_extra_op: ExtraRead::Noop,
+                        txn_extra_op: ExtraOp::Noop,
                     });
                     self.delegates.borrow_mut().remove(&region_id);
                     return;
@@ -698,7 +698,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
                 invalid: Arc::new(AtomicBool::new(false)),
-                extra_read: Arc::new(AtomicCell::new(ExtraRead::default())),
+                extra_op: Arc::new(AtomicCell::new(ExtraOp::default())),
             };
             meta.readers.insert(1, read_delegate);
         }
