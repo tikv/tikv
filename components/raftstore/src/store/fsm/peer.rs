@@ -1906,8 +1906,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if new_region.get_id() != region_id {
                 match new_regions_map.get(&new_region.get_id()) {
                     None => {
-                        // FIXME: here need to clean the new_region's data, but is it safe to clean and do not
-                        // affect the possibly existing peer with the same region id in region worker?
+                        // FIXME: here need to clean the new_region's data, but is it safe to clean in region worker
+                        // and do not affect the possibly existing peer with the same region id?
                         continue;
                     }
                     Some(peer_id) => {
