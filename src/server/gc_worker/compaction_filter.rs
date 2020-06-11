@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ffi::CString;
+use std::mem::replace;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +13,8 @@ use engine::rocks::{
 };
 use engine_rocks::{util::get_cf_handle, RocksEngine, RocksWriteBatch};
 use engine_traits::{Mutable, WriteBatch, CF_WRITE};
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use tikv_util::collections::HashMap;
+use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 
@@ -78,8 +80,8 @@ struct WriteCompactionFilter {
     key_prefix: Vec<u8>,
     remove_older: bool,
 
-    delete_key_prefix: Vec<u8>,
-    delete_key_ts: u64,
+    // Record the last MVCC delete mark for each level.
+    leveled_tail_deletes: HashMap<usize, Vec<u8>>,
 
     versions: usize,
     deleted: usize,
@@ -100,9 +102,7 @@ impl WriteCompactionFilter {
             key_prefix: vec![],
             remove_older: false,
 
-            delete_key_prefix: vec![],
-            delete_key_ts: 0,
-
+            leveled_tail_deletes: HashMap::default(),
             versions: 0,
             deleted: 0,
         }
@@ -150,22 +150,18 @@ impl WriteCompactionFilter {
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
-        if !self.delete_key_prefix.is_empty() && self.delete_key_prefix == self.key_prefix {
-            let mut write_batch =
-                RocksWriteBatch::with_capacity(Arc::clone(&self.db), DEFAULT_DELETE_BATCH_SIZE);
-
+        let db = self.db.clone();
+        let mut write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
+        for (_, seek_key) in replace(&mut self.leveled_tail_deletes, HashMap::default()) {
             // In this compaction, the last MVCC version is deleted. However there could be
             // still some versions for the key which are not included in this compaction.
             let cf_handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
             let mut iter = DBIterator::new_cf(self.db.clone(), cf_handle, ReadOptions::new());
-            let seek_key = Key::from_encoded_slice(&self.delete_key_prefix)
-                .append_ts(TimeStamp::from(self.delete_key_ts))
-                .into_encoded();
             let mut valid = iter.seek(SeekKey::Key(&seek_key)).unwrap();
             while valid {
                 let (key, value) = (iter.key(), iter.value());
                 let key_prefix = match Key::split_on_ts_for(key) {
-                    Ok((prefix, _)) if prefix != self.delete_key_prefix.as_slice() => break,
+                    Ok((prefix, _)) if !seek_key.starts_with(prefix) => break,
                     Ok((prefix, _)) => prefix,
                     Err(_) => break,
                 };
@@ -182,10 +178,7 @@ impl Drop for WriteCompactionFilter {
                 self.deleted += 1;
                 valid = iter.next().unwrap();
             }
-
-            let mut opts = WriteOptions::new();
-            opts.set_sync(true);
-            self.db.write_opt(write_batch.as_inner(), &opts).unwrap();
+            self.db.write(write_batch.as_inner()).unwrap();
         }
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
@@ -208,7 +201,7 @@ impl Drop for WriteCompactionFilter {
 impl CompactionFilter for WriteCompactionFilter {
     fn filter(
         &mut self,
-        _level: usize,
+        level: usize,
         key: &[u8],
         value: &[u8],
         _: &mut Vec<u8>,
@@ -244,14 +237,11 @@ impl CompactionFilter for WriteCompactionFilter {
             match write_type {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
-                    // Currently `WriteType::Delete` will always be kept.
                     self.remove_older = true;
                     if self.bottommost_level {
                         // Handle delete marks if the bottommost level is reached.
                         filtered = true;
-                        self.delete_key_prefix.clear();
-                        self.delete_key_prefix.extend_from_slice(key_prefix);
-                        self.delete_key_ts = commit_ts;
+                        self.leveled_tail_deletes.insert(level, key.to_vec());
                     }
                 }
                 WriteType::Put => self.remove_older = true,
@@ -277,6 +267,7 @@ pub mod tests {
     use crate::storage::mvcc::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
     use engine_traits::{CompactExt, Peekable, SyncMutable};
+    use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = RocksEngine::from_db(engine.get_rocksdb());
