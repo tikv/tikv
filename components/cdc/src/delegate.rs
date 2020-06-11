@@ -756,7 +756,9 @@ impl Delegate {
     ) -> Result<()> {
         let snapshot =
             RegionSnapshot::from_snapshot(Arc::new(kv_engine.snapshot()), Region::default());
-        let mut iter_opts = IterOptions::default();
+        let mut iter_opts = IterOptions::default()
+            .use_prefix_seek()
+            .set_prefix_same_as_start(true);
         iter_opts.set_lower_bound(to_read_old.first().unwrap().as_encoded().as_slice(), 0);
         iter_opts.set_fill_cache(false);
         let mut write_cursor = Cursor::new(

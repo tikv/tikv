@@ -211,6 +211,27 @@ impl TestSuite {
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     }
 
+    pub fn must_kv_rollback(&mut self, region_id: u64, keys: Vec<Vec<u8>>, start_ts: TimeStamp) {
+        let mut rollback_req = BatchRollbackRequest::default();
+        rollback_req.set_context(self.get_context(region_id));
+        rollback_req.start_version = start_ts.into_inner();
+        rollback_req.set_keys(keys.into_iter().collect());
+        let rollback_resp = self
+            .get_tikv_client(region_id)
+            .kv_batch_rollback(&rollback_req)
+            .unwrap();
+        assert!(
+            !rollback_resp.has_region_error(),
+            "{:?}",
+            rollback_resp.get_region_error()
+        );
+        assert!(
+            !rollback_resp.has_error(),
+            "{:?}",
+            rollback_resp.get_error()
+        );
+    }
+
     pub fn async_kv_commit(
         &mut self,
         region_id: u64,

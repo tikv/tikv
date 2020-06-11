@@ -1030,34 +1030,30 @@ impl<S: Snapshot> MvccTxn<S> {
         write: Option<Write>,
     ) -> Result<()> {
         if need_extra_read(self.extra_read, mutation_type) {
-            if let Some(write) = write {
-                match write.write_type {
-                    WriteType::Put | WriteType::Delete => {
-                        self.writes.extra.add_old_value(
-                            key.clone().append_ts(self.start_ts),
-                            Some((write.short_value, write.start_ts)),
-                        );
-                    }
-                    WriteType::Lock | WriteType::Rollback => loop {
-                        if let Some((_, next_write)) = self.reader.next_write(&key)? {
-                            match next_write.write_type {
-                                WriteType::Put | WriteType::Delete => {
-                                    self.writes.extra.add_old_value(
-                                        key.clone().append_ts(self.start_ts),
-                                        Some((write.short_value, write.start_ts)),
-                                    );
-                                }
-                                WriteType::Lock | WriteType::Rollback => continue,
+            if let Some(mut write) = write {
+                loop {
+                    match write.write_type {
+                        WriteType::Put | WriteType::Delete => {
+                            self.writes.extra.add_old_value(
+                                key.clone().append_ts(self.start_ts),
+                                Some((write.short_value, write.start_ts)),
+                            );
+                            return Ok(());
+                        }
+                        WriteType::Lock | WriteType::Rollback => {
+                            if let Some((_, next_write)) = self.reader.next_write(&key)? {
+                                write = next_write;
+                            } else {
+                                break;
                             }
                         }
-                        break;
-                    },
+                    }
                 }
-            } else {
-                self.writes
-                    .extra
-                    .add_old_value(key.clone().append_ts(self.start_ts), None);
             }
+            // If write is None or cannot find a previously valid record.
+            self.writes
+                .extra
+                .add_old_value(key.clone().append_ts(self.start_ts), None);
         }
         Ok(())
     }
