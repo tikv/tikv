@@ -752,7 +752,7 @@ impl Peer {
             .map_or(0, |v| v.len() as u64);
         metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if !ready.snapshot().is_empty() {
             metrics.snapshot += 1;
         }
     }
@@ -1404,7 +1404,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
+        if ready.snapshot().is_empty() {
             debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
@@ -1511,7 +1511,7 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
