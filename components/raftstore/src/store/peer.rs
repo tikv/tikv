@@ -2199,9 +2199,11 @@ impl Peer {
         true
     }
 
-    // For now, it is only used in merge.
-    pub fn get_min_progress(&self) -> Result<u64> {
-        let mut min = None;
+    /// Return (minimal matched, minimal committed_index)
+    ///
+    /// For now, it is only used in merge.
+    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
+        let (mut min_m, mut min_c) = (None, None);
         if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
@@ -2216,15 +2218,15 @@ impl Peer {
                         pr
                     ));
                 }
-                if min.is_none() {
-                    min = Some(pr.matched);
+                if min_m.unwrap_or(u64::MAX) > pr.matched {
+                    min_m = Some(pr.matched);
                 }
-                if min.unwrap() > pr.matched {
-                    min = Some(pr.matched);
+                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
+                    min_c = Some(pr.committed_index);
                 }
             }
         }
-        Ok(min.unwrap_or(0))
+        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -2233,18 +2235,25 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress()?;
-        let min_index = min_progress + 1;
-        if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
+        let (min_matched, min_committed) = self.get_min_progress()?;
+        if min_matched == 0 || last_index - min_matched > ctx.cfg.merge_max_log_gap {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",
-                min_progress,
+                min_matched,
                 last_index
             ));
         }
         let mut entry_size = 0;
-        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
-            entry_size += entry.get_data().len();
+        for entry in self
+            .raft_group
+            .raft
+            .raft_log
+            .entries(min_committed + 1, NO_LIMIT)?
+        {
+            // commit merge only contains entries start from min_matched + 1
+            if entry.index > min_matched {
+                entry_size += entry.get_data().len();
+            }
             if entry.get_entry_type() == EntryType::EntryConfChange {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
@@ -2280,7 +2289,7 @@ impl Peer {
         }
         req.mut_admin_request()
             .mut_prepare_merge()
-            .set_min_index(min_index);
+            .set_min_index(min_matched + 1);
         Ok(())
     }
 

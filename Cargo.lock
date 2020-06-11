@@ -2949,7 +2949,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+source = "git+https://github.com/pingcap/raft-rs#aaa67943fb3e6b0b5398517637841afa2d07ca04"
 dependencies = [
  "fxhash",
  "getset",
@@ -2963,7 +2963,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+source = "git+https://github.com/pingcap/raft-rs#aaa67943fb3e6b0b5398517637841afa2d07ca04"
 dependencies = [
  "lazy_static",
  "prost",
