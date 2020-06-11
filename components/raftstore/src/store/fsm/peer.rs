@@ -995,17 +995,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             };
             let next_tick = current_time + self.ctx.cfg.raft_base_tick_interval();
             // We need to propose a read index request if current lease can't cover till next tick
-            let mut need_propose =
-                self.fsm.peer.inspect_lease(Some(next_tick)) == LeaseState::Expired;
-            if need_propose && !self.fsm.peer.leader_lease.is_suspect() {
-                if let Some(read) = self.fsm.peer.pending_reads.back_mut() {
-                    let lease_bound =
-                        read.renew_lease_time + self.ctx.cfg.raft_store_max_leader_lease();
-                    // If there are read index whose lease can cover till next tick
-                    // then we don't need to propose a new one
-                    need_propose = lease_bound < next_tick;
+            let need_propose = match self.fsm.peer.inspect_lease(Some(next_tick)) {
+                LeaseState::Expired => {
+                    let max_lease = self.ctx.cfg.raft_store_max_leader_lease();
+                    self.fsm.peer.pending_reads.back_mut().map_or(true, |read| {
+                        // If there are read index whose lease can cover till next tick
+                        // then we don't need to propose a new one
+                        read.renew_lease_time + max_lease < next_tick
+                    })
                 }
-            }
+                _ => false,
+            };
             if need_propose {
                 let (id, dropped) = self.fsm.peer.propose_read_index();
                 if !dropped {
