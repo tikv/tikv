@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use tipb;
 
 /// Bucket is an element of histogram.
 struct Bucket {
@@ -157,9 +156,9 @@ mod tests {
 
     use std::iter::repeat;
 
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
-    use tidb_query::expr::EvalContext;
+    use tidb_query_datatype::codec::datum;
+    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::expr::EvalContext;
 
     #[test]
     fn test_histogram() {

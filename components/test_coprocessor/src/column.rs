@@ -2,9 +2,9 @@
 
 use super::*;
 
-use tidb_query::codec::{datum, Datum};
-use tidb_query::expr::EvalContext;
-use tipb::ColumnInfo;
+use tidb_query_datatype::codec::{datum, Datum};
+use tidb_query_datatype::expr::EvalContext;
+use tipb::{ColumnInfo, FieldType};
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;
@@ -22,7 +22,7 @@ impl Column {
     pub fn as_column_info(&self) -> ColumnInfo {
         let mut c_info = ColumnInfo::default();
         c_info.set_column_id(self.id);
-        c_info.set_tp(self.col_type);
+        c_info.set_tp(self.col_field_type());
         c_info.set_pk_handle(self.index == 0);
         if let Some(ref dv) = self.default_val {
             c_info.set_default_val(
@@ -30,6 +30,20 @@ impl Column {
             )
         }
         c_info
+    }
+
+    pub fn as_field_type(&self) -> FieldType {
+        let mut ft = FieldType::default();
+        ft.set_tp(self.col_field_type());
+        ft
+    }
+
+    pub fn col_field_type(&self) -> i32 {
+        match self.col_type {
+            TYPE_LONG => 8,      // FieldTypeTp::LongLong
+            TYPE_VAR_CHAR => 15, // FieldTypeTp::VarChar
+            _ => unreachable!("col_type: {}", self.col_type),
+        }
     }
 }
 

@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
 use std::process;
@@ -76,6 +75,13 @@ fn main() {
                 .help("Set the HTTP listening address for the status report service"),
         )
         .arg(
+            Arg::with_name("advertise-status-addr")
+                .long("advertise-status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the advertise listening address for the client communication of status report service"),
+        )
+        .arg(
             Arg::with_name("data-dir")
                 .long("data-dir")
                 .short("s")
@@ -135,11 +141,6 @@ fn main() {
                     "Sets push address to the Prometheus Pushgateway, \
                      leaves it empty will disable Prometheus push",
                 ),
-        )
-        .arg(
-            Arg::with_name("dynamic-config")
-                .long("dynamic-config")
-                .help("switch of online config change feature"),
         )
         .get_matches();
 

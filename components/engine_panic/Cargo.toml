@@ -1,0 +1,12 @@
+[package]
+name = "engine_panic"
+version = "0.0.1"
+description = "An example TiKV storage engine that does nothing but panic"
+edition = "2018"
+publish = false
+
+[dependencies]
+engine_traits = { path = "../engine_traits" }
+tikv_alloc = { path = "../tikv_alloc" }
+# FIXME: Remove this dep from the engine_traits interface
+tikv_util = { path = "../tikv_util" }

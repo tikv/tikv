@@ -13,4 +13,6 @@ pub trait ColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64;
     fn set_block_cache_capacity(&self, capacity: u64) -> Result<(), String>;
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions);
+    fn get_target_file_size_base(&self) -> u64;
+    fn get_disable_auto_compactions(&self) -> bool;
 }

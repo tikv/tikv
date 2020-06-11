@@ -7,12 +7,6 @@ use std::path::Path;
 pub trait ImportExt: CFHandleExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-        &self,
-        path: P,
-        clone: Q,
-    ) -> Result<()>;
-
     fn ingest_external_file_cf(
         &self,
         cf: &Self::CFHandle,

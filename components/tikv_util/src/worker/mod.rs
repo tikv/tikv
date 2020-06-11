@@ -29,9 +29,10 @@ use std::{io, usize};
 
 use self::metrics::*;
 use crate::mpsc::{self, Receiver, Sender};
-use crate::time::{Instant, SlowTimer};
+use crate::time::Instant;
 use crate::timer::Timer;
 
+pub use self::future::dummy_scheduler as dummy_future_scheduler;
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
 pub use self::future::{Stopped, Worker as FutureWorker};
@@ -50,18 +51,15 @@ impl<T> ScheduleError<T> {
     }
 }
 
-impl<T> Error for ScheduleError<T> {
-    fn description(&self) -> &str {
-        match *self {
-            ScheduleError::Stopped(_) => "channel has been closed",
-            ScheduleError::Full(_) => "channel is full",
-        }
-    }
-}
+impl<T> Error for ScheduleError<T> {}
 
 impl<T> Display for ScheduleError<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.description())
+        let msg = match *self {
+            ScheduleError::Stopped(_) => "channel has been closed",
+            ScheduleError::Full(_) => "channel is full",
+        };
+        write!(f, "{}", msg)
     }
 }
 
@@ -83,9 +81,9 @@ pub trait Runnable<T: Display> {
     fn run_batch(&mut self, ts: &mut Vec<T>) {
         for t in ts.drain(..) {
             let task_str = format!("{}", t);
-            let timer = SlowTimer::new();
+            let timer = Instant::now_coarse();
             self.run(t);
-            slow_log!(timer, "handle task {}", task_str);
+            slow_log!(timer.elapsed(), "handle task {}", task_str);
         }
     }
 

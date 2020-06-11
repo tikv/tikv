@@ -15,10 +15,10 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use engine_rocks::RocksEngine;
-use tikv_util::security::SecurityManager;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
+use security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -55,7 +55,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn Snapshot<RocksEngine>>,
+    snap: Box<dyn GenericSnapshot>,
     remain_bytes: usize,
 }
 
@@ -177,7 +177,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn Snapshot<RocksEngine>>>,
+    file: Option<Box<dyn GenericSnapshot>>,
     raft_msg: RaftMessage,
 }
 
@@ -218,7 +218,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<RocksSnapshot>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -235,7 +235,7 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter + 'static>(
+fn recv_snap<R: RaftStoreRouter<RocksSnapshot> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager<RocksEngine>,
@@ -291,7 +291,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     .map_err(Error::from)
 }
 
-pub struct Runner<R: RaftStoreRouter + 'static> {
+pub struct Runner<R: RaftStoreRouter<RocksSnapshot> + 'static> {
     env: Arc<Environment>,
     snap_mgr: SnapManager<RocksEngine>,
     pool: CpuPool,
@@ -302,7 +302,7 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter + 'static> Runner<R> {
+impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager<RocksEngine>,
@@ -326,7 +326,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
@@ -343,7 +343,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
                 }
-                SNAP_TASK_COUNTER.with_label_values(&["recv"]).inc();
+                SNAP_TASK_COUNTER_STATIC.recv.inc();
 
                 let snap_mgr = self.snap_mgr.clone();
                 let raft_router = self.raft_router.clone();
@@ -369,7 +369,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
                     return;
                 }
-                SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
+                SNAP_TASK_COUNTER_STATIC.send.inc();
 
                 let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();

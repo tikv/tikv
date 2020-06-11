@@ -917,6 +917,15 @@ pub trait NumberEncoder: BufferWriter {
         write!(self, v, 2, encode_u16_le)
     }
 
+    /// Writes an unsigned 16 bit integer `v` in big endian,
+    /// which is memory-comparable.
+    ///
+    /// This function is an alias to `write_u16`.
+    #[inline]
+    fn write_u16_be(&mut self, v: u16) -> Result<()> {
+        self.write_u16(v)
+    }
+
     /// Writes a signed 16 bit integer `v` in little endian,
     /// which is not memory-comparable.
     ///
@@ -937,6 +946,15 @@ pub trait NumberEncoder: BufferWriter {
     #[inline]
     fn write_u32_le(&mut self, v: u32) -> Result<()> {
         write!(self, v, 4, encode_u32_le)
+    }
+
+    /// Writes an unsigned 32 bit integer `v` in big endian,
+    /// which is memory-comparable.
+    ///
+    /// This function is an alias to `write_u32`.
+    #[inline]
+    fn write_u32_be(&mut self, v: u32) -> Result<()> {
+        self.write_u32(v)
     }
 
     /// Writes a signed 32 bit integer `v` in little endian,
@@ -1049,7 +1067,6 @@ impl<T: BufferWriter> NumberEncoder for T {}
 #[cfg(test)]
 mod tests {
     use protobuf::CodedOutputStream;
-    use rand;
 
     fn get_u8_samples() -> Vec<u8> {
         vec![
@@ -1801,7 +1818,6 @@ mod tests {
 mod benches {
     use crate::ErrorInner;
 
-    use byteorder;
     use protobuf::CodedOutputStream;
 
     /// Encode u64 little endian using `NumberCodec` and store position in extra variable.

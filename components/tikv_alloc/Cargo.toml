@@ -10,12 +10,12 @@ jemalloc = ["jemallocator", "jemalloc-sys", "jemalloc-ctl"]
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
-mem-profiling = ["jemallocator/profiling"]
+mem-profiling = ["jemallocator/profiling", "log"]
 mimalloc = ["mimallocator"]
 
 [dependencies]
 libc = "0.2"
-log = "0.4"
+log = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"

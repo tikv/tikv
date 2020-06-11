@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::{CompactOptions, Writable, DB};
-use engine::{CF_DEFAULT, CF_LOCK};
+use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_raftstore::*;
 
 fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {

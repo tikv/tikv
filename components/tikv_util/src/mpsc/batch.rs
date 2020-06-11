@@ -241,8 +241,24 @@ impl<T> Stream for Receiver<T> {
     }
 }
 
+/// A Collector Used in `BatchReceiver`.
+pub trait BatchCollector<Collection, Elem> {
+    /// If `elem` is collected into `collection` successfully, return `None`.
+    /// Otherwise return `elem` back, and `collection` should be spilled out.
+    fn collect(&mut self, collection: &mut Collection, elem: Elem) -> Option<Elem>;
+}
+
+pub struct VecCollector;
+
+impl<E> BatchCollector<Vec<E>, E> for VecCollector {
+    fn collect(&mut self, v: &mut Vec<E>, e: E) -> Option<E> {
+        v.push(e);
+        None
+    }
+}
+
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
-pub struct BatchReceiver<T, E, I: Fn() -> E, C: Fn(&mut E, T)> {
+pub struct BatchReceiver<T, E, I: Fn() -> E, C: BatchCollector<E, T>> {
     rx: Receiver<T>,
     max_batch_size: usize,
     elem: Option<E>,
@@ -250,7 +266,7 @@ pub struct BatchReceiver<T, E, I: Fn() -> E, C: Fn(&mut E, T)> {
     collector: C,
 }
 
-impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> BatchReceiver<T, E, I, C> {
+impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> BatchReceiver<T, E, I, C> {
     /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
     /// used to generate a initial value, and `collector` will collect every (at most
     /// `max_batch_size`) raw items into the batched value.
@@ -265,16 +281,20 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> BatchReceiver<T, E, I, C> {
     }
 }
 
-impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> {
+impl<T, E, I: Fn() -> E, C: BatchCollector<E, T>> Stream for BatchReceiver<T, E, I, C> {
     type Error = ();
     type Item = E;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
-        let mut count = 0;
+        let (mut count, mut received) = (0, None);
         let finished = loop {
             match self.rx.try_recv() {
                 Ok(m) => {
-                    (self.collector)(self.elem.get_or_insert_with(&self.initializer), m);
+                    let collection = self.elem.get_or_insert_with(&self.initializer);
+                    if let Some(m) = self.collector.collect(collection, m) {
+                        received = Some(m);
+                        break false;
+                    }
                     count += 1;
                     if count >= self.max_batch_size {
                         break false;
@@ -294,7 +314,13 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
         } else if self.elem.is_none() {
             return Ok(Async::NotReady);
         }
-        Ok(Async::Ready(self.elem.take()))
+        let elem = self.elem.take();
+        if let Some(m) = received {
+            let collection = self.elem.get_or_insert_with(&self.initializer);
+            let _received = self.collector.collect(collection, m);
+            debug_assert!(_received.is_none());
+        }
+        Ok(Async::Ready(elem))
     }
 }
 
@@ -316,11 +342,10 @@ mod tests {
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = CpuPool::new(1);
-        pool.spawn(rx.for_each(move |_| {
+        let _res = pool.spawn(rx.for_each(move |_| {
             msg_counter1.fetch_add(1, Ordering::AcqRel);
             Ok(())
-        }))
-        .forget();
+        }));
 
         // Wait until the receiver is suspended.
         loop {
@@ -353,13 +378,13 @@ mod tests {
     #[test]
     fn test_batch_receiver() {
         let (tx, rx) = unbounded::<u64>(4);
-        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
 
+        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), VecCollector);
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter_spawned = Arc::clone(&msg_counter);
         let (nty, polled) = mpsc::sync_channel(1);
         let pool = CpuPool::new(1);
-        pool.spawn(
+        let _res = pool.spawn(
             rx.select(stream::poll_fn(move || -> Poll<Option<Vec<u64>>, ()> {
                 nty.send(()).unwrap();
                 Ok(Async::Ready(None))
@@ -370,8 +395,7 @@ mod tests {
                 msg_counter_spawned.fetch_add(len, Ordering::AcqRel);
                 Ok(())
             }),
-        )
-        .forget();
+        );
 
         // Wait until the receiver has been polled in the spawned thread.
         polled.recv().unwrap();

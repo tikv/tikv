@@ -79,8 +79,35 @@ fn test_upload_sst() {
 }
 
 #[test]
-fn test_ingest_sst() {
+fn test_write_sst() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    let mut meta = new_sst_meta(0, 0);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    let mut keys = vec![];
+    let mut values = vec![];
+    let sst_range = (0, 10);
+    for i in sst_range.0..sst_range.1 {
+        keys.push(vec![i]);
+        values.push(vec![i]);
+    }
+    let resp = send_write_sst(&import, &meta, keys, values, 1).unwrap();
+
+    for m in resp.metas.into_iter() {
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(m.clone());
+        let resp = import.ingest(&ingest).unwrap();
+        assert!(!resp.has_error());
+    }
+    check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
+}
+
+#[test]
+fn test_ingest_sst() {
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
@@ -101,24 +128,45 @@ fn test_ingest_sst() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    // Cann't upload the same file again.
+    // Can't upload the same file again.
     assert!(send_upload_sst(&import, &meta, &data).is_err());
 
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
+}
+
+#[test]
+fn test_ingest_sst_without_crc32() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_sst_without_crc32")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    // Set crc32 == 0 and length != 0 still ingest success
+    send_upload_sst(&import, &meta, &data).unwrap();
+    meta.set_crc32(0);
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta.clone());
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
 
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range);
-
-    // Upload the same file again to check if the ingested file has been deleted.
-    send_upload_sst(&import, &meta, &data).unwrap();
 }
 
 #[test]
 fn test_download_sst() {
-    use grpcio::{Error, RpcStatus};
-
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst")
@@ -137,13 +185,12 @@ fn test_download_sst() {
     download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
     download.set_name("missing.sst".to_owned());
 
-    let result = import.download(&download);
-    match &result {
-        Err(Error::RpcFailure(RpcStatus {
-            details: Some(msg), ..
-        })) if msg.contains("CannotReadExternalStorage") => {}
-        _ => panic!("unexpected download reply: {:?}", result),
-    }
+    let result = import.download(&download).unwrap();
+    assert!(
+        result.has_error(),
+        "unexpected download reply: {:?}",
+        result
+    );
 
     // Checks that downloading an empty SST returns OK (but cannot be ingested)
     download.set_name("test.sst".to_owned());
@@ -216,6 +263,29 @@ fn test_cleanup_sst() {
     check_sst_deleted(&import, &meta, &data);
 }
 
+#[test]
+fn test_ingest_sst_region_not_found() {
+    let (_cluster, mut ctx_not_found, _, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_sst_errors")
+        .tempdir()
+        .unwrap();
+
+    ctx_not_found.set_region_id(1 << 31); // A large region id that must no exists.
+    let sst_path = temp_dir.path().join("test_split.sst");
+    let sst_range = (0, 100);
+    let (mut meta, _data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx_not_found.get_region_id());
+    meta.set_region_epoch(ctx_not_found.get_region_epoch().clone());
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx_not_found);
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(resp.get_error().has_region_not_found());
+}
+
 fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
     let mut m = SstMeta::default();
     m.set_uuid(Uuid::new_v4().as_bytes().to_vec());
@@ -242,6 +312,40 @@ fn send_upload_sst(
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
+fn send_write_sst(
+    client: &ImportSstClient,
+    meta: &SstMeta,
+    keys: Vec<Vec<u8>>,
+    values: Vec<Vec<u8>>,
+    commit_ts: u64,
+) -> Result<WriteResponse> {
+    let mut r1 = WriteRequest::default();
+    r1.set_meta(meta.clone());
+    let mut r2 = WriteRequest::default();
+
+    let mut batch = WriteBatch::default();
+    let mut pairs = vec![];
+
+    for (i, key) in keys.iter().enumerate() {
+        let mut pair = Pair::default();
+        pair.set_key(key.to_vec());
+        pair.set_value(values[i].to_vec());
+        pairs.push(pair);
+    }
+    batch.set_commit_ts(commit_ts);
+    batch.set_pairs(pairs.into());
+    r2.set_batch(batch);
+
+    let reqs: Vec<_> = vec![r1, r2]
+        .into_iter()
+        .map(|r| (r, WriteFlags::default()))
+        .collect();
+
+    let (tx, rx) = client.write().unwrap();
+    let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
+}
+
 fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
     for i in sst_range.0..sst_range.1 {
         let mut m = RawGetRequest::default();
@@ -249,6 +353,18 @@ fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
         m.set_key(vec![i]);
         let resp = tikv.raw_get(&m).unwrap();
         assert!(resp.get_error().is_empty());
+        assert!(!resp.has_region_error());
+        assert_eq!(resp.get_value(), &[i]);
+    }
+}
+
+fn check_ingested_txn_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8), start_ts: u64) {
+    for i in sst_range.0..sst_range.1 {
+        let mut m = GetRequest::default();
+        m.set_context(ctx.clone());
+        m.set_key(vec![i]);
+        m.set_version(start_ts);
+        let resp = tikv.kv_get(&m).unwrap();
         assert!(!resp.has_region_error());
         assert_eq!(resp.get_value(), &[i]);
     }

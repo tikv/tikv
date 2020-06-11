@@ -9,7 +9,6 @@ use tikv::storage;
 
 #[test]
 fn test_gcworker_busy() {
-    let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let mut gc_worker = GcWorker::new(engine, None, None, None, Default::default());
@@ -37,7 +36,7 @@ fn test_gcworker_busy() {
     // `GC_MAX_EXECUTING_TASKS` requests in queue.
     gc_worker
         .gc(
-            ctx.clone(),
+            ctx,
             1.into(),
             Box::new(move |res: storage::Result<()>| {
                 assert!(res.is_ok());

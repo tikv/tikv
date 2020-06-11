@@ -43,6 +43,9 @@ fn test_prevote<T: Simulator>(
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
+    // Disable this feature because the test could run slow, in which case peers shouldn't
+    // hibernate, otherwise it's possible to detect no vote messages.
+    cluster.cfg.raft_store.hibernate_regions = false;
     // To stable the test, we use a large election timeout to make
     // leader's readiness get handle within an election timeout
     configure_for_lease_read(cluster, Some(20), Some(10));

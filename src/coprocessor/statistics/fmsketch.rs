@@ -1,9 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
-use tipb;
 
 /// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -26,9 +24,8 @@ impl FmSketch {
 
     pub fn insert(&mut self, mut bytes: &[u8]) {
         let hash = {
-            let mut out: [u8; 16] = [0; 16];
-            murmur3_x64_128(&mut bytes, 0, &mut out);
-            LittleEndian::read_u64(&out[0..8])
+            let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+            out as u64
         };
         self.insert_hash_value(hash);
     }
@@ -61,10 +58,10 @@ mod tests {
     use std::iter::repeat;
     use std::slice::from_ref;
 
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
-    use tidb_query::codec::Result;
-    use tidb_query::expr::EvalContext;
+    use tidb_query_datatype::codec::datum;
+    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::codec::Result;
+    use tidb_query_datatype::expr::EvalContext;
 
     struct TestData {
         samples: Vec<Datum>,

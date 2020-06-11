@@ -4,8 +4,8 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine::CfName;
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine_traits::CfName;
+use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -482,7 +482,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         } else {
             None
         };
-        let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        let mut iter_opt = IterOptions::new(l_bound, u_bound, self.fill_cache);
         if let Some(ts) = self.hint_min_ts {
             iter_opt.set_hint_min_ts(Bound::Included(ts.into_inner()));
         }
@@ -493,5 +493,142 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
         self.snapshot.iter_cf(self.cf, iter_opt, self.scan_mode)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_traits::{IterOptions, KvEngines, SyncMutable};
+    use keys::data_key;
+    use kvproto::metapb::{Peer, Region};
+    use tempfile::Builder;
+    use txn_types::Key;
+
+    use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use raftstore::store::{new_temp_engine, RegionSnapshot};
+
+    type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
+
+    fn load_default_dataset(engines: KvEngines<RocksEngine, RocksEngine>) -> (Region, DataSet) {
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
+        r.set_id(10);
+        r.set_start_key(b"a2".to_vec());
+        r.set_end_key(b"a7".to_vec());
+
+        let base_data = vec![
+            (b"a1".to_vec(), b"v1".to_vec()),
+            (b"a3".to_vec(), b"v3".to_vec()),
+            (b"a5".to_vec(), b"v5".to_vec()),
+            (b"a7".to_vec(), b"v7".to_vec()),
+            (b"a9".to_vec(), b"v9".to_vec()),
+        ];
+
+        for &(ref k, ref v) in &base_data {
+            engines.kv.put(&data_key(k), v).unwrap();
+        }
+        (r, base_data)
+    }
+
+    #[test]
+    fn test_reverse_iterate() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let engines = new_temp_engine(&path);
+        let (region, test_data) = load_default_dataset(engines.clone());
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
+        let mut statistics = CfStatistics::default();
+        let it = snap.iter(IterOptions::default());
+        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
+            .unwrap());
+        let mut pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
+        assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
+            .unwrap());
+        pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
+        assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .is_err());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+            .is_err());
+
+        assert!(iter.seek_to_last(&mut statistics));
+        let mut res = vec![];
+        loop {
+            res.push((
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            ));
+            if !iter.prev(&mut statistics) {
+                break;
+            }
+        }
+        let mut expect = test_data[1..3].to_vec();
+        expect.reverse();
+        assert_eq!(res, expect);
+
+        // test last region
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
+        let it = snap.iter(IterOptions::default());
+        let mut iter = Cursor::new(it, ScanMode::Mixed);
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+            .unwrap());
+        let pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
+        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
+        for kv_pairs in test_data.windows(2) {
+            let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
+            assert!(
+                iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
+                "{}",
+                seek_key
+            );
+            let pair = (
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            );
+            assert_eq!(pair, kv_pairs[0]);
+        }
+
+        assert!(iter.seek_to_last(&mut statistics));
+        let mut res = vec![];
+        loop {
+            res.push((
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            ));
+            if !iter.prev(&mut statistics) {
+                break;
+            }
+        }
+        let mut expect = test_data;
+        expect.reverse();
+        assert_eq!(res, expect);
     }
 }

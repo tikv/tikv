@@ -103,8 +103,7 @@ mod profiling {
 
     /// Dump the profile to the `path`.
     pub fn dump_prof(path: &str) -> ProfResult<()> {
-        // TODO: return errors in this function
-        let mut bytes = CString::new(path).unwrap().into_bytes_with_nul();
+        let mut bytes = CString::new(path)?.into_bytes_with_nul();
         let ptr = bytes.as_mut_ptr() as *mut c_char;
         let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, ptr) };
         match res {
@@ -161,11 +160,11 @@ mod profiling {
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path);
+            super::dump_prof(&path).unwrap();
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path);
+            super::dump_prof(&path).unwrap();
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
@@ -183,7 +182,7 @@ mod profiling {
                     prof_count += 1
                 }
             }
-            assert!(prof_count == 2);
+            assert_eq!(prof_count, 2);
         }
     }
 }
