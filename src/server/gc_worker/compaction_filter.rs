@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ffi::CString;
-use std::mem::replace;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -152,7 +151,7 @@ impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         let db = self.db.clone();
         let mut write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
-        for (_, seek_key) in replace(&mut self.leveled_tail_deletes, HashMap::default()) {
+        for (_, seek_key) in std::mem::take(&mut self.leveled_tail_deletes) {
             // In this compaction, the last MVCC version is deleted. However there could be
             // still some versions for the key which are not included in this compaction.
             let cf_handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
