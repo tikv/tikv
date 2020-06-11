@@ -62,7 +62,7 @@ pub fn sha2(
 // https://dev.mysql.com/doc/refman/5.7/en/password-hashing.html
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn password(ctx: &mut EvalContext, input: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn password(ctx: &mut EvalContext, input: Option<BytesRef>) -> Result<Option<Bytes>> {
     ctx.warnings.append_warning(Error::Other(box_err!(
         "Warning: Deprecated syntax PASSWORD"
     )));
@@ -71,7 +71,7 @@ pub fn password(ctx: &mut EvalContext, input: &Option<Bytes>) -> Result<Option<B
             if bytes.is_empty() {
                 Ok(Some(Vec::new()))
             } else {
-                let hash1 = hex_digest(MessageDigest::sha1(), bytes.as_slice())?;
+                let hash1 = hex_digest(MessageDigest::sha1(), bytes)?;
                 let mut hash2 = hex_digest(MessageDigest::sha1(), hash1.as_slice())?;
                 hash2.insert(0, b'*');
                 Ok(Some(hash2))
