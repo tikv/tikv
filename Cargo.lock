@@ -4417,7 +4417,12 @@ dependencies = [
  "futures-util",
  "grpcio",
  "hex 0.4.2",
+<<<<<<< HEAD
  "hyper 0.12.35",
+=======
+ "http",
+ "hyper",
+>>>>>>> 855e9fb... Add TLS for registering address to PD (#8075)
  "hyper-openssl",
  "into_other",
  "itertools",
@@ -4447,7 +4452,6 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
- "reqwest",
  "rev_lines",
  "security",
  "serde",

@@ -87,8 +87,15 @@ grpcio = { version = "0.5", default-features = false, features = ["openssl-vendo
 hex = "0.4"
 itertools = "0.8"
 openssl = "0.10"
+<<<<<<< HEAD
 tokio-openssl = "0.2"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
+=======
+hyper = "0.13"
+hyper-openssl = "0.8"
+http = "0"
+into_other = { path = "components/into_other" }
+>>>>>>> 855e9fb... Add TLS for registering address to PD (#8075)
 keys = { path = "components/keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 lazy_static = "1.3"
@@ -109,7 +116,6 @@ raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore" }
 rand = "0.7.3"
 regex = "1.3"
-reqwest = { version = "0.10.4", features = ["blocking"] }
 rev_lines = "0.2.1"
 security = { path = "components/security" }
 serde = { version = "1.0", features = ["derive"] }
@@ -156,7 +162,10 @@ test_sst_importer = { path = "components/test_sst_importer" }
 test_util = { path = "components/test_util" }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
+<<<<<<< HEAD
 hyper-openssl = "0.7"
+=======
+>>>>>>> 855e9fb... Add TLS for registering address to PD (#8075)
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
