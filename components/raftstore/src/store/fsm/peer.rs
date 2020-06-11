@@ -29,6 +29,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -36,7 +37,7 @@ use tikv_util::{escape, is_zero_duration};
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
+use crate::store::fsm::store::{CreatePeerStatus, PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
 };
@@ -1450,6 +1451,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             }
         }
+        if !util::is_region_initialized(self.region()) {
+            // If the data in pending_create_peers is changed, it means this region was created from splitting.
+            // The `CreatePeerStatus::Snapshot` is valid because there may be several snapshots sending to this
+            // peer before applying any of them.
+            match meta.pending_create_peers.get(&region_id) {
+                None => return Ok(Some(key)),
+                Some(status) => {
+                    if *status != (self.fsm.peer_id(), CreatePeerStatus::Empty)
+                        && *status != (self.fsm.peer_id(), CreatePeerStatus::Snapshot)
+                    {
+                        return Ok(Some(key));
+                    }
+                }
+            }
+        }
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
                enc_end_key(region) > snap_enc_start_key &&
@@ -1529,7 +1545,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Check if snapshot file exists.
         self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
+        // WARNING: The checking code must be above this line.
+        // Now all checking passed.
+
         meta.pending_snapshot_regions.push(snap_region);
+        if !util::is_region_initialized(self.region()) {
+            // Change to `CreatePeerStatus::Snapshot`
+            meta.pending_create_peers
+                .insert(region_id, (self.fsm.peer_id(), CreatePeerStatus::Snapshot));
+        }
 
         assert!(!meta.atomic_snap_regions.contains_key(&region_id));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
@@ -1835,10 +1859,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+    fn on_ready_split_region(
+        &mut self,
+        derived: metapb::Region,
+        regions: Vec<metapb::Region>,
+        new_regions_map: HashMap<u64, u64>,
+    ) {
         self.register_split_region_check_tick();
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
@@ -1875,6 +1903,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
+            if new_region.get_id() != region_id {
+                match new_regions_map.get(&new_region.get_id()) {
+                    None => {
+                        // FIXME: here need to clean the new_region's data, but is it safe to clean and do not
+                        // affect the possibly existing peer with the same region id in region worker?
+                        continue;
+                    }
+                    Some(peer_id) => {
+                        assert_eq!(
+                            meta.pending_create_peers.remove(&new_region.get_id()),
+                            Some((*peer_id, CreatePeerStatus::Split))
+                        );
+                    }
+                }
+            }
             let new_region_id = new_region.get_id();
 
             let not_exist = meta
@@ -1900,7 +1943,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // store. After that, the old snapshot comes, followed with the last split
                 // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
-                if !r.get_peers().is_empty() {
+                if util::is_region_initialized(r) {
                     panic!(
                         "[region {}] duplicated region {:?} for split region {:?}",
                         new_region_id, r, new_region
@@ -2587,8 +2630,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         }
 
-        let initialized = !prev_region.get_peers().is_empty();
-        if initialized {
+        if util::is_region_initialized(&prev_region) {
             info!(
                 "region changed after applying snapshot";
                 "region_id" => self.fsm.region_id(),
@@ -2600,10 +2642,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if prev != Some(region.get_id()) {
                 panic!(
                     "{} meta corrupted, expect {:?} got {:?}",
-                    self.fsm.peer.tag, prev_region, prev
+                    self.fsm.peer.tag, prev_region, prev,
                 );
             }
+        } else {
+            assert_eq!(
+                meta.pending_create_peers.remove(&region.get_id()),
+                Some((self.fsm.peer_id(), CreatePeerStatus::Snapshot))
+            );
         }
+        assert!(meta.pending_create_peers.get(&region.get_id()).is_none());
 
         if let Some(r) = meta
             .region_ranges
@@ -2644,9 +2692,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(first_index, state)
                 }
-                ExecResult::SplitRegion { derived, regions } => {
-                    self.on_ready_split_region(derived, regions)
-                }
+                ExecResult::SplitRegion {
+                    derived,
+                    regions,
+                    new_regions_map,
+                } => self.on_ready_split_region(derived, regions, new_regions_map),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }

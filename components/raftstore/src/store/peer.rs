@@ -373,7 +373,7 @@ impl Peer {
     /// Sets commit group to the peer.
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
-        if !self.get_store().region().get_peers().is_empty() {
+        if !self.is_initialized() {
             let version = state.status().get_dr_auto_sync().state_id;
             let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
             self.raft_group.raft.assign_commit_groups(gb);

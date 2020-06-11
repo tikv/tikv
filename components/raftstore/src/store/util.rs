@@ -301,6 +301,11 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     })
 }
 
+#[inline]
+pub fn is_region_initialized(r: &metapb::Region) -> bool {
+    !r.get_peers().is_empty()
+}
+
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Suspect Timestamp

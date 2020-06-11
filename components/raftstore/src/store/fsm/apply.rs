@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{cmp, usize};
 
@@ -34,6 +34,7 @@ use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
+use crate::store::fsm::store::{CreatePeerStatus, StoreMeta};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
@@ -51,6 +52,7 @@ use crate::report_perf_context;
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
+use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -208,6 +210,7 @@ pub enum ExecResult<S> {
     SplitRegion {
         regions: Vec<Region>,
         derived: Region,
+        new_regions_map: HashMap<u64, u64>,
     },
     PrepareMerge {
         region: Region,
@@ -368,6 +371,9 @@ where
     perf_context_statistics: PerfContextStatistics,
 
     yield_duration: Duration,
+
+    store_id: u64,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -384,6 +390,8 @@ where
         router: ApplyRouter,
         notifier: Notifier<E::Snapshot>,
         cfg: &Config,
+        store_id: u64,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
             tag,
@@ -407,6 +415,8 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             yield_duration: cfg.apply_yield_duration.0,
+            store_id,
+            store_meta,
         }
     }
 
@@ -1814,7 +1824,8 @@ where
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+
+        let mut new_regions_map = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
             // TODO: check new region id validation.
@@ -1830,7 +1841,81 @@ where
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
+            new_regions_map.insert(
+                new_region.get_id(),
+                util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+            );
+            regions.push(new_region);
+        }
+
+        let mut meta = ctx.store_meta.lock().unwrap();
+        new_regions_map.retain(|region_id, peer_id| {
+            if let Some(r) = meta.regions.get(region_id) {
+                if util::is_region_initialized(r) {
+                    return false;
+                } else {
+                    // If the region in meta.regions is not initialized, it must be in pending_create_peers.
+                    let status = meta.pending_create_peers.get(&region_id).unwrap();
+                    if *status == (*peer_id, CreatePeerStatus::Empty) {
+                        meta.pending_create_peers
+                            .insert(*region_id, (*peer_id, CreatePeerStatus::Split));
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            assert_eq!(
+                meta.pending_create_peers
+                    .insert(*region_id, (*peer_id, CreatePeerStatus::Split))
+                    .is_none(),
+                true
+            );
+            true
+        });
+        drop(meta);
+
+        let mut already_exist_regions = Vec::new();
+        new_regions_map.retain(|region_id, peer_id| {
+            let region_state_key = keys::region_state_key(*region_id);
+            match ctx.engine.get_value_cf(CF_RAFT, &region_state_key) {
+                Ok(state) => {
+                    if state.is_some() {
+                        already_exist_regions.push((*region_id, *peer_id));
+                        false
+                    } else {
+                        true
+                    }
+                }
+                e => panic!(
+                    "{} failed to get regions state of {}: {:?}",
+                    self.tag, region_id, e
+                ),
+            }
+        });
+
+        if !already_exist_regions.is_empty() {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
+                assert_eq!(
+                    meta.pending_create_peers.remove(region_id),
+                    Some((*peer_id, CreatePeerStatus::Split))
+                );
+            }
+        }
+
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        for new_region in &regions {
+            if !new_regions_map.contains_key(&new_region.get_id()) {
+                info!(
+                    "new region from split is already exist";
+                    "new_region_id" => new_region.get_id(),
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                );
+                continue;
+            }
+            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None)
                 .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1838,7 +1923,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-            regions.push(new_region);
         }
         if right_derive {
             derived.set_start_key(keys.pop_front().unwrap());
@@ -1853,7 +1937,11 @@ where
 
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::SplitRegion { regions, derived }),
+            ApplyResult::Res(ExecResult::SplitRegion {
+                regions,
+                derived,
+                new_regions_map,
+            }),
         ))
     }
 
@@ -3181,6 +3269,8 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     sender: Notifier<RocksSnapshot>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
+    store_id: u64,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
@@ -3199,6 +3289,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             _phantom: PhantomData,
             sender,
             router,
+            store_id: builder.store.get_id(),
+            store_meta: builder.store_meta.clone(),
         }
     }
 }
@@ -3221,6 +3313,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
                 self.router.clone(),
                 self.sender.clone(),
                 &cfg,
+                self.store_id,
+                self.store_meta.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -3367,6 +3461,7 @@ mod tests {
     use std::time::*;
 
     use crate::coprocessor::*;
+    use crate::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
@@ -3559,6 +3654,7 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3569,6 +3665,8 @@ mod tests {
             _phantom: PhantomData,
             engine,
             router: router.clone(),
+            store_id: 1,
+            store_meta,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -3921,6 +4019,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3931,6 +4030,8 @@ mod tests {
             importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
+            store_id: 1,
+            store_meta,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4275,6 +4376,7 @@ mod tests {
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let _phantom = engine.write_batch();
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
@@ -4285,6 +4387,8 @@ mod tests {
             engine,
             _phantom: PhantomData,
             router: router.clone(),
+            store_id: 1,
+            store_meta,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4571,6 +4675,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -4581,6 +4686,8 @@ mod tests {
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
+            store_id: 1,
+            store_meta,
         };
         system.spawn("test-split".to_owned(), builder);
 
