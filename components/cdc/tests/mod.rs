@@ -25,6 +25,7 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::*;
 use test_raftstore::*;
@@ -81,6 +82,7 @@ pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
     pub endpoints: HashMap<u64, Worker<Task>>,
     pub obs: HashMap<u64, CdcObserver>,
+    pd: Arc<TestPdClient>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
 
@@ -139,6 +141,7 @@ impl TestSuite {
             cluster,
             endpoints,
             obs,
+            pd: pd_cli,
             env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
@@ -159,12 +162,24 @@ impl TestSuite {
         pk: Vec<u8>,
         ts: TimeStamp,
     ) {
+        self.must_kv_prewrite_large_txn(region_id, muts, pk, ts, TimeStamp::zero());
+    }
+
+    pub fn must_kv_prewrite_large_txn(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        min_commit_ts: TimeStamp,
+    ) {
         let mut prewrite_req = PrewriteRequest::default();
         prewrite_req.set_context(self.get_context(region_id));
         prewrite_req.set_mutations(muts.into_iter().collect());
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        prewrite_req.set_min_commit_ts(min_commit_ts.into_inner());
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)
@@ -203,6 +218,33 @@ impl TestSuite {
             commit_resp.get_region_error()
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
+    pub fn must_kv_check_txn_status(
+        &mut self,
+        region_id: u64,
+        key: Vec<u8>,
+        start_ts: TimeStamp,
+        caller_start_ts: TimeStamp,
+        current_ts: TimeStamp,
+    ) -> (u64, TimeStamp, Action) {
+        let mut req = CheckTxnStatusRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.set_primary_key(key);
+        req.set_lock_ts(start_ts.into_inner());
+        req.set_caller_start_ts(caller_start_ts.into_inner());
+        req.set_current_ts(current_ts.into_inner());
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_check_txn_status(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(!resp.has_error(), "{:?}", resp.get_error());
+        (
+            resp.get_lock_ttl(),
+            resp.get_commit_version().into(),
+            resp.get_action(),
+        )
     }
 
     pub fn async_kv_commit(
@@ -265,5 +307,13 @@ impl TestSuite {
             let channel = ChannelBuilder::new(env).connect(&addr);
             ChangeDataClient::new(channel)
         })
+    }
+
+    pub fn get_tso(&self) -> TimeStamp {
+        self.pd.get_tso().wait().unwrap()
+    }
+
+    pub fn set_tso(&mut self, ts: TimeStamp) {
+        self.pd.set_tso(ts);
     }
 }

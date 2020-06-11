@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryInto;
+use std::ops::Sub;
 use std::sync::*;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
@@ -17,8 +19,19 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::sleep_ms;
+use txn_types::TimeStamp;
 
 use cdc::Task;
+
+fn format_event_enum(e: &Event_oneof_event) -> String {
+    match e {
+        Event_oneof_event::ResolvedTs(e) => format!("ResolvedTs({})", e),
+        Event_oneof_event::Entries(e) => format!("Entries({:?})", e),
+        Event_oneof_event::Admin(e) => format!("Admin({:?})", e),
+        Event_oneof_event::Error(e) => format!("Error({:?})", e),
+        Event_oneof_event::LongTxn(e) => format!("LongTxn({:?})", e),
+    }
+}
 
 #[test]
 fn test_cdc_basic() {
@@ -761,5 +774,168 @@ fn test_cdc_batch_size_limit() {
     }
 
     event_feed_wrap.as_ref().replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_long_txn() {
+    let mut suite = TestSuite::new(1);
+
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let (req_tx, _event_feed_wrap, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    // Make sure region 1 is registered.
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let now_ts = TimeStamp::compose(now.as_millis().try_into().unwrap(), 0);
+    let start_ts = TimeStamp::compose(
+        now.sub(Duration::from_secs(120))
+            .as_millis()
+            .try_into()
+            .unwrap(),
+        0,
+    );
+    let min_commit_ts1 = TimeStamp::compose(
+        now.sub(Duration::from_secs(80))
+            .as_millis()
+            .try_into()
+            .unwrap(),
+        0,
+    );
+    let min_commit_ts2 = TimeStamp::compose(
+        now.sub(Duration::from_secs(40))
+            .as_millis()
+            .try_into()
+            .unwrap(),
+        0,
+    );
+
+    let (k, v) = (b"key1".to_vec(), b"value".to_vec());
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_prewrite_large_txn(1, vec![mutation], k.clone(), start_ts, start_ts.next());
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
+        }
+        _ => panic!("unknown event"),
+    }
+    // Wait for resolved ts to be pushed to `start_ts`
+    suite.set_tso(now_ts);
+    let wait_for_resolved_ts_and_report_long_txn =
+        |ts_pred: Box<dyn Fn(u64) -> bool>, expect_long_txn: bool| {
+            let mut report_long_txn_received = false;
+            let mut resolved_ts_reached = false;
+            for _retry in 0..30 {
+                let events = receive_event(true);
+                for event in events {
+                    match event.event.unwrap() {
+                        Event_oneof_event::ResolvedTs(rts) => {
+                            if resolved_ts_reached {
+                                assert!(ts_pred(rts));
+                            }
+                            if ts_pred(rts) {
+                                resolved_ts_reached = true;
+                            }
+                        }
+                        Event_oneof_event::LongTxn(txn) => {
+                            assert_eq!(txn.get_txn_info()[0].get_start_ts(), start_ts.into_inner());
+                            report_long_txn_received = true;
+                        }
+                        e => panic!("unexpected event {}", format_event_enum(&e)),
+                    }
+                    if (report_long_txn_received || !expect_long_txn) && resolved_ts_reached {
+                        return;
+                    }
+                }
+                sleep_ms(50);
+            }
+            panic!(
+                "can't receive expected events. got resolved ts: {}; got long txn: {}",
+                resolved_ts_reached, report_long_txn_received
+            );
+        };
+
+    wait_for_resolved_ts_and_report_long_txn(Box::new(|ts| ts == start_ts.into_inner()), true);
+
+    // Push min_commit_ts by updating primary key.
+    // `kv_check_txn_status` uses `max(caller_start_ts + 1, current_ts)` as the mew `min_commit_ts`,
+    // so we pass it `min_commit_ts - 1`.
+    let (_, _, action) = suite.must_kv_check_txn_status(
+        1,
+        k.clone(),
+        start_ts,
+        min_commit_ts1.prev(),
+        min_commit_ts1.prev(),
+    );
+    assert_eq!(action, Action::MinCommitTsPushed);
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
+        }
+        _ => panic!("unknown event"),
+    }
+
+    // Then the resolved ts can be pushed to `min_commit_ts - 1`.
+    wait_for_resolved_ts_and_report_long_txn(
+        Box::new(|ts| ts == min_commit_ts1.prev().into_inner()),
+        true,
+    );
+
+    // Push min_commit_ts by notifying txn status from CDC client.
+    let mut req = ChangeDataRequest::default();
+    req.region_id = 1;
+    req.set_region_epoch(suite.get_context(1).take_region_epoch());
+    let mut txn_status = TxnStatus::default();
+    txn_status.set_start_ts(start_ts.into_inner());
+    txn_status.set_min_commit_ts(min_commit_ts2.into_inner());
+    let mut notify = ChangeDataRequestNotifyTxnStatus::default();
+    notify.set_txn_status(vec![txn_status].into());
+    req.set_notify_txn_status(notify);
+
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+
+    wait_for_resolved_ts_and_report_long_txn(
+        Box::new(|ts| ts == min_commit_ts2.prev().into_inner()),
+        true,
+    );
+
+    // Commit
+    let commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k], start_ts, commit_ts);
+    let mut events = receive_event(false);
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
+        }
+        _ => panic!("unknown event"),
+    }
+    wait_for_resolved_ts_and_report_long_txn(Box::new(|ts| ts > now_ts.into_inner()), false);
+
     suite.stop();
 }

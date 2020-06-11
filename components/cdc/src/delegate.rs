@@ -712,15 +712,12 @@ impl Delegate {
                     // In order to compute resolved ts,
                     // we must track inflight txns.
                     match self.resolver {
-                        Some(ref mut resolver) => {
-                            // TODO: Set proper min_commit_ts
-                            resolver.track_lock(
-                                row.start_ts.into(),
-                                TimeStamp::zero(),
-                                row.key.clone(),
-                                lock.primary,
-                            )
-                        }
+                        Some(ref mut resolver) => resolver.track_lock(
+                            row.start_ts.into(),
+                            lock.min_commit_ts,
+                            row.key.clone(),
+                            lock.primary,
+                        ),
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");
                             let pending = self.pending.as_mut().unwrap();
