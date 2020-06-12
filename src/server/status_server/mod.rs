@@ -1250,6 +1250,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         status_server.stop();
+        panic!("test_pprof_heap_service done");
     }
 
     #[test]
