@@ -90,7 +90,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
 /// The MAX/MIN aggregate functions.
 #[derive(Debug, AggrFunction)]
-#[aggr_function(state = AggFnStateExtremum::<T>::new(self.ord))]
+#[aggr_function(state = AggFnStateExtremum::<T, E>::new())]
 pub struct AggFnExtremum<T, E>
 where
     T: Evaluable + Ord,
@@ -98,7 +98,6 @@ where
     VectorValue: VectorValueExt<T>,
 {
     _phantom: std::marker::PhantomData<(T, E)>,
-    ord: Ordering,
 }
 
 impl<T, E> AggFnExtremum<T, E>
@@ -110,38 +109,40 @@ where
     fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            ord: E::ORD,
         }
     }
 }
 
 /// The state of the MAX/MIN aggregate function.
 #[derive(Debug)]
-pub struct AggFnStateExtremum<T>
+pub struct AggFnStateExtremum<T, E>
 where
     T: Evaluable + Ord,
+    E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
-    ord: Ordering,
-    extremum: Option<T>,
+    extremum_value: Option<T>,
+    _phantom: std::marker::PhantomData<E>,
 }
 
-impl<T> AggFnStateExtremum<T>
+impl<T, E> AggFnStateExtremum<T, E>
 where
     T: Evaluable + Ord,
+    E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
-    pub fn new(ord: Ordering) -> Self {
+    pub fn new() -> Self {
         Self {
-            ord,
-            extremum: None,
+            extremum_value: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<T> super::ConcreteAggrFunctionState for AggFnStateExtremum<T>
+impl<T, E> super::ConcreteAggrFunctionState for AggFnStateExtremum<T, E>
 where
     T: Evaluable + Ord,
+    E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
     type ParameterType = T;
@@ -152,15 +153,17 @@ where
         _ctx: &mut EvalContext,
         value: &Option<Self::ParameterType>,
     ) -> Result<()> {
-        if value.is_some() && (self.extremum.is_none() || self.extremum.cmp(value) == self.ord) {
-            self.extremum = value.clone();
+        if value.is_some()
+            && (self.extremum_value.is_none() || self.extremum_value.cmp(value) == E::ORD)
+        {
+            self.extremum_value = value.clone();
         }
         Ok(())
     }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push(self.extremum.clone());
+        target[0].push(self.extremum_value.clone());
         Ok(())
     }
 }
