@@ -8,7 +8,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Fix the issue that the tikv-ctl does not support relative path [#7963](https://github.com/tikv/tikv/pull/7963)
   + Fix the bug that the monitoring metric of Point Selects is inaccurate [#8033](https://github.com/tikv/tikv/pull/8033)
   + Fix the issue that a peer might not be destroyed after the network isolation disappears [#8006](https://github.com/tikv/tikv/pull/8006)
-  + Fix the issue that a `read index` request might be outdated [#8043](https://github.com/tikv/tikv/pull/8043)
+  + Fix the issue that a `read index` request may get out-of-date commit index [#8043](https://github.com/tikv/tikv/pull/8043)
   + Improve the reliability of backup and restore with S3 and GCS storages [#7917](https://github.com/tikv/tikv/pull/7917)
 + New Features
   + Add the `--advertise-status-addr` start flag to specify the status address to advertise [#8046](https://github.com/tikv/tikv/pull/8046)
