@@ -202,8 +202,8 @@ impl Drop for WriteCompactionFilter {
         info!(
             "Dropping WriteCompactionFilter";
             "bottommost_level" => self.bottommost_level,
-            "versions" => self.versions,
-            "deleted" => self.deleted,
+            "versions" => self.total_versions,
+            "deleted" => self.total_deleted,
         );
     }
 }
