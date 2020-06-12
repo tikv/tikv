@@ -396,9 +396,10 @@ mod tests {
             let function = match_template_collator! {
                 TT, match coll {
                     Collation::TT => {
-                        match is_max {
-                            true => Box::new(AggFnExtremum4Bytes::<TT, Max>::new()) as Box<dyn AggrFunction>,
-                            false => Box::new(AggFnExtremum4Bytes::<TT, Min>::new()) as Box<dyn AggrFunction>
+                        if is_max {
+                            Box::new(AggFnExtremum4Bytes::<TT, Max>::new()) as Box<dyn AggrFunction>
+                        } else {
+                            Box::new(AggFnExtremum4Bytes::<TT, Min>::new()) as Box<dyn AggrFunction>
                         }
                     }
                 }
