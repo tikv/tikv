@@ -29,6 +29,15 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
     buf: Vec<u8>,
 }
 
+impl<R> AsyncReadAsSyncStreamOfBytes<R> {
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader: Mutex::new(reader),
+            buf: vec![0; READ_BUF_SIZE],
+        }
+    }
+}
+
 impl<R: AsyncRead + Unpin> Stream for AsyncReadAsSyncStreamOfBytes<R> {
     type Item = io::Result<Bytes>;
 
