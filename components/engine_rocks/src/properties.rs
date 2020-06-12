@@ -4,6 +4,7 @@ use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
@@ -163,7 +164,7 @@ impl RangeProperties {
             buf.encode_u64(offsets.size).unwrap();
             buf.encode_u64(offsets.keys).unwrap();
         }
-        let mut delete_buf = Vec::with_capacity(1024);
+        let mut delete_buf = Vec::with_capacity(self.offsets.len() * mem::size_of::<u64>());
         for (_, offsets) in &self.offsets {
             delete_buf.encode_u64(offsets.delete_keys).unwrap();
         }
@@ -380,7 +381,11 @@ impl Default for RangePropertiesCollector {
 }
 
 impl RangePropertiesCollector {
-    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64, prop_delete_keys_index_distance: u64) -> Self {
+    pub fn new(
+        prop_size_index_distance: u64,
+        prop_keys_index_distance: u64,
+        prop_delete_keys_index_distance: u64,
+    ) -> Self {
         RangePropertiesCollector {
             prop_size_index_distance,
             prop_keys_index_distance,
