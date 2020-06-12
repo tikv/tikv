@@ -148,9 +148,8 @@ pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time
     })
 }
 
-#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn month_name(ctx: &mut EvalContext, tmp: Option<&DateTime>) -> Result<Option<Bytes>> {
+pub fn month_name(tmp: Option<&DateTime>) -> Result<Option<Bytes>> {
     match tmp {
         Some(t) => {
             let month = t.month() as usize;
