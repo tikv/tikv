@@ -4686,7 +4686,7 @@ mod tests {
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
-            store_id: 1,
+            store_id: 2,
             store_meta,
         };
         system.spawn("test-split".to_owned(), builder);
