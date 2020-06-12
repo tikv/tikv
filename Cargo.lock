@@ -1143,6 +1143,9 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
+ "http 0.2.0",
+ "hyper 0.13.3",
+ "hyper-tls",
  "kvproto",
  "rand 0.7.3",
  "rusoto_core",
@@ -1946,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#f7b6982b0416c1d3d64dd82dd7f92a8a2bf9047a"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#44301fcea60837d5abb823f9e44271e48d21db3c"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3892,6 +3895,7 @@ dependencies = [
  "test_util",
  "tikv_alloc",
  "tikv_util",
+ "tokio 0.2.13",
  "tokio-sync",
  "txn_types",
  "uuid",
@@ -4387,7 +4391,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.0"
+version = "4.0.1"
 dependencies = [
  "async-stream",
  "async-trait",
