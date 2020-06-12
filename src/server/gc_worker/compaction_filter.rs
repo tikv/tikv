@@ -114,20 +114,12 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn delete_default_key(&mut self, key: &[u8], write_batch: Option<&mut RocksWriteBatch>) {
-        if let Some(write_batch) = write_batch {
-            write_batch.delete(key).unwrap();
-            return;
-        }
+    fn delete_default_key(&mut self, key: &[u8]) {
         self.write_batch.delete(key).unwrap();
         self.flush_pending_writes_if_need();
     }
 
-    fn delete_write_key(&mut self, key: &[u8], write_batch: Option<&mut RocksWriteBatch>) {
-        if let Some(write_batch) = write_batch {
-            write_batch.delete_cf(CF_WRITE, key).unwrap();
-            return;
-        }
+    fn delete_write_key(&mut self, key: &[u8]) {
         self.write_batch.delete_cf(CF_WRITE, key).unwrap();
         self.flush_pending_writes_if_need();
     }
@@ -158,14 +150,13 @@ impl WriteCompactionFilter {
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
-        let db = self.db.clone();
-        let mut write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
         for (_, seek_key) in std::mem::take(&mut self.leveled_tail_deletes) {
             // In this compaction, the last MVCC version is deleted. However there could be
             // still some versions for the key which are not included in this compaction.
             let cf_handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
             let mut iter = DBIterator::new_cf(self.db.clone(), cf_handle, ReadOptions::new());
-            let mut valid = iter.seek(SeekKey::Key(&seek_key)).unwrap();
+            // `seek` then `next` because the MVCC delete mark is handled by compaction filter.
+            let mut valid = iter.seek(SeekKey::Key(&seek_key)).unwrap() && iter.next().unwrap();
             while valid {
                 let (key, value) = (iter.key(), iter.value());
                 let key_prefix = match Key::split_on_ts_for(key) {
@@ -177,18 +168,17 @@ impl Drop for WriteCompactionFilter {
                 let write = WriteRef::parse(value).unwrap();
                 let (start_ts, short_value) = (write.start_ts, write.short_value);
                 if short_value.is_none() {
-                    let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-                    self.delete_default_key(key.as_encoded(), Some(&mut write_batch));
+                    let k = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
+                    self.delete_default_key(k.as_encoded());
                 }
 
-                self.delete_write_key(key, Some(&mut write_batch));
+                self.delete_write_key(key);
                 self.versions += 1;
                 self.deleted += 1;
                 valid = iter.next().unwrap();
             }
             self.switch_key_metrics();
         }
-        self.db.write(write_batch.as_inner()).unwrap();
 
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
@@ -264,7 +254,7 @@ impl CompactionFilter for WriteCompactionFilter {
         if filtered {
             if short_value.is_none() {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-                self.delete_default_key(key.as_encoded(), None);
+                self.delete_default_key(key.as_encoded());
             }
             self.deleted += 1;
         }
