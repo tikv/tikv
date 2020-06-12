@@ -272,7 +272,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .get_region_by_id_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
@@ -329,9 +331,11 @@ impl PdClient for RpcClient {
             }
 
             debug!("heartbeat sender is refreshed");
-            let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
+            let left = inner.hb_sender.as_mut().left().unwrap();
+            let sender = left.take().expect("expect region heartbeat sink");
             let (tx, rx) = mpsc::unbounded();
-            tx.unbounded_send(req).unwrap();
+            tx.unbounded_send(req)
+                .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
             inner.hb_sender = Either::Right(tx);
             Box::new(
                 sender
@@ -378,7 +382,7 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .ask_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
@@ -410,7 +414,7 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .ask_batch_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
@@ -439,8 +443,13 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
+<<<<<<< HEAD
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+=======
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
+            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
+>>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999)
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
@@ -466,7 +475,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .report_batch_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "report_batch_split", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
@@ -516,7 +527,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .get_gc_safe_point_async_opt(&req, option)
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])
@@ -580,7 +593,10 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
             let cli = client.read().unwrap();
-            let (req_sink, resp_stream) = cli.client_stub.tso().unwrap();
+            let (req_sink, resp_stream) = cli
+                .client_stub
+                .tso()
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
             let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
             let send_once = req_sink.send((req, WriteFlags::default())).then(|s| {
                 let _ = keep_req_tx.send(s);
@@ -594,7 +610,9 @@ impl PdClient for RpcClient {
                     .and_then(move |(resp, _)| {
                         // Now we can safely drop sink without
                         // causing a Cancel error.
-                        let _ = keep_req_rx.try_recv().unwrap();
+                        let _ = keep_req_rx
+                            .try_recv()
+                            .unwrap_or_else(|e| panic!("fail to receive tso sender err {:?}", e));
                         let resp = match resp {
                             Some(r) => r,
                             None => return Ok(TimeStamp::zero()),
