@@ -148,6 +148,7 @@ pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time
     })
 }
 
+#[rpn_fn]
 #[inline]
 pub fn month_name(tmp: Option<&DateTime>) -> Result<Option<Bytes>> {
     match tmp {
