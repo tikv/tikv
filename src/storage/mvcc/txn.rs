@@ -190,21 +190,24 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         key: Key,
         lock: &Lock,
-        is_pessimistic_txn: bool,
+        is_primary: bool,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
         }
 
-        // Only the primary key of a pessimistic transaction needs to be protected.
-        let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        let write = Write::new_rollback(self.start_ts, protected);
-        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key.clone())?;
+        let is_pessimistic = !lock.for_update_ts.is_zero();
+        // Only primary keys need to write ROLLBACK record.
+        if is_primary {
+            // Only the primary key of a pessimistic transaction needs to be protected.
+            let write = Write::new_rollback(self.start_ts, is_pessimistic);
+            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+            if self.collapse_rollback {
+                self.collapse_prev_rollback(key.clone())?;
+            }
         }
-        Ok(self.unlock_key(key, is_pessimistic_txn))
+        Ok(self.unlock_key(key, is_pessimistic))
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -683,6 +686,8 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.unlock_key(key, is_pessimistic_txn))
     }
 
+    /// Rollback the lock which must be secondary lock. Please use `cleanup` or
+    /// `check_txn_status` to rollback primary locks.
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
         fail_point!("rollback", |err| Err(make_txn_error(
             err,
@@ -692,21 +697,18 @@ impl<S: Snapshot> MvccTxn<S> {
         .into()));
 
         // Rollback is called only if the transaction is known to fail. Under the circumstances,
-        // the rollback record needn't be protected.
+        // the rollback record needn't to be written because no commit request can arrive.
         self.cleanup(key, TimeStamp::zero(), false)
     }
 
     fn check_txn_status_missing_lock(
         &mut self,
-        primary_key: Key,
+        key: Key,
         rollback_if_not_exist: bool,
-        protect_rollback: bool,
+        is_primary: bool,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
-        match self
-            .reader
-            .get_txn_commit_info(&primary_key, self.start_ts)?
-        {
+        match self.reader.get_txn_commit_info(&key, self.start_ts)? {
             Some((ts, write_type)) => {
                 if write_type == WriteType::Rollback {
                     Ok(TxnStatus::RolledBack)
@@ -716,24 +718,25 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             None => {
                 if rollback_if_not_exist {
-                    let ts = self.start_ts;
+                    // Only primary keys need to write ROLLBACK record.
+                    if is_primary {
+                        let ts = self.start_ts;
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(key.clone())?;
+                        }
 
-                    // collapse previous rollback if exist.
-                    if self.collapse_rollback {
-                        self.collapse_prev_rollback(primary_key.clone())?;
+                        // The rollback must be protected, see more on
+                        // [issue #7364](https://github.com/tikv/tikv/issues/7364)
+                        let write = Write::new_rollback(ts, true);
+                        self.put_write(key, ts, write.as_ref().to_bytes());
                     }
-
-                    // Insert a Rollback to Write CF in case that a stale prewrite
-                    // command is received after a cleanup command.
-                    let write = Write::new_rollback(ts, protect_rollback);
-                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
                     Ok(TxnStatus::LockNotExist)
                 } else {
                     Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
-                        key: primary_key.into_raw()?,
+                        key: key.into_raw()?,
                     }
                     .into())
                 }
@@ -745,13 +748,12 @@ impl<S: Snapshot> MvccTxn<S> {
     /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
     /// transaction, the rollback record is protected from being collapsed.
     ///
-    /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
-    /// committed.
+    /// Returns the released lock or error if the key has already been committed.
     pub fn cleanup(
         &mut self,
         key: Key,
         current_ts: TimeStamp,
-        protect_rollback: bool,
+        is_primary: bool,
     ) -> Result<Option<ReleasedLock>> {
         fail_point!("cleanup", |err| Err(make_txn_error(
             err,
@@ -771,10 +773,9 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
 
-                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-                self.rollback_lock(key, lock, is_pessimistic_txn)
+                self.rollback_lock(key, lock, is_primary)
             }
-            _ => match self.check_txn_status_missing_lock(key, true, protect_rollback)? {
+            _ => match self.check_txn_status_missing_lock(key, true, is_primary)? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(ErrorInner::Committed { commit_ts }.into())
@@ -897,11 +898,9 @@ impl<S: Snapshot> MvccTxn<S> {
 
         match self.reader.load_lock(&primary_key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
-                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
-                    let released = self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
+                    let released = self.rollback_lock(primary_key, lock, true)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
                 }
@@ -929,8 +928,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 Ok((TxnStatus::uncommitted(lock.ttl, lock.min_commit_ts), None))
             }
-            // The rollback must be protected, see more on
-            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             _ => self
                 .check_txn_status_missing_lock(primary_key, rollback_if_not_exist, true)
                 .map(|s| (s, None)),
@@ -1118,9 +1115,9 @@ mod tests {
         // should read pending locks
         must_get_err(&engine, k1, 7);
         // should ignore the primary lock and get none when reading the latest record
-        must_get_none(&engine, k1, u64::max_value());
+        must_get_none(&engine, k1, TimeStamp::max());
         // should read secondary locks even when reading the latest record
-        must_get_err(&engine, k2, u64::max_value());
+        must_get_err(&engine, k2, TimeStamp::max());
 
         must_commit(&engine, k1, 5, 10);
         must_commit(&engine, k2, 5, 10);
@@ -1129,12 +1126,12 @@ mod tests {
         must_get_none(&engine, k1, 7);
         // should read with ts > commit_ts
         must_get(&engine, k1, 13, v);
-        // should read the latest record if `ts == u64::max_value()`
-        must_get(&engine, k1, u64::max_value(), v);
+        // should read the latest record if `ts == TimeStamp::max()`
+        must_get(&engine, k1, TimeStamp::max(), v);
 
         must_prewrite_delete(&engine, k1, k1, 15);
         // should ignore the lock and get previous record when reading the latest record
-        must_get(&engine, k1, u64::max_value(), v);
+        must_get(&engine, k1, TimeStamp::max(), v);
         must_commit(&engine, k1, 15, 20);
         must_get_none(&engine, k1, 3);
         must_get_none(&engine, k1, 7);
@@ -1151,9 +1148,9 @@ mod tests {
         must_get(&engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
         must_get_err(&engine, k1, 30);
-        // should read the latest record when `ts == u64::max_value()`
+        // should read the latest record when `ts == TimeStamp::max()`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
-        must_get(&engine, k1, u64::max_value(), v);
+        must_get(&engine, k1, TimeStamp::max(), v);
         must_commit(&engine, k1, 23, 31);
         must_get(&engine, k1, 30, v);
         must_get_none(&engine, k1, 32);
@@ -1189,14 +1186,14 @@ mod tests {
         // Not conflict.
         must_prewrite_lock(&engine, k, k, 12);
         must_locked(&engine, k, 12);
-        must_rollback(&engine, k, 12);
+        must_cleanup(&engine, k, 12, TimeStamp::max());
         must_unlocked(&engine, k);
         must_written(&engine, k, 12, 12, WriteType::Rollback);
         // Cannot retry Prewrite after rollback.
         must_prewrite_lock_err(&engine, k, k, 12);
         // Can prewrite after rollback.
         must_prewrite_delete(&engine, k, k, 13);
-        must_rollback(&engine, k, 13);
+        must_cleanup(&engine, k, 13, TimeStamp::max());
         must_unlocked(&engine, k);
     }
 
@@ -1294,7 +1291,7 @@ mod tests {
         must_locked(&engine, k, 15);
 
         // Rollback lock
-        must_rollback(&engine, k, 15);
+        must_cleanup(&engine, k, 15, TimeStamp::max());
         // Rollbacks of optimistic transactions needn't be protected
         must_get_rollback_protected(&engine, k, 15, false);
     }
@@ -1307,23 +1304,23 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, k1, k1, 5, 5);
         must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
-        must_rollback(&engine, k1, 5);
+        must_cleanup(&engine, k1, 5, TimeStamp::max());
         must_rollback(&engine, k2, 5);
         // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 5, true);
-        // The rollback of the secondary key needn't be protected
-        must_get_rollback_protected(&engine, k2, 5, false);
+        // The rollback of the secondary key needn't be written.
+        must_get_rollback_ts_none(&engine, k2, 5);
 
         must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
         must_acquire_pessimistic_lock(&engine, k2, k1, 15, 17);
         must_pessimistic_prewrite_put(&engine, k1, v, k1, 15, 17, true);
         must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, true);
-        must_rollback(&engine, k1, 15);
+        must_cleanup(&engine, k1, 15, TimeStamp::max());
         must_rollback(&engine, k2, 15);
         // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 15, true);
         // The rollback of the secondary key needn't be protected
-        must_get_rollback_protected(&engine, k2, 15, false);
+        must_get_rollback_ts_none(&engine, k2, 15);
     }
 
     #[test]
@@ -1540,26 +1537,26 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
-        must_rollback(&engine, k, 5);
+        must_cleanup(&engine, k, 5, TimeStamp::max());
         // Rollback should be idempotent
-        must_rollback(&engine, k, 5);
+        must_cleanup(&engine, k, 5, TimeStamp::max());
         // Lock should be released after rollback
         must_unlocked(&engine, k);
         must_prewrite_lock(&engine, k, k, 10);
-        must_rollback(&engine, k, 10);
+        must_cleanup(&engine, k, 10, TimeStamp::max());
         // data should be dropped after rollback
         must_get_none(&engine, k, 20);
 
         // Can't rollback committed transaction.
         must_prewrite_put(&engine, k, v, k, 25);
         must_commit(&engine, k, 25, 30);
-        must_rollback_err(&engine, k, 25);
+        must_cleanup_err(&engine, k, 25, TimeStamp::max());
         must_rollback_err(&engine, k, 25);
 
         // Can't rollback other transaction's lock
         must_prewrite_delete(&engine, k, k, 35);
-        must_rollback(&engine, k, 34);
-        must_rollback(&engine, k, 36);
+        must_cleanup(&engine, k, 34, TimeStamp::max());
+        must_cleanup(&engine, k, 36, TimeStamp::max());
         must_written(&engine, k, 34, 34, WriteType::Rollback);
         must_written(&engine, k, 36, 36, WriteType::Rollback);
         must_locked(&engine, k, 35);
@@ -1580,7 +1577,7 @@ mod tests {
     fn test_mvcc_txn_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let key = b"key";
-        must_rollback(&engine, key, 5);
+        must_cleanup(&engine, key, 5, TimeStamp::max());
         must_prewrite_lock_err(&engine, key, key, 5);
     }
 
@@ -1663,7 +1660,7 @@ mod tests {
         must_get_commit_ts(&engine, k, 5, 10);
 
         must_prewrite_delete(&engine, k, k, 15);
-        must_rollback(&engine, k, 15);
+        must_cleanup(&engine, k, 15, TimeStamp::max());
         must_seek_write(&engine, k, TimeStamp::max(), 15, 15, WriteType::Rollback);
         must_get_commit_ts(&engine, k, 5, 10);
         must_get_commit_ts_none(&engine, k, 15);
@@ -1801,20 +1798,20 @@ mod tests {
 
         // Add a Rollback whose start ts is 1.
         must_prewrite_put(&engine, key, value, key, 1);
-        must_rollback_collapsed(&engine, key, 1);
+        must_cleanup(&engine, key, 1, TimeStamp::max());
         must_get_rollback_ts(&engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
         must_prewrite_put(&engine, key, value, key, 2);
-        must_rollback_collapsed(&engine, key, 2);
+        must_cleanup(&engine, key, 2, TimeStamp::max());
         must_get_none(&engine, key, 2);
         must_get_rollback_ts(&engine, key, 2);
         must_get_rollback_ts_none(&engine, key, 1);
 
         // Rollback arrive before Prewrite, it will collapse the
         // previous rollback whose start ts is 2.
-        must_rollback_collapsed(&engine, key, 3);
+        must_cleanup(&engine, key, 3, TimeStamp::max());
         must_get_none(&engine, key, 3);
         must_get_rollback_ts(&engine, key, 3);
         must_get_rollback_ts_none(&engine, key, 2);
@@ -1996,7 +1993,7 @@ mod tests {
 
         // Rollback
         must_acquire_pessimistic_lock(&engine, k, k, 18, 18);
-        must_rollback(&engine, k, 18);
+        must_cleanup(&engine, k, 18, TimeStamp::max());
         must_unlocked(&engine, k);
         must_prewrite_put(&engine, k, v, k, 19);
         must_commit(&engine, k, 19, 20);
@@ -2048,12 +2045,9 @@ mod tests {
         must_get_commit_ts(&engine, k, 30, 31);
 
         // Rollback collapsed.
-        must_rollback_collapsed(&engine, k, 32);
-        must_rollback_collapsed(&engine, k, 33);
+        must_cleanup(&engine, k, 32, TimeStamp::max());
+        must_cleanup(&engine, k, 33, TimeStamp::max());
         must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
-        // Currently we cannot avoid this.
-        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
-        must_pessimistic_rollback(&engine, k, 32, 34);
         must_unlocked(&engine, k);
 
         // Acquire lock when there is lock with different for_update_ts.
@@ -2135,7 +2129,7 @@ mod tests {
             must_get(&engine, k, commit_ts + 1, v);
         }
 
-        must_rollback(&engine, k, 170);
+        must_cleanup(&engine, k, 170, TimeStamp::max());
 
         // Now the data should be like: (start_ts -> commit_ts)
         // 140 -> 190
@@ -2531,7 +2525,7 @@ mod tests {
             WriteType::Rollback,
         );
 
-        // Rollback when current_ts is u64::max_value()
+        // Rollback when current_ts is TimeStamp::max()
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(270, 0), 100, 0);
         must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 1), false);
         must_check_txn_status(
@@ -2927,5 +2921,67 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 80, 80);
         must_cleanup(&engine, k, 80, TimeStamp::max());
         must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
+    }
+
+    #[test]
+    fn test_eliminate_rollback_record_on_secondary_keys() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let primary = b"p";
+        let secondary = b"s";
+        let value = b"v";
+
+        let mut ts = 10;
+        for pessimistic_lock in &[false, true] {
+            for lock_exist in &[false, true] {
+                if *lock_exist {
+                    if *pessimistic_lock {
+                        must_acquire_pessimistic_lock(&engine, primary, primary, ts, ts);
+                        must_acquire_pessimistic_lock(&engine, secondary, primary, ts, ts);
+                    } else {
+                        must_prewrite_put(&engine, primary, value, primary, ts);
+                        must_prewrite_put(&engine, secondary, value, primary, ts);
+                    }
+                }
+                must_cleanup(&engine, primary, ts, TimeStamp::max());
+                must_get_rollback_ts(&engine, primary, ts);
+                must_rollback(&engine, secondary, ts);
+                must_get_rollback_ts_none(&engine, secondary, ts);
+                ts += 10;
+            }
+        }
+
+        for pessimistic_lock in &[false, true] {
+            if *pessimistic_lock {
+                must_acquire_pessimistic_lock(&engine, primary, primary, ts, ts);
+                must_acquire_pessimistic_lock(&engine, secondary, primary, ts, ts);
+            } else {
+                must_prewrite_put(&engine, primary, value, primary, ts);
+                must_prewrite_put(&engine, secondary, value, primary, ts);
+            }
+            must_check_txn_status(
+                &engine,
+                primary,
+                ts,
+                ts + 10,
+                TimeStamp::max(),
+                true,
+                TxnStatus::TtlExpire,
+            );
+            must_get_rollback_ts(&engine, primary, ts);
+            must_rollback(&engine, secondary, ts);
+            must_get_rollback_ts_none(&engine, secondary, ts);
+            ts += 10;
+        }
+
+        must_check_txn_status(
+            &engine,
+            primary,
+            ts,
+            ts + 10,
+            TimeStamp::max(),
+            true,
+            TxnStatus::LockNotExist,
+        );
+        must_get_rollback_ts(&engine, primary, ts);
     }
 }

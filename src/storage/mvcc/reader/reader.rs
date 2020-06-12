@@ -589,12 +589,21 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
-        fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
+        fn cleanup(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
+            let snap =
+                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
+            txn.cleanup(Key::from_raw(pk), TimeStamp::max(), true)
+                .unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn rollback(&mut self, k: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.collapse_rollback(false);
-            txn.rollback(Key::from_raw(pk)).unwrap();
+            txn.rollback(Key::from_raw(k)).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -940,8 +949,8 @@ mod tests {
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
-        engine.rollback(k, 5);
-        engine.rollback(k, 20);
+        engine.cleanup(k, 5);
+        engine.cleanup(k, 20);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 25);
@@ -1061,8 +1070,8 @@ mod tests {
         engine.prewrite(m.clone(), k, 1);
         engine.commit(k, 1, 5);
 
-        engine.rollback(k, 3);
-        engine.rollback(k, 7);
+        engine.cleanup(k, 3);
+        engine.cleanup(k, 7);
 
         engine.prewrite(m.clone(), k, 15);
         engine.commit(k, 15, 17);
@@ -1109,11 +1118,11 @@ mod tests {
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
-        assert_eq!(write, Write::new_rollback(3.into(), false));
+        assert_eq!(write, Write::new_rollback(3.into(), true));
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
-        assert_eq!(write, Write::new_rollback(7.into(), false));
+        assert_eq!(write, Write::new_rollback(7.into(), true));
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());

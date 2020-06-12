@@ -456,7 +456,7 @@ mod tests {
             if ts < REVERSE_SEEK_BOUND / 2 {
                 must_commit(&engine, k, ts, ts);
             } else {
-                must_rollback(&engine, k, ts);
+                must_cleanup_not_collapse(&engine, k, ts, TimeStamp::max());
             }
         }
 
@@ -474,7 +474,7 @@ mod tests {
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            must_cleanup_not_collapse(&engine, k, ts, TimeStamp::max());
         }
 
         // Generate 1 PUT for key [6].
@@ -488,7 +488,7 @@ mod tests {
         let k = &[5 as u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            must_cleanup_not_collapse(&engine, k, ts, TimeStamp::max());
         }
 
         // Generate 1 PUT with ts = REVERSE_SEEK_BOUND and 1 PUT
@@ -685,7 +685,7 @@ mod tests {
 
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         // Generate 1 put for [c].
@@ -755,7 +755,7 @@ mod tests {
         must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
         must_commit(&engine, b"b", 0, 0);
         for ts in 1..=REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         // Generate 1 put for [c].
@@ -1159,7 +1159,7 @@ mod tests {
             for y in 0..16 {
                 let pk = &[i as u8, y as u8];
                 must_prewrite_put(&engine, pk, b"", pk, start_ts);
-                must_rollback(&engine, pk, start_ts);
+                must_cleanup(&engine, pk, start_ts, TimeStamp::max());
                 // Generate 254 RocksDB tombstones between [0,0] and [15,15].
                 if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);

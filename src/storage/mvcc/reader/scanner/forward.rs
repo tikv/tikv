@@ -841,7 +841,7 @@ mod latest_kv_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -893,7 +893,7 @@ mod latest_kv_tests {
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -956,7 +956,7 @@ mod latest_kv_tests {
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
@@ -1130,7 +1130,7 @@ mod latest_entry_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -1187,7 +1187,7 @@ mod latest_entry_tests {
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -1256,7 +1256,7 @@ mod latest_entry_tests {
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
@@ -1405,7 +1405,7 @@ mod latest_entry_tests {
 
         // Generate rollbacks for [b] at 2, 3, 4.
         for ts in 2..5 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         // Generate delete for [b] at 10.
@@ -1487,7 +1487,7 @@ mod delta_entry_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            must_cleanup(&engine, b"b", ts, TimeStamp::max());
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -1544,7 +1544,7 @@ mod delta_entry_tests {
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -1615,7 +1615,7 @@ mod delta_entry_tests {
         // It differs from EntryScanner that this will try to fetch multiple versions of each key.
         // So in this test it needs one more next than EntryScanner.
         for ts in 1..=SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            must_cleanup(&engine, b"b", ts as u64, TimeStamp::max());
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND + 1);
         must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
@@ -1903,7 +1903,7 @@ mod delta_entry_tests {
                         commit_ts - 1,
                         true,
                     ),
-                    WriteType::Rollback => must_rollback(&engine, key, start_ts),
+                    WriteType::Rollback => must_cleanup(&engine, key, start_ts, TimeStamp::max()),
                 }
                 if *write_type != WriteType::Rollback {
                     must_commit(&engine, key, start_ts, commit_ts);
