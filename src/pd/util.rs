@@ -93,14 +93,9 @@ impl LeaderClient {
         client: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
-<<<<<<< HEAD:src/pd/util.rs
-        let (tx, rx) = client.region_heartbeat().unwrap();
-=======
-        let (tx, rx) = client_stub
+        let (tx, rx) = client
             .region_heartbeat()
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-
->>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/pd_client/src/util.rs
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
@@ -179,15 +174,10 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-<<<<<<< HEAD:src/pd/util.rs
-            let (tx, rx) = client.region_heartbeat().unwrap();
-            warn!("heartbeat sender and receiver are stale, refreshing ...");
-=======
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
                 panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
             });
             info!("heartbeat sender and receiver are stale, refreshing ...");
->>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/pd_client/src/util.rs
 
             // Try to cancel an unused heartbeat sender.
             if let Either::Left(Some(ref mut r)) = inner.hb_sender {
@@ -419,16 +409,7 @@ fn connect(
     let channel = security_mgr.connect(cb, addr);
     let client = PdClient::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-<<<<<<< HEAD:src/pd/util.rs
     match client.get_members_opt(&GetMembersRequest::new(), option) {
-=======
-    let response = client
-        .get_members_async_opt(&GetMembersRequest::default(), option)
-        .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
-        .compat()
-        .await;
-    match response {
->>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/pd_client/src/util.rs
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
