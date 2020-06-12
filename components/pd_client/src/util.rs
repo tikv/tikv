@@ -411,16 +411,7 @@ fn connect(
     let channel = security_mgr.connect(cb, addr);
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-<<<<<<< HEAD
     match client.get_members_opt(&GetMembersRequest::default(), option) {
-=======
-    let response = client
-        .get_members_async_opt(&GetMembersRequest::default(), option)
-        .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
-        .compat()
-        .await;
-    match response {
->>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999)
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }

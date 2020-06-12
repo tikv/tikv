@@ -443,13 +443,8 @@ impl PdClient for RpcClient {
                 .rl()
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
-<<<<<<< HEAD
-                .unwrap();
-            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
-=======
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
-            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
->>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999)
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
