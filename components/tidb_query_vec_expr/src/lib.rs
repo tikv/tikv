@@ -459,6 +459,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
         ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
+        ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
