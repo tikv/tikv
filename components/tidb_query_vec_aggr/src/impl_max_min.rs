@@ -65,7 +65,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         let out_ft = aggr_def.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
-        let out_coll = out_ft.as_accessor().collation();
+        let out_coll = box_try!(out_ft.as_accessor().collation());
 
         if out_et != eval_type {
             return Err(other_err!(
@@ -83,15 +83,10 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         )?);
 
         if out_et == EvalType::Bytes {
-            return match out_coll {
-                Ok(coll) => {
-                    match_template_collator! {
-                        TT, match coll {
-                            Collation::TT => Ok(Box::new(AggFnExtremum4Bytes::<TT, T>::new()))
-                        }
-                    }
+            return match_template_collator! {
+                C, match out_coll {
+                    Collation::C => Ok(Box::new(AggFnExtremum4Bytes::<C, T>::new()))
                 }
-                Err(e) => Err(other_err!("get collation information error {}", e)),
             };
         }
 
@@ -104,60 +99,59 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 }
 
 #[derive(Debug, AggrFunction)]
-#[aggr_function(state = AggFnStateExtremum4Bytes::<T>::new(self.ord))]
-pub struct AggFnExtremum4Bytes<T, E>
+#[aggr_function(state = AggFnStateExtremum4Bytes::<C, E>::new())]
+pub struct AggFnExtremum4Bytes<C, E>
 where
-    T: Collator,
+    C: Collator,
     E: Extremum,
     VectorValue: VectorValueExt<Bytes>,
 {
-    _phantom: std::marker::PhantomData<(T, E)>,
-    ord: Ordering,
+    _phantom: std::marker::PhantomData<(C, E)>,
 }
 
-impl<T, E> AggFnExtremum4Bytes<T, E>
+impl<C, E> AggFnExtremum4Bytes<C, E>
 where
-    T: Collator,
+    C: Collator,
     E: Extremum,
     VectorValue: VectorValueExt<Bytes>,
 {
     fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            ord: E::ORD,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct AggFnStateExtremum4Bytes<T>
+pub struct AggFnStateExtremum4Bytes<C, E>
 where
     VectorValue: VectorValueExt<Bytes>,
-    T: Collator,
+    C: Collator,
+    E: Extremum,
 {
-    ord: Ordering,
     extremum: Option<Bytes>,
-    _phantom: std::marker::PhantomData<T>,
+    _phantom: std::marker::PhantomData<(C, E)>,
 }
 
-impl<T> AggFnStateExtremum4Bytes<T>
+impl<C, E> AggFnStateExtremum4Bytes<C, E>
 where
     VectorValue: VectorValueExt<Bytes>,
-    T: Collator,
+    C: Collator,
+    E: Extremum,
 {
-    pub fn new(ord: Ordering) -> Self {
+    pub fn new() -> Self {
         Self {
-            ord,
             extremum: None,
             _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<T> super::ConcreteAggrFunctionState for AggFnStateExtremum4Bytes<T>
+impl<C, E> super::ConcreteAggrFunctionState for AggFnStateExtremum4Bytes<C, E>
 where
     VectorValue: VectorValueExt<Bytes>,
-    T: Collator,
+    C: Collator,
+    E: Extremum,
 {
     type ParameterType = Bytes;
 
@@ -176,15 +170,10 @@ where
             return Ok(());
         }
 
-        match T::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap()) {
-            Err(e) => Err(other_err!("compare bytes error {}", e)),
-            Ok(ord) => {
-                if ord == self.ord {
-                    self.extremum = value.clone();
-                }
-                Ok(())
-            }
+        if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
+            self.extremum = value.clone();
         }
+        Ok(())
     }
 
     #[inline]
