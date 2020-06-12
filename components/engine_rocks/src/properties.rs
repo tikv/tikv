@@ -21,6 +21,7 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
+const PROP_DELETE_INDEX: &str = "tikv.delete_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
@@ -160,10 +161,14 @@ impl RangeProperties {
             buf.extend(k);
             buf.encode_u64(offsets.size).unwrap();
             buf.encode_u64(offsets.keys).unwrap();
-            buf.encode_u64(offsets.delete_keys).unwrap();
+        }
+        let mut delete_buf = Vec::with_capacity(1024);
+        for (_, offsets) in &self.offsets {
+            delete_buf.encode_u64(offsets.delete_keys).unwrap();
         }
         let mut props = UserProperties::new();
         props.encode(PROP_RANGE_INDEX, buf);
+        props.encode(PROP_DELETE_INDEX, delete_buf);
         props
     }
 
@@ -185,9 +190,19 @@ impl RangeProperties {
             let mut offsets = RangeOffsets::default();
             offsets.size = number::decode_u64(&mut buf)?;
             offsets.keys = number::decode_u64(&mut buf)?;
-            offsets.delete_keys = number::decode_u64(&mut buf).unwrap_or_else(|_| 0);
             res.offsets.push((k, offsets));
         }
+
+        let mut delete_count = 0;
+        if let Ok(mut delete_buf) = props.decode(PROP_DELETE_INDEX) {
+            let mut it = res.offsets.iter_mut();
+            while !delete_buf.is_empty() {
+                (*it.next().unwrap()).1.delete_keys = number::decode_u64(&mut delete_buf)?;
+                delete_count += 1;
+            }
+        }
+        assert!(res.offsets.len() == delete_count);
+
         Ok(res)
     }
 
@@ -262,11 +277,7 @@ impl RangeProperties {
         // RangeOffsetKind == Keys
         if kind == RangeOffsetKind::Keys {
             let remain_keys = keys - delete_keys;
-            if remain_keys > 0 {
-                return remain_keys;
-            } else {
-                return 0;
-            }
+            return cmp::max(remain_keys, 0);
         }
 
         // RangeOffsetKind == Size
@@ -275,10 +286,7 @@ impl RangeProperties {
         }
         let average_size = size / keys;
         let remain_size = size - delete_keys * average_size as u64;
-        if remain_size > 0 {
-            return remain_size;
-        }
-        0
+        cmp::max(remain_size, 0)
     }
 
     // equivalent to range(Excluded(start_key), Excluded(end_key))
@@ -405,12 +413,9 @@ impl TablePropertiesCollector for RangePropertiesCollector {
             self.cur_offsets.delete_keys += 1;
             // Consider that we firstly insert a new point with a key, then delete the same key,
             // the information of deleted keys should be changed in the last offset.
-            if let Some(last_point) = self.props.offsets.last() {
+            if let Some(last_point) = self.props.offsets.last_mut() {
                 if last_point.0 == key {
-                    let mut last_offset = last_point.1.clone();
-                    last_offset.delete_keys = self.cur_offsets.delete_keys;
-                    self.props.offsets.pop();
-                    self.props.offsets.push((key.to_owned(), last_offset));
+                    last_point.1.delete_keys = self.cur_offsets.delete_keys;
                 }
             }
         }
