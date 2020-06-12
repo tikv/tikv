@@ -81,6 +81,8 @@ impl<T: PdClient, S: Snapshot> Runner<T, S> {
             if state.group.group_id(state_id, store_id).is_none() {
                 group_id = state.group.register_store(store_id, s.take_labels().into());
             }
+        } else {
+            state.group.backup_store_labels(&mut s);
         }
         drop(state);
         if let (Some(group_id), Some(router)) = (group_id, &self.router) {

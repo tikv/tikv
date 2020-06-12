@@ -93,9 +93,8 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().sync_wal()?)
     }
 
-    #[allow(deprecated)]
     fn exists(path: &str) -> bool {
-        engine::rocks::util::db_exist(path)
+        crate::raw_util::db_exist(path)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -125,6 +124,21 @@ impl MiscExt for RocksEngine {
 
         Ok(box_try!(String::from_utf8(s)))
     }
+
+    fn get_latest_sequence_number(&self) -> u64 {
+        self.as_inner().get_latest_sequence_number()
+    }
+
+    fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
+        match self
+            .as_inner()
+            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+        {
+            // Some(0) indicates that no snapshot is in use
+            Some(0) => None,
+            s => s,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,8 +146,7 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use crate::raw_util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::DB;
     use std::sync::Arc;
@@ -271,7 +284,7 @@ mod tests {
         cf_opts
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
-                Box::new(rocks::util::FixedSuffixSliceTransform::new(8)),
+                Box::new(crate::util::FixedSuffixSliceTransform::new(8)),
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.

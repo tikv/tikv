@@ -12,6 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use encryption::DataKeyManager;
 use engine::*;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::Peekable;
@@ -21,6 +22,7 @@ use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -175,6 +177,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: TiKvConfig,
         engines: Engines,
+        key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
@@ -202,7 +205,9 @@ impl Simulator for NodeCluster {
                 .contains_key(&node_id)
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(router.clone()));
+            let snap_mgr = SnapManagerBuilder::default()
+                .encryption_key_manager(key_manager)
+                .build(tmp.path().to_str().unwrap(), Some(router.clone()));
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();

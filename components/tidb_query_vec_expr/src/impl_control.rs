@@ -7,11 +7,11 @@ use tidb_query_datatype::codec::data_type::*;
 
 #[rpn_fn]
 #[inline]
-fn if_null<T: Evaluable>(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<T>> {
+fn if_null<T: Evaluable>(lhs: Option<&T>, rhs: Option<&T>) -> Result<Option<T>> {
     if lhs.is_some() {
-        return Ok(lhs.clone());
+        return Ok(lhs.cloned());
     }
-    Ok(rhs.clone())
+    Ok(rhs.cloned())
 }
 
 #[rpn_fn(raw_varg, extra_validator = case_when_validator::<T>)]
@@ -35,16 +35,15 @@ pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>>
 #[rpn_fn]
 #[inline]
 fn if_condition<T: Evaluable>(
-    condition: &Option<Int>,
-    value_if_true: &Option<T>,
-    value_if_false: &Option<T>,
+    condition: Option<&Int>,
+    value_if_true: Option<&T>,
+    value_if_false: Option<&T>,
 ) -> Result<Option<T>> {
-    Ok(if condition.unwrap_or(0) != 0 {
-        value_if_true
+    Ok(if condition.cloned().unwrap_or(0) != 0 {
+        value_if_true.cloned()
     } else {
-        value_if_false
-    }
-    .clone())
+        value_if_false.cloned()
+    })
 }
 
 fn case_when_validator<T: Evaluable>(expr: &tipb::Expr) -> Result<()> {

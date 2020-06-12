@@ -340,6 +340,7 @@ pub struct ApplySnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
+    pub destroyed_regions: Vec<metapb::Region>,
 }
 
 /// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
@@ -353,6 +354,8 @@ pub struct InvokeContext {
     last_term: u64,
     /// The old region is stored here if there is a snapshot.
     pub snap_region: Option<Region>,
+    /// The regions whose range are overlapped with this region
+    pub destroyed_regions: Vec<metapb::Region>,
 }
 
 impl InvokeContext {
@@ -363,6 +366,7 @@ impl InvokeContext {
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
             snap_region: None,
+            destroyed_regions: vec![],
         }
     }
 
@@ -1069,6 +1073,7 @@ where
         snap: &Snapshot,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::WriteBatch,
+        destroy_regions: &[metapb::Region],
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -1094,7 +1099,10 @@ where
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(kv_wb, raft_wb)?;
         }
-
+        // Write its source peers' `RegionLocalState` together with itself for atomicity
+        for r in destroy_regions {
+            write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
+        }
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
@@ -1148,11 +1156,14 @@ where
     }
 
     /// Delete all data that is not covered by `new_region`.
-    fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
-        let (old_start_key, old_end_key) =
-            (enc_start_key(self.region()), enc_end_key(self.region()));
+    fn clear_extra_data(
+        &self,
+        region_id: u64,
+        old_region: &metapb::Region,
+        new_region: &metapb::Region,
+    ) -> Result<()> {
+        let (old_start_key, old_end_key) = (enc_start_key(old_region), enc_end_key(old_region));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
-        let region_id = new_region.get_id();
         if old_start_key < new_start_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
                 region_id,
@@ -1281,6 +1292,10 @@ where
             region_id: self.get_region_id(),
             status,
         };
+
+        // Don't schedule the snapshot to region worker.
+        fail_point!("skip_schedule_applying_snapshot", |_| {});
+
         // TODO: gracefully remove region instead.
         if let Err(e) = self.region_sched.schedule(task) {
             info!(
@@ -1303,6 +1318,7 @@ where
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
+        destroy_regions: Vec<metapb::Region>,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
         let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
@@ -1310,8 +1326,10 @@ where
         } else {
             fail_point!("raft_before_apply_snap");
             let (kv_wb, raft_wb) = ready_ctx.wb_mut();
-            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb)?;
+            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb, &destroy_regions)?;
             fail_point!("raft_after_apply_snap");
+
+            ctx.destroyed_regions = destroy_regions;
 
             last_index(&ctx.raft_state)
         };
@@ -1333,7 +1351,7 @@ where
         }
 
         // Save raft state if it has changed or peer has applied a snapshot.
-        if ctx.raft_state != self.raft_state || snapshot_index != 0 {
+        if ctx.raft_state != self.raft_state || snapshot_index > 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
             if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
@@ -1345,7 +1363,7 @@ where
         }
 
         // only when apply snapshot
-        if snapshot_index != 0 {
+        if snapshot_index > 0 {
             ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
         }
 
@@ -1364,15 +1382,34 @@ where
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.region()) {
+            if let Err(e) = self.clear_extra_data(self.get_region_id(), self.region(), &snap_region)
+            {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
                 error!(
                     "failed to cleanup data, may leave some dirty data";
-                    "region_id" => self.region.get_id(),
+                    "region_id" => self.get_region_id(),
                     "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
+        }
+
+        // Note that the correctness depends on the fact that these source regions MUST NOT
+        // serve read request otherwise a corrupt data may be returned.
+        // For now, it is ensured by
+        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
+        //    suspected immediately which makes local reader invalid to serve read request.
+        // 2. No read request can be responsed during merging.
+        // These conditions are used to prevent reading **stale** data in the past.
+        // At present, they are used to prevent reading **corrupt** data.
+        for r in &ctx.destroyed_regions {
+            if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+                error!(
+                    "failed to cleanup data, may leave some dirty data";
+                    "region_id" => r.get_id(),
                     "err" => ?e,
                 );
             }
@@ -1385,6 +1422,7 @@ where
         Some(ApplySnapResult {
             prev_region,
             region: self.region().clone(),
+            destroyed_regions: ctx.destroyed_regions,
         })
     }
 }
@@ -1662,8 +1700,8 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine::rocks::util::new_engine;
     use engine::Engines;
+    use engine_rocks::raw_util::new_engine;
     use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
@@ -2021,7 +2059,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
@@ -2338,7 +2375,6 @@ mod tests {
             mgr,
             0,
             true,
-            Duration::from_secs(0),
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
@@ -2362,7 +2398,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s2.engines.kv.write_batch();
         let mut raft_wb = s2.engines.raft.write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2380,7 +2416,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = s3.engines.kv.write_batch();
         let mut raft_wb = s3.engines.raft.write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

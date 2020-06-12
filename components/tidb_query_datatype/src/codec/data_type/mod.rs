@@ -7,7 +7,8 @@ mod vector;
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
-pub use crate::codec::mysql::{Decimal, Duration, Json, JsonType, Time as DateTime};
+pub type BytesRef<'a> = &'a [u8];
+pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -123,6 +124,39 @@ impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 impl_evaluable_type! { Json }
 
+pub trait IntoEvaluableRef<T>: Sized {
+    /// Performs the conversion.
+    fn into_evaluable_ref(self) -> T;
+}
+
+macro_rules! impl_into_evaluable_ref {
+    ($ty:tt) => {
+        impl<'a> IntoEvaluableRef<Option<&'a $ty>> for Option<&'a $ty> {
+            fn into_evaluable_ref(self) -> Option<&'a $ty> {
+                self
+            }
+        }
+    };
+}
+
+impl_into_evaluable_ref! { Int }
+impl_into_evaluable_ref! { Real }
+impl_into_evaluable_ref! { Decimal }
+impl_into_evaluable_ref! { DateTime }
+impl_into_evaluable_ref! { Duration }
+
+impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
+    fn into_evaluable_ref(self) -> Option<BytesRef<'a>> {
+        self.map(|x| x.as_slice())
+    }
+}
+
+impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
+    fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
+        self.map(|x| x.as_ref())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +243,14 @@ mod tests {
                 Err(_) => assert!(expected.is_none(), "{} to bool should fail", f,),
             }
         }
+    }
+
+    #[test]
+    fn test_into_evaluable_ref() {
+        let x: Option<&Int> = Some(&1);
+        assert_eq!(x.into_evaluable_ref(), Some(&1));
+        let y = vec![1, 2, 3];
+        let x: Option<&Bytes> = Some(&y);
+        assert_eq!(x.into_evaluable_ref(), Some(vec![1, 2, 3].as_slice()));
     }
 }
