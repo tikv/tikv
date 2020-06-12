@@ -2,6 +2,17 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.1] - 2020-06-12
++ Bug Fixes
+  + Fix the issue that the `use-unified-pool` configuration in the startup log is incorrectly printed [#7946](https://github.com/tikv/tikv/pull/7946)
+  + Fix the issue that the tikv-ctl does not support relative path [#7963](https://github.com/tikv/tikv/pull/7963)
+  + Fix the bug that the monitoring metric of Point Selects is inaccurate [#8033](https://github.com/tikv/tikv/pull/8033)
+  + Fix the issue that a peer might not be destroyed after the network isolation disappears [#8006](https://github.com/tikv/tikv/pull/8006)
+  + Fix the issue that a `read index` request might be outdated [#8043](https://github.com/tikv/tikv/pull/8043)
+  + Improve the reliability of backup and restore with S3 and GCS storages [#7917](https://github.com/tikv/tikv/pull/7917)
++ New Features
+  + Add the `--advertise-status-addr` start flag to specify the status address to advertise [#8046](https://github.com/tikv/tikv/pull/8046)
+
 ## [4.0.0] - 2020-05-27
 + Bug Fixes
   + Fix the issue of backup fails with DefaultNotFound error. [#7937](https://github.com/tikv/tikv/pull/7937)
@@ -48,7 +59,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Fix the deadlock issue caused by the probe request from TiDB [#7540](https://github.com/tikv/tikv/pull/7540)
   + Fix the issue that the minimum commit timestamp of a transaction might overflow which affects data correctness [#7638](https://github.com/tikv/tikv/pull/7638)
 + New Features
-  + Support using the user-owned KMS key for the server-side encryption when backing up data to S3 [#7630](https://github.com/tikv/tikv/pull/7630) 
+  + Support using the user-owned KMS key for the server-side encryption when backing up data to S3 [#7630](https://github.com/tikv/tikv/pull/7630)
   + Enable the load-based `split region` operation [#7623](https://github.com/tikv/tikv/pull/7623)
   + Support validating common names [#7468](https://github.com/tikv/tikv/pull/7468)
   + Add the file lock check to avoid starting multiple TiKV instances that are bound to the same address [#7447](https://github.com/tikv/tikv/pull/7447)
@@ -57,8 +68,8 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Address the OpenSSL security issue: CVE-2020-1967 [#7622](https://github.com/tikv/tikv/pull/7622)
   + Avoid protecting rollback records written by `BatchRollback` to improve performance when many write conflicts exist in optimistic transactions [#7604](https://github.com/tikv/tikv/pull/7604)
   + Fix the issue that the needless wake-up of transactions results in useless retry and performance reduction in heavy lock-race workloads [#7551](https://github.com/tikv/tikv/pull/7551)
-  + Fix the issue that the Region might be stuck in the multi-time merging [#7518](https://github.com/tikv/tikv/pull/7518) 
-  + Fix the issue that the learner is not deleted when deleting the learner [#7518](https://github.com/tikv/tikv/pull/7518) 
+  + Fix the issue that the Region might be stuck in the multi-time merging [#7518](https://github.com/tikv/tikv/pull/7518)
+  + Fix the issue that the learner is not deleted when deleting the learner [#7518](https://github.com/tikv/tikv/pull/7518)
   + Fix the issue that follower read might cause panic in raft-rs [#7408](https://github.com/tikv/tikv/pull/7408)
   + Fix the bug that a SQL operation might fail because of the `group by constant` error [#7383](https://github.com/tikv/tikv/pull/7383)
   + Fix the issue that an optimistic lock might block reads if the corresponding primary lock is a pessimistic lock [#7328](https://github.com/tikv/tikv/pull/7328)
@@ -116,7 +127,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + [#5134](https://github.com/tikv/tikv/pull/5134) [#4685](https://github.com/tikv/tikv/pull/4685) [#4650](https://github.com/tikv/tikv/pull/4650) [#6463](https://github.com/tikv/tikv/pull/6463)
 
 ## [3.1.0-beta.1] - 2020-01-10
-+ backup 
++ backup
     + Change the name of the backup file from `start_key` to the hash value of `start_key` to reduce the file name's length for easy reading (https://github.com/tikv/tikv/pull/6198)
     + Disable RocksDB's `force_consistency_checks` check to avoid false positives in the consistency check [#6249](https://github.com/tikv/tikv/pull/6249)
     + Add the incremental backup feature [#6286](https://github.com/tikv/tikv/pull/6286)
@@ -188,7 +199,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Reduce the overhead of region's heartbeat [#5620](https://github.com/tikv/tikv/pull/5620)
 + Reduce message flush in raftstore [#5617](https://github.com/tikv/tikv/pull/5617)
 + Check Lock's TTL  when doing clean up [#5589](https://github.com/tikv/tikv/pull/5589)
-  
+
 ## [3.0.4] - 2019-10-08
 
 + Fix the issue that the approximate keys is not correct when region is empty [#5414](https://github.com/tikv/tikv/pull/5414)
@@ -240,13 +251,13 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
   - Introduce Titan, a key-value plugin that improves write performance for
   scenarios with value sizes greater than 1KiB, and relieves write
   amplification in certain degrees
-  - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option` 
+  - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option`
   - Support `block cache` sharing among different column families
 + Server
   - Support reversed `raw_scan` and `raw_batch_scan`
   - Support batch receiving and sending Raft messages, improving TPS by 7% for write intensive scenarios
   - Support getting monitoring information via HTTP
-  - Support Local Reader in RawKV to improve performance  
+  - Support Local Reader in RawKV to improve performance
   - Reduce context switch overhead from `batch commands`
 + Raftstore
   - Support Multi-thread Raftstore and Multi-thread Apply to improve scalabilities,
@@ -263,14 +274,14 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
   - Add monitoring items related to `read index` and `GC worker`
 + Coprocessor
   - Refactor the computation framework to implement vector operators, computation
-  using vector expressions, and vector aggregations to improve performance  
+  using vector expressions, and vector aggregations to improve performance
   - Support providing operator execution status for the `EXPLAIN ANALYZE` statement
-  in TiDB  
+  in TiDB
   - Switch to the `work-stealing` thread pool model to reduce context switch cost
 + Misc
   - Develop a unified log format specification with restructured log system to
   facilitate collection and analysis by tools
-  - Add performance metrics related to configuration information and key bound crossing. 
+  - Add performance metrics related to configuration information and key bound crossing.
 
 ## [3.0.0-rc.3] - 2019-06-21
 + Engine
@@ -290,10 +301,10 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
     - Fix missing fsync calls for snapshots. [4850](https://github.com/tikv/tikv/pull/4850)
 + Coprocessor
     - Improve coprocessor batch executor. [4877](https://github.com/tikv/tikv/pull/4877)
-+ Transaction 
++ Transaction
     - Support `ResolveLockLite` to allow only resolving specified lock keys. [4882](https://github.com/tikv/tikv/pull/4882)
     - Improve pessimistic lock transaction. [4889](https://github.com/tikv/tikv/pull/4889)
-+ Tikv-ctl 
++ Tikv-ctl
     - Improve `bad-regions` and `tombstone` subcommands. [4862](https://github.com/tikv/tikv/pull/4862)
 + Misc
     - Add dist_release. [4841](https://github.com/tikv/tikv/pull/4841)
