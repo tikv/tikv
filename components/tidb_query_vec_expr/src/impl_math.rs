@@ -40,7 +40,7 @@ pub fn pi() -> Result<Option<Real>> {
 
 #[rpn_fn]
 #[inline]
-pub fn crc32(arg: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(arg
         .as_ref()
         .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
@@ -442,7 +442,7 @@ pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Re
 #[inline]
 #[rpn_fn]
 pub fn conv(
-    n: Option<&Bytes>,
+    n: Option<BytesRef>,
     from_base: Option<&Int>,
     to_base: Option<&Int>,
 ) -> Result<Option<Bytes>> {
@@ -550,6 +550,23 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
         x
     } else {
         Real::from(tmp.trunc() / shift)
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            if *digits >= 0 {
+                Ok(Some(*number))
+            } else {
+                let power = 10.0_f64.powi(-digits as i32);
+                let frac = *number as f64 / power;
+                Ok(Some((frac.round() * power) as i64))
+            }
+        }
+        _ => Ok(None),
     }
 }
 
@@ -1586,6 +1603,45 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let test_cases = vec![
+            (Some(Int::from(23)), Some(Int::from(2)), Some(Int::from(23))),
+            (
+                Some(Int::from(23)),
+                Some(Int::from(-1)),
+                Some(Int::from(20)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-1)),
+                Some(Int::from(-30)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (None, Some(Int::from(-27)), None),
+            (Some(Int::from(-27)), None, None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

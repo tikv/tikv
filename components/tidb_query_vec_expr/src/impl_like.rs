@@ -10,14 +10,14 @@ use tidb_query_shared_expr::*;
 #[rpn_fn]
 #[inline]
 pub fn like<C: Collator>(
-    target: Option<&Bytes>,
-    pattern: Option<&Bytes>,
+    target: Option<BytesRef>,
+    pattern: Option<BytesRef>,
     escape: Option<&i64>,
 ) -> Result<Option<i64>> {
     match (target, pattern, escape) {
         (Some(target), Some(pattern), Some(escape)) => {
             Ok(Some(
-                like::like::<C>(target.as_slice(), pattern.as_slice(), *escape as u32)? as i64,
+                like::like::<C>(target, pattern, *escape as u32)? as i64
             ))
         }
         _ => Ok(None),

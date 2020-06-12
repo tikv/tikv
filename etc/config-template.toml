@@ -482,6 +482,9 @@
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
 
+# RocksDB log levels
+# info-log-level = "info"
+
 ## Options for `Titan`.
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
@@ -743,6 +746,7 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# info-log-level = "info"
 # optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
