@@ -20,6 +20,22 @@ where
     C::compare(lhs, rhs)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn compare_bytes<C: Collator, F: CmpOp>(
+    lhs: Option<BytesRef>,
+    rhs: Option<BytesRef>,
+) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => {
+            let ord = C::sort_compare(lhs, rhs)?;
+            Some(F::compare_order(ord) as i64)
+        }
+    })
+}
+
 pub trait Comparer {
     type T: Evaluable;
 
@@ -39,26 +55,6 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(rhs)) as i64),
-        })
-    }
-}
-
-pub struct StringComparer<C: Collator, F: CmpOp> {
-    _phantom: std::marker::PhantomData<(C, F)>,
-}
-
-impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
-    type T = Bytes;
-
-    #[inline]
-    fn compare(lhs: Option<&Bytes>, rhs: Option<&Bytes>) -> Result<Option<i64>> {
-        Ok(match (lhs, rhs) {
-            (None, None) => F::compare_null(),
-            (None, _) | (_, None) => F::compare_partial_null(),
-            (Some(lhs), Some(rhs)) => {
-                let ord = C::sort_compare(lhs, rhs)?;
-                Some(F::compare_order(ord) as i64)
-            }
         })
     }
 }
@@ -244,7 +240,7 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
+pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {
