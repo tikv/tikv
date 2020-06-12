@@ -83,8 +83,12 @@ struct WriteCompactionFilter {
     // Record the last MVCC delete mark for each level.
     leveled_tail_deletes: HashMap<usize, Vec<u8>>,
 
+    // For metrics about (versions, deleted_versions) for every MVCC key.
     versions: usize,
     deleted: usize,
+    // Total versions and deleted versions in the compaction.
+    total_versions: usize,
+    total_deleted: usize,
 }
 
 impl WriteCompactionFilter {
@@ -105,6 +109,8 @@ impl WriteCompactionFilter {
             leveled_tail_deletes: HashMap::default(),
             versions: 0,
             deleted: 0,
+            total_versions: 0,
+            total_deleted: 0,
         }
     }
 
@@ -136,13 +142,15 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn reset_statistics(&mut self) {
+    fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
             MVCC_VERSIONS_HISTOGRAM.observe(self.versions as f64);
+            self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.deleted != 0 {
             GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted as f64);
+            self.total_deleted += self.deleted;
             self.deleted = 0;
         }
     }
@@ -178,8 +186,10 @@ impl Drop for WriteCompactionFilter {
                 self.deleted += 1;
                 valid = iter.next().unwrap();
             }
-            self.db.write(write_batch.as_inner()).unwrap();
+            self.switch_key_metrics();
         }
+        self.db.write(write_batch.as_inner()).unwrap();
+
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
             opts.set_sync(true);
@@ -218,7 +228,7 @@ impl CompactionFilter for WriteCompactionFilter {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.reset_statistics();
+            self.switch_key_metrics();
             // The level's tail delete mark can be removed because
             // the key is not the last one in the level.
             self.leveled_tail_deletes.remove(&level);
