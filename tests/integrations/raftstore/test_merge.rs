@@ -213,10 +213,20 @@ fn test_node_merge_prerequisites_check() {
     cluster.must_transfer_leader(left.get_id(), left_on_store1);
     let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
     cluster.must_transfer_leader(right.get_id(), right_on_store1);
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        left.get_id(),
-        3,
-    )));
+
+    // first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make source peer have uncommitted entries.
+    let append_filter = RegionPacketFilter::new(left.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgAppend)
+        .allow(1);
+    // make the source peer have no way to know the uncommitted entries can be applied from heartbeat.
+    let heartbeat_filter = RegionPacketFilter::new(left.get_id(), 3)
+        .msg_type(MessageType::MsgHeartbeat)
+        .direction(Direction::Recv);
+
+    cluster.add_send_filter(CloneFilterFactory(append_filter.clone()));
+    cluster.add_send_filter(CloneFilterFactory(heartbeat_filter.clone()));
     cluster.must_split(&left, b"k11");
     let res = cluster.try_merge(left.get_id(), right.get_id());
     // log gap contains admin entries.
@@ -225,10 +235,8 @@ fn test_node_merge_prerequisites_check() {
     cluster.must_put(b"k22", b"v22");
     must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
 
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        right.get_id(),
-        3,
-    )));
+    cluster.add_send_filter(CloneFilterFactory(append_filter));
+    cluster.add_send_filter(CloneFilterFactory(heartbeat_filter));
     // It doesn't matter if the index and term is correct.
     let compact_log = new_compact_log_request(100, 10);
     let req = new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
