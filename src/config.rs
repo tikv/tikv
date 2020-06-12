@@ -37,7 +37,7 @@ use engine_rocks::util::{
 };
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE, DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -234,6 +234,8 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             #[config(skip)]
             pub prop_keys_index_distance: u64,
+            #[config(skip)]
+            pub prop_delete_keys_index_distance: u64,
             #[config(skip)]
             pub enable_doubly_skiplist: bool,
             #[config(submodule)]
@@ -470,6 +472,7 @@ impl Default for DefaultCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
@@ -482,6 +485,7 @@ impl DefaultCfConfig {
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
+            prop_delete_keys_index_distance: self.prop_delete_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -537,6 +541,7 @@ impl Default for WriteCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
         }
@@ -559,6 +564,7 @@ impl WriteCfConfig {
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
+            prop_delete_keys_index_distance: self.prop_delete_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -606,6 +612,7 @@ impl Default for LockCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
         }
@@ -622,6 +629,7 @@ impl LockCfConfig {
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
+            prop_delete_keys_index_distance: self.prop_delete_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
@@ -670,6 +678,7 @@ impl Default for RaftCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan,
         }
@@ -734,6 +743,7 @@ impl Default for VersionCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
@@ -746,6 +756,7 @@ impl VersionCfConfig {
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
+            prop_delete_keys_index_distance, self.prop_delete_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -1051,6 +1062,7 @@ impl Default for RaftDefaultCfConfig {
             force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }

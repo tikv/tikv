@@ -24,6 +24,7 @@ const PROP_RANGE_INDEX: &str = "tikv.range_index";
 const PROP_DELETE_INDEX: &str = "tikv.delete_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
+pub const DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE: u64 = 20 * 1024;
 
 fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
     match entry_type {
@@ -361,6 +362,7 @@ pub struct RangePropertiesCollector {
     cur_offsets: RangeOffsets,
     prop_size_index_distance: u64,
     prop_keys_index_distance: u64,
+    prop_delete_keys_index_distance: u64,
 }
 
 impl Default for RangePropertiesCollector {
@@ -372,15 +374,17 @@ impl Default for RangePropertiesCollector {
             cur_offsets: RangeOffsets::default(),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
         }
     }
 }
 
 impl RangePropertiesCollector {
-    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64) -> Self {
+    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64, prop_delete_keys_index_distance: u64) -> Self {
         RangePropertiesCollector {
             prop_size_index_distance,
             prop_keys_index_distance,
+            prop_delete_keys_index_distance,
             ..Default::default()
         }
     }
@@ -391,6 +395,10 @@ impl RangePropertiesCollector {
 
     fn keys_in_last_range(&self) -> u64 {
         self.cur_offsets.keys - self.last_offsets.keys
+    }
+
+    fn delete_keys_in_last_range(&self) -> u64 {
+        self.cur_offsets.delete_keys - self.last_offsets.delete_keys
     }
 
     fn insert_new_point(&mut self, key: Vec<u8>) {
@@ -424,6 +432,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         if self.last_key.is_empty()
             || self.size_in_last_range() >= self.prop_size_index_distance
             || self.keys_in_last_range() >= self.prop_keys_index_distance
+            || self.delete_keys_in_last_range() > self.prop_delete_keys_index_distance
         {
             self.insert_new_point(key.to_owned());
         }
@@ -443,6 +452,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
 pub struct RangePropertiesCollectorFactory {
     pub prop_size_index_distance: u64,
     pub prop_keys_index_distance: u64,
+    pub prop_delete_keys_index_distance: u64,
 }
 
 impl Default for RangePropertiesCollectorFactory {
@@ -450,6 +460,7 @@ impl Default for RangePropertiesCollectorFactory {
         RangePropertiesCollectorFactory {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            prop_delete_keys_index_distance: DEFAULT_PROP_DELETE_KEYS_INDEX_DISTANCE,
         }
     }
 }
@@ -459,6 +470,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
         Box::new(RangePropertiesCollector::new(
             self.prop_size_index_distance,
             self.prop_keys_index_distance,
+            self.prop_delete_keys_index_distance,
         ))
     }
 }

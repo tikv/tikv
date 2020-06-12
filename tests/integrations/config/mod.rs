@@ -292,6 +292,7 @@ fn test_serde_custom_tikv_config() {
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: false,
         },
         writecf: WriteCfConfig {
@@ -350,6 +351,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: true,
         },
         lockcf: LockCfConfig {
@@ -408,6 +410,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: true,
         },
         raftcf: RaftCfConfig {
@@ -466,6 +469,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: true,
         },
         ver_defaultcf: VersionCfConfig {
@@ -510,6 +514,7 @@ fn test_serde_custom_tikv_config() {
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: false,
         },
         titan: titan_db_config.clone(),
@@ -582,6 +587,7 @@ fn test_serde_custom_tikv_config() {
             titan: titan_cf_config,
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            prop_delete_keys_index_distance: 20000,
             enable_doubly_skiplist: true,
         },
         titan: titan_db_config,
