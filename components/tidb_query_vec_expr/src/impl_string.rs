@@ -1984,7 +1984,7 @@ mod tests {
         let test_cases: Vec<(Vec<ScalarValue>, _)> = vec![
             (
                 vec![
-                    Some(0).into(),
+                    Some(0b0).into(),
                     Some(b"DataBase".to_vec()).into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
@@ -1992,7 +1992,7 @@ mod tests {
             ),
             (
                 vec![
-                    Some(1).into(),
+                    Some(0b1).into(),
                     Some(b"DataBase".to_vec()).into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
@@ -2009,7 +2009,7 @@ mod tests {
             (vec![None::<Int>.into(), None::<Bytes>.into()], None),
             (
                 vec![
-                    Some(1).into(),
+                    Some(0b1).into(),
                     None::<Bytes>.into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
@@ -2017,7 +2017,7 @@ mod tests {
             ),
             (
                 vec![
-                    Some(3).into(),
+                    Some(0b11).into(),
                     None::<Bytes>.into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
@@ -2025,7 +2025,7 @@ mod tests {
             ),
             (
                 vec![
-                    Some(0).into(),
+                    Some(0b0).into(),
                     None::<Bytes>.into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
@@ -2042,7 +2042,7 @@ mod tests {
             ),
             (
                 vec![
-                    Some(2).into(),
+                    Some(0b10).into(),
                     Some(b"DataBase".to_vec()).into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
