@@ -262,6 +262,12 @@ impl StatsMonitor {
                             "err" => ?e,
                         );
                     }
+<<<<<<< HEAD:src/pd/pd.rs
+=======
+                    // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
+                    auto_split_controller.refresh_cfg();
+>>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/raftstore/src/store/worker/pd.rs
                 }
             })?;
 
@@ -270,6 +276,7 @@ impl StatsMonitor {
     }
 
     pub fn stop(&mut self) {
+<<<<<<< HEAD:src/pd/pd.rs
         let h = self.handle.take();
         if h.is_none() {
             return;
@@ -278,6 +285,14 @@ impl StatsMonitor {
         if let Err(e) = h.unwrap().join() {
             error!("join stats collector failed"; "err" => ?e);
             return;
+=======
+        if let Some(h) = self.handle.take() {
+            drop(self.timer.take());
+            drop(self.sender.take());
+            if let Err(e) = h.join() {
+                error!("join stats collector failed"; "err" => ?e);
+            }
+>>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/raftstore/src/store/worker/pd.rs
         }
     }
 }
@@ -381,6 +396,11 @@ impl<T: PdClient> Runner<T> {
         right_derive: bool,
         callback: Callback,
     ) {
+        if split_keys.is_empty() {
+            info!("empty split key, skip ask batch split";
+                "region_id" => region.get_id());
+            return;
+        }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let f = self
@@ -754,6 +774,16 @@ impl<T: PdClient> Runner<T> {
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
         }
+<<<<<<< HEAD:src/pd/pd.rs
+=======
+        if !read_stats.region_infos.is_empty() {
+            if let Some(sender) = self.stats_monitor.get_sender() {
+                if sender.send(read_stats).is_err() {
+                    warn!("send read_stats failed, are we shutting down?")
+                }
+            }
+        }
+>>>>>>> 558ca5f... pd_client: unwrap or panic with detail log (#7999):components/raftstore/src/store/worker/pd.rs
     }
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
