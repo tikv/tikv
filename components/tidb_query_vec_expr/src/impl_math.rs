@@ -570,6 +570,19 @@ pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Opt
     }
 }
 
+#[inline]
+#[rpn_fn]
+pub fn round_with_frac_real(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let power = 10.0_f64.powi(-digits as i32);
+            let frac = *number / power;
+            Ok(Some(Real::from(frac.round() * power)))
+        }
+        _ => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
@@ -1608,7 +1621,7 @@ mod tests {
 
     #[test]
     fn test_round_frac() {
-        let test_cases = vec![
+        let int_cases = vec![
             (Some(Int::from(23)), Some(Int::from(2)), Some(Int::from(23))),
             (
                 Some(Int::from(23)),
@@ -1635,11 +1648,43 @@ mod tests {
             (None, None, None),
         ];
 
-        for (arg0, arg1, exp) in test_cases {
+        for (arg0, arg1, exp) in int_cases {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let real_cases = vec![
+            (
+                Some(Real::from(-1.298_f64)),
+                Some(Int::from(1)),
+                Some(Real::from(-1.3_f64)),
+            ),
+            (
+                Some(Real::from(-1.298_f64)),
+                Some(Int::from(0)),
+                Some(Real::from(-1.0_f64)),
+            ),
+            (
+                Some(Real::from(23.298_f64)),
+                Some(Int::from(2)),
+                Some(Real::from(23.30_f64)),
+            ),
+            (
+                Some(Real::from(23.298_f64)),
+                Some(Int::from(-1)),
+                Some(Real::from(20.0_f64)),
+            ),
+        ];
+
+        for (arg0, arg1, exp) in real_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracReal)
                 .unwrap();
             assert_eq!(got, exp);
         }
