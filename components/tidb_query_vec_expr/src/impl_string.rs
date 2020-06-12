@@ -341,7 +341,7 @@ pub fn insert(
             let s = s;
             let newstr = newstr;
             if pos < 1 || upos > s.len() {
-                return Ok(Some(s));
+                return Ok(Some(s.to_vec()));
             }
             if ulen > s.len() - upos + 1 || len < 0 {
                 ulen = s.len() - upos + 1;
@@ -350,7 +350,7 @@ pub fn insert(
             ret.extend_from_slice(&s[0..upos - 1]);
             ret.extend_from_slice(&newstr);
             ret.extend_from_slice(&s[upos + ulen - 1..]);
-            Ok(Some(ret))
+            Ok(Some(ret.to_vec()))
         }
         _ => Ok(None),
     }
