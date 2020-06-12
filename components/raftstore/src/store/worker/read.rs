@@ -40,8 +40,6 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
-    pub(crate) rejected_by_appiled_term: i64,
-    pub(crate) rejected_by_no_lease: i64,
 }
 
 impl ReadDelegate {
@@ -58,8 +56,6 @@ impl ReadDelegate {
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
-            rejected_by_appiled_term: 0,
-            rejected_by_no_lease: 0,
         }
     }
 
@@ -241,7 +237,7 @@ where
 
         // Check region id.
         let region_id = req.get_header().get_region_id();
-        let mut delegate = match self.delegates.get_mut(&region_id) {
+        let delegate = match self.delegates.get_mut(&region_id) {
             Some(delegate) => {
                 fail_point!("localreader_on_find_delegate");
                 match delegate.take() {
@@ -286,16 +282,14 @@ where
             return Ok(None);
         }
 
-        match delegate.inspect(req) {
+        let mut inspector = Inspector {
+            delegate: &delegate,
+            metrics: &mut self.metrics,
+        };
+        match inspector.inspect(req) {
             Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
             // It can not handle other policies.
-            Ok(_) => {
-                self.metrics.rejected_by_no_lease += delegate.rejected_by_no_lease;
-                self.metrics.rejected_by_appiled_term += delegate.rejected_by_appiled_term;
-                delegate.rejected_by_no_lease = 0;
-                delegate.rejected_by_appiled_term = 0;
-                Ok(None)
-            }
+            Ok(_) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -438,32 +432,37 @@ where
     }
 }
 
-impl RequestInspector for ReadDelegate {
+struct Inspector<'r, 'm> {
+    delegate: &'r ReadDelegate,
+    metrics: &'m mut ReadMetrics,
+}
+
+impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
     fn has_applied_to_current_term(&mut self) -> bool {
-        if self.applied_index_term == self.term {
+        if self.delegate.applied_index_term == self.delegate.term {
             true
         } else {
             debug!(
                 "rejected by term check";
-                "tag" => &self.tag,
-                "applied_index_term" => self.applied_index_term,
-                "delegate_term" => ?self.term,
+                "tag" => &self.delegate.tag,
+                "applied_index_term" => self.delegate.applied_index_term,
+                "delegate_term" => ?self.delegate.term,
             );
 
             // only for metric.
-            self.rejected_by_appiled_term += 1;
+            self.metrics.rejected_by_appiled_term += 1;
             false
         }
     }
 
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
-        if self.leader_lease.is_some() {
+        if self.delegate.leader_lease.is_some() {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            debug!("rejected by leader lease"; "tag" => &self.tag);
-            self.rejected_by_no_lease += 1;
+            debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
+            self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
     }
