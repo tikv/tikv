@@ -1678,6 +1678,9 @@ mod tests {
                 Some(Int::from(-1)),
                 Some(Real::from(20.0_f64)),
             ),
+            (Some(Real::from(23.298_f64)), None, None),
+            (None, Some(Int::from(2)), None),
+            (None, None, None),
         ];
 
         for (arg0, arg1, exp) in real_cases {
