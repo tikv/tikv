@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::READ_BUF_SIZE;
+
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
@@ -25,6 +27,15 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // we use this member to ensure every call to `poll_next()` reuse the same
     // buffer.
     buf: Vec<u8>,
+}
+
+impl<R> AsyncReadAsSyncStreamOfBytes<R> {
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader: Mutex::new(reader),
+            buf: vec![0; READ_BUF_SIZE],
+        }
+    }
 }
 
 impl<R: AsyncRead + Unpin> Stream for AsyncReadAsSyncStreamOfBytes<R> {
