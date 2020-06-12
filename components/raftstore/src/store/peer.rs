@@ -2239,6 +2239,7 @@ impl Peer {
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
+            || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
         {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",
