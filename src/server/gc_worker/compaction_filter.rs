@@ -199,7 +199,7 @@ impl Drop for WriteCompactionFilter {
             self.db.sync_wal().unwrap();
         }
 
-        info!(
+        debug!(
             "Dropping WriteCompactionFilter";
             "bottommost_level" => self.bottommost_level,
             "versions" => self.total_versions,
