@@ -219,6 +219,9 @@ impl CompactionFilter for WriteCompactionFilter {
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
             self.reset_statistics();
+            // The level's tail delete mark can be removed because
+            // the key is not the last one in the level.
+            self.leveled_tail_deletes.remove(&level);
         }
 
         self.versions += 1;
