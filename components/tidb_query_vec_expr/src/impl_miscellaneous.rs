@@ -20,9 +20,29 @@ const PREFIX_MAPPED: [u8; 12] = [
 
 #[rpn_fn(varg)]
 #[inline]
-pub fn any_value<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
+pub fn any_value<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     if let Some(arg) = args.first() {
         Ok(arg.cloned())
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn any_value_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    if let Some(arg) = args.first() {
+        Ok(arg.map(|x| x.to_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    if let Some(arg) = args.first() {
+        Ok(arg.map(|x| x.to_vec()))
     } else {
         Ok(None)
     }
