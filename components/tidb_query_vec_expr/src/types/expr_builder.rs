@@ -765,13 +765,13 @@ mod tests {
         assert!(it.next().unwrap().constant_value().as_real().is_none());
 
         // node b
-        assert_eq!(7, it.next().unwrap().constant_value().as_int().unwrap());
+        assert_eq!(7, *it.next().unwrap().constant_value().as_int().unwrap());
 
         // node c
-        assert_eq!(3, it.next().unwrap().constant_value().as_int().unwrap());
+        assert_eq!(3, *it.next().unwrap().constant_value().as_int().unwrap());
 
         // node d
-        assert_eq!(11, it.next().unwrap().constant_value().as_int().unwrap());
+        assert_eq!(11, *it.next().unwrap().constant_value().as_int().unwrap());
 
         // fn_c
         assert_eq!(it.next().unwrap().fn_call_func().name, "fn_c");
@@ -781,13 +781,13 @@ mod tests {
 
         // node e
         assert_eq!(
-            &Real::new(-1.5).ok(),
+            Real::new(-1.5).ok().as_ref(),
             it.next().unwrap().constant_value().as_real()
         );
 
         // node f
         assert_eq!(
-            &Real::new(100.12).ok(),
+            Real::new(100.12).ok().as_ref(),
             it.next().unwrap().constant_value().as_real()
         );
 

@@ -101,7 +101,7 @@ pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Op
 
 pub trait Ceil {
     type Input: Evaluable;
-    type Output: Evaluable;
+    type Output: EvaluableRet;
 
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
@@ -181,7 +181,7 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<
 
 pub trait Floor {
     type Input: Evaluable;
-    type Output: Evaluable;
+    type Output: EvaluableRet;
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
@@ -868,7 +868,7 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
