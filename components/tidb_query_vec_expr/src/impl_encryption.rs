@@ -103,7 +103,7 @@ mod tests {
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
@@ -146,7 +146,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Md5);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Md5);
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Sha1);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Sha1);
     }
 
     #[test]
