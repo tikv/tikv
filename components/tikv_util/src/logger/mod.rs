@@ -12,10 +12,10 @@ use std::sync::Mutex;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
+use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::{LogFormat, ReadableDuration, ReadableSize};
+use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
 
@@ -109,19 +109,14 @@ pub fn set_global_logger(
     Ok(())
 }
 
-/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
-// Avoid clippy type_complexity lint.
-pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
-
-/// Constructs a new file drainer which outputs log to a file at the specified
-/// path. The file drainer rotates for the specified timespan.
-pub fn file_drainer<N>(
-    format: LogFormat,
+/// Constructs a new file writer which outputs log to a file at the specified
+/// path. The file writer rotates for the specified timespan.
+pub fn file_writer<N>(
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
     rename: N,
-) -> io::Result<Box<dyn Drain<Ok = (), Err = io::Error> + Send>>
+) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
@@ -131,28 +126,28 @@ where
             .add_rotator(RotateBySize::new(rotation_size))
             .build()?,
     );
-
-    Ok(match format {
-        LogFormat::Text => {
-            let decorator = PlainDecorator::new(logger);
-            Box::new(TikvFormat::new(decorator))
-        }
-        LogFormat::Json => Box::new(json_format(logger)),
-    })
+    Ok(logger)
 }
 
-/// Constructs a new terminal drainer which outputs logs to stderr.
-pub fn term_drainer(format: LogFormat) -> Box<dyn Drain<Ok = (), Err = io::Error> + Send> {
-    match format {
-        LogFormat::Text => {
-            let decorator = TermDecorator::new().stderr().build();
-            Box::new(TikvFormat::new(decorator))
-        }
-        LogFormat::Json => Box::new(json_format(io::stderr())),
-    }
+/// Constructs a new terminal writer which outputs logs to stderr.
+pub fn term_writer() -> io::Stderr {
+    io::stderr()
 }
 
-fn json_format<W: io::Write>(io: W) -> slog_json::Json<W> {
+/// Formats output logs to "TiDB Log Format".
+pub fn text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
+where
+    W: io::Write,
+{
+    let decorator = PlainDecorator::new(io);
+    TikvFormat::new(decorator)
+}
+
+/// Formats output logs to JSON format.
+pub fn json_format<W>(io: W) -> slog_json::Json<W>
+where
+    W: io::Write,
+{
     slog_json::Json::new(io)
         .set_newlines(true)
         .set_flush(true)
@@ -277,7 +272,7 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if let Err(e) = self.0.log(record, values) {
-            let fatal_drainer = Mutex::new(term_drainer(LogFormat::Text)).ignore_res();
+            let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
             fatal_drainer.log(record, values).unwrap();
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
