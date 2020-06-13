@@ -570,6 +570,21 @@ pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Opt
     }
 }
 
+#[rpn_fn]
+#[inline]
+fn round_with_frac_dec(arg0: Option<&Decimal>, arg1: Option<&Int>) -> Result<Option<Decimal>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let res: codec::Result<Decimal> = number
+                .to_owned()
+                .round(*digits as i8, RoundMode::HalfEven)
+                .into();
+            Ok(Some(res?))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[inline]
 #[rpn_fn]
 pub fn round_with_frac_real(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
@@ -1653,6 +1668,36 @@ mod tests {
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let dec_cases = vec![
+            (
+                Some(Decimal::from_str("150.000").unwrap()),
+                Some(Int::from(2)),
+                Some(Decimal::from_str("150.000").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("150.257").unwrap()),
+                Some(Int::from(1)),
+                Some(Decimal::from_str("150.3").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("153.257").unwrap()),
+                Some(Int::from(-1)),
+                Some(Decimal::from_str("150").unwrap()),
+            ),
+            (Some(Decimal::from_str("153.257").unwrap()), None, None),
+            (None, Some(Int::from(-27)), None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in dec_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracDec)
                 .unwrap();
             assert_eq!(got, exp);
         }
