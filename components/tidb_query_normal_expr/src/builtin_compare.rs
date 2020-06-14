@@ -886,7 +886,7 @@ mod tests {
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
             ),
             (
-                vec![Datum::Bytes(t9.clone()), Datum::Bytes(t4.clone())],
+                vec![Datum::Bytes(t9), Datum::Bytes(t4.clone())],
                 Datum::Null,
                 Datum::Bytes(t4.clone()),
             ),
