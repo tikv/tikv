@@ -233,33 +233,35 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut res = None;
         let mut least =
             Time::parse_datetime(ctx, "9999-12-31 23:59:59.999999", mysql::MAX_FSP, false)?;
         let mut invalid_time = None;
+        let mut invalid_time_found = false;
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
+            invalid_time = match invalid_time {
+                Some(str_val) => min(Some(s.clone()), Some(str_val)),
+                None => Some(s.clone()),
+            };
             match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
                     _ => {
-                        if invalid_time == None {
-                            invalid_time = Some(Cow::Owned(s.to_string().into_bytes()));
+                        if !invalid_time_found {
+                            invalid_time_found = true;
                         }
                     }
                 },
             }
         }
 
-        if res == None {
-            res = Some(Cow::Owned(least.to_string().into_bytes()));
+        if invalid_time_found {
+            Ok(invalid_time.map(|str_val| Cow::Owned(str_val.to_string().into_bytes())))
+        } else {
+            Ok(Some(Cow::Owned(least.to_string().into_bytes())))
         }
-        if invalid_time != None {
-            res = invalid_time;
-        }
-        Ok(res)
     }
 
     pub fn least_string<'a, 'b: 'a>(
@@ -725,11 +727,12 @@ mod tests {
         let t1 = b"2012-12-12 12:00:39".to_owned().to_vec();
         let t2 = b"2012-12-24 12:00:39".to_owned().to_vec();
         let t3 = b"2012-12-31 12:00:39".to_owned().to_vec();
-        let t4 = b"invalid_time".to_owned().to_vec();
+        let t4 = b"invalid_time_a".to_owned().to_vec();
         let t5 = b"2012-12-12 12:00:38.12003800000".to_owned().to_vec();
         let t6 = b"2012-12-31 12:00:39.120050".to_owned().to_vec();
         let t7 = b"2018-04-03 00:00:00.000000".to_owned().to_vec();
         let _t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
+        let t9 = b"invalid_time_b".to_owned().to_vec();
 
         let int_cases = vec![
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
@@ -868,7 +871,7 @@ mod tests {
                     Datum::Bytes(t4.clone()),
                 ],
                 Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(t1.clone()),
             ),
             (
                 vec![
@@ -883,7 +886,7 @@ mod tests {
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
             ),
             (
-                vec![Datum::Bytes(t4.clone()), Datum::Bytes(t4.clone())],
+                vec![Datum::Bytes(t9.clone()), Datum::Bytes(t4.clone())],
                 Datum::Null,
                 Datum::Bytes(t4.clone()),
             ),

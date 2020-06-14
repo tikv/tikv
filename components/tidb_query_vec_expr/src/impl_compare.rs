@@ -363,6 +363,7 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
         false,
     )?);
     let mut invalid_time = None;
+    let mut invalid_time_found = false;
 
     for arg in args {
         match arg {
@@ -375,12 +376,16 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
                             .map(|_| Ok(None))?;
                     }
                 };
+                invalid_time = match invalid_time {
+                    Some(str_val) => min(Some(s), Some(str_val)),
+                    None => Some(s),
+                };
                 match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         ctx.handle_invalid_time_error(Error::invalid_time_format(&s))?;
-                        if invalid_time == None {
-                            invalid_time = Some(s.to_string().into_bytes());
+                        if !invalid_time_found {
+                            invalid_time_found = true;
                         }
                     }
                 }
@@ -391,10 +396,11 @@ pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Op
         }
     }
 
-    if invalid_time != None {
-        return Ok(invalid_time);
+    if invalid_time_found {
+        Ok(invalid_time.map(|str_val| str_val.to_string().into_bytes()))
+    } else {
+        Ok(least.map(|time| time.to_string().into_bytes()))
     }
-    Ok(least.map(|time| time.to_string().into_bytes()))
 }
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
@@ -1260,7 +1266,7 @@ mod tests {
                     Some(b"invalid_time".to_owned().to_vec()),
                 ],
                 Some(b"2012-12-31 12:00:39".to_owned().to_vec()),
-                Some(b"invalid_time".to_owned().to_vec()),
+                Some(b"2012-12-12 12:00:39".to_owned().to_vec()),
             ),
             (
                 vec![
@@ -1276,11 +1282,11 @@ mod tests {
             ),
             (
                 vec![
-                    Some(b"invalid_time".to_owned().to_vec()),
-                    Some(b"invalid_time".to_owned().to_vec()),
+                    Some(b"invalid_time_b".to_owned().to_vec()),
+                    Some(b"invalid_time_a".to_owned().to_vec()),
                 ],
                 None,
-                Some(b"invalid_time".to_owned().to_vec()),
+                Some(b"invalid_time_a".to_owned().to_vec()),
             ),
             (
                 vec![
