@@ -434,18 +434,33 @@ fn field<T: Evaluable + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
     }))
 }
 
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
+    Ok(Some(match args[0] {
+        // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
+        None => 0,
+        Some(val) => args
+            .iter()
+            .skip(1)
+            .position(|&i| i == Some(val))
+            .map_or(0, |pos| (pos + 1) as i64),
+    }))
+}
+
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
     let index = raw_args[0].as_int();
-    Ok(match *index {
+    Ok(match index {
         None => None,
         Some(i) => {
+            let i = *i;
             if i <= 0 || i + 1 > raw_args.len() as i64 {
                 return Ok(None);
             }
-            raw_args[i as usize].as_bytes().to_owned()
+            raw_args[i as usize].as_bytes().map(|x| x.to_vec())
         }
     })
 }

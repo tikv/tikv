@@ -101,7 +101,7 @@ pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Op
 
 pub trait Ceil {
     type Input: Evaluable;
-    type Output: Evaluable;
+    type Output: EvaluableRet;
 
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
@@ -181,7 +181,7 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<
 
 pub trait Floor {
     type Input: Evaluable;
-    type Output: Evaluable;
+    type Output: EvaluableRet;
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
@@ -553,6 +553,23 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
     }
 }
 
+#[inline]
+#[rpn_fn]
+pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            if *digits >= 0 {
+                Ok(Some(*number))
+            } else {
+                let power = 10.0_f64.powi(-digits as i32);
+                let frac = *number as f64 / power;
+                Ok(Some((frac.round() * power) as i64))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
@@ -838,7 +855,7 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
@@ -1586,6 +1603,45 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let test_cases = vec![
+            (Some(Int::from(23)), Some(Int::from(2)), Some(Int::from(23))),
+            (
+                Some(Int::from(23)),
+                Some(Int::from(-1)),
+                Some(Int::from(20)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-1)),
+                Some(Int::from(-30)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (None, Some(Int::from(-27)), None),
+            (Some(Int::from(-27)), None, None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
