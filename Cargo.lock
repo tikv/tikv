@@ -1863,7 +1863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/hicqu/kvproto?branch=store-heartbeat-cluster-version#76ef595714bb074accfc4af21f4adbfaa807d3d9"
+source = "git+https://github.com/pingcap/kvproto.git#8037ca08f377c8f041ff4a2bf9a7cdbce5479d9a"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2923,12 +2923,13 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.11.1"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f3ca050cd02aa2ee07f8e227871ebe8c12cf076ff7c6bf82fdd41dc81af874"
+checksum = "62e8796ce8d382b0a59f53772a00728799f4d78fc478d4f85e6ca864d67130e0"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
+ "proc-macro2",
  "prost-build",
  "protobuf",
  "protobuf-codegen",
@@ -4258,6 +4259,7 @@ dependencies = [
  "rand",
  "rand_xorshift",
  "security",
+ "semver 0.10.0",
  "serde_json",
  "slog",
  "slog-global",
