@@ -45,6 +45,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
 mod snapshot;
