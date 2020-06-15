@@ -1006,13 +1006,12 @@ impl DebugExecutor for Debugger {
 
 fn warning_prompt(message: &str) -> bool {
     const EXPECTED: &str = "I consent";
-    println!(
-        "{} Type \"{}\" to continue, anything else to exit:",
-        message, EXPECTED
-    );
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-
+    println!("{}", message);
+    let input: String = promptly::prompt(format!(
+        "Type \"{}\" to continue, anything else to exit:",
+        EXPECTED
+    ))
+    .unwrap();
     if input == EXPECTED {
         true
     } else {
