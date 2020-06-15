@@ -253,7 +253,7 @@ mod tests {
     use super::super::size::tests::must_split_at;
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine_rocks::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
