@@ -43,7 +43,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer, RequestInspector, StaleState};
+use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
