@@ -835,7 +835,7 @@ impl Peer {
         if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
             // If the leader hasn't committed any entries in its term, it can't response read only
             // requests. Please also take a look at raft-rs.
-            let state = self.inspect_lease(None);
+            let state = self.inspect_lease();
             if let LeaseState::Valid = state {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
@@ -2098,7 +2098,7 @@ impl Peer {
 
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
-            match self.inspect_lease(Some(renew_lease_time)) {
+            match self.inspect_lease() {
                 // Here combine the new read request with the previous one even if the lease expired is
                 // ok because in this case, the previous read index must be sent out with a valid
                 // lease instead of a suspect lease. So there must no pending transfer-leader proposals
@@ -2869,7 +2869,7 @@ pub trait RequestInspector {
     /// Has the current term been applied?
     fn has_applied_to_current_term(&mut self) -> bool;
     /// Inspects its lease.
-    fn inspect_lease(&mut self, ts: Option<Timespec>) -> LeaseState;
+    fn inspect_lease(&mut self) -> LeaseState;
 
     /// Inspect a request, return a policy that tells us how to
     /// handle the request.
@@ -2921,7 +2921,7 @@ pub trait RequestInspector {
 
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
-        match self.inspect_lease(None) {
+        match self.inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
@@ -2936,11 +2936,12 @@ impl RequestInspector for Peer {
         self.get_store().applied_index_term() == self.term()
     }
 
-    fn inspect_lease(&mut self, ts: Option<Timespec>) -> LeaseState {
+    fn inspect_lease(&mut self) -> LeaseState {
         if !self.raft_group.raft.in_lease() {
             return LeaseState::Suspect;
         }
-        let state = self.leader_lease.inspect(ts);
+        // None means now.
+        let state = self.leader_lease.inspect(None);
         if LeaseState::Expired == state {
             debug!(
                 "leader lease is expired";
@@ -3267,7 +3268,7 @@ mod tests {
             fn has_applied_to_current_term(&mut self) -> bool {
                 self.applied_to_index_term
             }
-            fn inspect_lease(&mut self, _: Option<Timespec>) -> LeaseState {
+            fn inspect_lease(&mut self) -> LeaseState {
                 self.lease_state
             }
         }
