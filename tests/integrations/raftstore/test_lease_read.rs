@@ -78,7 +78,16 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     if cluster.engines.len() > 1 {
         // Wait for the leader lease to expire.
         thread::sleep(max_lease);
+        // Wait for the raft tick renew leader lease
+        thread::sleep(cluster.cfg.raft_store.raft_base_tick_interval.0);
 
+        // Check if the raft tick proposed a read index and renewed the leader lease.
+        assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+        expect_lease_read += 1;
+        assert_eq!(detector.ctx.rl().len(), expect_lease_read);
+
+        // Wait for the leader lease to expire.
+        thread::sleep(max_lease);
         // Issue a read request and check the value on response.
         must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
@@ -88,11 +97,14 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(detector.ctx.rl().len(), expect_lease_read);
     }
 
-    // Wait for the leader lease to expire.
-    thread::sleep(max_lease);
+    // Wait for the leader lease to pass 1/2 of it.
+    thread::sleep(max_lease / 2);
 
     // Issue a write request.
     cluster.must_put(key, b"v2");
+
+    // The leader lease will not expire, because the write request renew it.
+    thread::sleep(max_lease / 2);
 
     // Check if the leader has renewed its lease so that it can do lease read.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
