@@ -449,7 +449,7 @@ impl DataKeyManager {
         dict_path: &str,
         key_ids: Option<Vec<u64>>,
     ) -> Result<()> {
-        let dict_file = EncryptedFile::new(Path::new(dict_path), FILE_DICT_NAME);
+        let dict_file = EncryptedFile::new(Path::new(dict_path), KEY_DICT_NAME);
         // Here we don't trigger master key rotation and don't care about
         // config.previous_master_key.
         let backend = create_backend(&config.master_key)?;
