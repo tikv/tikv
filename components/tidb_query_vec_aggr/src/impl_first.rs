@@ -66,12 +66,12 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
 #[aggr_function(state = AggrFnStateFirst::<T>::new())]
 pub struct AggrFnFirst<T>(PhantomData<T>)
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>;
 
 impl<T> AggrFnFirst<T>
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>,
 {
     fn new() -> Self {
@@ -83,7 +83,7 @@ where
 #[derive(Debug)]
 pub enum AggrFnStateFirst<T>
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>,
 {
     Empty,
@@ -92,7 +92,7 @@ where
 
 impl<T> AggrFnStateFirst<T>
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>,
 {
     pub fn new() -> Self {
@@ -104,7 +104,7 @@ where
 // `ConcreteAggrFunctionState` so that `update_repeat` and `update_vector` can be faster.
 impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateFirst<T>
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>,
 {
     #[inline]
@@ -145,8 +145,8 @@ where
 // `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
 impl<T1, T2> super::AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
 where
-    T1: Evaluable,
-    T2: Evaluable,
+    T1: EvaluableRet,
+    T2: EvaluableRet,
     VectorValue: VectorValueExt<T2>,
 {
     #[inline]
@@ -177,7 +177,7 @@ where
 
 impl<T> super::AggrFunctionState for AggrFnStateFirst<T>
 where
-    T: Evaluable,
+    T: EvaluableRet,
     VectorValue: VectorValueExt<T>,
 {
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
