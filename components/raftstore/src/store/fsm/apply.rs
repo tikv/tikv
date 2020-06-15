@@ -29,6 +29,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
+use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
@@ -210,7 +211,7 @@ pub enum ExecResult<S> {
     SplitRegion {
         regions: Vec<Region>,
         derived: Region,
-        new_regions_map: HashMap<u64, u64>,
+        new_regions_map: HashMap<u64, (u64, Option<String>)>,
     },
     PrepareMerge {
         region: Region,
@@ -1843,48 +1844,59 @@ where
             }
             new_regions_map.insert(
                 new_region.get_id(),
-                util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                (
+                    util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    None,
+                ),
             );
             regions.push(new_region);
         }
 
         let mut meta = ctx.store_meta.lock().unwrap();
-        new_regions_map.retain(|region_id, peer_id| {
+        for (region_id, val) in new_regions_map.iter_mut() {
+            if val.1.is_some() {
+                continue;
+            }
+            let peer_id = val.0;
             if let Some(r) = meta.regions.get(region_id) {
                 if util::is_region_initialized(r) {
-                    return false;
+                    val.1 = Some(format!("region {:?} has already initialized", r));
                 } else {
-                    // If the region in meta.regions is not initialized, it must be in pending_create_peers.
-                    let status = meta.pending_create_peers.get(&region_id).unwrap();
-                    if *status == (*peer_id, CreatePeerStatus::Empty) {
-                        meta.pending_create_peers
-                            .insert(*region_id, (*peer_id, CreatePeerStatus::Split));
-                        return true;
+                    // If the region in meta.regions is not initialized, it must exist in meta.pending_create_peers.
+                    let status = meta.pending_create_peers.get_mut(region_id).unwrap();
+                    if *status == (peer_id, CreatePeerStatus::Empty) {
+                        *status = (peer_id, CreatePeerStatus::Split);
                     } else {
-                        return false;
+                        val.1 = Some(format!("status {:?} is not expected", status));
                     }
                 }
+            } else {
+                // If the region is not in meta.regions, it must not exist in meta.pending_create_peers.
+                assert_eq!(
+                    meta.pending_create_peers
+                        .insert(*region_id, (peer_id, CreatePeerStatus::Split))
+                        .is_none(),
+                    true
+                );
             }
-            assert_eq!(
-                meta.pending_create_peers
-                    .insert(*region_id, (*peer_id, CreatePeerStatus::Split))
-                    .is_none(),
-                true
-            );
-            true
-        });
+        }
         drop(meta);
 
         let mut already_exist_regions = Vec::new();
-        new_regions_map.retain(|region_id, peer_id| {
+        for (region_id, val) in new_regions_map.iter_mut() {
+            if val.1.is_some() {
+                continue;
+            }
+            let peer_id = val.0;
             let region_state_key = keys::region_state_key(*region_id);
             match ctx.engine.get_value_cf(CF_RAFT, &region_state_key) {
-                Ok(state) => {
-                    if state.is_some() {
-                        already_exist_regions.push((*region_id, *peer_id));
-                        false
-                    } else {
-                        true
+                Ok(v) => {
+                    if v.is_some() {
+                        already_exist_regions.push((*region_id, peer_id));
+
+                        let mut state = RegionLocalState::default();
+                        state.merge_from_bytes(&v.unwrap()).unwrap();
+                        val.1 = Some(format!("state {:?} exist in kv engine", state));
                     }
                 }
                 e => panic!(
@@ -1892,7 +1904,7 @@ where
                     self.tag, region_id, e
                 ),
             }
-        });
+        }
 
         if !already_exist_regions.is_empty() {
             let mut meta = ctx.store_meta.lock().unwrap();
@@ -1906,10 +1918,13 @@ where
 
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for new_region in &regions {
-            if !new_regions_map.contains_key(&new_region.get_id()) {
-                info!(
-                    "new region from split is already exist";
+            let val = new_regions_map.get(&new_region.get_id()).unwrap();
+            if let Some(reason) = &val.1 {
+                warn!(
+                    "new region from splitting already exist";
                     "new_region_id" => new_region.get_id(),
+                    "new_peer_id" => val.0,
+                    "reason" => reason,
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                 );

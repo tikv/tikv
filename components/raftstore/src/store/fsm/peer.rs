@@ -1694,6 +1694,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
+        if !is_initialized {
+            let v = meta.pending_create_peers.get(&region_id);
+            if let Some(status) = v {
+                if *status == (self.fsm.peer_id(), CreatePeerStatus::Empty) {
+                    meta.pending_create_peers.remove(&region_id);
+                }
+            }
+        }
 
         // Clear merge related structures.
         if let Some(&need_atomic) = meta.destroyed_region_for_snap.get(&region_id) {
@@ -1863,7 +1871,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
-        new_regions_map: HashMap<u64, u64>,
+        new_regions_map: HashMap<u64, (u64, Option<String>)>,
     ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -1904,18 +1912,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             if new_region.get_id() != region_id {
-                match new_regions_map.get(&new_region.get_id()) {
-                    None => {
-                        // FIXME: here need to clean the new_region's data, but is it safe to clean in region worker
-                        // and do not affect the possibly existing peer with the same region id?
-                        continue;
-                    }
-                    Some(peer_id) => {
-                        assert_eq!(
-                            meta.pending_create_peers.remove(&new_region.get_id()),
-                            Some((*peer_id, CreatePeerStatus::Split))
-                        );
-                    }
+                let v = new_regions_map.get(&new_region.get_id()).unwrap();
+                if v.1.is_some() {
+                    // FIXME: here need to clean the new_region's data, but is it safe to clean in region worker
+                    // and do not affect the possibly existing peer with the same region id?
+                    continue;
+                } else {
+                    assert_eq!(
+                        meta.pending_create_peers.remove(&new_region.get_id()),
+                        Some((v.0, CreatePeerStatus::Split))
+                    );
                 }
             }
             let new_region_id = new_region.get_id();
