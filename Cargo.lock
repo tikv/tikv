@@ -428,7 +428,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46e3374c604fb39d1a2f35ed5e4a4e30e60d01fab49446e08f1b3e9a90aef202"
 dependencies = [
- "semver",
+ "semver 0.9.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -1863,7 +1863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6f5f6ae6671fe18f2e5521e6eb28ba9e359b6e59"
+source = "git+https://github.com/hicqu/kvproto?branch=store-heartbeat-cluster-version#76ef595714bb074accfc4af21f4adbfaa807d3d9"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2585,6 +2585,7 @@ dependencies = [
  "prometheus",
  "quick-error",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "slog",
@@ -3489,7 +3490,7 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 dependencies = [
- "semver",
+ "semver 0.9.0",
 ]
 
 [[package]]
@@ -3595,6 +3596,15 @@ checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 dependencies = [
  "semver-parser",
  "serde",
+]
+
+[[package]]
+name = "semver"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "394cec28fa623e00903caf7ba4fa6fb9a0e260280bb8cdbbba029611108a0190"
+dependencies = [
+ "semver-parser",
 ]
 
 [[package]]
