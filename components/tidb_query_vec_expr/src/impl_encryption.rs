@@ -17,7 +17,7 @@ const SHA512: i64 = 512;
 
 #[rpn_fn]
 #[inline]
-pub fn md5(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
+pub fn md5(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => hex_digest(MessageDigest::md5(), arg).map(Some),
         None => Ok(None),
@@ -26,7 +26,7 @@ pub fn md5(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn sha1(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
+pub fn sha1(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => hex_digest(MessageDigest::sha1(), arg).map(Some),
         None => Ok(None),
@@ -37,7 +37,7 @@ pub fn sha1(arg: Option<&Bytes>) -> Result<Option<Bytes>> {
 #[inline]
 pub fn sha2(
     ctx: &mut EvalContext,
-    input: Option<&Bytes>,
+    input: Option<BytesRef>,
     hash_length: Option<&Int>,
 ) -> Result<Option<Bytes>> {
     match (input, hash_length) {
@@ -68,7 +68,7 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn uncompressed_length(ctx: &mut EvalContext, arg: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn uncompressed_length(ctx: &mut EvalContext, arg: Option<BytesRef>) -> Result<Option<Int>> {
     use byteorder::{ByteOrder, LittleEndian};
     Ok(arg.as_ref().map(|s| {
         if s.is_empty() {
@@ -103,7 +103,7 @@ mod tests {
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
@@ -146,7 +146,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Md5);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Md5);
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Sha1);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Sha1);
     }
 
     #[test]
