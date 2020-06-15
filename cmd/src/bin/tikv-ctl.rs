@@ -1007,7 +1007,7 @@ impl DebugExecutor for Debugger {
 fn warning_prompt(message: &str) -> bool {
     const EXPECTED: &str = "I consent";
     print!(
-        "{}\nType \"{}\" to continue, anything else to exit:",
+        "{} Type \"{}\" to continue, anything else to exit:",
         message, EXPECTED
     );
     let mut input = String::new();
@@ -1793,6 +1793,7 @@ fn main() {
                         .about("Dump data keys")
                         .arg(
                             Arg::with_name("ids")
+                                .long("ids")
                                 .takes_value(true)
                                 .use_delimiter(true)
                                 .help("List of data key ids. Dump all keys if not provided."),
@@ -1803,6 +1804,7 @@ fn main() {
                         .about("Dump file encryption info")
                         .arg(
                             Arg::with_name("path")
+                                .long("path")
                                 .takes_value(true)
                                 .help("Path to the file. Dump for all files if not provided."),
                         ),
