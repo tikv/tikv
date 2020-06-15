@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
-use engine::rocks::{
+use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
     TitanDBOptions,
