@@ -922,7 +922,7 @@ mod tests {
                 .context(ctx)
                 .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::DayName);
             let output = output.unwrap();
-            assert_eq!(output.as_bytes(), &exp.map(|v| v.as_bytes().to_vec()));
+            assert_eq!(output.as_bytes(), exp.map(|v| v.as_bytes()));
             if let Some(err_code) = err_code {
                 assert_eq!(ctx.warnings.warnings[0].get_code(), err_code);
             }
