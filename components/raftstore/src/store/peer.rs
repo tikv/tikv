@@ -2236,6 +2236,7 @@ impl Peer {
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
+        assert!(min_matched >= min_committed);
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
