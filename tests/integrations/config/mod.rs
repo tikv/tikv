@@ -8,10 +8,11 @@ use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine::rocks::util::config::{BlobRunMode, CompressionType};
+
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -63,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
+        advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
         concurrent_send_snap_limit: 4,
@@ -193,6 +195,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         early_apply: false,
         apply_yield_duration: ReadableDuration::millis(333),
+        perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

@@ -14,13 +14,16 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use super::*;
+use encryption::DataKeyManager;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::{AutoSplitController, Callback, LocalReader, SnapManager, SplitCheckRunner};
+use raftstore::store::{
+    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+};
 use raftstore::Result;
 use security::SecurityManager;
 use tikv::config::{ConfigController, TiKvConfig};
@@ -124,6 +127,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: Engines,
+        key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
@@ -221,7 +225,9 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
+        let snap_mgr = SnapManagerBuilder::default()
+            .encryption_key_manager(key_manager)
+            .build(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),

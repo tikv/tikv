@@ -25,7 +25,7 @@ fn test_bootstrap_half_way_failure(fp: &str) {
         .unwrap();
     let store_id = ident.get_store_id();
     debug!("store id {:?}", store_id);
-    assert!(cluster.engines.insert(store_id, engines.clone()).is_none());
+    cluster.set_bootstrapped(store_id, 0);
 
     // Check whether it can bootstrap cluster successfully.
     fail::remove(fp);
