@@ -171,15 +171,6 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.log_file = file.to_owned();
     }
 
-    if let Some(format) = matches.value_of("log-format") {
-        let format = match format {
-            "text" => LogFormat::Text,
-            "json" => LogFormat::Json,
-            _ => panic!("Must be one of text or json"),
-        };
-        config.log_format = format;
-    }
-
     if let Some(addr) = matches.value_of("addr") {
         config.server.addr = addr.to_owned();
     }
