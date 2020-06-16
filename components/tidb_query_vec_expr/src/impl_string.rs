@@ -338,8 +338,6 @@ pub fn insert(
             let len = *len;
             let upos: usize = pos as usize;
             let mut ulen: usize = len as usize;
-            let s = s;
-            let newstr = newstr;
             if pos < 1 || upos > s.len() {
                 return Ok(Some(s.to_vec()));
             }
