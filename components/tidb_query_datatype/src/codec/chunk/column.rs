@@ -10,7 +10,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::{VectorValue, ChunkRef};
 use crate::codec::datum;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::{
@@ -19,7 +19,7 @@ use crate::codec::mysql::decimal::{
 use crate::codec::mysql::duration::{
     Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
 };
-use crate::codec::mysql::json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
+use crate::codec::mysql::json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef};
 use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder};
 use crate::codec::Datum;
 use crate::expr::EvalContext;
@@ -130,7 +130,7 @@ impl Column {
             VectorValue::Int(vec) => {
                 if field_type.is_unsigned() {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -141,7 +141,7 @@ impl Column {
                     }
                 } else {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -155,7 +155,7 @@ impl Column {
             VectorValue::Real(vec) => {
                 if col.get_fixed_len() == 4 {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -166,7 +166,7 @@ impl Column {
                     }
                 } else {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -179,7 +179,7 @@ impl Column {
             }
             VectorValue::Decimal(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -191,7 +191,7 @@ impl Column {
             }
             VectorValue::Bytes(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -203,7 +203,7 @@ impl Column {
             }
             VectorValue::DateTime(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -215,7 +215,7 @@ impl Column {
             }
             VectorValue::Duration(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -227,11 +227,11 @@ impl Column {
             }
             VectorValue::Json(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
-                        Some(val) => col.append_json(&val)?,
+                        Some(val) => col.append_json(val)?,
                     }
                 }
             }
@@ -303,7 +303,7 @@ impl Column {
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(v) => self.append_time(*v),
-            Datum::Json(ref v) => self.append_json(v),
+            Datum::Json(ref v) => self.append_json(v.as_ref()),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
     }
@@ -779,8 +779,8 @@ impl Column {
 
     /// Append a json datum to the column.
     #[inline]
-    pub fn append_json(&mut self, j: &Json) -> Result<()> {
-        self.data.write_json(j.as_ref())?;
+    pub fn append_json(&mut self, j: JsonRef) -> Result<()> {
+        self.data.write_json(j)?;
         self.finished_append_var();
         Ok(())
     }

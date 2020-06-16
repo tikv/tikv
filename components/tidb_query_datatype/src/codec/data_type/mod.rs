@@ -10,6 +10,7 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+pub use not_chunked_vec::NotChunkedVec;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -45,13 +46,40 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        self.as_slice().as_mysql_bool(context)
+    }
+}
+
+impl <'a> AsMySQLBool for BytesRef<'a> {
+    #[inline]
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
-impl<T> AsMySQLBool for Option<T>
+impl<'a, T> AsMySQLBool for Option<&'a T>
 where
     T: AsMySQLBool,
+{
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<JsonRef<'a>>
+where
+{
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        // TODO: This logic is not correct. See pingcap/tidb#9593
+        Ok(false)
+    }
+}
+
+impl<'a> AsMySQLBool for Option<BytesRef<'a>>
+where
 {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
@@ -86,7 +114,7 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<Self>>;
+    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Self>;
 }
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -94,7 +122,7 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
+    fn into_vector_value(vec: NotChunkedVec<Self>) -> VectorValue;
 }
 
 macro_rules! impl_evaluable_type {
@@ -119,7 +147,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<$ty>> {
+            fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<$ty> {
                 match v {
                     VectorValue::$ty(x) => x,
                     _ => unimplemented!(),
@@ -141,7 +169,7 @@ macro_rules! impl_evaluable_ret {
             const EVAL_TYPE: EvalType = EvalType::$ty;
 
             #[inline]
-            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
+            fn into_vector_value(vec: NotChunkedVec<Self>) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
@@ -176,7 +204,7 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
 
 impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
     const EVAL_TYPE: EvalType = T::EVAL_TYPE;
-    type ChunkedType = &'a Vec<Option<T>>;
+    type ChunkedType = &'a NotChunkedVec<T>;
     type EvaluableType = T;
 
     #[inline]
@@ -190,7 +218,7 @@ impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a Vec<Option<T>> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<T> {
         Evaluable::borrow_vector_value(v)
     }
 }
@@ -198,7 +226,7 @@ impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
 impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Bytes;
     type EvaluableType = Bytes;
-    type ChunkedType = &'a Vec<Option<Bytes>>;
+    type ChunkedType = &'a NotChunkedVec<Bytes>;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -217,7 +245,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a Vec<Option<Bytes>> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<Bytes> {
         match v {
             VectorValue::Bytes(x) => x,
             _ => unimplemented!(),
@@ -228,7 +256,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
     type EvaluableType = Json;
-    type ChunkedType = &'a Vec<Option<Json>>;
+    type ChunkedType = &'a NotChunkedVec<Json>;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -247,7 +275,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &VectorValue) -> &Vec<Option<Json>> {
+    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Json> {
         match v {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),

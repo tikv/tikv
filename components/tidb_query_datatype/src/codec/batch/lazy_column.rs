@@ -175,7 +175,7 @@ impl LazyBatchColumn {
                         vec.push(None);
                     }
                     for row_index in logical_rows {
-                        vec[*row_index] = raw_vec[*row_index].decode(field_type, ctx)?;
+                        vec.replace(*row_index, raw_vec[*row_index].decode(field_type, ctx)?);
                     }
                 }
             }
