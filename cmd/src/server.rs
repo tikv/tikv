@@ -770,6 +770,7 @@ impl TiKVServer {
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
+                Arc::new(self.config.security.clone()),
                 self.router.clone(),
             ) {
                 Ok(status_server) => Box::new(status_server),
@@ -785,7 +786,6 @@ impl TiKVServer {
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
-                &self.config.security,
             ) {
                 error!(
                     "failed to bind addr for status service";
