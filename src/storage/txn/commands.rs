@@ -632,7 +632,7 @@ impl Command {
 
     // This is for backward compatibility, after some other refactors are done
     // we can remove CommandKind totally and use `&dyn CommandExt` instead
-    fn command_ext<'a>(&'a self) -> &'a dyn CommandExt {
+    fn command_ext(&self) -> &dyn CommandExt {
         match &self.kind {
             CommandKind::Prewrite(t) => t,
             CommandKind::PrewritePessimistic(t) => t,
