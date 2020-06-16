@@ -662,7 +662,7 @@ where
                         (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                         (Method::GET, "/status") => Box::new(ok(Response::default())),
                         (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
-                        (Method::GET, "/config") => Self::get_config(&cfg_controller),
+                        (Method::GET, "/config") => Self::get_config(req, &cfg_controller),
                         (Method::POST, "/config") => {
                             Self::update_config(cfg_controller.clone(), req)
                         }
@@ -882,6 +882,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
+    use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
 
