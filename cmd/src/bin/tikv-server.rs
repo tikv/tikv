@@ -76,6 +76,13 @@ fn main() {
                 .help("Set the HTTP listening address for the status report service"),
         )
         .arg(
+            Arg::with_name("advertise-status-addr")
+                .long("advertise-status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the advertise listening address for the client communication of status report service"),
+        )
+        .arg(
             Arg::with_name("data-dir")
                 .long("data-dir")
                 .short("s")

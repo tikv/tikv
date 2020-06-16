@@ -77,14 +77,19 @@ fn new_debug_executor(
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+            let kv_path = kv_path.to_str().unwrap();
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
-                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
-                    .canonicalize()
-                    .unwrap();
-                String::from(db_path.to_str().unwrap())
-            });
+            let mut raft_path = raft_db
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            raft_path = PathBuf::from(raft_path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .map(ToString::to_string)
+                .unwrap();
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
