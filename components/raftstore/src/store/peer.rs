@@ -1369,7 +1369,11 @@ impl Peer {
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
         if !ready.committed_entries.as_ref().map_or(true, Vec::is_empty) {
-            ctx.current_time.borrow_mut().may_set();
+            // We must renew current_time because this value may be created a long time ago.
+            // If we do not renew it, this time may be smaller than propose_time of a command,
+            // which was proposed in another thread while this thread receives its AppendEntriesResponse
+            // and is ready to calculate its commit-log-duration.
+            ctx.current_time.borrow_mut().renew();
         }
 
         // The leader can write to disk and replicate to the followers concurrently

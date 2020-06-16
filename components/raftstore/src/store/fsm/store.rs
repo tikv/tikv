@@ -268,10 +268,6 @@ pub struct PollContext<T, C: 'static> {
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
-    /// `Instant` shared by FSMs within same batch, the underlying value will be seted at
-    /// its first use and will be cleared at `PollHandler::end`. For the same FSM, this
-    /// `Instant` will be monotonic, because a FSM will not be handled in diffrent batch
-    /// at the same time.
     pub current_time: RefCell<SharedInstant>,
     pub perf_context_statistics: PerfContextStatistics,
     pub node_start_time: Option<Instant>,

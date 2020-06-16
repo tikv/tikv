@@ -453,11 +453,9 @@ impl SharedInstant {
         }
     }
 
-    /// Set the value if not set yet
-    pub fn may_set(&mut self) {
-        if self.0.is_none() {
-            self.0 = Some(monotonic_raw_now());
-        }
+    /// Renew the `Instant`
+    pub fn renew(&mut self) {
+        self.0.replace(monotonic_raw_now());
     }
 
     pub fn clear(&mut self) {
