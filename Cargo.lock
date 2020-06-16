@@ -1078,6 +1078,8 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "coarsetime",
+ "configuration",
  "encryption",
  "engine",
  "engine_traits",
@@ -1086,12 +1088,15 @@ dependencies = [
  "prometheus",
  "rand 0.7.3",
  "rocksdb",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
+ "toml",
 ]
 
 [[package]]
