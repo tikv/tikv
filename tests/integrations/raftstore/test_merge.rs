@@ -220,7 +220,7 @@ fn test_node_merge_prerequisites_check() {
         .direction(Direction::Recv)
         .msg_type(MessageType::MsgAppend)
         .allow(1);
-    // make the source peer have no way to know the uncommitted entries can be applied from heartbeat.
+    // make the source peer's commit index can't be updated by MsgHeartbeat.
     let heartbeat_filter = RegionPacketFilter::new(left.get_id(), 3)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv);
