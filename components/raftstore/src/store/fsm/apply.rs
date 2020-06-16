@@ -29,7 +29,6 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
@@ -1826,7 +1825,8 @@ where
             regions.push(derived.clone());
         }
 
-        let mut new_regions_map = HashMap::default();
+        // region_id -> (peer_id, None or Some(create failed reason))
+        let mut new_regions_map: HashMap<u64, (u64, Option<String>)> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
             // TODO: check new region id validation.
@@ -1871,13 +1871,10 @@ where
                     }
                 }
             } else {
-                // If the region is not in meta.regions, it must not exist in meta.pending_create_peers.
-                assert_eq!(
-                    meta.pending_create_peers
-                        .insert(*region_id, (peer_id, CreatePeerStatus::Split))
-                        .is_none(),
-                    true
-                );
+                // If the region not exist in meta.regions, it may exist in meta.pending_create_peers.
+                // See details in `maybe_create_peer`.
+                meta.pending_create_peers
+                    .insert(*region_id, (peer_id, CreatePeerStatus::Split));
             }
         }
         drop(meta);
@@ -1889,15 +1886,14 @@ where
             }
             let peer_id = val.0;
             let region_state_key = keys::region_state_key(*region_id);
-            match ctx.engine.get_value_cf(CF_RAFT, &region_state_key) {
-                Ok(v) => {
-                    if v.is_some() {
-                        already_exist_regions.push((*region_id, peer_id));
-
-                        let mut state = RegionLocalState::default();
-                        state.merge_from_bytes(&v.unwrap()).unwrap();
-                        val.1 = Some(format!("state {:?} exist in kv engine", state));
-                    }
+            match ctx
+                .engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            {
+                Ok(None) => (),
+                Ok(Some(state)) => {
+                    already_exist_regions.push((*region_id, peer_id));
+                    val.1 = Some(format!("state {:?} exist in kv engine", state));
                 }
                 e => panic!(
                     "{} failed to get regions state of {}: {:?}",
