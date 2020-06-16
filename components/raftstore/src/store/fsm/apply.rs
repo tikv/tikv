@@ -1852,6 +1852,11 @@ where
             regions.push(new_region);
         }
 
+        if right_derive {
+            derived.set_start_key(keys.pop_front().unwrap());
+            regions.push(derived.clone());
+        }
+
         let mut meta = ctx.store_meta.lock().unwrap();
         for (region_id, val) in new_regions_map.iter_mut() {
             if val.1.is_some() {
@@ -1914,6 +1919,9 @@ where
 
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for new_region in &regions {
+            if new_region.get_id() == derived.get_id() {
+                continue;
+            }
             let val = new_regions_map.get(&new_region.get_id()).unwrap();
             if let Some(reason) = &val.1 {
                 warn!(
@@ -1934,10 +1942,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-        }
-        if right_derive {
-            derived.set_start_key(keys.pop_front().unwrap());
-            regions.push(derived.clone());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)

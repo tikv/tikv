@@ -1571,7 +1571,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if msg.get_region_epoch().get_version() > exist_region.get_region_epoch().get_version()
             {
                 // If new region's epoch version is greater than exist region's, the exist region
-                // may has been merged already.
+                // may has been merged/splitted already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
@@ -1630,8 +1630,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 return Ok(true);
             }
             // The data is not changed in pending_create_peers.
-            // Remove it due to the latter check may fail. Re-add it after all checking passed.
-            // Correctness depends on the StoreMeta lock MUST NOT be released until all latter checking passed.
+            // Remove it due to the latter check may fail. Re-add it after all checking pass.
+            // Correctness depends on the StoreMeta lock **MUST NOT** be released until all latter checking pass
+            // and update regions and pending_create_peers.
             meta.pending_create_peers.remove(&region_id);
 
             if is_local_state_changed {
@@ -1656,7 +1657,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
 
-        // following snapshot may overlap, should insert into region_ranges after
+        // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
