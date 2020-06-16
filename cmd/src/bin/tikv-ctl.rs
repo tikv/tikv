@@ -1932,8 +1932,14 @@ fn main() {
                 .unwrap();
             }
             ("dump-file", Some(matches)) => {
-                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, matches.value_of("path"))
-                    .unwrap();
+                let path = matches
+                    .value_of("path")
+                    .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                DataKeyManager::dump_file_dict(
+                    &cfg.storage.data_dir,
+                    path.as_ref().map(|path| path.as_str()),
+                )
+                .unwrap();
             }
             _ => ve1!("{}", matches.usage()),
         }
