@@ -26,7 +26,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, KvEngine, Peekable, ReadOptions, CF_DEFAULT, CF_WRITE};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
@@ -754,12 +754,13 @@ impl Delegate {
         kv_engine: &RocksEngine,
         statistics: &mut Statistics,
     ) -> Result<()> {
-        let snapshot =
-            RegionSnapshot::from_snapshot(Arc::new(kv_engine.snapshot()), Region::default());
+        // Hack: init a empty region to pass the check
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        let snapshot = RegionSnapshot::from_snapshot(Arc::new(kv_engine.snapshot()), region);
         let mut iter_opts = IterOptions::default()
             .use_prefix_seek()
             .set_prefix_same_as_start(true);
-        iter_opts.set_lower_bound(to_read_old.first().unwrap().as_encoded().as_slice(), 0);
         iter_opts.set_fill_cache(false);
         let mut write_cursor = Cursor::new(
             snapshot.iter_cf(CF_WRITE, iter_opts.clone()).unwrap(),
