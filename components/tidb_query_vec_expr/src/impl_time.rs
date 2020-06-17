@@ -941,7 +941,7 @@ mod tests {
                 .context(ctx)
                 .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::MonthName);
             let output = output.unwrap();
-            assert_eq!(output.as_bytes(), &exp.map(|v| v.as_bytes().to_vec()));
+            assert_eq!(output.as_bytes(), exp.map(|v| v.as_bytes()));
         }
     }
 
