@@ -874,4 +874,4 @@
 # enable-compaction-filter = false
 
 ## Garbage ratio threshold to trigger a GC.
-# ratio-threshold = 0.1
+# ratio-threshold = 1.1
