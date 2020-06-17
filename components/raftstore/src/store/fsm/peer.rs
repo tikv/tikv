@@ -1540,8 +1540,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // The split process only change this flag to true when it's exactly the same peer, if so,
             // this peer can't pass the previous range check.
             // The condition of passing the range check is this region must merge the other regions and then split.
-            // It's impossible because this peer does not exist which violates the merge condition, i.e. PD ensure
-            // all target peer must exist during merging.
+            // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e. PD
+            // ensure all target peer must exist during merging.
             assert_eq!(
                 *meta.pending_create_peers.get(&region_id).unwrap(),
                 (self.fsm.peer_id(), false)
@@ -1689,6 +1689,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if !is_initialized {
             let v = meta.pending_create_peers.get(&region_id);
+            // If the data in `meta.pending_create_peers` is not equal to `(peer_id, false)`,
+            // it means this peer will be replaced from the new one from splitting.
             if let Some(status) = v {
                 if *status == (self.fsm.peer_id(), false) {
                     meta.pending_create_peers.remove(&region_id);
@@ -2644,13 +2646,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.tag, prev_region, prev,
                 );
             }
+            // The initialized peer must not exist in `meta.pending_create_peers`.
+            assert!(meta.pending_create_peers.get(&region.get_id()).is_none());
         } else {
+            // The uninitialized peer must exist in `meta.pending_create_peers`
+            // which is added in `maybe_create_peer`
             assert_eq!(
                 meta.pending_create_peers.remove(&region.get_id()),
                 Some((self.fsm.peer_id(), false))
             );
         }
-        assert!(meta.pending_create_peers.get(&region.get_id()).is_none());
 
         if let Some(r) = meta
             .region_ranges

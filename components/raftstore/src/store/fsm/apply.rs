@@ -1825,7 +1825,7 @@ where
             regions.push(derived.clone());
         }
 
-        // region_id -> (peer_id, None or Some(create failed reason))
+        // region_id -> (peer_id, None or Some(split failed reason))
         let mut new_regions_map: HashMap<u64, (u64, Option<String>)> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
@@ -1863,9 +1863,10 @@ where
                 if util::is_region_initialized(r) {
                     *reason = Some(format!("region {:?} has already initialized", r));
                 } else {
-                    // If the region in meta.regions is not initialized, it must exist in meta.pending_create_peers.
+                    // If the region in `meta.regions` is not initialized, it must exist in `meta.pending_create_peers`.
                     let status = meta.pending_create_peers.get_mut(region_id).unwrap();
                     // If they are the same peer, the new one from splitting can replace it.
+                    // Because it must be uninitialized. See detailes in `check_snapshot`.
                     if *status == (*peer_id, false) {
                         *status = (*peer_id, true);
                     } else {
@@ -1873,7 +1874,7 @@ where
                     }
                 }
             } else {
-                // If the region not exist in meta.regions, it may exist in meta.pending_create_peers.
+                // If the region not exist in `meta.regions`, it may exist in `meta.pending_create_peers`.
                 // See details in `maybe_create_peer`.
                 meta.pending_create_peers
                     .insert(*region_id, (*peer_id, true));
