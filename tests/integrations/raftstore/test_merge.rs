@@ -216,27 +216,30 @@ fn test_node_merge_prerequisites_check() {
 
     // first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make source peer have uncommitted entries.
-    let append_filter = RegionPacketFilter::new(left.get_id(), 3)
-        .direction(Direction::Recv)
-        .msg_type(MessageType::MsgAppend)
-        .allow(1);
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .allow(1),
+    ));
     // make the source peer's commit index can't be updated by MsgHeartbeat.
-    let heartbeat_filter = RegionPacketFilter::new(left.get_id(), 3)
-        .msg_type(MessageType::MsgHeartbeat)
-        .direction(Direction::Recv);
-
-    cluster.add_send_filter(CloneFilterFactory(append_filter.clone()));
-    cluster.add_send_filter(CloneFilterFactory(heartbeat_filter.clone()));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .msg_type(MessageType::MsgHeartbeat)
+            .direction(Direction::Recv),
+    ));
     cluster.must_split(&left, b"k11");
     let res = cluster.try_merge(left.get_id(), right.get_id());
-    // log gap contains admin entries.
+    // log gap (min_committed, last_index] contains admin entries.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k22", b"v22");
     must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
 
-    cluster.add_send_filter(CloneFilterFactory(append_filter));
-    cluster.add_send_filter(CloneFilterFactory(heartbeat_filter));
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        left.get_id(),
+        3,
+    )));
     // It doesn't matter if the index and term is correct.
     let compact_log = new_compact_log_request(100, 10);
     let req = new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
@@ -246,7 +249,7 @@ fn test_node_merge_prerequisites_check() {
         .unwrap();
     assert!(res.get_header().has_error(), "{:?}", res);
     let res = cluster.try_merge(right.get_id(), left.get_id());
-    // log gap contains admin entries.
+    // log gap (min_matched, last_index] contains admin entries.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k23", b"v23");
