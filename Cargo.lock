@@ -4715,7 +4715,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dcfcea0b59654004a89d5c25d6d22c113a13b848"
+source = "git+https://github.com/pingcap/tipb.git#7316d94df1eed974822e2f3e70dc3e0aea1a6b0a"
 dependencies = [
  "lazy_static",
  "prost",
@@ -5433,7 +5433,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#d23564ca477156a9963080a3d98ee841f62095fc"
+source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
