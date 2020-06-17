@@ -248,7 +248,7 @@ pub trait CommandExt {
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
-        $cmd: ident, $cmd_ty: ty, $tag_and_cmd_metric: ident {
+        $cmd: ident, $cmd_ty: ty, $tag: ident {
             $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
         }
     ) => {
@@ -274,11 +274,11 @@ macro_rules! command {
 
         impl CommandExt for $cmd {
             fn tag(&self) -> metrics::CommandKind {
-                metrics::CommandKind::$tag_and_cmd_metric
+                metrics::CommandKind::$tag
             }
 
             fn incr_cmd_metric(&self) {
-                KV_COMMAND_COUNTER_VEC_STATIC.$tag_and_cmd_metric.inc();
+                KV_COMMAND_COUNTER_VEC_STATIC.$tag.inc();
             }
         }
     }
@@ -499,22 +499,13 @@ command! {
 
 command! {
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
-    ScanLock -> Vec<LockInfo> {
+    ScanLock, Vec<LockInfo>, scan_lock {
         /// The maximum transaction timestamp to scan.
         max_ts: TimeStamp,
         /// The key to start from. (`None` means start from the very beginning.)
         start_key: Option<Key>,
         /// The result limit.
         limit: usize,
-    }
-}
-
-impl CommandExt for ScanLock {
-    fn tag(&self) -> metrics::CommandKind {
-        metrics::CommandKind::scan_lock
-    }
-    fn incr_cmd_metric(&self) {
-        KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc()
     }
 }
 
