@@ -435,34 +435,6 @@ impl BlockingClock for CoarseClock {
 /// A limiter which uses the coarse clock for measurement.
 pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
 
-pub struct SharedInstant(Option<Timespec>);
-
-impl SharedInstant {
-    pub fn new() -> SharedInstant {
-        SharedInstant(None)
-    }
-
-    /// Get the `Timespec` and set the value if not set yet
-    pub fn get(&mut self) -> Timespec {
-        match self.0 {
-            None => {
-                self.0 = Some(monotonic_raw_now());
-                self.get()
-            }
-            Some(t) => t,
-        }
-    }
-
-    /// Renew the `Instant`
-    pub fn renew(&mut self) {
-        self.0.replace(monotonic_raw_now());
-    }
-
-    pub fn clear(&mut self) {
-        self.0 = None;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

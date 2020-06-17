@@ -433,8 +433,7 @@ impl Peer {
                         .check_group_commit_consistent(ctx.cfg.group_consistent_log_gap)
                         .unwrap_or(false)
                 {
-                    self.wait_sync_deadline =
-                        Some((ctx.current_time.borrow_mut().get(), timeout as u64));
+                    self.wait_sync_deadline = Some((ctx.get_current_time(), timeout as u64));
                     enable_group_commit = false;
                 }
             }
@@ -1373,7 +1372,7 @@ impl Peer {
             // If we do not renew it, this time may be smaller than propose_time of a command,
             // which was proposed in another thread while this thread receives its AppendEntriesResponse
             // and is ready to calculate its commit-log-duration.
-            ctx.current_time.borrow_mut().renew();
+            ctx.current_time.borrow_mut().replace(monotonic_raw_now());
         }
 
         // The leader can write to disk and replicate to the followers concurrently
@@ -1486,9 +1485,7 @@ impl Peer {
                         .find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.borrow_mut().get() - propose_time)
-                                .to_std()
-                                .unwrap(),
+                            (ctx.get_current_time() - propose_time).to_std().unwrap(),
                         ));
                         self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
@@ -1895,7 +1892,7 @@ impl Peer {
         mut p: Proposal<RocksSnapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
-        p.renew_lease_time = Some(poll_ctx.current_time.borrow_mut().get());
+        p.renew_lease_time = Some(poll_ctx.get_current_time());
         self.proposals.push(p);
     }
 
@@ -2678,10 +2675,7 @@ impl Peer {
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
                 let res = self.check_group_commit_consistent(ctx.cfg.group_consistent_log_gap);
-                self.check_wait_sync_deadline(
-                    res.unwrap_or(false),
-                    ctx.current_time.borrow_mut().get(),
-                );
+                self.check_wait_sync_deadline(res.unwrap_or(false), ctx.get_current_time());
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
                     if self.get_store().applied_index_term() >= self.term() {
