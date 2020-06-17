@@ -165,9 +165,9 @@ impl RegionChangeObserver for CdcObserver {
         let region_id = ctx.region().get_id();
         match event {
             RegionChangeEvent::Destroy => {
-                self.region_states[&region_id].store(false, atomic::Ordering::Release);
                 if let Some(observe_id) = self.is_subscribed(region_id) {
                     // Unregister all downstreams.
+                    self.region_states[&region_id].store(false, atomic::Ordering::Release);
                     let store_err = RaftStoreError::RegionNotFound(region_id);
                     let deregister = Deregister::Region {
                         region_id,
