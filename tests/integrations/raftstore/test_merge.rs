@@ -237,7 +237,7 @@ fn test_node_merge_prerequisites_check() {
     must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
 
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        left.get_id(),
+        right.get_id(),
         3,
     )));
     // It doesn't matter if the index and term is correct.
