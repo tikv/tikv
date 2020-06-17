@@ -1935,11 +1935,7 @@ fn main() {
                 let path = matches
                     .value_of("path")
                     .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
-                DataKeyManager::dump_file_dict(
-                    &cfg.storage.data_dir,
-                    path.as_ref().map(|path| path.as_str()),
-                )
-                .unwrap();
+                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
             _ => ve1!("{}", matches.usage()),
         }
