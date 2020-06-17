@@ -587,6 +587,7 @@ dependencies = [
  "nix 0.11.1",
  "pd_client",
  "prometheus",
+ "promptly",
  "protobuf",
  "raft",
  "raftstore",
@@ -2295,6 +2296,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50e4785f2c3b7589a0d0c1dd60285e1188adac4006e8abd6dd578e1567027363"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
+ "void",
+]
+
+[[package]]
 name = "nodrop"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2835,6 +2849,15 @@ source = "git+https://github.com/tikv/rust-prometheus.git?rev=fd122caa03de8e7e5e
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
+]
+
+[[package]]
+name = "promptly"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b99cfb0289110d969dd21637cfbc922584329bc9e5037c5e576325c615658509"
+dependencies = [
+ "rustyline",
 ]
 
 [[package]]
@@ -3467,6 +3490,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustyline"
+version = "6.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61a7384a84da856bd163ef2c22982c816b0bcedaf17978ec13d8e0e277ddc332"
+dependencies = [
+ "cfg-if",
+ "dirs",
+ "libc",
+ "log",
+ "memchr",
+ "nix 0.17.0",
+ "unicode-segmentation",
+ "unicode-width",
+ "utf8parse",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -5116,6 +5157,12 @@ dependencies = [
  "matches",
  "percent-encoding",
 ]
+
+[[package]]
+name = "utf8parse"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
 
 [[package]]
 name = "utime"

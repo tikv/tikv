@@ -71,7 +71,7 @@ impl AggrFnStateCount {
 // `update_vector` can be faster. Also note that we support all kind of
 // `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
 
-impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
+impl<T: EvaluableRet> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
     #[inline]
     fn update(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         if value.is_some() {
