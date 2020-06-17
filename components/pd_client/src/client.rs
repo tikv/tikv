@@ -22,7 +22,7 @@ use txn_types::TimeStamp;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
-use super::{Config, PdFuture, UnixSecs};
+use super::{ClusterVersion, Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
@@ -126,6 +126,10 @@ impl RpcClient {
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
         block_on(self.leader_client.reconnect())
+    }
+
+    pub fn cluster_version(&self) -> ClusterVersion {
+        self.leader_client.inner.rl().cluster_version.clone()
     }
 
     /// Creates a new call option with default request timeout.
@@ -486,7 +490,10 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(
+        &self,
+        mut stats: pdpb::StoreStats,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
@@ -496,17 +503,21 @@ impl PdClient for RpcClient {
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
+            let cluster_version = client.rl().cluster_version.clone();
             let handler = client
                 .rl()
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
-            Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                Ok(resp.replication_status.take())
+                if cluster_version.set(resp.get_cluster_version()).is_err() {
+                    warn!("invalid cluster version: {}", resp.get_cluster_version());
+                };
+                Ok(resp)
             })) as PdFuture<_>
         };
 
