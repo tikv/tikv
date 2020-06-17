@@ -457,7 +457,7 @@ pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     let mut pow2 = 1;
     let s = b",";
     let mut q = false;
-    match *mask {
+    match mask {
         None => {
             return Ok(None);
         }
