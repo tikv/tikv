@@ -72,6 +72,7 @@ fn test_gc_worker_config_update() {
         change.insert("gc.ratio-threshold".to_owned(), "1.23".to_owned());
         change.insert("gc.batch-keys".to_owned(), "1234".to_owned());
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "1KB".to_owned());
+        change.insert("gc.enable-compaction-filter".to_owned(), "true".to_owned());
         change
     };
     cfg_controller.update(change).unwrap();
@@ -79,6 +80,7 @@ fn test_gc_worker_config_update() {
         assert_eq!(cfg.ratio_threshold, 1.23);
         assert_eq!(cfg.batch_keys, 1234);
         assert_eq!(cfg.max_write_bytes_per_sec, ReadableSize::kb(1));
+        assert!(cfg.enable_compaction_filter);
     });
 }
 
