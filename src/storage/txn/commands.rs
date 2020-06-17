@@ -482,32 +482,15 @@ command! {
     }
 }
 
-/// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
-pub struct ScanLock {
-    /// The maximum transaction timestamp to scan.
-    pub max_ts: TimeStamp,
-    /// The key to start from. (`None` means start from the very beginning.)
-    pub start_key: Option<Key>,
-    /// The result limit.
-    pub limit: usize,
-}
-
-impl ScanLock {
-    pub fn new(
+command! {
+    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
+    ScanLock -> Vec<LockInfo> {
+        /// The maximum transaction timestamp to scan.
         max_ts: TimeStamp,
+        /// The key to start from. (`None` means start from the very beginning.)
         start_key: Option<Key>,
+        /// The result limit.
         limit: usize,
-        ctx: Context,
-    ) -> TypedCommand<Vec<LockInfo>> {
-        Command {
-            ctx,
-            kind: CommandKind::ScanLock(ScanLock {
-                max_ts,
-                start_key,
-                limit,
-            }),
-        }
-        .into()
     }
 }
 
