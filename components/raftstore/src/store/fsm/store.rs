@@ -82,13 +82,6 @@ const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
-#[derive(Debug, PartialEq)]
-pub enum CreatePeerStatus {
-    Empty,
-    Snapshot,
-    Split,
-}
-
 pub struct StoreInfo<E> {
     pub engine: E,
     pub capacity: u64,
@@ -122,8 +115,10 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
-    /// region_id -> (peer_id, CreatePeerStatus)
-    pub pending_create_peers: HashMap<u64, (u64, CreatePeerStatus)>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// A uninitialized peer can be replaced to the one from splitting iif they are exactly the same peer.
+    pub pending_create_peers: HashMap<u64, (u64, bool)>,
 }
 
 impl StoreMeta {
@@ -1610,7 +1605,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         if status == CheckMsgStatus::NewPeerNone {
             meta.pending_create_peers
-                .insert(region_id, (target.get_id(), CreatePeerStatus::Empty));
+                .insert(region_id, (target.get_id(), false));
 
             drop(meta);
 
@@ -1626,8 +1621,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
             let v = meta.pending_create_peers.get(&region_id);
             // If the data is changed in `pending_create_peers`, it also means this region was created from splitting.
-            if v.is_none() || *v.unwrap() != (target.get_id(), CreatePeerStatus::Empty) {
-                return Ok(true);
+            match v {
+                Some(status) if *status == (target.get_id(), false) => (),
+                _ => return Ok(true),
             }
             // The data is not changed in pending_create_peers.
             // Remove it due to the latter check may fail. Re-add it after all checking pass.
@@ -1662,7 +1658,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
         meta.pending_create_peers
-            .insert(region_id, (target.get_id(), CreatePeerStatus::Empty));
+            .insert(region_id, (target.get_id(), false));
 
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);

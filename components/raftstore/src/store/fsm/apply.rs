@@ -34,7 +34,7 @@ use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::store::{CreatePeerStatus, StoreMeta};
+use crate::store::fsm::store::StoreMeta;
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
@@ -1865,8 +1865,9 @@ where
                 } else {
                     // If the region in meta.regions is not initialized, it must exist in meta.pending_create_peers.
                     let status = meta.pending_create_peers.get_mut(region_id).unwrap();
-                    if *status == (*peer_id, CreatePeerStatus::Empty) {
-                        *status = (*peer_id, CreatePeerStatus::Split);
+                    // If they are the same peer, the new one from splitting can replace it.
+                    if *status == (*peer_id, false) {
+                        *status = (*peer_id, true);
                     } else {
                         *reason = Some(format!("status {:?} is not expected", status));
                     }
@@ -1875,7 +1876,7 @@ where
                 // If the region not exist in meta.regions, it may exist in meta.pending_create_peers.
                 // See details in `maybe_create_peer`.
                 meta.pending_create_peers
-                    .insert(*region_id, (*peer_id, CreatePeerStatus::Split));
+                    .insert(*region_id, (*peer_id, true));
             }
         }
         drop(meta);
@@ -1907,7 +1908,7 @@ where
             for (region_id, peer_id) in &already_exist_regions {
                 assert_eq!(
                     meta.pending_create_peers.remove(region_id),
-                    Some((*peer_id, CreatePeerStatus::Split))
+                    Some((*peer_id, true))
                 );
             }
         }

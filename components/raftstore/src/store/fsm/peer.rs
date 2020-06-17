@@ -37,7 +37,7 @@ use tikv_util::{escape, is_zero_duration};
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{CreatePeerStatus, PollContext, StoreMeta};
+use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
 };
@@ -1451,21 +1451,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             }
         }
-        if !util::is_region_initialized(self.region()) {
-            // If the data in pending_create_peers is changed, it means this region was created from splitting.
-            // The `CreatePeerStatus::Snapshot` is valid because there may be several snapshots sending to this
-            // peer before applying any of them.
-            match meta.pending_create_peers.get(&region_id) {
-                None => return Ok(Some(key)),
-                Some(status) => {
-                    if *status != (self.fsm.peer_id(), CreatePeerStatus::Empty)
-                        && *status != (self.fsm.peer_id(), CreatePeerStatus::Snapshot)
-                    {
-                        return Ok(Some(key));
-                    }
-                }
-            }
-        }
+
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
                enc_end_key(region) > snap_enc_start_key &&
@@ -1550,9 +1536,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         meta.pending_snapshot_regions.push(snap_region);
         if !util::is_region_initialized(self.region()) {
-            // Change to `CreatePeerStatus::Snapshot`
-            meta.pending_create_peers
-                .insert(region_id, (self.fsm.peer_id(), CreatePeerStatus::Snapshot));
+            // If the region is not initialized and snapshot checking has passed, the split flag must be false.
+            // The split process only change this flag to true when it's exactly the same peer, if so,
+            // this peer can't pass the previous range check.
+            // The condition of passing the range check is this region must merge the other regions and then split.
+            // It's impossible because this peer does not exist which violates the merge condition, i.e. PD ensure
+            // all target peer must exist during merging.
+            assert_eq!(
+                *meta.pending_create_peers.get(&region_id).unwrap(),
+                (self.fsm.peer_id(), false)
+            );
         }
 
         assert!(!meta.atomic_snap_regions.contains_key(&region_id));
@@ -1697,7 +1690,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !is_initialized {
             let v = meta.pending_create_peers.get(&region_id);
             if let Some(status) = v {
-                if *status == (self.fsm.peer_id(), CreatePeerStatus::Empty) {
+                if *status == (self.fsm.peer_id(), false) {
                     meta.pending_create_peers.remove(&region_id);
                 }
             }
@@ -1912,15 +1905,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             if new_region.get_id() != region_id {
-                let v = new_regions_map.get(&new_region.get_id()).unwrap();
-                if v.1.is_some() {
+                let (peer_id, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
+                if reason.is_some() {
                     // FIXME: here need to clean the new_region's data, but is it safe to clean in region worker
                     // and do not affect the possibly existing peer with the same region id?
                     continue;
                 } else {
                     assert_eq!(
                         meta.pending_create_peers.remove(&new_region.get_id()),
-                        Some((v.0, CreatePeerStatus::Split))
+                        Some((*peer_id, true))
                     );
                 }
             }
@@ -2654,7 +2647,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         } else {
             assert_eq!(
                 meta.pending_create_peers.remove(&region.get_id()),
-                Some((self.fsm.peer_id(), CreatePeerStatus::Snapshot))
+                Some((self.fsm.peer_id(), false))
             );
         }
         assert!(meta.pending_create_peers.get(&region.get_id()).is_none());
