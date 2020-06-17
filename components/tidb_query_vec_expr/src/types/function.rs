@@ -80,31 +80,38 @@ pub trait RpnFnArg: std::fmt::Debug {
 
 /// Represents an RPN function argument of a `ScalarValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct ScalarArg<'a, T: Evaluable>(&'a Option<T>);
+pub struct ScalarArg<'a, T: EvaluableRef<'a>>(Option<T>, PhantomData<&'a T>);
 
-impl<'a, T: Evaluable> RpnFnArg for ScalarArg<'a, T> {
-    type Type = &'a Option<T>;
+impl<'a, T: EvaluableRef<'a>> ScalarArg<'a, T> {
+    pub fn new(data: Option<T>) -> Self {
+        Self(data, PhantomData)
+    }
+}
+
+impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
+    type Type = Option<T>;
 
     /// Gets the value in the given row. All rows of a `ScalarArg` share the same value.
     #[inline]
-    fn get(&self, _row: usize) -> &'a Option<T> {
-        self.0
+    fn get(&self, _row: usize) -> Option<T> {
+        self.0.clone()
     }
 }
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: Evaluable> {
-    physical_col: &'a [Option<T>],
+pub struct VectorArg<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> {
+    physical_col: &'a C,
     logical_rows: &'a [usize],
+    _phantom: PhantomData<T>,
 }
 
-impl<'a, T: Evaluable> RpnFnArg for VectorArg<'a, T> {
-    type Type = &'a Option<T>;
+impl<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> RpnFnArg for VectorArg<'a, T, C> {
+    type Type = Option<T>;
 
     #[inline]
-    fn get(&self, row: usize) -> &'a Option<T> {
-        &self.physical_col[self.logical_rows[row]]
+    fn get(&self, row: usize) -> Option<T> {
+        self.physical_col.get_option_ref(self.logical_rows[row])
     }
 }
 
@@ -156,25 +163,25 @@ impl ArgDef for Null {}
 /// - Custom evaluators which do the actual execution of the RPN function. The `def` parameter of
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
 ///   arguments, execute the RPN function and fill the result vector.
-pub trait Evaluator {
+pub trait Evaluator<'a> {
     fn eval(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'_>],
+        args: &'a [RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
+pub struct ArgConstructor<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> {
     arg_index: usize,
     inner: E,
-    _phantom: PhantomData<A>,
+    _phantom: PhantomData<&'a A>,
 }
 
-impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
+impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> ArgConstructor<'a, A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
         ArgConstructor {
@@ -185,21 +192,21 @@ impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
     }
 }
 
-impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
+impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor<'a, A, E> {
     fn eval(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
-        args: &[RpnStackNode<'_>],
+        args: &'a [RpnStackNode<'a>],
         extra: &mut RpnFnCallExtra<'_>,
         metadata: &(dyn Any + Send),
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                let v = A::borrow_scalar_value(value);
+                let v = A::borrow_scalar_value_ref(value.as_scalar_value_ref());
                 let new_def = Arg {
-                    arg: ScalarArg(v),
+                    arg: ScalarArg::new(v),
                     rem: def,
                 };
                 self.inner
@@ -207,11 +214,14 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
+
                 let v = A::borrow_vector_value(value.as_ref());
+
                 let new_def = Arg {
                     arg: VectorArg {
                         physical_col: v,
                         logical_rows,
+                        _phantom: PhantomData,
                     },
                     rem: def,
                 };

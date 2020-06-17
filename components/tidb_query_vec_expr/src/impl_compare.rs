@@ -22,6 +22,16 @@ where
 
 #[rpn_fn]
 #[inline]
+pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(&rhs)) as i64),
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn compare_bytes<C: Collator, F: CmpOp>(
     lhs: Option<BytesRef>,
     rhs: Option<BytesRef>,
@@ -217,10 +227,32 @@ impl CmpOp for CmpOpNullEQ {
 
 #[rpn_fn(varg)]
 #[inline]
-pub fn coalesce<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
+pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
         if arg.is_some() {
             return Ok(arg.cloned());
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_vec()));
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_owned()));
         }
     }
     Ok(None)
