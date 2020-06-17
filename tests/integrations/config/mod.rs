@@ -196,7 +196,7 @@ fn test_serde_custom_tikv_config() {
         early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
-        group_consistent_log_gap: 10,
+        group_consistent_log_gap: 5,
         perf_level: PerfLevel::EnableTime,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
