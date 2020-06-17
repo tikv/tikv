@@ -2199,7 +2199,7 @@ impl Peer {
         true
     }
 
-    /// Return (minimal matched, minimal committed_index)
+    /// Returns (minimal matched, minimal committed_index)
     ///
     /// For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<(u64, u64)> {
@@ -2236,18 +2236,19 @@ impl Peer {
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
-        assert!(min_matched >= min_committed);
         if min_matched == 0
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
         {
             return Err(box_err!(
-                "log gap ({}, {}] is too large, skip merge",
+                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
                 min_matched,
+                min_committed,
                 last_index
             ));
         }
+        assert!(min_matched >= min_committed);
         let mut entry_size = 0;
         for entry in self
             .raft_group
