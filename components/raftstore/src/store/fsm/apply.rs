@@ -1858,38 +1858,33 @@ where
         }
 
         let mut meta = ctx.store_meta.lock().unwrap();
-        for (region_id, val) in new_regions_map.iter_mut() {
-            if val.1.is_some() {
-                continue;
-            }
-            let peer_id = val.0;
+        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
             if let Some(r) = meta.regions.get(region_id) {
                 if util::is_region_initialized(r) {
-                    val.1 = Some(format!("region {:?} has already initialized", r));
+                    *reason = Some(format!("region {:?} has already initialized", r));
                 } else {
                     // If the region in meta.regions is not initialized, it must exist in meta.pending_create_peers.
                     let status = meta.pending_create_peers.get_mut(region_id).unwrap();
-                    if *status == (peer_id, CreatePeerStatus::Empty) {
-                        *status = (peer_id, CreatePeerStatus::Split);
+                    if *status == (*peer_id, CreatePeerStatus::Empty) {
+                        *status = (*peer_id, CreatePeerStatus::Split);
                     } else {
-                        val.1 = Some(format!("status {:?} is not expected", status));
+                        *reason = Some(format!("status {:?} is not expected", status));
                     }
                 }
             } else {
                 // If the region not exist in meta.regions, it may exist in meta.pending_create_peers.
                 // See details in `maybe_create_peer`.
                 meta.pending_create_peers
-                    .insert(*region_id, (peer_id, CreatePeerStatus::Split));
+                    .insert(*region_id, (*peer_id, CreatePeerStatus::Split));
             }
         }
         drop(meta);
 
         let mut already_exist_regions = Vec::new();
-        for (region_id, val) in new_regions_map.iter_mut() {
-            if val.1.is_some() {
+        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
+            if reason.is_some() {
                 continue;
             }
-            let peer_id = val.0;
             let region_state_key = keys::region_state_key(*region_id);
             match ctx
                 .engine
@@ -1897,8 +1892,8 @@ where
             {
                 Ok(None) => (),
                 Ok(Some(state)) => {
-                    already_exist_regions.push((*region_id, peer_id));
-                    val.1 = Some(format!("state {:?} exist in kv engine", state));
+                    already_exist_regions.push((*region_id, *peer_id));
+                    *reason = Some(format!("state {:?} exist in kv engine", state));
                 }
                 e => panic!(
                     "{} failed to get regions state of {}: {:?}",
@@ -1922,13 +1917,13 @@ where
             if new_region.get_id() == derived.get_id() {
                 continue;
             }
-            let val = new_regions_map.get(&new_region.get_id()).unwrap();
-            if let Some(reason) = &val.1 {
+            let (new_peer_id, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
+            if let Some(r) = reason {
                 warn!(
                     "new region from splitting already exist";
                     "new_region_id" => new_region.get_id(),
-                    "new_peer_id" => val.0,
-                    "reason" => reason,
+                    "new_peer_id" => new_peer_id,
+                    "reason" => r,
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                 );

@@ -145,3 +145,66 @@ impl Filter for PrevoteRangeFilter {
         Ok(())
     }
 }
+
+#[test]
+fn test_split_not_to_split_exist_region() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    cluster.put(b"k1", b"v1").unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    let peer_3 = find_peer(&region, 3).cloned().unwrap();
+    assert_eq!(peer_3.get_id(), 1003);
+    let on_handle_apply_1003_fp = "on_handle_apply_1003";
+    fail::cfg(on_handle_apply_1003_fp, "pause").unwrap();
+
+    // [-∞, k1), [k1, k2), [k2, +∞)
+    cluster.must_split(&region, b"k1");
+
+    pd_client.must_remove_peer(region.get_id(), peer_3);
+    pd_client.must_add_peer(region.get_id(), new_peer(4, 4));
+
+    let left_region = pd_client.get_region(b"k0").unwrap();
+    let left_peer_3 = find_peer(&left_region, 3).cloned().unwrap();
+    pd_client.must_remove_peer(left_region.get_id(), left_peer_3);
+    pd_client.must_add_peer(left_region.get_id(), new_peer(4, 5));
+
+    pd_client.must_merge(region.get_id(), left_region.get_id());
+
+    let right_region = pd_client.get_region(b"k2").unwrap();
+    let right_peer_3 = find_peer(&right_region, 3).cloned().unwrap();
+    pd_client.must_remove_peer(right_region.get_id(), right_peer_3);
+    pd_client.must_add_peer(right_region.get_id(), new_peer(4, 6));
+
+    pd_client.must_merge(right_region.get_id(), left_region.get_id());
+
+    region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let peer_4 = find_peer(&region, 4).cloned().unwrap();
+    pd_client.must_remove_peer(region.get_id(), peer_4);
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 7));
+
+    cluster.put(b"k2", b"v2").unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+
+    fail::remove(on_handle_apply_1003_fp);
+
+    must_get_none(&cluster.get_engine(3), b"k1");
+}
