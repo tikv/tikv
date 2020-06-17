@@ -233,10 +233,11 @@ run-test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --workspace --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- -- nocapture --ignored; \
 	fi
 
 .PHONY: test
