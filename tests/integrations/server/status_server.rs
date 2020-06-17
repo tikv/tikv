@@ -4,6 +4,7 @@ use hyper::{body, Client, StatusCode, Uri};
 use security::SecurityConfig;
 use std::error::Error;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use test_raftstore::{new_server_cluster, Simulator};
 use tikv::config::ConfigController;
 use tikv::server::status_server::{region_meta::RegionMeta, StatusServer};
@@ -41,12 +42,16 @@ fn test_region_meta_endpoint() {
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
-    let mut status_server =
-        StatusServer::new(1, None, ConfigController::default(), router.unwrap()).unwrap();
+    let mut status_server = StatusServer::new(
+        1,
+        None,
+        ConfigController::default(),
+        Arc::new(SecurityConfig::default()),
+        router.unwrap(),
+    )
+    .unwrap();
     let addr = "127.0.0.1:0".to_owned();
-    assert!(status_server
-        .start(addr.clone(), addr, &SecurityConfig::default())
-        .is_ok());
+    assert!(status_server.start(addr.clone(), addr).is_ok());
     let check_task = check(status_server.listening_addr(), region_id);
     let mut rt = tokio::runtime::Runtime::new().unwrap();
     if let Err(err) = rt.block_on(check_task) {
