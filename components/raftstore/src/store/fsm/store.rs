@@ -117,7 +117,7 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// A uninitialized peer can be replaced to the one from splitting iif they are exactly the same peer.
+    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pub pending_create_peers: HashMap<u64, (u64, bool)>,
 }
 

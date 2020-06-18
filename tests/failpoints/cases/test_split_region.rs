@@ -164,7 +164,6 @@ fn test_split_not_to_split_exist_region() {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let mut region_a = pd_client.get_region(b"k1").unwrap();
-    // state 1
     // [-∞, k2), [k2, +∞)
     //    b         a
     cluster.must_split(&region_a, b"k2");
@@ -180,7 +179,6 @@ fn test_split_not_to_split_exist_region() {
     assert_eq!(peer_b_3.get_id(), 1003);
     let on_handle_apply_1003_fp = "on_handle_apply_1003";
     fail::cfg(on_handle_apply_1003_fp, "pause").unwrap();
-    // state 2
     // [-∞, k1), [k1, k2), [k2, +∞)
     //    c         b          a
     cluster.must_split(&region_b, b"k1");
@@ -192,7 +190,6 @@ fn test_split_not_to_split_exist_region() {
     let peer_c_3 = find_peer(&region_c, 3).cloned().unwrap();
     pd_client.must_remove_peer(region_c.get_id(), peer_c_3);
     pd_client.must_add_peer(region_c.get_id(), new_peer(4, 5));
-    // state 3
     // [-∞, k2), [k2, +∞)
     //     c        a
     pd_client.must_merge(region_b.get_id(), region_c.get_id());
@@ -201,13 +198,11 @@ fn test_split_not_to_split_exist_region() {
     let peer_a_3 = find_peer(&region_a, 3).cloned().unwrap();
     pd_client.must_remove_peer(region_a.get_id(), peer_a_3);
     pd_client.must_add_peer(region_a.get_id(), new_peer(4, 6));
-    // state 4
     // [-∞, +∞)
     //    c
     pd_client.must_merge(region_a.get_id(), region_c.get_id());
 
     region_c = pd_client.get_region(b"k1").unwrap();
-    // state 5
     // [-∞, k2), [k2, +∞)
     //     d        c
     cluster.must_split(&region_c, b"k2");
@@ -242,7 +237,6 @@ fn test_split_not_to_split_exist_tombstone_region() {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let mut region_a = pd_client.get_region(b"k1").unwrap();
-    // state 1
     // [-∞, k2), [k2, +∞)
     //    b         a
     cluster.must_split(&region_a, b"k2");
@@ -258,7 +252,6 @@ fn test_split_not_to_split_exist_tombstone_region() {
     assert_eq!(peer_b_3.get_id(), 1003);
     let on_handle_apply_1003_fp = "on_handle_apply_1003";
     fail::cfg(on_handle_apply_1003_fp, "pause").unwrap();
-    // state 2
     // [-∞, k1), [k1, k2), [k2, +∞)
     //    c         b          a
     cluster.must_split(&region_b, b"k1");
@@ -270,7 +263,6 @@ fn test_split_not_to_split_exist_tombstone_region() {
     let peer_c_3 = find_peer(&region_c, 3).cloned().unwrap();
     pd_client.must_remove_peer(region_c.get_id(), peer_c_3);
     pd_client.must_add_peer(region_c.get_id(), new_peer(4, 5));
-    // state 3
     // [-∞, k2), [k2, +∞)
     //     c        a
     pd_client.must_merge(region_b.get_id(), region_c.get_id());
@@ -279,13 +271,11 @@ fn test_split_not_to_split_exist_tombstone_region() {
     let peer_a_3 = find_peer(&region_a, 3).cloned().unwrap();
     pd_client.must_remove_peer(region_a.get_id(), peer_a_3);
     pd_client.must_add_peer(region_a.get_id(), new_peer(4, 6));
-    // state 4
     // [-∞, +∞)
     //    c
     pd_client.must_merge(region_a.get_id(), region_c.get_id());
 
     region_c = pd_client.get_region(b"k1").unwrap();
-    // state 5
     // [-∞, k2), [k2, +∞)
     //     d        c
     cluster.must_split(&region_c, b"k2");

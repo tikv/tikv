@@ -1829,7 +1829,6 @@ where
         let mut new_regions_map: HashMap<u64, (u64, Option<String>)> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
-            // TODO: check new region id validation.
             new_region.set_id(req.get_new_region_id());
             new_region.set_region_epoch(derived.get_region_epoch().to_owned());
             new_region.set_start_key(keys.pop_front().unwrap());
@@ -1858,9 +1857,6 @@ where
         }
 
         for (region_id, (_, reason)) in new_regions_map.iter_mut() {
-            if reason.is_some() {
-                continue;
-            }
             let region_state_key = keys::region_state_key(*region_id);
             match ctx
                 .engine
