@@ -443,6 +443,52 @@ impl DataKeyManager {
             Iv::from_slice(&file.iv)?,
         )
     }
+
+    pub fn dump_key_dict(
+        config: &EncryptionConfig,
+        dict_path: &str,
+        key_ids: Option<Vec<u64>>,
+    ) -> Result<()> {
+        let dict_file = EncryptedFile::new(Path::new(dict_path), KEY_DICT_NAME);
+        // Here we don't trigger master key rotation and don't care about
+        // config.previous_master_key.
+        let backend = create_backend(&config.master_key)?;
+        let dict_bytes = dict_file.read(backend.as_ref())?;
+        let mut dict = KeyDictionary::default();
+        dict.merge_from_bytes(&dict_bytes)?;
+        if let Some(key_ids) = key_ids {
+            for key_id in key_ids {
+                if let Some(key) = dict.keys.get(&key_id) {
+                    println!("{}: {:?}", key_id, key);
+                }
+            }
+        } else {
+            println!("current key id: {}", dict.current_key_id);
+            for (key_id, key) in dict.keys.iter() {
+                println!("{}: {:?}", key_id, key);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn dump_file_dict(dict_path: &str, file_path: Option<&str>) -> Result<()> {
+        let dict_file = EncryptedFile::new(Path::new(dict_path), FILE_DICT_NAME);
+        let config = MasterKeyConfig::Plaintext;
+        let backend = create_backend(&config)?;
+        let dict_bytes = dict_file.read(backend.as_ref())?;
+        let mut dict = FileDictionary::default();
+        dict.merge_from_bytes(&dict_bytes)?;
+        if let Some(file_path) = file_path {
+            if let Some(info) = dict.files.get(file_path) {
+                println!("{}: {:?}", file_path, info);
+            }
+        } else {
+            for (path, info) in dict.files.iter() {
+                println!("{}: {:?}", path, info);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl EncryptionKeyManager for DataKeyManager {
