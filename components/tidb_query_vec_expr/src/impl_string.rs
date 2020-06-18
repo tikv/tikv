@@ -434,18 +434,68 @@ fn field<T: Evaluable + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
     }))
 }
 
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
+    Ok(Some(match args[0] {
+        // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
+        None => 0,
+        Some(val) => args
+            .iter()
+            .skip(1)
+            .position(|&i| i == Some(val))
+            .map_or(0, |pos| (pos + 1) as i64),
+    }))
+}
+
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[inline]
+pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
+    assert!(raw_args.len() >= 2);
+    let mask = raw_args[0].as_int();
+    let mut output = Vec::new();
+    let mut pow2 = 1;
+    let s = b",";
+    let mut q = false;
+    match mask {
+        None => {
+            return Ok(None);
+        }
+        Some(mask2) => {
+            for i in 1..raw_args.len() {
+                if pow2 & mask2 != 0 {
+                    let input = raw_args[i].as_bytes();
+                    match input {
+                        None => {}
+                        Some(s2) => {
+                            if q {
+                                output.extend_from_slice(s);
+                            }
+                            output.extend_from_slice(s2);
+                            q = true;
+                        }
+                    };
+                }
+                pow2 <<= 1;
+            }
+        }
+    };
+    Ok(Some(output))
+}
+
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
     let index = raw_args[0].as_int();
-    Ok(match *index {
+    Ok(match index {
         None => None,
         Some(i) => {
+            let i = *i;
             if i <= 0 || i + 1 > raw_args.len() as i64 {
                 return Ok(None);
             }
-            raw_args[i as usize].as_bytes().to_owned()
+            raw_args[i as usize].as_bytes().map(|x| x.to_vec())
         }
     })
 }
@@ -476,6 +526,52 @@ pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
         }
         None => None,
     })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn substring_index(
+    s: Option<BytesRef>,
+    delim: Option<BytesRef>,
+    count: Option<&Int>,
+) -> Result<Option<Bytes>> {
+    if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
+        let count = *count;
+        if count == 0 || s.is_empty() || delim.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let finder = if count > 0 {
+            twoway::find_bytes
+        } else {
+            twoway::rfind_bytes
+        };
+        let mut remaining = &s[..];
+        let mut remaining_pattern_count = count.abs();
+        let mut bound = 0;
+        while remaining_pattern_count > 0 {
+            if let Some(offset) = finder(&remaining, delim) {
+                if count > 0 {
+                    bound += offset + delim.len();
+                    remaining = &s[bound..];
+                } else {
+                    bound = offset;
+                    remaining = &s[..bound];
+                }
+            } else {
+                break;
+            }
+            remaining_pattern_count -= 1;
+        }
+        Ok(Some(if remaining_pattern_count > 0 {
+            s[..].to_vec()
+        } else if count > 0 {
+            s[..bound - delim.len()].to_vec()
+        } else {
+            s[bound + delim.len()..].to_vec()
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 #[rpn_fn]
@@ -1939,6 +2035,288 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Space)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_make_set() {
+        let test_cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    Some(0b110).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b100).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b0).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b1).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    None::<Int>.into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (vec![None::<Int>.into(), None::<Bytes>.into()], None),
+            (
+                vec![
+                    Some(0b1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b11).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b0).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xffffffff).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                    None::<Bytes>.into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b10).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xffffffff).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xfffffffe).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xfffffffd).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,c".to_vec()),
+            ),
+        ];
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::MakeSet)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_substring_index() {
+        let test_cases = vec![
+            (None, None, None, None),
+            (Some(vec![]), None, None, None),
+            (Some(vec![]), Some(vec![]), Some(1i64), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(1), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(-1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(-1), Some(vec![])),
+            (
+                Some(b"abc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(0),
+                Some(vec![]),
+            ),
+            (
+                Some(b"aaaaaaaa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"bbbbbbbb".to_vec()),
+                Some(b"bb".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"cccccccc".to_vec()),
+                Some(b"cc".to_vec()),
+                Some(2),
+                Some(b"cc".to_vec()),
+            ),
+            (
+                Some(b"dddddddd".to_vec()),
+                Some(b"dd".to_vec()),
+                Some(-2),
+                Some(b"dd".to_vec()),
+            ),
+            (
+                Some(b"eeeeeeee".to_vec()),
+                Some(b"ee".to_vec()),
+                Some(5),
+                Some(b"eeeeeeee".to_vec()),
+            ),
+            (
+                Some(b"ffffffff".to_vec()),
+                Some(b"ff".to_vec()),
+                Some(-5),
+                Some(b"ffffffff".to_vec()),
+            ),
+            (
+                Some(b"gggggggg".to_vec()),
+                Some(b"gg".to_vec()),
+                Some(6),
+                Some(b"gggggggg".to_vec()),
+            ),
+            (
+                Some(b"hhhhhhhh".to_vec()),
+                Some(b"hh".to_vec()),
+                Some(-6),
+                Some(b"hhhhhhhh".to_vec()),
+            ),
+            (
+                Some(b"iiiii".to_vec()),
+                Some(b"ii".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"jjjjj".to_vec()),
+                Some(b"jj".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"kkkkk".to_vec()),
+                Some(b"kk".to_vec()),
+                Some(3),
+                Some(b"kkkkk".to_vec()),
+            ),
+            (
+                Some(b"lllll".to_vec()),
+                Some(b"ll".to_vec()),
+                Some(-3),
+                Some(b"lllll".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(2),
+                Some(b"www.mysql".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(-2),
+                Some(b"mysql.com".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-1),
+                Some(b"c".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(2),
+                Some(b"abc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-2),
+                Some(b"cabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(-1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+        ];
+        for (s, delim, count, exp) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(delim)
+                .push_param(count)
+                .evaluate(ScalarFuncSig::SubstringIndex)
                 .unwrap();
             assert_eq!(output, exp);
         }

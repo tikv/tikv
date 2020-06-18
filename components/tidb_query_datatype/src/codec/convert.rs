@@ -28,8 +28,19 @@ pub trait ToInt {
 
 /// A trait for converting a value to `T`
 pub trait ConvertTo<T> {
-    /// Converts the given value ToInt `T` value
+    /// Converts the given value to `T` value
     fn convert(&self, ctx: &mut EvalContext) -> Result<T>;
+}
+
+pub trait ConvertFrom<T>: Sized {
+    /// Converts the given value from `T` value
+    fn convert_from(ctx: &mut EvalContext, from: T) -> Result<Self>;
+}
+
+impl<V, W: ConvertTo<V>> ConvertFrom<W> for V {
+    fn convert_from(ctx: &mut EvalContext, from: W) -> Result<Self> {
+        from.convert(ctx)
+    }
 }
 
 impl<T> ConvertTo<i64> for T
@@ -54,7 +65,7 @@ where
 
 impl<T> ConvertTo<Real> for T
 where
-    T: ConvertTo<f64> + Evaluable,
+    T: ConvertTo<f64> + EvaluableRet,
 {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
@@ -66,7 +77,7 @@ where
 
 impl<T> ConvertTo<String> for T
 where
-    T: ToString + Evaluable,
+    T: ToString + EvaluableRet,
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<String> {
@@ -77,8 +88,32 @@ where
 
 impl<T> ConvertTo<Bytes> for T
 where
-    T: ToString + Evaluable,
+    T: ToString + EvaluableRet,
 {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        Ok(self.to_string().into_bytes())
+    }
+}
+
+impl<'a> ConvertTo<Real> for JsonRef<'a> {
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
+        let val = self.convert(ctx)?;
+        let val = box_try!(Real::new(val));
+        Ok(val)
+    }
+}
+
+impl<'a> ConvertTo<String> for JsonRef<'a> {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<String> {
+        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+        Ok(self.to_string())
+    }
+}
+
+impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
         Ok(self.to_string().into_bytes())
@@ -440,13 +475,11 @@ impl ToInt for Duration {
 }
 
 impl ToInt for Json {
-    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         self.as_ref().to_int(ctx, tp)
     }
 
-    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         self.as_ref().to_uint(ctx, tp)
