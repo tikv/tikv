@@ -14,6 +14,7 @@ use kvproto::pdpb;
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
+use semver::Version;
 use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
@@ -500,4 +501,55 @@ fn test_periodical_update() {
     }
 
     panic!("failed, leader should changed");
+}
+
+#[test]
+fn test_cluster_version() {
+    let server = MockServer::<Service>::new(3);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let cluster_version = client.cluster_version();
+    assert!(cluster_version.get().is_none());
+
+    let emit_heartbeat = || {
+        let req = pdpb::StoreStats::default();
+        client.store_heartbeat(req).wait().unwrap();
+    };
+
+    let set_cluster_version = |version: &str| {
+        let h = server.default_handler();
+        h.set_cluster_version(version.to_owned());
+    };
+
+    // Empty version string will be treated as invalid.
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    // Explicitly invalid version string.
+    set_cluster_version("invalid-version");
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    let v_500 = Version::parse("5.0.0").unwrap();
+    let v_501 = Version::parse("5.0.1").unwrap();
+
+    // Correct version string.
+    set_cluster_version("5.0.0");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can't go backwards.
+    set_cluster_version("4.99");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // After reconnect the version should be still accessable.
+    client.reconnect().unwrap();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can go forwards.
+    set_cluster_version("5.0.1");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_501);
 }
