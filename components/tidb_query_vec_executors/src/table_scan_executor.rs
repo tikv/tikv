@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use smallvec::SmallVec;
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
@@ -16,7 +17,7 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row;
-use tidb_query_datatype::codec::table::check_record_key;
+use tidb_query_datatype::codec::table::{check_record_key, Handle};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -39,6 +40,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
+        primary_column_ids: Vec<i64>,
         is_backward: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
@@ -75,6 +77,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             columns_default_value,
             column_id_index,
             handle_indices,
+            primary_column_ids,
             is_column_filled,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -141,6 +144,9 @@ struct TableScanExecutorImpl {
 
     /// Vec of indices in output row to put the handle. The indices must be sorted in the vec.
     handle_indices: HandleIndicesVec,
+
+    /// Vec of Primary key column's IDs.
+    primary_column_ids: Vec<i64>,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -289,22 +295,33 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::{datum, table};
+        use tidb_query_datatype::codec::datum;
 
         check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
         if !self.handle_indices.is_empty() {
-            let handle_id = table::decode_handle(key)?;
+            let handle = Handle::try_from(key)?.into_i64()?;
+
             for handle_index in &self.handle_indices {
                 // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
                 // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-                columns[*handle_index]
-                    .mut_decoded()
-                    .push_int(Some(handle_id));
+                columns[*handle_index].mut_decoded().push_int(Some(handle));
                 decoded_columns += 1;
                 self.is_column_filled[*handle_index] = true;
+            }
+        } else if !self.primary_column_ids.is_empty() {
+            let handle = Handle::try_from(key)?.into_common()?;
+            for (i, primary_id) in self.primary_column_ids.iter().enumerate() {
+                let index = self.column_id_index.get(primary_id);
+                if let Some(&index) = index {
+                    if !self.is_column_filled[index] {
+                        columns[i].mut_raw().push(handle[i]);
+                        decoded_columns += 1;
+                        self.is_column_filled[index] = true;
+                    }
+                }
             }
         }
 
@@ -624,6 +641,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             ranges,
+            vec![],
             false,
         )
         .unwrap();
@@ -705,6 +723,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
+            vec![],
             false,
         )
         .unwrap()
@@ -842,6 +861,7 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[corrupted_row_index].clone(),
                 ],
+                vec![],
                 false,
             )
             .unwrap();
@@ -946,6 +966,7 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[2].clone(),
                 ],
+                vec![],
                 false,
             )
             .unwrap();
@@ -980,6 +1001,7 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[2].clone(),
                 ],
+                vec![],
                 false,
             )
             .unwrap();
@@ -1016,6 +1038,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
+                vec![],
                 false,
             )
             .unwrap();
@@ -1034,6 +1057,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
+                vec![],
                 false,
             )
             .unwrap();
@@ -1065,6 +1089,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info,
                 vec![key_range_point[1].clone()],
+                vec![],
                 false,
             )
             .unwrap();
@@ -1112,6 +1137,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             vec![key_range],
+            vec![],
             false,
         )
         .unwrap();

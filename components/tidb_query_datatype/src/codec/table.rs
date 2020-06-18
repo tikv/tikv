@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::io::Write;
 use std::sync::Arc;
 use std::{cmp, u8};
@@ -30,6 +30,56 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 // the maximum len of the old encoding of index value.
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
+pub enum Handle<'a> {
+    Int(i64),
+    // TODO: use `BytesSlice` instead to eliminate the allocation.
+    Common(Vec<BytesSlice<'a>>),
+}
+
+impl<'a> Handle<'a> {
+    pub fn into_i64(self) -> Result<i64> {
+        match self {
+            Handle::Int(i) => Ok(i),
+            _ => Err(invalid_type!(
+                "Expect an integer handle, got a common handle"
+            )),
+        }
+    }
+
+    pub fn into_common(self) -> Result<Vec<BytesSlice<'a>>> {
+        match self {
+            Handle::Common(slices) => Ok(slices),
+            _ => Err(invalid_type!(
+                "Expect a common handle, got an integer handle"
+            )),
+        }
+    }
+}
+
+impl<'a> TryFrom<BytesSlice<'a>> for Handle<'a> {
+    type Error = Error;
+
+    fn try_from(mut key: BytesSlice<'a>) -> Result<Self> {
+        if key.len() < RECORD_ROW_KEY_LEN || check_record_key(key).is_err() {
+            Err(invalid_type!("record key expected, but got {:?}", key))
+        } else if key.len() == RECORD_ROW_KEY_LEN {
+            Ok(Handle::Int(
+                key[PREFIX_LEN..].as_ref().read_i64().map_err(Error::from)?,
+            ))
+        } else {
+            check_record_key(key)?;
+            key = &key[PREFIX_LEN..];
+
+            let mut datums = Vec::new();
+            while !key.is_empty() {
+                let (column, remain) = datum::split_datum(key, false)?;
+                datums.push(column);
+                key = remain;
+            }
+            Ok(Handle::Common(datums))
+        }
+    }
+}
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
