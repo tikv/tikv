@@ -1857,8 +1857,31 @@ where
             regions.push(derived.clone());
         }
 
+        for (region_id, (_, reason)) in new_regions_map.iter_mut() {
+            if reason.is_some() {
+                continue;
+            }
+            let region_state_key = keys::region_state_key(*region_id);
+            match ctx
+                .engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            {
+                Ok(None) => (),
+                Ok(Some(state)) => {
+                    *reason = Some(format!("state {:?} exist in kv engine", state));
+                }
+                e => panic!(
+                    "{} failed to get regions state of {}: {:?}",
+                    self.tag, region_id, e
+                ),
+            }
+        }
+
         let mut meta = ctx.store_meta.lock().unwrap();
         for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
+            if reason.is_some() {
+                continue;
+            }
             if let Some(r) = meta.regions.get(region_id) {
                 if util::is_region_initialized(r) {
                     *reason = Some(format!("region {:?} has already initialized", r));
@@ -1874,45 +1897,14 @@ where
                     }
                 }
             } else {
-                // If the region not exist in `meta.regions`, it may exist in `meta.pending_create_peers`.
-                // See details in `maybe_create_peer`.
-                meta.pending_create_peers
-                    .insert(*region_id, (*peer_id, true));
-            }
-        }
-        drop(meta);
-
-        let mut already_exist_regions = Vec::new();
-        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
-            if reason.is_some() {
-                continue;
-            }
-            let region_state_key = keys::region_state_key(*region_id);
-            match ctx
-                .engine
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            {
-                Ok(None) => (),
-                Ok(Some(state)) => {
-                    already_exist_regions.push((*region_id, *peer_id));
-                    *reason = Some(format!("state {:?} exist in kv engine", state));
-                }
-                e => panic!(
-                    "{} failed to get regions state of {}: {:?}",
-                    self.tag, region_id, e
-                ),
-            }
-        }
-
-        if !already_exist_regions.is_empty() {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            for (region_id, peer_id) in &already_exist_regions {
                 assert_eq!(
-                    meta.pending_create_peers.remove(region_id),
-                    Some((*peer_id, true))
+                    meta.pending_create_peers
+                        .insert(*region_id, (*peer_id, true)),
+                    None
                 );
             }
         }
+        drop(meta);
 
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for new_region in &regions {

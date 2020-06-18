@@ -1293,8 +1293,6 @@ enum CheckMsgStatus {
     DropMsg,
     // Try to create peer
     NewPeer,
-    // Try to create peer and no region_local_state in kv engine
-    NewPeerNone,
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -1313,7 +1311,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
-                None => return Ok(CheckMsgStatus::NewPeerNone),
+                None => return Ok(CheckMsgStatus::NewPeer),
             };
 
         if local_state.get_state() != PeerState::Tombstone {
@@ -1479,12 +1477,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());
         }
-        let status = self.check_msg(&msg)?;
-        match status {
+        match self.check_msg(&msg)? {
             CheckMsgStatus::DropMsg => return Ok(()),
             CheckMsgStatus::PeerExist => (),
-            CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerNone => {
-                if !self.maybe_create_peer(region_id, &msg, status)? {
+            CheckMsgStatus::NewPeer => {
+                if !self.maybe_create_peer(region_id, &msg)? {
                     return Ok(());
                 }
             }
@@ -1497,12 +1494,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     ///
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
-    fn maybe_create_peer(
-        &mut self,
-        region_id: u64,
-        msg: &RaftMessage,
-        status: CheckMsgStatus,
-    ) -> Result<bool> {
+    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
         let target = msg.get_to_peer();
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
@@ -1517,7 +1509,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if meta.regions.contains_key(&region_id) {
+        if meta.regions.contains_key(&region_id)
+            || meta.pending_create_peers.contains_key(&region_id)
+        {
             return Ok(true);
         }
 
@@ -1598,42 +1592,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     }),
                 )
                 .unwrap();
-        }
-
-        if meta.pending_create_peers.contains_key(&region_id) {
-            return Ok(true);
-        }
-        if status == CheckMsgStatus::NewPeerNone {
-            meta.pending_create_peers
-                .insert(region_id, (target.get_id(), false));
-
-            drop(meta);
-
-            // If the region_local_state is changed, it means this region was created from splitting.
-            let is_local_state_changed = self
-                .ctx
-                .engines
-                .kv
-                .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
-                .is_some();
-
-            meta = self.ctx.store_meta.lock().unwrap();
-
-            let v = meta.pending_create_peers.get(&region_id);
-            // If the data is changed in `pending_create_peers`, it also means this region was created from splitting.
-            match v {
-                Some(status) if *status == (target.get_id(), false) => (),
-                _ => return Ok(true),
-            }
-            // The data is not changed in pending_create_peers.
-            // Remove it due to the latter check may fail. Re-add it after all checking pass.
-            // Correctness depends on the StoreMeta lock **MUST NOT** be released until all latter checking pass
-            // and update regions and pending_create_peers.
-            meta.pending_create_peers.remove(&region_id);
-
-            if is_local_state_changed {
-                return Ok(true);
-            }
         }
 
         // New created peers should know it's learner or not.
