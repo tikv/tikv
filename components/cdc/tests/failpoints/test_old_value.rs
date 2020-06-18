@@ -1,5 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
 use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
@@ -16,8 +15,13 @@ use pd_client::PdClient;
 use test_raftstore::sleep_ms;
 
 #[test]
-fn test_old_value_basic() {
-    let mut suite = TestSuite::new(1);
+fn test_old_value_fallback() {
+    // For test that a pending cmd batch contains a error like epoch not match.
+    let mut suite = TestSuite::new(3);
+
+    let fp = "raft_return_txn_extra_op_none";
+    fail::cfg(fp, "return").unwrap();
+
     let mut req = ChangeDataRequest::default();
     req.region_id = 1;
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
@@ -89,44 +93,6 @@ fn test_old_value_basic() {
                                 assert_eq!(row.get_old_value(), vec![b'3'; 5120].as_slice());
                                 event_count += 1;
                             }
-                        }
-                    }
-                }
-                Event_oneof_event::Error(e) => panic!("{:?}", e),
-                Event_oneof_event::ResolvedTs(e) => panic!("{:?}", e),
-                Event_oneof_event::Admin(e) => panic!("{:?}", e),
-            }
-        }
-        if event_count >= 3 {
-            break;
-        }
-    }
-
-    let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
-    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
-    let mut event_count = 0;
-    loop {
-        let events = receive_event(false);
-        for event in events {
-            match event.event.unwrap() {
-                Event_oneof_event::Entries(mut es) => {
-                    for row in es.take_entries() {
-                        if row.get_type() == EventLogType::Committed
-                            && row.get_start_ts() == m1_start_ts.into_inner()
-                        {
-                            assert_eq!(row.get_old_value(), b"");
-                            event_count += 1;
-                        } else if row.get_type() == EventLogType::Committed
-                            && row.get_start_ts() == m3_start_ts.into_inner()
-                        {
-                            assert_eq!(row.get_old_value(), b"v1");
-                            event_count += 1;
-                        } else if row.get_type() == EventLogType::Prewrite
-                            && row.get_start_ts() == m5_start_ts.into_inner()
-                        {
-                            assert_eq!(row.get_old_value(), b"v3");
-                            event_count += 1;
                         }
                     }
                 }

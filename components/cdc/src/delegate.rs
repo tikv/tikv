@@ -771,35 +771,38 @@ impl Delegate {
             ScanMode::Mixed,
         );
         for mut key in to_read_old {
-            write_cursor.near_seek_for_prev(&key, &mut statistics.write)?;
-            let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
             let mut old_value = None;
-            loop {
-                if Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
-                    let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
-                    let v = match write.write_type {
-                        WriteType::Put => match write.short_value {
-                            Some(short_value) => short_value.to_vec(),
-                            None => {
-                                key = key.truncate_ts().unwrap().append_ts(write.start_ts);
-                                default_cursor
-                                    .get(&key, &mut statistics.write)
-                                    .unwrap()
-                                    .map_or_else(Vec::default, |v| v.to_vec())
+            if write_cursor.near_seek_for_prev(&key, &mut statistics.write)? {
+                let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
+                loop {
+                    if Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
+                        let write =
+                            WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
+                        let v = match write.write_type {
+                            WriteType::Put => match write.short_value {
+                                Some(short_value) => short_value.to_vec(),
+                                None => {
+                                    key = key.truncate_ts().unwrap().append_ts(write.start_ts);
+                                    default_cursor
+                                        .get(&key, &mut statistics.write)
+                                        .unwrap()
+                                        .map_or_else(Vec::default, |v| v.to_vec())
+                                }
+                            },
+                            WriteType::Delete => Vec::default(),
+                            WriteType::Rollback | WriteType::Lock => {
+                                if !write_cursor.prev(&mut statistics.write) {
+                                    break;
+                                }
+                                continue;
                             }
-                        },
-                        WriteType::Delete => Vec::default(),
-                        WriteType::Rollback | WriteType::Lock => {
-                            if !write_cursor.prev(&mut statistics.write) {
-                                break;
-                            }
-                            continue;
-                        }
-                    };
-                    old_value = Some(v)
+                        };
+                        old_value = Some(v)
+                    }
+                    break;
                 }
-                break;
             }
+            // If the old value is None, the operation is likely Insert.
             let raw_key = key.truncate_ts().unwrap().into_raw().unwrap();
             if let Some(old_value) = old_value {
                 rows.get_mut(&raw_key).unwrap().old_value = old_value;

@@ -2551,10 +2551,15 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
-        resp.txn_extra_op = self.txn_extra_op.load();
+        resp.txn_extra_op = self.load_txn_extra_op();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
+    }
+
+    fn load_txn_extra_op(&self) -> TxnExtraOp {
+        fail_point!("raft_return_txn_extra_op_none", |_| TxnExtraOp::Noop);
+        self.txn_extra_op.load()
     }
 
     pub fn term(&self) -> u64 {
