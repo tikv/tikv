@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
-use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::{self, Engines};
+use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
