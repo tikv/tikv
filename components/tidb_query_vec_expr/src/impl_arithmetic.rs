@@ -37,13 +37,13 @@ pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
 }
 
 pub trait ArithmeticOp {
-    type T: Evaluable;
+    type T: Evaluable + EvaluableRet;
 
     fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
 }
 
 pub trait ArithmeticOpWithCtx {
-    type T: Evaluable;
+    type T: Evaluable + EvaluableRet;
 
     fn calc(ctx: &mut EvalContext, lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
 }

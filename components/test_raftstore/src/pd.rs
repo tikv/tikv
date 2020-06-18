@@ -1300,7 +1300,7 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
@@ -1309,7 +1309,12 @@ impl PdClient for TestPdClient {
         let store_id = stats.get_store_id();
         let mut cluster = self.cluster.wl();
         cluster.store_stats.insert(store_id, stats);
-        Box::new(ok(cluster.replication_status.clone()))
+
+        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        if let Some(ref status) = cluster.replication_status {
+            resp.set_replication_status(status.clone());
+        }
+        Box::new(ok(resp))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
