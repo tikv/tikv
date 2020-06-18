@@ -85,7 +85,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         if out_et == EvalType::Bytes {
             return match_template_collator! {
                 C, match out_coll {
-                    Collation::C => Ok(Box::new(AggFnExtremum4Bytes::<C, T>::new()))
+                    Collation::C => Ok(Box::new(AggFnExtremumForBytes::<C, T>::new()))
                 }
             };
         }
@@ -100,7 +100,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggFnStateExtremum4Bytes::<C, E>::new())]
-pub struct AggFnExtremum4Bytes<C, E>
+pub struct AggFnExtremumForBytes<C, E>
 where
     C: Collator,
     E: Extremum,
@@ -109,7 +109,7 @@ where
     _phantom: std::marker::PhantomData<(C, E)>,
 }
 
-impl<C, E> AggFnExtremum4Bytes<C, E>
+impl<C, E> AggFnExtremumForBytes<C, E>
 where
     C: Collator,
     E: Extremum,
@@ -383,23 +383,23 @@ mod tests {
     fn test_collation() {
         let mut ctx = EvalContext::default();
         let cases = vec![
-            (Collation::Binary, true, vec!["A", "a"], "a"),
-            (Collation::Utf8Mb4Bin, true, vec!["A", "a"], "a"),
-            (Collation::Utf8Mb4GeneralCi, true, vec!["A", "a"], "A"),
-            (Collation::Utf8Mb4BinNoPadding, true, vec!["A", "a"], "a"),
-            (Collation::Binary, false, vec!["a", "A"], "A"),
-            (Collation::Utf8Mb4Bin, false, vec!["a", "A"], "A"),
-            (Collation::Utf8Mb4GeneralCi, false, vec!["a", "A"], "a"),
-            (Collation::Utf8Mb4BinNoPadding, false, vec!["a", "A"], "A"),
+            (Collation::Binary, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4Bin, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
+            (Collation::Binary, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4BinNoPadding, false, vec!["B", "a"], "B"),
         ];
         for (coll, is_max, args, expected) in cases {
             let function = match_template_collator! {
                 TT, match coll {
                     Collation::TT => {
                         if is_max {
-                            Box::new(AggFnExtremum4Bytes::<TT, Max>::new()) as Box<dyn AggrFunction>
+                            Box::new(AggFnExtremumForBytes::<TT, Max>::new()) as Box<dyn AggrFunction>
                         } else {
-                            Box::new(AggFnExtremum4Bytes::<TT, Min>::new()) as Box<dyn AggrFunction>
+                            Box::new(AggFnExtremumForBytes::<TT, Min>::new()) as Box<dyn AggrFunction>
                         }
                     }
                 }
