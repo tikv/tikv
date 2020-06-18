@@ -2134,8 +2134,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let target_id = expect_region.get_id();
             let sibling_region = expect_region;
 
-            let min_index = self.fsm.peer.get_min_progress()? + 1;
-            let low = cmp::max(min_index, state.get_min_index());
+            let (min_index, _) = self.fsm.peer.get_min_progress()?;
+            let low = cmp::max(min_index + 1, state.get_min_index());
             // TODO: move this into raft module.
             // > over >= to include the PrepareMerge proposal.
             let entries = if low > state.get_commit() {
