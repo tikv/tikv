@@ -453,7 +453,11 @@ impl Peer {
         );
     }
 
-    fn check_wait_sync_deadline(&mut self, check_consistent_res: bool, current_time: Timespec) {
+    pub fn need_check_delay_switch(&self) -> bool {
+        !self.raft_group.raft.group_commit() && self.wait_sync_deadline.is_some()
+    }
+
+    pub fn check_wait_sync_deadline(&mut self, check_consistent_res: bool, current_time: Timespec) {
         if self.raft_group.raft.group_commit() || self.wait_sync_deadline.is_none() {
             // The required replication state already reached.
             return;
@@ -468,7 +472,7 @@ impl Peer {
         }
     }
 
-    fn check_group_commit_consistent(&mut self, allow_gap: u64) -> Option<bool> {
+    pub fn check_group_commit_consistent(&mut self, allow_gap: u64) -> Option<bool> {
         if !self.is_leader() || !self.raft_group.raft.apply_to_current_term() {
             return None;
         }
