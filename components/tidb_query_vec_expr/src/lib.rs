@@ -550,6 +550,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
         ScalarFuncSig::FieldString => field_bytes_fn_meta(),
         ScalarFuncSig::Elt => elt_fn_meta(),
+        ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
