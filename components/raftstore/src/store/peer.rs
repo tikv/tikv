@@ -2147,7 +2147,6 @@ impl Peer {
         poll_ctx.raft_metrics.propose.read_index += 1;
         self.bcast_wake_up_time = None;
 
-        // Should we call pre_propose here?
         let (id, dropped) = self.propose_read_index();
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
