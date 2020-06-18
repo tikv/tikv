@@ -272,7 +272,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 	-A clippy::needless_range_loop -A clippy::redundant_closure \
 	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-	-A clippy::identity_conversion -A clippy::new_ret_no_self
+	-A clippy::useless_conversion -A clippy::new_ret_no_self
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))

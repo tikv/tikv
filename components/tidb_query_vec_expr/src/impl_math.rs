@@ -290,13 +290,13 @@ fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
-    Ok(arg.and_then(|n| {
+    Ok(arg.map(|n| {
         if **n > 0f64 {
-            Some(1)
+            1
         } else if **n == 0f64 {
-            Some(0)
+            0
         } else {
-            Some(-1)
+            -1
         }
     }))
 }
