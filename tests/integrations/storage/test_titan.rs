@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use engine::rocks::{IngestExternalFileOptions, Writable};
+use engine_rocks::raw::{IngestExternalFileOptions, Writable};
 use engine::Engines;
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
