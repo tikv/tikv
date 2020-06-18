@@ -213,13 +213,24 @@ fn test_node_merge_prerequisites_check() {
     cluster.must_transfer_leader(left.get_id(), left_on_store1);
     let right_on_store1 = find_peer(&right, 1).unwrap().to_owned();
     cluster.must_transfer_leader(right.get_id(), right_on_store1);
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        left.get_id(),
-        3,
-    )));
+
+    // first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make source peer have uncommitted entries.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .allow(1),
+    ));
+    // make the source peer's commit index can't be updated by MsgHeartbeat.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .msg_type(MessageType::MsgHeartbeat)
+            .direction(Direction::Recv),
+    ));
     cluster.must_split(&left, b"k11");
     let res = cluster.try_merge(left.get_id(), right.get_id());
-    // log gap contains admin entries.
+    // log gap (min_committed, last_index] contains admin entries.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k22", b"v22");
@@ -238,7 +249,7 @@ fn test_node_merge_prerequisites_check() {
         .unwrap();
     assert!(res.get_header().has_error(), "{:?}", res);
     let res = cluster.try_merge(right.get_id(), left.get_id());
-    // log gap contains admin entries.
+    // log gap (min_matched, last_index] contains admin entries.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k23", b"v23");
