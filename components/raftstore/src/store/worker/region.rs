@@ -405,6 +405,7 @@ where
     }
 
     /// Cleans up the data within the range.
+    // If `region_id` is 0, it's used for deleting extra range from splitting
     fn cleanup_range(
         &self,
         region_id: u64,
@@ -671,13 +672,20 @@ where
                 end_key,
             } => {
                 fail_point!("on_region_worker_destroy", true, |_| {});
-                // try to delay the range deletion because
-                // there might be a coprocessor request related to this range
-                self.ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key);
+                // If `region_id` is 0, it's used for deleting extra range from splitting.
+                if region_id == 0 {
+                    self.ctx.cleanup_range(
+                        region_id, &start_key, &end_key, true, /* use_delete_files */
+                    );
+                } else {
+                    // try to delay the range deletion because
+                    // there might be a coprocessor request related to this range
+                    self.ctx
+                        .insert_pending_delete_range(region_id, &start_key, &end_key);
 
-                // try to delete stale ranges if there are any
-                self.ctx.clean_stale_ranges();
+                    // try to delete stale ranges if there are any
+                    self.ctx.clean_stale_ranges();
+                }
             }
         }
     }

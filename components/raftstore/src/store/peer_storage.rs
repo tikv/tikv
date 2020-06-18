@@ -1180,6 +1180,14 @@ where
         Ok(())
     }
 
+    /// Delete all extra split data from the `start_key` to `end_key`.
+    pub fn clear_extra_split_data(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        box_try!(self
+            .region_sched
+            .schedule(RegionTask::destroy(0, start_key, end_key)));
+        Ok(())
+    }
+
     pub fn get_raft_engine(&self) -> ER {
         self.engines.raft.clone()
     }

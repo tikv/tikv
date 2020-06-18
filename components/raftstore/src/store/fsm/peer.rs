@@ -1537,11 +1537,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.pending_snapshot_regions.push(snap_region);
         if !util::is_region_initialized(self.region()) {
             // If the region is not initialized and snapshot checking has passed, the split flag must be false.
-            // The split process only change this flag to true when it's exactly the same peer, if so,
-            // this peer can't pass the previous range check.
+            // The split process only change this flag to true if it's exactly the same peer,
+            // if so, this peer can't pass the previous range check.
             // The condition of passing the range check is this region must merge the other regions and then split.
-            // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e. PD
-            // ensure all target peer must exist during merging.
+            // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e.
+            // all target peer must exist during merging.
             assert_eq!(
                 *meta.pending_create_peers.get(&region_id).unwrap(),
                 (self.fsm.peer_id(), false)
@@ -1909,8 +1909,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if new_region.get_id() != region_id {
                 let (peer_id, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
                 if reason.is_some() {
-                    // FIXME: here need to clean the new_region's data, but is it safe to clean in region worker
-                    // and do not affect the possibly existing peer with the same region id?
+                    if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
+                        enc_start_key(&new_region),
+                        enc_end_key(&new_region),
+                    ) {
+                        error!(
+                            "failed to cleanup extra split data, may leave some dirty data";
+                            "region_id" => new_region.get_id(),
+                            "err" => ?e,
+                        );
+                    }
                     continue;
                 } else {
                     assert_eq!(

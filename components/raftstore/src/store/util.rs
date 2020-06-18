@@ -1214,4 +1214,13 @@ mod tests {
             assert_eq!(quorum, expected_quorum);
         }
     }
+
+    #[test]
+    fn test_is_region_initialized() {
+        let mut region = metapb::Region::default();
+        assert_eq!(is_region_initialized(&region), false);
+        let peers = vec![new_peer(1, 2)];
+        region.set_peers(peers.into());
+        assert_eq!(is_region_initialized(&region), true);
+    }
 }
