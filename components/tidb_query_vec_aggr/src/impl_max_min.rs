@@ -188,7 +188,7 @@ where
 #[aggr_function(state = AggFnStateExtremum::<T, E>::new())]
 pub struct AggFnExtremum<T, E>
 where
-    T: Evaluable + Ord,
+    T: EvaluableRet + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
@@ -197,7 +197,7 @@ where
 
 impl<T, E> AggFnExtremum<T, E>
 where
-    T: Evaluable + Ord,
+    T: EvaluableRet + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
@@ -212,7 +212,7 @@ where
 #[derive(Debug)]
 pub struct AggFnStateExtremum<T, E>
 where
-    T: Evaluable + Ord,
+    T: EvaluableRet + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
@@ -222,7 +222,7 @@ where
 
 impl<T, E> AggFnStateExtremum<T, E>
 where
-    T: Evaluable + Ord,
+    T: EvaluableRet + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
@@ -236,7 +236,7 @@ where
 
 impl<T, E> super::ConcreteAggrFunctionState for AggFnStateExtremum<T, E>
 where
-    T: Evaluable + Ord,
+    T: EvaluableRet + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T>,
 {

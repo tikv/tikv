@@ -1376,6 +1376,7 @@ mod tests {
 
     #[cfg(feature = "mem-profiling")]
     #[test]
+    #[ignore]
     fn test_pprof_heap_service() {
         let mut status_server = StatusServer::new(
             1,

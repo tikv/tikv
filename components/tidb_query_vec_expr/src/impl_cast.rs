@@ -61,7 +61,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Int) => cast_any_as_any_fn_meta::<Duration, Int>(),
         (EvalType::Json, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Json, Int>()
+                cast_json_as_any_fn_meta::<Int>()
             } else {
                 cast_json_as_uint_fn_meta()
             }
@@ -104,7 +104,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
-        (EvalType::Json, EvalType::Real) => cast_any_as_any_fn_meta::<Json, Real>(),
+        (EvalType::Json, EvalType::Real) => cast_json_as_any_fn_meta::<Real>(),
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
@@ -125,7 +125,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Decimal, EvalType::Bytes) => cast_any_as_string_fn_meta::<Decimal>(),
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
+        (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -140,7 +140,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Real, EvalType::Decimal) => cast_real_as_decimal_fn_meta(),
         (EvalType::Bytes, EvalType::Decimal) => {
             if !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Bytes>()
+                cast_bytes_as_decimal_fn_meta()
             } else {
                 cast_string_as_unsigned_decimal_fn_meta()
             }
@@ -154,7 +154,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
+        (EvalType::Json, EvalType::Decimal) => cast_json_as_decimal_fn_meta(),
 
         // any as duration
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
@@ -181,16 +181,16 @@ fn get_cast_fn_rpn_meta(
             {
                 cast_bool_as_json_fn_meta()
             } else if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Json>()
+                cast_any_as_json_fn_meta::<Int>()
             } else {
                 cast_uint_as_json_fn_meta()
             }
         }
-        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
+        (EvalType::Real, EvalType::Json) => cast_any_as_json_fn_meta::<Real>(),
         (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
-        (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
-        (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
-        (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
+        (EvalType::Decimal, EvalType::Json) => cast_any_as_json_fn_meta::<Decimal>(),
+        (EvalType::DateTime, EvalType::Json) => cast_any_as_json_fn_meta::<DateTime>(),
+        (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
@@ -846,6 +846,46 @@ fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
     }
 }
 
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_json_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec: Decimal = val.convert(ctx)?;
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_bytes_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<BytesRef>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec: Decimal = val.convert(ctx)?;
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
+        }
+    }
+}
+
 // cast any as duration, no cast functions reuse `cast_any_as_any`
 
 #[rpn_fn(capture = [ctx, extra])]
@@ -1141,10 +1181,67 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
+fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<To>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_json_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Json>>(
+    ctx: &mut EvalContext,
+    val: Option<JsonRef>,
+) -> Result<Option<To>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = To::convert_from(ctx, val.to_owned())?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_as_json<From: ConvertTo<Json> + Evaluable>(
+    ctx: &mut EvalContext,
+    val: Option<&From>,
+) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable>(
+    ctx: &mut EvalContext,
+    val: Option<&From>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -2190,7 +2287,7 @@ mod tests {
 
     #[test]
     fn test_json_as_int() {
-        test_none_with_ctx(cast_any_as_any::<Json, Int>);
+        test_none_with_ctx(cast_json_as_any::<Int>);
 
         // no overflow
         let cs = vec![
@@ -2244,7 +2341,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Int>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_any::<Int>(&mut ctx, Some(input.as_ref()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
@@ -3089,7 +3186,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Real>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_any::<Real>(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3665,7 +3762,7 @@ mod tests {
 
     #[test]
     fn test_json_as_string() {
-        test_none_with_ctx(cast_any_as_any::<Json, Bytes>);
+        test_none_with_ctx(cast_json_as_bytes);
 
         // FIXME: this case is not exactly same as TiDB's,
         //  such as(left is TiKV, right is TiDB)
@@ -3724,7 +3821,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Json, Bytes>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_bytes(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -4263,7 +4360,7 @@ mod tests {
 
     #[test]
     fn test_string_as_signed_decimal() {
-        test_none_with_ctx_and_extra(cast_any_as_decimal::<Bytes>);
+        test_none_with_ctx_and_extra(cast_bytes_as_decimal);
 
         // TODO: add test case that make Decimal::from_bytes return err.
         let cs = vec![
@@ -4511,8 +4608,8 @@ mod tests {
         test_as_decimal_helper(
             cs,
             |ctx, extra, _, val| {
-                let val = val.map(|x| x.as_bytes().to_vec());
-                cast_any_as_decimal::<Bytes>(ctx, extra, val.as_ref())
+                let val = val.map(|x| x.as_bytes());
+                cast_bytes_as_decimal(ctx, extra, val)
             },
             |x| (*x).to_string(),
             "cast_string_as_signed_decimal",
@@ -4926,7 +5023,7 @@ mod tests {
 
     #[test]
     fn test_json_as_decimal() {
-        test_none_with_ctx_and_extra(cast_any_as_decimal::<Json>);
+        test_none_with_ctx_and_extra(cast_json_as_decimal);
 
         // TODO: add test case that make Decimal::from_str failed
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
@@ -5037,7 +5134,7 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            cast_closure_with_metadata!(cast_any_as_decimal::<Json>),
+            |ctx, extra, _, val| cast_json_as_decimal(ctx, extra, val.map(|x| x.as_ref())),
             |x| x.to_string(),
             "cast_json_as_decimal",
         );
@@ -5527,7 +5624,7 @@ mod tests {
 
     #[test]
     fn test_int_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Int, Json>);
+        test_none_with_ctx(cast_any_as_json::<Int>);
 
         let cs = vec![
             (i64::MIN, Json::from_i64(i64::MIN).unwrap()),
@@ -5536,7 +5633,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Int, Json>(&mut ctx, Some(&input));
+            let r = cast_any_as_json::<Int>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5576,7 +5673,7 @@ mod tests {
 
     #[test]
     fn test_real_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Real, Json>);
+        test_none_with_ctx(cast_any_as_json::<Real>);
 
         let cs = vec![
             (
@@ -5592,7 +5689,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Real, Json>(&mut ctx, Real::new(input).as_ref().ok());
+            let r = cast_any_as_json::<Real>(&mut ctx, Real::new(input).as_ref().ok());
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5684,7 +5781,7 @@ mod tests {
 
     #[test]
     fn test_decimal_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Decimal, Json>);
+        test_none_with_ctx(cast_any_as_json::<Decimal>);
         let cs = vec![
             (
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
@@ -5710,7 +5807,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, Some(&input));
+            let r = cast_any_as_json::<Decimal>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5718,7 +5815,7 @@ mod tests {
 
     #[test]
     fn test_time_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Time, Json>);
+        test_none_with_ctx(cast_any_as_json::<Time>);
         let mut ctx = EvalContext::default();
 
         // TODO: add more case for other TimeType
@@ -5757,7 +5854,7 @@ mod tests {
         ];
         for (input, time_type, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Time, Json>(&mut ctx, Some(&input));
+            let result = cast_any_as_json::<Time>(&mut ctx, Some(&input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
@@ -5774,7 +5871,7 @@ mod tests {
 
     #[test]
     fn test_duration_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Duration, Json>);
+        test_none_with_ctx(cast_any_as_json::<Duration>);
 
         // TODO: add more case
         let cs = vec![
@@ -5790,7 +5887,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Duration, Json>(&mut ctx, Some(&input));
+            let result = cast_any_as_json::<Duration>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }
