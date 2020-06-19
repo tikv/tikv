@@ -14,7 +14,7 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
     fn create_partitioner(
         &self,
         context: &rocksdb::SstPartitionerContext,
-    ) -> Box<dyn rocksdb::SstPartitioner> {
+    ) -> Option<Box<dyn rocksdb::SstPartitioner>> {
         let ctx = engine_traits::SstPartitionerContext {
             is_full_compaction: context.is_full_compaction,
             is_manual_compaction: context.is_manual_compaction,
@@ -22,7 +22,9 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
             smallest_key: context.smallest_key,
             largest_key: context.largest_key,
         };
-        Box::new(RocksSstPartitioner(self.0.create_partitioner(&ctx))) as _
+        self.0
+            .create_partitioner(&ctx)
+            .map(|p| Box::new(RocksSstPartitioner(p)) as _)
     }
 }
 

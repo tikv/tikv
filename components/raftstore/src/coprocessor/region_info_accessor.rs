@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
-use std::collections::Bound::{Included, Excluded, Unbounded};
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;

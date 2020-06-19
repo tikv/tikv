@@ -24,5 +24,8 @@ pub trait SstPartitioner {
 
 pub trait SstPartitionerFactory: Sync + Send {
     fn name(&self) -> &CString;
-    fn create_partitioner(&self, context: &SstPartitionerContext) -> Box<dyn SstPartitioner>;
+    fn create_partitioner(
+        &self,
+        context: &SstPartitionerContext,
+    ) -> Option<Box<dyn SstPartitioner>>;
 }
