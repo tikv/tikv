@@ -705,8 +705,8 @@ where
             .map_err(|e| {
                 error!("store heartbeat failed"; "err" => ?e);
             })
-            .map(move |status| {
-                if let Some(status) = status {
+            .map(move |mut resp| {
+                if let Some(status) = resp.replication_status.take() {
                     let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                 }
             });

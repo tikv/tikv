@@ -1321,7 +1321,7 @@ where
         destroy_regions: Vec<metapb::Region>,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
+        let snapshot_index = if ready.snapshot().is_empty() {
             0
         } else {
             fail_point!("raft_before_apply_snap");

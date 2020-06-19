@@ -355,6 +355,7 @@ fn general_ci_convert(c: char) -> u16 {
 pub const TRIM_PADDING_SPACE: char = 0x20 as char;
 
 /// Collator for utf8mb4_general_ci collation with padding behavior (trims right spaces).
+#[derive(Debug)]
 pub struct CollatorUtf8Mb4GeneralCi;
 
 impl Collator for CollatorUtf8Mb4GeneralCi {
@@ -395,6 +396,7 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
 }
 
 /// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
+#[derive(Debug)]
 pub struct CollatorUtf8Mb4Bin;
 
 impl Collator for CollatorUtf8Mb4Bin {
@@ -429,6 +431,7 @@ impl Collator for CollatorUtf8Mb4Bin {
 }
 
 /// Collator for utf8mb4_bin collation without padding.
+#[derive(Debug)]
 pub struct CollatorUtf8Mb4BinNoPadding;
 
 impl Collator for CollatorUtf8Mb4BinNoPadding {
