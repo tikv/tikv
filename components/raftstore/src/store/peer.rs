@@ -1334,34 +1334,48 @@ impl Peer {
                 // Because other followers may complete the merge process, if so, the source region's
                 // leader may get a stale data.
                 //
-                // Check the committed entries from the last committed index + 1 to the latest committed index.
-                let last_committed_index = self.get_store().committed_index();
-                for entry in self
-                    .raft_group
-                    .raft
-                    .raft_log
-                    .slice(last_committed_index + 1, hs.get_commit() + 1, None)
-                    .unwrap()
-                {
-                    // We care about split/merge commands that are committed in the current term.
-                    if entry.term == self.term() {
-                        let ctx = ProposalContext::from_bytes(&entry.context);
-                        if ctx.contains(ProposalContext::SPLIT) {
-                            // We don't need to suspect its lease because peers of new region that
-                            // in other store do not start election before theirs election timeout
-                            // which is longer than the max leader lease.
-                            // It's safe to read local within its current lease, however, it's not
-                            // safe to renew its lease.
-                            self.last_committed_split_idx = entry.index;
-                        } else if ctx.contains(ProposalContext::PREPARE_MERGE) {
-                            // We committed prepare merge, to prevent unsafe read index,
-                            // we must record its index.
-                            self.last_committed_prepare_merge_idx = entry.get_index();
-                            // After prepare_merge is committed, the leader can not know
-                            // when the target region merges majority of this region, also
-                            // it can not know when the target region writes new values.
-                            // To prevent unsafe local read, we suspect its leader lease.
-                            self.leader_lease.suspect(monotonic_raw_now());
+                // Check the committed entries.
+                // TODO: It can change to not rely on the `committed_entries` must have the latest committed entry
+                // and become O(1) by maintaining these not-committed admin requests that changes epoch.
+                if hs.get_commit() > self.get_store().committed_index() {
+                    assert_eq!(
+                        ready
+                            .committed_entries
+                            .as_ref()
+                            .unwrap()
+                            .last()
+                            .unwrap()
+                            .index,
+                        hs.get_commit()
+                    );
+                    let mut split_to_be_updated = true;
+                    let mut merge_to_be_updated = true;
+                    for entry in ready.committed_entries.as_ref().unwrap().iter().rev() {
+                        // We care about split/merge commands that are committed in the current term.
+                        if entry.term == self.term() && (split_to_be_updated || merge_to_be_updated)
+                        {
+                            let ctx = ProposalContext::from_bytes(&entry.context);
+                            if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
+                                // We don't need to suspect its lease because peers of new region that
+                                // in other store do not start election before theirs election timeout
+                                // which is longer than the max leader lease.
+                                // It's safe to read local within its current lease, however, it's not
+                                // safe to renew its lease.
+                                self.last_committed_split_idx = entry.index;
+                                split_to_be_updated = false;
+                            } else if merge_to_be_updated
+                                && ctx.contains(ProposalContext::PREPARE_MERGE)
+                            {
+                                // We committed prepare merge, to prevent unsafe read index,
+                                // we must record its index.
+                                self.last_committed_prepare_merge_idx = entry.get_index();
+                                // After prepare_merge is committed, the leader can not know
+                                // when the target region merges majority of this region, also
+                                // it can not know when the target region writes new values.
+                                // To prevent unsafe local read, we suspect its leader lease.
+                                self.leader_lease.suspect(monotonic_raw_now());
+                                merge_to_be_updated = false;
+                            }
                         }
                     }
                 }
