@@ -336,7 +336,10 @@ impl TiKVServer {
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
         let mut raft_db_opts = self.config.raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
+        let raft_db_cf_opts = self
+            .config
+            .raftdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
@@ -348,7 +351,10 @@ impl TiKVServer {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(new_compaction_listener(self.router.clone()));
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
+        let kv_cfs_opts = self
+            .config
+            .rocksdb
+            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
         let db_path = self
             .store_path
             .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));

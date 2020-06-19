@@ -3,7 +3,7 @@
 use std::{cell::Cell, ffi::CString};
 
 use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
-use engine_traits::{
+use engine_rocks::raw::{
     SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerState,
 };
 use keys::data_end_key;
@@ -13,19 +13,19 @@ lazy_static! {
 }
 
 pub struct CompactionGuardGeneratorFactory {
-    provider: RegionInfoAccessor,
+    accessor: RegionInfoAccessor,
     min_output_file_size: u64,
     max_output_file_size: u64,
 }
 
 impl CompactionGuardGeneratorFactory {
     pub fn new(
-        provider: RegionInfoAccessor,
+        accessor: RegionInfoAccessor,
         min_output_file_size: u64,
         max_output_file_size: u64,
     ) -> Self {
         CompactionGuardGeneratorFactory {
-            provider,
+            accessor,
             min_output_file_size,
             max_output_file_size,
         }
@@ -42,11 +42,11 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
         context: &SstPartitionerContext,
     ) -> Option<Box<dyn SstPartitioner>> {
         match self
-            .provider
+            .accessor
             .get_regions_in_range(context.smallest_key, context.largest_key)
         {
             Ok(regions) => {
-                // The regions returned from region_info_provider should have been sorted,
+                // The regions returned from region_info_accessor should have been sorted,
                 // but we sort it again just in case.
                 let mut boundaries = regions
                     .iter()
