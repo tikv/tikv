@@ -30,9 +30,9 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 // the maximum len of the old encoding of index value.
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
+#[derive(Debug)]
 pub enum Handle<'a> {
     Int(i64),
-    // TODO: use `BytesSlice` instead to eliminate the allocation.
     Common(Vec<BytesSlice<'a>>),
 }
 
@@ -210,6 +210,13 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
     key.write_i64(handle).unwrap();
+    key
+}
+
+pub fn encode_common_handle(table_id: i64, handle: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
+    key.append_table_record_prefix(table_id).unwrap();
+    key.extend(handle);
     key
 }
 

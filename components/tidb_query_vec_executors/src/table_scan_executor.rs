@@ -317,7 +317,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 let index = self.column_id_index.get(primary_id);
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
-                        columns[i].mut_raw().push(handle[i]);
+                        columns[index].mut_raw().push(handle[i]);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     }
@@ -1173,6 +1173,83 @@ mod tests {
         test_multi_handle_column_impl(&[true, true]);
         test_multi_handle_column_impl(&[true, false, true]);
         test_multi_handle_column_impl(&[
+            false, false, false, true, false, false, true, true, false, false,
+        ]);
+    }
+
+    fn test_common_handle_impl(primary_columns: &[bool]) {
+        const TABLE_ID: i64 = 2333;
+
+        let mut columns_info = vec![];
+        let mut schema = vec![];
+        let mut handle = vec![];
+        let mut primary_column_ids = vec![];
+        let column_ids = (0..primary_columns.len() as i64).collect::<Vec<_>>();
+        let row = column_ids.iter().map(|_| Datum::Null).collect();
+
+        for (i, &is_primary_column) in primary_columns.iter().enumerate() {
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci.set_column_id(i as i64);
+
+            if is_primary_column {
+                handle.push(Datum::I64(i as i64));
+                primary_column_ids.push(i as i64);
+            }
+            columns_info.push(ci);
+            schema.push(FieldTypeTp::LongLong.into());
+        }
+
+        let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
+
+        let key = table::encode_common_handle(TABLE_ID, &handle);
+        let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
+
+        let mut key_range = KeyRange::default();
+        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
+        key_range.set_start(begin);
+        key_range.set_end(end);
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![key_range],
+            primary_column_ids.clone(),
+            false,
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
+        assert_eq!(result.physical_columns.columns_len(), primary_columns.len());
+        for i in 0..primary_columns.len() {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
+                .unwrap();
+            if primary_column_ids.contains(&(i as i64)) {
+                assert_eq!(
+                    result.physical_columns[i].decoded().as_int_slice(),
+                    &[Some(i as i64)]
+                );
+            } else {
+                assert_eq!(result.physical_columns[i].decoded().as_int_slice(), &[None]);
+            }
+        }
+    }
+    #[test]
+    fn test_common_handle() {
+        test_common_handle_impl(&[true]);
+        test_common_handle_impl(&[false]);
+        test_common_handle_impl(&[true, false]);
+        test_common_handle_impl(&[false, true]);
+        test_common_handle_impl(&[true, true]);
+        test_common_handle_impl(&[true, false, true]);
+        test_common_handle_impl(&[
             false, false, false, true, false, false, true, true, false, false,
         ]);
     }
