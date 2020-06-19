@@ -10,6 +10,7 @@ pub mod transport;
 pub mod util;
 
 mod bootstrap;
+mod compaction_guard;
 mod local_metrics;
 mod metrics;
 mod peer;
@@ -24,6 +25,7 @@ pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster,
 };
+pub use self::compaction_guard::CompactionGuardGeneratorFactory;
 pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
