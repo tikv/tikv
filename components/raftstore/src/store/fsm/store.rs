@@ -1508,6 +1508,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(false);
         }
 
+        // Note that the following execution sequence is possible if it's the first peer of this region in local TiKV.
+        // Store thread:    check `RegionLocalState`(None)
+        // Apply thread:    create region from splitting
+        // Peer thread:     apply snapshot and then be destroyed
+        // Store thread:    check `StoreMeta` and find it's ok to create this new region.
+        // It's **very unlikely** to happen because the step 2 and step 3 should take far more time than the time interval
+        // between step 1 and step 4.(A similiar case can happen in split process, see details in `exec_batch_split`)
+        // Even it happens, this new region will be destroyed in future when it communicates to other TiKVs or PD.
+        // Now it seems there is no other side effects.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         if meta.regions.contains_key(&region_id)
             || meta.pending_create_peers.contains_key(&region_id)

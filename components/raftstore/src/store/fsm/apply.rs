@@ -1873,6 +1873,15 @@ where
             }
         }
 
+        // Note that the following execution sequence is possible.
+        // Apply thread:    check `RegionLocalState`(None)
+        // Store thread:    create peer
+        // Peer thread:     apply snapshot and then be destroyed
+        // Apply thread:    check `StoreMeta` and find it's ok to create this new region.
+        // It's **very unlikely** to happen because the step 2 and step 3 should take far more time than the time interval
+        // between step 1 and step 4. (A similiar case can happen in create-peer process, see details in `maybe_create_peer`)
+        // Even it happens, this new region will be destroyed in future when it communicates to other TiKVs or PD.
+        // Now it seems there is no other side effects.
         let mut meta = ctx.store_meta.lock().unwrap();
         for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
             if reason.is_some() {
