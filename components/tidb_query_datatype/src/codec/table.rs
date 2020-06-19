@@ -60,23 +60,26 @@ impl<'a> TryFrom<BytesSlice<'a>> for Handle<'a> {
     type Error = Error;
 
     fn try_from(mut key: BytesSlice<'a>) -> Result<Self> {
-        if key.len() < RECORD_ROW_KEY_LEN || check_record_key(key).is_err() {
-            Err(invalid_type!("record key expected, but got {:?}", key))
-        } else if key.len() == RECORD_ROW_KEY_LEN {
-            Ok(Handle::Int(
-                key[PREFIX_LEN..].as_ref().read_i64().map_err(Error::from)?,
-            ))
-        } else {
-            check_record_key(key)?;
-            key = &key[PREFIX_LEN..];
+        use std::cmp::Ordering;
+        // Expects a record key.
+        check_record_key(key)?;
 
-            let mut datums = Vec::new();
-            while !key.is_empty() {
-                let (column, remain) = datum::split_datum(key, false)?;
-                datums.push(column);
-                key = remain;
+        match key.len().cmp(&RECORD_ROW_KEY_LEN) {
+            Ordering::Less => Err(invalid_type!("record key expected, but got {:?}", key)),
+            Ordering::Equal => Ok(Handle::Int(
+                key[PREFIX_LEN..].as_ref().read_i64().map_err(Error::from)?,
+            )),
+            _ => {
+                key = &key[PREFIX_LEN..];
+
+                let mut datums = Vec::new();
+                while !key.is_empty() {
+                    let (column, remain) = datum::split_datum(key, false)?;
+                    datums.push(column);
+                    key = remain;
+                }
+                Ok(Handle::Common(datums))
             }
-            Ok(Handle::Common(datums))
         }
     }
 }

@@ -1180,6 +1180,7 @@ mod tests {
     fn test_common_handle_impl(primary_columns: &[bool]) {
         const TABLE_ID: i64 = 2333;
 
+        // Prepare some table meta data
         let mut columns_info = vec![];
         let mut schema = vec![];
         let mut handle = vec![];
@@ -1205,6 +1206,7 @@ mod tests {
         let key = table::encode_common_handle(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
+        // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
         let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
         let end = table::encode_common_handle(TABLE_ID + 1, &handle);
@@ -1227,6 +1229,7 @@ mod tests {
         assert_eq!(result.is_drained.unwrap(), true);
         assert_eq!(result.logical_rows.len(), 1);
         assert_eq!(result.physical_columns.columns_len(), primary_columns.len());
+        // We expect we fill the primary column with the value embedded in the common handle.
         for i in 0..primary_columns.len() {
             result.physical_columns[i]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
