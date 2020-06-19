@@ -22,33 +22,21 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
             smallest_key: context.smallest_key,
             largest_key: context.largest_key,
         };
-        self.0.create_partitioner(&ctx) as _
+        Box::new(RocksSstPartitioner(self.0.create_partitioner(&ctx))) as _
     }
 }
 
-trait RocksSstPartitionerExt {
-    fn should_partition(&self, state: &rocksdb::SstPartitionerState) -> bool;
-    fn reset(&self, key: &[u8]);
-}
+struct RocksSstPartitioner(Box<dyn engine_traits::SstPartitioner>);
 
-impl RocksSstPartitionerExt for dyn engine_traits::SstPartitioner {
+impl rocksdb::SstPartitioner for RocksSstPartitioner {
     fn should_partition(&self, state: &rocksdb::SstPartitionerState) -> bool {
         let st = engine_traits::SstPartitionerState {
             next_key: state.next_key,
             current_output_file_size: state.current_output_file_size,
         };
-        self.should_partition(&st)
+        self.0.should_partition(&st)
     }
     fn reset(&self, key: &[u8]) {
-        self.reset(key);
-    }
-}
-
-impl rocksdb::SstPartitioner for dyn RocksSstPartitionerExt {
-    fn should_partition(&self, state: &rocksdb::SstPartitionerState) -> bool {
-        self.should_partition(state)
-    }
-    fn reset(&self, key: &[u8]) {
-        self.reset(key);
+        self.0.reset(key);
     }
 }
