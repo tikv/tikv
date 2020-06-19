@@ -296,7 +296,7 @@ mod tests {
     use test::{black_box, Bencher};
     use tidb_query_common::Result;
     use tidb_query_datatype::codec::batch::LazyBatchColumn;
-    use tidb_query_datatype::codec::data_type::{Int, Real};
+    use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
     use tidb_query_datatype::expr::EvalContext;
 
@@ -311,7 +311,10 @@ mod tests {
         let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10);
         let val = result.unwrap();
         assert!(val.is_scalar());
-        assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
+        assert_eq!(
+            val.scalar_value().unwrap().as_real(),
+            Real::new(1.5).ok().as_ref()
+        );
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
@@ -1082,7 +1085,10 @@ mod tests {
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
         #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
-        fn fn_a<T: Evaluable>(metadata: &i64, v: Option<&Int>) -> Result<Option<Int>> {
+        fn fn_a<T: Evaluable + EvaluableRet>(
+            metadata: &i64,
+            v: Option<&Int>,
+        ) -> Result<Option<Int>> {
             assert_eq!(*metadata, 42);
             Ok(v.map(|v| v + *metadata))
         }
@@ -1093,7 +1099,10 @@ mod tests {
 
         #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
         #[rpn_fn(varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
-        fn fn_b<T: Evaluable>(metadata: &String, v: &[Option<&T>]) -> Result<Option<T>> {
+        fn fn_b<T: Evaluable + EvaluableRet>(
+            metadata: &String,
+            v: &[Option<&T>],
+        ) -> Result<Option<T>> {
             assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
             Ok(v[0].cloned())
         }

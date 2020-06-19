@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic, Arc, Mutex};
@@ -19,7 +18,6 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData,
 };
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
@@ -43,7 +41,6 @@ use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
 };
 use crate::{Error, Result};
-use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::Instant as UtilInstant;
@@ -205,7 +202,9 @@ pub struct Peer {
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true when merging, its data in storeMeta will be removed early by the target peer
+    /// If it's true,
+    /// 1. when merging, its data in storeMeta will be removed early by the target peer.
+    /// 2. all read requests must be rejected.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -753,7 +752,7 @@ impl Peer {
             .map_or(0, |v| v.len() as u64);
         metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if !ready.snapshot().is_empty() {
             metrics.snapshot += 1;
         }
     }
@@ -1225,8 +1224,8 @@ impl Peer {
             ctx.need_flush_trans = true;
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
-
-        if let Some(snap) = self.get_pending_snapshot() {
+        let mut destroy_regions = vec![];
+        if self.get_pending_snapshot().is_some() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1240,46 +1239,24 @@ impl Peer {
                 return None;
             }
 
-            let mut snap_data = RaftSnapshotData::default();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to parse snap data";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
-            let region = snap_data.take_region();
-
             let meta = ctx.store_meta.lock().unwrap();
-            // Region's range changes if and only if epoch version change. So if the snapshot's
-            // version is not larger than now, we can make sure there is no overlap.
-            if region.get_region_epoch().get_version()
-                > meta.regions[&region.get_id()]
-                    .get_region_epoch()
-                    .get_version()
-            {
-                // For merge process, when applying snapshot or create new peer the stale source
-                // peer is destroyed asynchronously. So here checks whether there is any overlap, if
-                // so, wait and do not handle raft ready.
-                if let Some(r) = meta
-                    .region_ranges
-                    .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
-                    .map(|(_, &region_id)| &meta.regions[&region_id])
-                    .take_while(|r| enc_start_key(r) < enc_end_key(&region))
-                    .find(|r| r.get_id() != region.get_id())
-                {
-                    info!(
-                        "snapshot range overlaps, wait source destroy finish";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "apply_index" => self.get_store().applied_index(),
-                        "last_applying_index" => self.last_applying_idx,
-                        "overlap_region" => ?r,
-                    );
-                    return None;
+            // For merge process, the stale source peer is destroyed asynchronously when applying
+            // snapshot or creating new peer. So here checks whether there is any overlap, if so,
+            // wait and do not handle raft ready.
+            if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
+                for (source_region_id, is_ready) in wait_destroy_regions {
+                    if !is_ready {
+                        info!(
+                            "snapshot range overlaps, wait source destroy finish";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer.get_id(),
+                            "apply_index" => self.get_store().applied_index(),
+                            "last_applying_index" => self.last_applying_idx,
+                            "overlap_region_id" => source_region_id,
+                        );
+                        return None;
+                    }
+                    destroy_regions.push(meta.regions[source_region_id].clone());
                 }
             }
         }
@@ -1298,12 +1275,6 @@ impl Peer {
             return None;
         }
 
-        debug!(
-            "handle raft ready";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
-
         let before_handle_raft_ready_1003 = || {
             fail_point!(
                 "before_handle_raft_ready_1003",
@@ -1312,6 +1283,18 @@ impl Peer {
             );
         };
         before_handle_raft_ready_1003();
+
+        fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer.get_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| None
+        );
+
+        debug!(
+            "handle raft ready";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
@@ -1388,7 +1371,10 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let invoke_ctx = match self
+            .mut_store()
+            .handle_raft_ready(ctx, &ready, destroy_regions)
+        {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -1470,7 +1456,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
+        if ready.snapshot().is_empty() {
             debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
@@ -1561,8 +1547,7 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
-        if !raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(self.get_store().is_applying_snapshot());
+        if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
@@ -2250,9 +2235,11 @@ impl Peer {
         true
     }
 
-    // For now, it is only used in merge.
-    pub fn get_min_progress(&self) -> Result<u64> {
-        let mut min = None;
+    /// Returns (minimal matched, minimal committed_index)
+    ///
+    /// For now, it is only used in merge.
+    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
+        let (mut min_m, mut min_c) = (None, None);
         if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
@@ -2267,15 +2254,15 @@ impl Peer {
                         pr
                     ));
                 }
-                if min.is_none() {
-                    min = Some(pr.matched);
+                if min_m.unwrap_or(u64::MAX) > pr.matched {
+                    min_m = Some(pr.matched);
                 }
-                if min.unwrap() > pr.matched {
-                    min = Some(pr.matched);
+                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
+                    min_c = Some(pr.committed_index);
                 }
             }
         }
-        Ok(min.unwrap_or(0))
+        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -2284,18 +2271,31 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress()?;
-        let min_index = min_progress + 1;
-        if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
+        let (min_matched, min_committed) = self.get_min_progress()?;
+        if min_matched == 0
+            || min_committed == 0
+            || last_index - min_matched > ctx.cfg.merge_max_log_gap
+            || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+        {
             return Err(box_err!(
-                "log gap ({}, {}] is too large, skip merge",
-                min_progress,
+                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                min_matched,
+                min_committed,
                 last_index
             ));
         }
+        assert!(min_matched >= min_committed);
         let mut entry_size = 0;
-        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
-            entry_size += entry.get_data().len();
+        for entry in self
+            .raft_group
+            .raft
+            .raft_log
+            .entries(min_committed + 1, NO_LIMIT)?
+        {
+            // commit merge only contains entries start from min_matched + 1
+            if entry.index > min_matched {
+                entry_size += entry.get_data().len();
+            }
             if entry.get_entry_type() == EntryType::EntryConfChange {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
@@ -2331,7 +2331,7 @@ impl Peer {
         }
         req.mut_admin_request()
             .mut_prepare_merge()
-            .set_min_index(min_index);
+            .set_min_index(min_matched + 1);
         Ok(())
     }
 

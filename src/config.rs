@@ -18,13 +18,14 @@ use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
+    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    LRUCacheOptions, TitanDBOptions,
 };
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
+use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -562,6 +563,12 @@ impl WriteCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+            .set_compaction_filter_factory(
+                "write_compaction_filter_factory",
+                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+            )
+            .unwrap();
         cf_opts
     }
 }

@@ -83,7 +83,7 @@ pub trait AggrFunctionState:
 /// any eval types (but will panic when eval type does not match expectation) will be generated via
 /// implementations over this trait.
 pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
-    type ParameterType: Evaluable;
+    type ParameterType: EvaluableRet;
 
     fn update_concrete(
         &mut self,
@@ -96,7 +96,7 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
 
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
-pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
+pub trait AggrFunctionStateUpdatePartial<T: EvaluableRet> {
     /// Updates the internal state giving one row data.
     ///
     /// # Panics
@@ -132,7 +132,7 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     ) -> Result<()>;
 }
 
-impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRet, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState,
 {
@@ -165,7 +165,7 @@ where
     }
 }
 
-impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRet, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState<ParameterType = T>,
 {
