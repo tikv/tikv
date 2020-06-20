@@ -25,7 +25,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Re
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
-use raftstore::Error as RaftStoreError;
+use raftstore::{Error as RaftStoreError, ErrorInner as RaftStoreErrorInner};
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::collections::HashMap;
@@ -650,22 +650,22 @@ impl Delegate {
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
         let store_err = match request.get_cmd_type() {
-            AdminCmdType::Split => RaftStoreError::EpochNotMatch(
+            AdminCmdType::Split => RaftStoreError::from(RaftStoreErrorInner::EpochNotMatch(
                 "split".to_owned(),
                 vec![
                     response.mut_split().take_left(),
                     response.mut_split().take_right(),
                 ],
-            ),
-            AdminCmdType::BatchSplit => RaftStoreError::EpochNotMatch(
+            )),
+            AdminCmdType::BatchSplit => RaftStoreError::from(RaftStoreErrorInner::EpochNotMatch(
                 "batchsplit".to_owned(),
                 response.mut_splits().take_regions().into(),
-            ),
+            )),
             AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge => {
-                RaftStoreError::EpochNotMatch("merge".to_owned(), vec![])
-            }
+            | AdminCmdType::RollbackMerge => RaftStoreError::from(
+                RaftStoreErrorInner::EpochNotMatch("merge".to_owned(), vec![]),
+            ),
             _ => return Ok(()),
         };
         self.mark_failed();

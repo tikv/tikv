@@ -49,7 +49,7 @@ use crate::observe_perf_context_type;
 use crate::report_perf_context;
 
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
@@ -598,7 +598,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
 }
 
 pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
-    let region_not_found = Error::RegionNotFound(region_id);
+    let region_not_found = Error::from(ErrorInner::RegionNotFound(region_id));
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
 }
@@ -621,7 +621,7 @@ fn notify_stale_command(
 }
 
 pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
-    let resp = cmd_resp::err_resp(Error::StaleCommand, term);
+    let resp = cmd_resp::err_resp(Error::from(ErrorInner::StaleCommand), term);
     cb.invoke_with_response(resp);
 }
 
@@ -953,11 +953,10 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx
-                .cbs
-                .last_mut()
-                .unwrap()
-                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
+            apply_ctx.cbs.last_mut().unwrap().push(
+                cmd.cb.take(),
+                cmd_resp::err_resp(Error::from(ErrorInner::StaleCommand), term),
+            );
         }
         ApplyResult::None
     }
@@ -1108,7 +1107,7 @@ where
                 // clear dirty values.
                 ctx.kv_wb_mut().rollback_to_save_point().unwrap();
                 match e {
-                    Error::EpochNotMatch(..) => debug!(
+                    Error(box ErrorInner::EpochNotMatch(..)) => debug!(
                         "epoch not match";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
@@ -1439,7 +1438,10 @@ where
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+            return Err(Error::from(ErrorInner::KeyNotInRegion(
+                e_key.to_vec(),
+                self.region.clone(),
+            )));
         }
 
         let resp = Response::default();
@@ -2223,7 +2225,7 @@ fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
 
     let region_id = sst.get_region_id();
     if region_id != region.get_id() {
-        return Err(Error::RegionNotFound(region_id));
+        return Err(Error::from(ErrorInner::RegionNotFound(region_id)));
     }
 
     let epoch = sst.get_region_epoch();
@@ -2232,7 +2234,10 @@ fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
         || epoch.get_version() != region_epoch.get_version()
     {
         let error = format!("{:?} != {:?}", epoch, region_epoch);
-        return Err(Error::EpochNotMatch(error, vec![region.clone()]));
+        return Err(Error::from(ErrorInner::EpochNotMatch(
+            error,
+            vec![region.clone()],
+        )));
     }
 
     let range = sst.get_range();
@@ -3299,7 +3304,9 @@ impl ApplyRouter {
                     warn!("target region is not found";
                             "region_id" => region_id);
                     let resp = ReadResponse {
-                        response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
+                        response: cmd_resp::new_error(Error::from(ErrorInner::RegionNotFound(
+                            region_id,
+                        ))),
                         snapshot: None,
                     };
                     cb.invoke_read(resp);

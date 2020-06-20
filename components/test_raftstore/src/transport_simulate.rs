@@ -14,13 +14,13 @@ use raft::eraftpb::MessageType;
 
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
-use raftstore::{DiscardReason, Error, Result};
+use raftstore::{DiscardReason, Error, ErrorInner, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
-        Err(Error::Transport(DiscardReason::Filtered))
+        Err(Error::from(ErrorInner::Transport(DiscardReason::Filtered)))
     } else {
         Ok(())
     }

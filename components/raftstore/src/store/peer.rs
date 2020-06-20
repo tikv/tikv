@@ -40,7 +40,7 @@ use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
 };
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::Instant as UtilInstant;
@@ -2405,7 +2405,10 @@ impl Peer {
                 "peer_id" => self.peer.get_id(),
                 "size" => data.len(),
             );
-            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+            return Err(Error::from(ErrorInner::RaftEntryTooLarge(
+                self.region_id,
+                data.len() as u64,
+            )));
         }
 
         let propose_index = self.next_proposal_index();
@@ -2413,7 +2416,7 @@ impl Peer {
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
-            return Err(Error::NotLeader(self.region_id, None));
+            return Err(Error::from(ErrorInner::NotLeader(self.region_id, None)));
         }
 
         if ctx.contains(ProposalContext::PREPARE_MERGE) {
@@ -2574,7 +2577,7 @@ impl Peer {
         if self.next_proposal_index() == propose_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
-            return Err(Error::NotLeader(self.region_id, None));
+            return Err(Error::from(ErrorInner::NotLeader(self.region_id, None)));
         }
 
         Ok(propose_index)

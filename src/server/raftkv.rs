@@ -23,7 +23,7 @@ use crate::storage::kv::{
     Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::errors::Error as RaftServerError;
+use raftstore::errors::{Error as RaftServerError, ErrorInner as RaftServerErrorInner};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
@@ -224,7 +224,10 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
                             Some(())
                         }
                     })
-                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                    .ok_or_else(|| {
+                        RaftServerError::from(RaftServerErrorInner::RegionNotFound(region_id))
+                            .into()
+                    })
                 });
                 Ok(())
             };

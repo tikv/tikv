@@ -26,7 +26,7 @@ use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
-use raftstore::{Error, Result};
+use raftstore::{Error, ErrorInner, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
@@ -90,8 +90,12 @@ pub trait Simulator {
                 return Ok(resp);
             }
         }
-        rx.recv_timeout(timeout)
-            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+        rx.recv_timeout(timeout).map_err(|_| {
+            Error::from(ErrorInner::Timeout(format!(
+                "request timeout for {:?}",
+                timeout
+            )))
+        })
     }
 }
 
@@ -662,7 +666,7 @@ impl<T: Simulator> Cluster<T> {
             );
             let result = self.call_command_on_leader(req, timeout);
 
-            if let Err(Error::Timeout(_)) = result {
+            if let Err(Error(box ErrorInner::Timeout(_))) = result {
                 warn!("call command timeout, let's retry");
                 sleep_ms(100);
                 continue;

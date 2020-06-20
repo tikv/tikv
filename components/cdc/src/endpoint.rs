@@ -874,7 +874,7 @@ mod tests {
     use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::kvrpcpb::Context;
-    use raftstore::errors::Error as RaftStoreError;
+    use raftstore::errors::{Error as RaftStoreError, ErrorInner as RaftStoreErrorInner};
     use raftstore::store::msg::CasualMessage;
     use std::collections::BTreeMap;
     use std::fmt::Display;
@@ -1031,7 +1031,7 @@ mod tests {
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
-            if let Err(RaftStoreError::Transport(_)) =
+            if let Err(RaftStoreError(box RaftStoreErrorInner::Transport(_))) =
                 raft_router.casual_send(1, CasualMessage::ClearRegionSize)
             {
                 break;

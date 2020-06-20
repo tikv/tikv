@@ -8,7 +8,10 @@ use crate::store::fsm::RaftRouter;
 use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
-use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
+use crate::{
+    DiscardReason, Error as RaftStoreError, ErrorInner as RaftStoreErrorInner,
+    Result as RaftStoreResult,
+};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
 
@@ -126,10 +129,10 @@ where
 
     pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
         self.router.send_control(msg).map_err(|e| {
-            RaftStoreError::Transport(match e {
+            RaftStoreError::from(RaftStoreErrorInner::Transport(match e {
                 TrySendError::Full(_) => DiscardReason::Full,
                 TrySendError::Disconnected(_) => DiscardReason::Disconnected,
-            })
+            }))
         })
     }
 }
@@ -137,8 +140,12 @@ where
 #[inline]
 pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
     match e {
-        TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
-        TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
+        TrySendError::Full(_) => {
+            RaftStoreError::from(RaftStoreErrorInner::Transport(DiscardReason::Full))
+        }
+        TrySendError::Disconnected(_) => {
+            RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(region_id))
+        }
     }
 }
 
@@ -173,7 +180,9 @@ where
         {
             // TODO: panic here once we can detect system is shutting down reliably.
             error!("failed to send significant msg"; "msg" => ?msg);
-            return Err(RaftStoreError::RegionNotFound(region_id));
+            return Err(RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(
+                region_id,
+            )));
         }
 
         Ok(())

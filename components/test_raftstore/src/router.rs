@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
-use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
+use raftstore::errors::{
+    Error as RaftStoreError, ErrorInner as RaftStoreErrorInner, Result as RaftStoreResult,
+};
 use raftstore::router::{handle_send_error, RaftStoreRouter};
 use raftstore::store::msg::{Callback, CasualMessage, PeerMsg, SignificantMsg};
 use tikv_util::collections::HashMap;
@@ -37,7 +39,9 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
             Ok(())
         } else {
             error!("failed to send significant msg"; "msg" => ?msg);
-            Err(RaftStoreError::RegionNotFound(region_id))
+            Err(RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(
+                region_id,
+            )))
         }
     }
 
@@ -51,7 +55,9 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
             tx.try_send(PeerMsg::CasualMessage(msg))
                 .map_err(|e| handle_send_error(region_id, e))
         } else {
-            Err(RaftStoreError::RegionNotFound(region_id))
+            Err(RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(
+                region_id,
+            )))
         }
     }
 

@@ -7,7 +7,7 @@ use engine_rocks::RocksEngine;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
-use raftstore::Error as RaftStoreError;
+use raftstore::{Error as RaftStoreError, ErrorInner as RaftStoreErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
 
@@ -123,7 +123,8 @@ impl RoleObserver for CdcObserver {
             let region_id = ctx.region().get_id();
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
-                let store_err = RaftStoreError::NotLeader(region_id, None);
+                let store_err =
+                    RaftStoreError::from(RaftStoreErrorInner::NotLeader(region_id, None));
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
@@ -148,7 +149,8 @@ impl RegionChangeObserver for CdcObserver {
             let region_id = ctx.region().get_id();
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
-                let store_err = RaftStoreError::RegionNotFound(region_id);
+                let store_err =
+                    RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(region_id));
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
