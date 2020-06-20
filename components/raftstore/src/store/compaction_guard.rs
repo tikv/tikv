@@ -33,14 +33,13 @@ impl CompactionGuardGeneratorFactory {
 }
 
 impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
+    type Partitioner = CompactionGuardGenerator;
+
     fn name(&self) -> &CString {
         &COMPACTION_GUARD
     }
 
-    fn create_partitioner(
-        &self,
-        context: &SstPartitionerContext,
-    ) -> Option<Box<dyn SstPartitioner>> {
+    fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
         match self
             .accessor
             .get_regions_in_range(context.smallest_key, context.largest_key)
@@ -53,12 +52,12 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
                     .map(|region| data_end_key(&region.end_key))
                     .collect::<Vec<Vec<u8>>>();
                 boundaries.sort();
-                Some(Box::new(CompactionGuardGenerator {
+                Some(CompactionGuardGenerator {
                     boundaries,
                     min_output_file_size: self.min_output_file_size,
                     max_output_file_size: self.max_output_file_size,
                     pos: Cell::new(0),
-                }) as _)
+                })
             }
             Err(e) => {
                 warn!("failed to create compaction guard generator"; "err" => ?e);
@@ -68,7 +67,7 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
     }
 }
 
-struct CompactionGuardGenerator {
+pub struct CompactionGuardGenerator {
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
     min_output_file_size: u64,
