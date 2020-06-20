@@ -58,7 +58,6 @@ pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod sst_partitioner;
-pub use crate::sst_partitioner::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;

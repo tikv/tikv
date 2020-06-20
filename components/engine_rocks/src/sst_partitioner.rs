@@ -2,11 +2,13 @@
 
 use std::ffi::CString;
 
-pub struct RocksSstPartitionerFactory<F: engine_traits::SstPartitionerFactory>(pub F);
+pub(crate) struct RocksSstPartitionerFactory<F: engine_traits::SstPartitionerFactory>(pub F);
 
 impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
     for RocksSstPartitionerFactory<F>
 {
+    type Partitioner = RocksSstPartitioner<F::Partitioner>;
+
     fn name(&self) -> &CString {
         self.0.name()
     }
@@ -14,7 +16,7 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
     fn create_partitioner(
         &self,
         context: &rocksdb::SstPartitionerContext,
-    ) -> Option<Box<dyn rocksdb::SstPartitioner>> {
+    ) -> Option<Self::Partitioner> {
         let ctx = engine_traits::SstPartitionerContext {
             is_full_compaction: context.is_full_compaction,
             is_manual_compaction: context.is_manual_compaction,
@@ -24,13 +26,13 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
         };
         self.0
             .create_partitioner(&ctx)
-            .map(|p| Box::new(RocksSstPartitioner(p)) as _)
+            .map(|p| RocksSstPartitioner(p))
     }
 }
 
-struct RocksSstPartitioner(Box<dyn engine_traits::SstPartitioner>);
+pub(crate) struct RocksSstPartitioner<P: engine_traits::SstPartitioner>(P);
 
-impl rocksdb::SstPartitioner for RocksSstPartitioner {
+impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstPartitioner<P> {
     fn should_partition(&self, state: &rocksdb::SstPartitionerState) -> bool {
         let st = engine_traits::SstPartitionerState {
             next_key: state.next_key,
