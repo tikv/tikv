@@ -32,6 +32,8 @@ impl CompactionGuardGeneratorFactory {
     }
 }
 
+// Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
+// ColumnFamilyOptions in src/config.rs.
 impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
     type Partitioner = CompactionGuardGenerator;
 
