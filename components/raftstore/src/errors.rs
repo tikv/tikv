@@ -259,13 +259,13 @@ impl<T> From<TrySendError<T>> for ErrorInner {
 #[cfg(feature = "prost-codec")]
 impl From<prost::EncodeError> for Error {
     fn from(err: prost::EncodeError) -> Error {
-        Box::new(Error::ProstEncode(err.into()))
+        Error::from(ErrorInner::ProstEncode(err.into()))
     }
 }
 
 #[cfg(feature = "prost-codec")]
 impl From<prost::DecodeError> for Error {
     fn from(err: prost::DecodeError) -> Error {
-        Box::new(Error::ProstDecode(err.into()))
+        Error::from(ErrorInner::ProstDecode(err.into()))
     }
 }
