@@ -90,7 +90,6 @@ impl ReadDelegate {
         }
     }
 
-    // TODO: return ReadResponse once we remove batch snapshot.
     fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
@@ -163,9 +162,9 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     delegates: HashMap<u64, Option<ReadDelegate>>,
-    // A channel to raftstore.
     snap_cache: Option<RegionSnapshot<E::Snapshot>>,
     cache_read_id: ThreadReadId,
+    // A channel to raftstore.
     router: C,
     tag: String,
 }

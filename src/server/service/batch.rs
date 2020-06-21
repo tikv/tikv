@@ -1,3 +1,5 @@
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
 use crate::server::service::kv::{batch_commands_response, poll_future_notify};
 use crate::storage::{
