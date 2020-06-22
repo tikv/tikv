@@ -251,9 +251,13 @@ pub trait CommandExt {
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
-        $cmd: ident, $cmd_ty: ty, $tag: ident $(, ts => $ts:ident)? {
-            $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
-        }
+        $cmd: ident:
+            cmd_ty => $cmd_ty: ty,
+            tag => $tag: ident $(,
+            ts => $ts:ident)?,
+            content => {
+                $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
+            }
     ) => {
         $(#[$outer_doc])*
         pub struct $cmd {
@@ -298,19 +302,23 @@ command! {
     ///
     /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
-    Prewrite, Vec<Result<()>>, prewrite, ts => start_ts {
-        /// The set of mutations to apply.
-        mutations: Vec<Mutation>,
-        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
-        primary: Vec<u8>,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        lock_ttl: u64,
-        skip_constraint_check: bool,
-        /// How many keys this transaction involved.
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-    }
+    Prewrite:
+        cmd_ty => Vec<Result<()>>,
+        tag => prewrite,
+        ts => start_ts,
+        content => {
+            /// The set of mutations to apply.
+            mutations: Vec<Mutation>,
+            /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
+            primary: Vec<u8>,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            lock_ttl: u64,
+            skip_constraint_check: bool,
+            /// How many keys this transaction involved.
+            txn_size: u64,
+            min_commit_ts: TimeStamp,
+        }
 }
 
 impl Prewrite {
@@ -375,94 +383,118 @@ command! {
     ///
     /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
-    PrewritePessimistic, Vec<Result<()>>, prewrite, ts => start_ts {
-        /// The set of mutations to apply; the bool = is pessimistic lock.
-        mutations: Vec<(Mutation, bool)>,
-        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
-        primary: Vec<u8>,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        /// How many keys this transaction involved.
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-    }
+    PrewritePessimistic:
+        cmd_ty => Vec<Result<()>>,
+        tag => prewrite,
+        ts => start_ts,
+        content => {
+            /// The set of mutations to apply; the bool = is pessimistic lock.
+            mutations: Vec<(Mutation, bool)>,
+            /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
+            primary: Vec<u8>,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            lock_ttl: u64,
+            for_update_ts: TimeStamp,
+            /// How many keys this transaction involved.
+            txn_size: u64,
+            min_commit_ts: TimeStamp,
+        }
 }
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
-    AcquirePessimisticLock, Result<PessimisticLockRes>, acquire_pessimistic_lock, ts => start_ts {
-        /// The set of keys to lock.
-        keys: Vec<(Key, bool)>,
-        /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
-        primary: Vec<u8>,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        lock_ttl: u64,
-        is_first_lock: bool,
-        for_update_ts: TimeStamp,
-        /// Time to wait for lock released in milliseconds when encountering locks.
-        wait_timeout: Option<WaitTimeout>,
-        /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
-        /// later read in the same transaction.
-        return_values: bool,
-        min_commit_ts: TimeStamp,
-    }
+    AcquirePessimisticLock:
+        cmd_ty => Result<PessimisticLockRes>,
+        tag => acquire_pessimistic_lock,
+        ts => start_ts,
+        content => {
+            /// The set of keys to lock.
+            keys: Vec<(Key, bool)>,
+            /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
+            primary: Vec<u8>,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            lock_ttl: u64,
+            is_first_lock: bool,
+            for_update_ts: TimeStamp,
+            /// Time to wait for lock released in milliseconds when encountering locks.
+            wait_timeout: Option<WaitTimeout>,
+            /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
+            /// later read in the same transaction.
+            return_values: bool,
+            min_commit_ts: TimeStamp,
+        }
 }
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite).
-    Commit, TxnStatus, commit, ts => commit_ts {
-        /// The keys affected.
-        keys: Vec<Key>,
-        /// The lock timestamp.
-        lock_ts: TimeStamp,
-        /// The commit timestamp.
-        commit_ts: TimeStamp,
-    }
+    Commit:
+        cmd_ty => TxnStatus,
+        tag => commit,
+        ts => commit_ts,
+        content => {
+            /// The keys affected.
+            keys: Vec<Key>,
+            /// The lock timestamp.
+            lock_ts: TimeStamp,
+            /// The commit timestamp.
+            commit_ts: TimeStamp,
+        }
 }
 
 command! {
     /// Rollback mutations on a single key.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
-    Cleanup, (), cleanup, ts => start_ts {
-        key: Key,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        /// The approximate current ts when cleanup request is invoked, which is used to check the
-        /// lock's TTL. 0 means do not check TTL.
-        current_ts: TimeStamp,
-    }
+    Cleanup:
+        cmd_ty => (),
+        tag => cleanup,
+        ts => start_ts,
+        content => {
+            key: Key,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            /// The approximate current ts when cleanup request is invoked, which is used to check the
+            /// lock's TTL. 0 means do not check TTL.
+            current_ts: TimeStamp,
+        }
 }
 
 command! {
     /// Rollback from the transaction that was started at `start_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
-    Rollback, (), rollback, ts => start_ts {
-        keys: Vec<Key>,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-    }
+    Rollback:
+        cmd_ty => (),
+        tag => rollback,
+        ts => start_ts,
+        content => {
+            keys: Vec<Key>,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+        }
 }
 
 command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
     /// This can roll back an [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) command.
-    PessimisticRollback, Vec<Result<()>>, pessimistic_rollback, ts => start_ts {
-        /// The keys to be rolled back.
-        keys: Vec<Key>,
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
-    }
+    PessimisticRollback:
+        cmd_ty => Vec<Result<()>>,
+        tag => pessimistic_rollback,
+        ts => start_ts,
+        content => {
+            /// The keys to be rolled back.
+            keys: Vec<Key>,
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            for_update_ts: TimeStamp,
+        }
 }
 
 command! {
@@ -471,15 +503,19 @@ command! {
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
     /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
     /// [`Prewrite`](CommandKind::Prewrite).
-    TxnHeartBeat, TxnStatus, txn_heart_beat, ts => start_ts {
-        /// The primary key of the transaction.
-        primary_key: Key,
-        /// The transaction's start_ts.
-        start_ts: TimeStamp,
-        /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
-        /// greater than `advise_ttl`, nothing will happen.
-        advise_ttl: u64,
-    }
+    TxnHeartBeat:
+        cmd_ty => TxnStatus,
+        tag => txn_heart_beat,
+        ts => start_ts,
+        content => {
+            /// The primary key of the transaction.
+            primary_key: Key,
+            /// The transaction's start_ts.
+            start_ts: TimeStamp,
+            /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
+            /// greater than `advise_ttl`, nothing will happen.
+            advise_ttl: u64,
+        }
 }
 
 command! {
@@ -491,31 +527,39 @@ command! {
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
     /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
     /// [`Prewrite`](CommandKind::Prewrite).
-    CheckTxnStatus, TxnStatus, check_txn_status, ts => lock_ts {
-        /// The primary key of the transaction.
-        primary_key: Key,
-        /// The lock's ts, namely the transaction's start_ts.
-        lock_ts: TimeStamp,
-        /// The start_ts of the transaction that invokes this command.
-        caller_start_ts: TimeStamp,
-        /// The approximate current_ts when the command is invoked.
-        current_ts: TimeStamp,
-        /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
-        /// rollbacks that transaction; otherwise returns an error.
-        rollback_if_not_exist: bool,
-    }
+    CheckTxnStatus:
+        cmd_ty => TxnStatus,
+        tag => check_txn_status,
+        ts => lock_ts,
+        content => {
+            /// The primary key of the transaction.
+            primary_key: Key,
+            /// The lock's ts, namely the transaction's start_ts.
+            lock_ts: TimeStamp,
+            /// The start_ts of the transaction that invokes this command.
+            caller_start_ts: TimeStamp,
+            /// The approximate current_ts when the command is invoked.
+            current_ts: TimeStamp,
+            /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
+            /// rollbacks that transaction; otherwise returns an error.
+            rollback_if_not_exist: bool,
+        }
 }
 
 command! {
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
-    ScanLock, Vec<LockInfo>, scan_lock, ts => max_ts {
-        /// The maximum transaction timestamp to scan.
-        max_ts: TimeStamp,
-        /// The key to start from. (`None` means start from the very beginning.)
-        start_key: Option<Key>,
-        /// The result limit.
-        limit: usize,
-    }
+    ScanLock:
+        cmd_ty => Vec<LockInfo>,
+        tag => scan_lock,
+        ts => max_ts,
+        content => {
+            /// The maximum transaction timestamp to scan.
+            max_ts: TimeStamp,
+            /// The key to start from. (`None` means start from the very beginning.)
+            start_key: Option<Key>,
+            /// The result limit.
+            limit: usize,
+        }
 }
 
 command! {
@@ -523,65 +567,82 @@ command! {
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before safe point.
-    ResolveLock, (), resolve_lock {
-        /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
-        ///
-        /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-        /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
-        /// start_ts is 102 was rolled back. If there are these keys in the db:
-        ///
-        /// * "k1", lock_ts = 100
-        /// * "k2", lock_ts = 102
-        /// * "k3", lock_ts = 104
-        /// * "k4", no lock
-        ///
-        /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
-        /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
-        /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
-        /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
-        /// version.
-        txn_status: HashMap<TimeStamp, TimeStamp>,
-        scan_key: Option<Key>,
-        key_locks: Vec<(Key, Lock)>,
-    }
+    ResolveLock:
+        cmd_ty => (),
+        tag => resolve_lock,
+        content => {
+            /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+            ///
+            /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
+            /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
+            /// start_ts is 102 was rolled back. If there are these keys in the db:
+            ///
+            /// * "k1", lock_ts = 100
+            /// * "k2", lock_ts = 102
+            /// * "k3", lock_ts = 104
+            /// * "k4", no lock
+            ///
+            /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
+            /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
+            /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
+            /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
+            /// version.
+            txn_status: HashMap<TimeStamp, TimeStamp>,
+            scan_key: Option<Key>,
+            key_locks: Vec<(Key, Lock)>,
+        }
 }
 
 command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
-    ResolveLockLite, (), resolve_lock_lite, ts => start_ts {
-        /// The transaction timestamp.
-        start_ts: TimeStamp,
-        /// The transaction commit timestamp.
-        commit_ts: TimeStamp,
-        /// The keys to resolve.
-        resolve_keys: Vec<Key>,
-    }
+    ResolveLockLite:
+        cmd_ty => (),
+        tag => resolve_lock_lite,
+        ts => start_ts,
+        content => {
+            /// The transaction timestamp.
+            start_ts: TimeStamp,
+            /// The transaction commit timestamp.
+            commit_ts: TimeStamp,
+            /// The keys to resolve.
+            resolve_keys: Vec<Key>,
+        }
 }
 
 command! {
     /// **Testing functionality:** Latch the given keys for given duration.
     ///
     /// This means other write operations that involve these keys will be blocked.
-    Pause, (), pause {
-        /// The keys to hold latches on.
-        keys: Vec<Key>,
-        /// The amount of time in milliseconds to latch for.
-        duration: u64,
-    }
+    Pause:
+        cmd_ty => (),
+        tag => pause,
+        content => {
+            /// The keys to hold latches on.
+            keys: Vec<Key>,
+            /// The amount of time in milliseconds to latch for.
+            duration: u64,
+        }
 }
 
 command! {
     /// Retrieve MVCC information for the given key.
-    MvccByKey, MvccInfo, key_mvcc {
-        key: Key,
-    }
+    MvccByKey:
+        cmd_ty => MvccInfo,
+        tag => key_mvcc,
+        content => {
+            key: Key,
+        }
 }
 
 command! {
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
-    MvccByStartTs, Option<(Key, MvccInfo)>, start_ts_mvcc, ts => start_ts {
-        start_ts: TimeStamp,
-    }
+    MvccByStartTs:
+        cmd_ty => Option<(Key, MvccInfo)>,
+        tag => start_ts_mvcc,
+        ts => start_ts,
+        content => {
+            start_ts: TimeStamp,
+        }
 }
 
 pub enum CommandKind {
