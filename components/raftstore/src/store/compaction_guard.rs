@@ -91,6 +91,6 @@ impl SstPartitioner for CompactionGuardGenerator {
         while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= key {
             pos += 1;
         }
-        self.pos.replace(pos);
+        self.pos.set(pos);
     }
 }
