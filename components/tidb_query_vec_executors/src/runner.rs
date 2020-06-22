@@ -143,7 +143,7 @@ pub fn build_executors<S: Storage + 'static>(
 
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
-            let primary_column_ids = descriptor.get_primary_column_ids().to_vec();
+            let primary_column_ids = descriptor.take_primary_column_ids().into();
 
             executor = Box::new(
                 BatchTableScanExecutor::new(

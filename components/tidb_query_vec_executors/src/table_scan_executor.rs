@@ -62,7 +62,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
                 handle_indices.push(index);
             } else {
                 is_key_only = false;
-                column_id_index.insert(dbg!(ci.get_column_id()), dbg!(index));
+                column_id_index.insert(ci.get_column_id(), index);
             }
 
             // Note: if two PK handles are given, we will only preserve the *last* one. Also if two
@@ -295,13 +295,14 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
     ) -> Result<()> {
         use tidb_query_datatype::codec::{datum, table};
 
-        table::check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
-        // NOTE: `primary_column_ids` is mutual exclusive toward `pk_handle`.
-        // If the column contains a pk_handle flag, we should extract the value of the column from the key.
+        // `handle_indices` and `primary_column_ids` mutexes.
+        assert!(self.handle_indices.is_empty() || self.primary_column_ids.is_empty());
+
         if !self.handle_indices.is_empty() {
+            // In this case, An int handle is expected.
             let handle = table::decode_int_handle(key)?;
 
             for handle_index in &self.handle_indices {
@@ -325,9 +326,15 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                         columns[index].mut_raw().push(datum);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
+                    } else {
+                        return Err(other_err!(
+                            "duplicated column ids are meet in `primary_column_ids`"
+                        ));
                     }
                 }
             }
+        } else {
+            table::check_record_key(key)?;
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -1226,13 +1233,13 @@ mod tests {
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
 
-        let key = table::encode_common_handle(TABLE_ID, &handle);
+        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
         // Constructs a range that includes the constructed key.
         let mut key_range = KeyRange::default();
-        let begin = table::encode_common_handle(TABLE_ID - 1, &handle);
-        let end = table::encode_common_handle(TABLE_ID + 1, &handle);
+        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
         key_range.set_start(begin);
         key_range.set_end(end);
 
