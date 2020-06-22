@@ -193,7 +193,6 @@ pub fn decode_common_handle(mut key: &[u8]) -> Result<&[u8]> {
     Ok(key)
 }
 
-
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
 pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
     decode_int_handle(key)?;

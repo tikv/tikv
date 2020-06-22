@@ -293,7 +293,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::{datum,table};
+        use tidb_query_datatype::codec::{datum, table};
 
         table::check_record_key(&key)?;
         let columns_len = self.schema.len();
@@ -318,7 +318,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 let index = self.column_id_index.get(primary_id);
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
-                        let (datum, remain) = datum::split_datum(handle,false)?;
+                        let (datum, remain) = datum::split_datum(handle, false)?;
                         columns[index].mut_raw().push(datum);
 
                         handle = remain;
