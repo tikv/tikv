@@ -49,11 +49,11 @@ impl<E: KvEngine> ImportModeSwitcherInner<E> {
         self.backup_db_options = ImportModeDBOptions::new_options(&self.db);
         self.backup_cf_options.clear();
 
-        let import_db_options = ImportModeDBOptions::new();
+        let import_db_options = self.backup_db_options.optimized_for_import_mode();
         import_db_options.set_options(&self.db)?;
-        let import_cf_options = ImportModeCFOptions::new();
         for cf_name in self.db.cf_names() {
             let cf_opts = ImportModeCFOptions::new_options(&self.db, cf_name);
+            let import_cf_options = cf_opts.optimized_for_import_mode();
             self.backup_cf_options.push((cf_name.to_owned(), cf_opts));
             import_cf_options.set_options(&self.db, cf_name, mf)?;
         }
@@ -143,9 +143,15 @@ struct ImportModeDBOptions {
 }
 
 impl ImportModeDBOptions {
-    fn new() -> ImportModeDBOptions {
-        ImportModeDBOptions {
+    fn new() -> Self {
+        Self {
             max_background_jobs: 32,
+        }
+    }
+
+    fn optimized_for_import_mode(&self) -> Self {
+        Self {
+            max_background_jobs: self.max_background_jobs.max(32),
         }
     }
 
@@ -168,7 +174,6 @@ impl ImportModeDBOptions {
 }
 
 struct ImportModeCFOptions {
-    block_cache_size: u64,
     level0_stop_writes_trigger: u32,
     level0_slowdown_writes_trigger: u32,
     soft_pending_compaction_bytes_limit: u64,
@@ -176,11 +181,10 @@ struct ImportModeCFOptions {
 }
 
 impl ImportModeCFOptions {
-    fn new() -> ImportModeCFOptions {
-        ImportModeCFOptions {
-            block_cache_size: 4 << 30,
-            level0_stop_writes_trigger: 1 << 30,
-            level0_slowdown_writes_trigger: 1 << 30,
+    fn optimized_for_import_mode(&self) -> Self {
+        Self {
+            level0_stop_writes_trigger: self.level0_stop_writes_trigger.max(1 << 30),
+            level0_slowdown_writes_trigger: self.level0_slowdown_writes_trigger.max(1 << 30),
             soft_pending_compaction_bytes_limit: 0,
             hard_pending_compaction_bytes_limit: 0,
         }
@@ -191,7 +195,6 @@ impl ImportModeCFOptions {
         let cf_opts = db.get_options_cf(cf);
 
         ImportModeCFOptions {
-            block_cache_size: cf_opts.get_block_cache_capacity(),
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
             level0_slowdown_writes_trigger: cf_opts.get_level_zero_slowdown_writes_trigger(),
             soft_pending_compaction_bytes_limit: cf_opts.get_soft_pending_compaction_bytes_limit(),
@@ -201,9 +204,6 @@ impl ImportModeCFOptions {
 
     fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
         let cf = db.cf_handle(cf_name).unwrap();
-        let cf_opts = db.get_options_cf(cf);
-        cf_opts.set_block_cache_capacity(self.block_cache_size)?;
-        mf(cf_name, "block_cache_size", self.block_cache_size as f64);
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -241,7 +241,7 @@ mod tests {
     use engine_traits::KvEngine;
     use std::thread;
     use tempfile::Builder;
-    use test_sst_importer::new_test_engine;
+    use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
 
     fn check_import_options<E>(
@@ -260,10 +260,6 @@ mod tests {
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();
             let cf_opts = db.get_options_cf(cf);
-            assert_eq!(
-                cf_opts.get_block_cache_capacity(),
-                expected_cf_opts.block_cache_size
-            );
             assert_eq!(
                 cf_opts.get_level_zero_stop_writes_trigger(),
                 expected_cf_opts.level0_stop_writes_trigger
@@ -291,10 +287,15 @@ mod tests {
             .unwrap();
         let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
 
-        let import_db_options = ImportModeDBOptions::new();
         let normal_db_options = ImportModeDBOptions::new_options(&db);
-        let import_cf_options = ImportModeCFOptions::new();
+        let import_db_options = normal_db_options.optimized_for_import_mode();
         let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let import_cf_options = normal_cf_options.optimized_for_import_mode();
+
+        assert!(
+            import_cf_options.level0_stop_writes_trigger
+                > normal_cf_options.level0_stop_writes_trigger
+        );
 
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
@@ -324,10 +325,10 @@ mod tests {
             .unwrap();
         let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
 
-        let import_db_options = ImportModeDBOptions::new();
         let normal_db_options = ImportModeDBOptions::new_options(&db);
-        let import_cf_options = ImportModeCFOptions::new();
+        let import_db_options = normal_db_options.optimized_for_import_mode();
         let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let import_cf_options = normal_cf_options.optimized_for_import_mode();
 
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
@@ -348,5 +349,24 @@ mod tests {
         thread::sleep(Duration::from_secs(1));
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
+    }
+
+    #[test]
+    fn test_import_mode_should_not_decrease_level0_stop_writes_trigger() {
+        // This checks issue tikv/tikv#6545.
+        let temp_dir = Builder::new()
+            .prefix("test_import_mode_should_not_decrease_level0_stop_writes_trigger")
+            .tempdir()
+            .unwrap();
+        let db = new_test_engine_with_options(
+            temp_dir.path().to_str().unwrap(),
+            &["default"],
+            |_, opt| opt.set_level_zero_stop_writes_trigger(2_000_000_000),
+        );
+
+        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        assert_eq!(normal_cf_options.level0_stop_writes_trigger, 2_000_000_000);
+        let import_cf_options = normal_cf_options.optimized_for_import_mode();
+        assert_eq!(import_cf_options.level0_stop_writes_trigger, 2_000_000_000);
     }
 }
