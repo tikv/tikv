@@ -7,10 +7,11 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tidb_query_datatype::codec::datum;
+use tidb_query_datatype::codec::datum::{encode_value, Datum, NIL_FLAG};
 use tidb_query_datatype::codec::table;
+use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::def::{Collation, FieldTypeTp};
+use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
@@ -181,7 +182,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut col_len = cols_info.len();
         let vec_cols_info = if cols_info[0].get_pk_handle() {
             col_len -= 1;
-            cols_info.to_vec()[1..col_len+1].to_vec()
+            cols_info.to_vec()[1..col_len + 1].to_vec()
         } else {
             cols_info.to_vec()
         };
@@ -229,19 +230,18 @@ impl<S: Snapshot> SampleBuilder<S> {
                 }
             }
             for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
-                if self.cols_info[i].get_tp() == FieldTypeTp::TinyBlob as i32 
-                || self.cols_info[i].get_tp() == FieldTypeTp::MediumBlob as i32
-                || self.cols_info[i].get_tp() == FieldTypeTp::Blob as i32
-                || self.cols_info[i].get_tp() == FieldTypeTp::VarChar as i32
-                || self.cols_info[i].get_tp() == FieldTypeTp::VarString as i32
-                || self.cols_info[i].get_tp() == FieldTypeTp::String as i32 {
+                if self.cols_info[i].as_accessor().is_string_like() {
                     let sorted_val = match_template_collator! {
-                        TT, match Collation::from_i32(self.cols_info[i].get_collation())? {
+                        TT, match self.cols_info[i].as_accessor().collation()? {
                             Collation::TT => {
                                 let mut mut_val = val.as_slice();
                                 let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
-                                let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                datum::encode_value(&mut EvalContext::default(), &[datum::Datum::Bytes(decoded_sorted_val)]).unwrap()
+                                if decoded_val == Datum::Null {
+                                    val
+                                } else {
+                                    let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                    encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
+                                }
                             }
                         }
                     };
@@ -301,7 +301,7 @@ impl SampleCollector {
     }
 
     pub fn collect(&mut self, data: Vec<u8>) {
-        if data[0] == datum::NIL_FLAG {
+        if data[0] == NIL_FLAG {
             self.null_count += 1;
             return;
         }
