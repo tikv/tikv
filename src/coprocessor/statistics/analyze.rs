@@ -8,7 +8,7 @@ use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use tidb_query_datatype::codec::datum;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::expr::{EvalContext, EvalConfig};
 use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
@@ -18,6 +18,9 @@ use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use tidb_query_vec_executors::BatchIndexScanExecutor;
+use std::sync::Arc;
+use tidb_query_vec_executors::interface::BatchExecutor;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -99,6 +102,36 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
+
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram and count-min sketch of index values.
+    fn batch_handle_index(
+        req: AnalyzeIndexReq,
+        scanner: &mut BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    ) -> Result<Vec<u8>> {
+        let mut hist = Histogram::new(req.get_bucket_size() as usize);
+        let mut cms = CmSketch::new(
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
+        while let Some(row) = scanner.next()? {
+            let row = row.take_origin()?;
+            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
+            hist.append(bytes);
+            if let Some(c) = cms.as_mut() {
+                for end_offset in end_offsets {
+                    c.insert(&bytes[..end_offset])
+                }
+            }
+        }
+        let mut res = tipb::AnalyzeIndexResp::default();
+        res.set_hist(hist.into_proto());
+        if let Some(c) = cms {
+            res.set_cms(c.into_proto());
+        }
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
 }
 
 #[async_trait]
@@ -107,14 +140,22 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
-                let mut scanner = ScanExecutor::index_scan_with_cols_len(
-                    EvalContext::default(),
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
+                // let mut scanner = ScanExecutor::index_scan_with_cols_len(
+                //     EvalContext::default(),
+                //     i64::from(req.get_num_columns()),
+                //     mem::replace(&mut self.ranges, Vec::new()),
+                //     self.storage.take().unwrap(),
+                // )?;
+                let mut batch_scanner: BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>> = BatchIndexScanExecutor::new(
                     self.storage.take().unwrap(),
+                    Arc::new(EvalConfig::default()),
+                    unimplemented!(), //TODO where to get this
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    false,
+                    unimplemented!(), //TODO true or false
                 )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_storage_stats(&mut self.storage_stats);
+                let res = AnalyzeContext::batch_handle_index(req, &mut batch_scanner);
+                batch_scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
 
@@ -206,7 +247,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 self.max_sample_size,
                 self.max_fm_sketch_size,
                 self.cm_sketch_depth,
-                self.cm_sketch_width
+                self.cm_sketch_width,
             );
             self.col_len
         ];
