@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::io::Write;
 use std::sync::Arc;
 use std::{cmp, u8};
@@ -30,59 +30,6 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 // the maximum len of the old encoding of index value.
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
-#[derive(Debug)]
-pub enum Handle<'a> {
-    Int(i64),
-    Common(Vec<BytesSlice<'a>>),
-}
-
-impl<'a> Handle<'a> {
-    pub fn into_i64(self) -> Result<i64> {
-        match self {
-            Handle::Int(i) => Ok(i),
-            _ => Err(invalid_type!(
-                "Expect an integer handle, got a common handle"
-            )),
-        }
-    }
-
-    pub fn into_common(self) -> Result<Vec<BytesSlice<'a>>> {
-        match self {
-            Handle::Common(slices) => Ok(slices),
-            _ => Err(invalid_type!(
-                "Expect a common handle, got an integer handle"
-            )),
-        }
-    }
-}
-
-impl<'a> TryFrom<BytesSlice<'a>> for Handle<'a> {
-    type Error = Error;
-
-    fn try_from(mut key: BytesSlice<'a>) -> Result<Self> {
-        use std::cmp::Ordering;
-        // Expects a record key.
-        check_record_key(key)?;
-
-        match key.len().cmp(&RECORD_ROW_KEY_LEN) {
-            Ordering::Less => Err(invalid_type!("record key expected, but got {:?}", key)),
-            Ordering::Equal => Ok(Handle::Int(
-                key[PREFIX_LEN..].as_ref().read_i64().map_err(Error::from)?,
-            )),
-            _ => {
-                key = &key[PREFIX_LEN..];
-
-                let mut datums = Vec::new();
-                while !key.is_empty() {
-                    let (column, remain) = datum::split_datum(key, false)?;
-                    datums.push(column);
-                    key = remain;
-                }
-                Ok(Handle::Common(datums))
-            }
-        }
-    }
-}
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -232,29 +179,24 @@ pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> 
     key
 }
 
-/// `decode_handle` decodes the key and gets the handle.
-pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
-    let mut buf = encoded;
-    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
-        return Err(invalid_type!(
-            "record key expected, but got {}",
-            hex::encode_upper(encoded)
-        ));
-    }
-    buf.read_i64()?;
-
-    if buf.read_bytes(RECORD_PREFIX_SEP.len())? != RECORD_PREFIX_SEP {
-        return Err(invalid_type!(
-            "record key expected, but got {}",
-            hex::encode_upper(encoded)
-        ));
-    }
-    buf.read_i64().map_err(Error::from)
+/// `decode_int_handle` decodes the key and gets the int handle.
+pub fn decode_int_handle(mut key: &[u8]) -> Result<i64> {
+    check_record_key(key)?;
+    key = &key[PREFIX_LEN..];
+    key.read_i64().map_err(Error::from)
 }
+
+/// `decode_common_handle` decodes key key and gets the common handle.
+pub fn decode_common_handle(mut key: &[u8]) -> Result<&[u8]> {
+    check_record_key(key)?;
+    key = &key[PREFIX_LEN..];
+    Ok(key)
+}
+
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
 pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
-    decode_handle(key)?;
+    decode_int_handle(key)?;
     Ok(&key[..RECORD_ROW_KEY_LEN])
 }
 

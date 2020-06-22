@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use smallvec::SmallVec;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
@@ -17,7 +16,6 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row;
-use tidb_query_datatype::codec::table::{check_record_key, Handle};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -295,14 +293,16 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::datum;
+        use tidb_query_datatype::codec::{datum,table};
 
-        check_record_key(&key)?;
+        table::check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
+        // NOTE: `primary_column_ids` is mutual exclusive toward `pk_handle`.
+        // If the column contains a pk_handle flag, we should extract the value of the column from the key.
         if !self.handle_indices.is_empty() {
-            let handle = Handle::try_from(key)?.into_i64()?;
+            let handle = table::decode_int_handle(key)?;
 
             for handle_index in &self.handle_indices {
                 // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
@@ -312,12 +312,16 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 self.is_column_filled[*handle_index] = true;
             }
         } else if !self.primary_column_ids.is_empty() {
-            let handle = Handle::try_from(key)?.into_common()?;
-            for (i, primary_id) in self.primary_column_ids.iter().enumerate() {
+            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the columns from the common handle.
+            let mut handle = table::decode_common_handle(key)?;
+            for primary_id in self.primary_column_ids.iter() {
                 let index = self.column_id_index.get(primary_id);
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
-                        columns[index].mut_raw().push(handle[i]);
+                        let (datum, remain) = datum::split_datum(handle,false)?;
+                        columns[index].mut_raw().push(datum);
+
+                        handle = remain;
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     }
