@@ -543,7 +543,7 @@ mod tests {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
             let k = encode_row_key(1, t);
-            assert_eq!(t, decode_handle(&k).unwrap());
+            assert_eq!(t, decode_int_handle(&k).unwrap());
         }
     }
 
