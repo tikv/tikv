@@ -246,6 +246,18 @@ pub trait CommandExt {
     fn ts(&self) -> TimeStamp {
         TimeStamp::zero()
     }
+    fn readonly(&self) -> bool {
+        false
+    }
+    fn is_sys_cmd(&self) -> bool {
+        false
+    }
+    fn requires_pessimistic_txn(&self) -> bool {
+        false
+    }
+    fn can_pipelined(&self) -> bool {
+        false
+    }
 }
 
 macro_rules! command {
@@ -253,8 +265,6 @@ macro_rules! command {
         $(#[$outer_doc: meta])*
         $cmd: ident:
             cmd_ty => $cmd_ty: ty,
-            tag => $tag: ident $(,
-            ts => $ts:ident)?,
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
@@ -278,23 +288,59 @@ macro_rules! command {
                 .into()
             }
         }
-
-        impl CommandExt for $cmd {
-            fn tag(&self) -> metrics::CommandKind {
-                metrics::CommandKind::$tag
-            }
-
-            fn incr_cmd_metric(&self) {
-                KV_COMMAND_COUNTER_VEC_STATIC.$tag.inc();
-            }
-
-            $(
-            fn ts(&self) -> TimeStamp {
-                self.$ts
-            }
-            )?
-        }
     }
+}
+
+macro_rules! ts {
+    ($ts:ident) => {
+        fn ts(&self) -> TimeStamp {
+            self.$ts
+        }
+    };
+}
+
+macro_rules! tag {
+    ($tag:ident) => {
+        fn tag(&self) -> metrics::CommandKind {
+            metrics::CommandKind::$tag
+        }
+
+        fn incr_cmd_metric(&self) {
+            KV_COMMAND_COUNTER_VEC_STATIC.$tag.inc();
+        }
+    };
+}
+
+macro_rules! readonly {
+    ($readonly: expr) => {
+        fn readonly(&self) -> bool {
+            $readonly
+        }
+    };
+}
+
+macro_rules! is_sys_cmd {
+    ($is_sys_cmd: expr) => {
+        fn is_sys_cmd(&self) -> bool {
+            $is_sys_cmd
+        }
+    };
+}
+
+macro_rules! requires_pessimistic_txn {
+    ($requires_pessimistic_txn: expr) => {
+        fn requires_pessimistic_txn(&self) -> bool {
+            $requires_pessimistic_txn
+        }
+    };
+}
+
+macro_rules! can_pipelined {
+    ($can_pipelined: expr) => {
+        fn can_pipelined(&self) -> bool {
+            $can_pipelined
+        }
+    };
 }
 
 command! {
@@ -304,8 +350,6 @@ command! {
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
     Prewrite:
         cmd_ty => Vec<Result<()>>,
-        tag => prewrite,
-        ts => start_ts,
         content => {
             /// The set of mutations to apply.
             mutations: Vec<Mutation>,
@@ -319,6 +363,11 @@ command! {
             txn_size: u64,
             min_commit_ts: TimeStamp,
         }
+}
+
+impl CommandExt for Prewrite {
+    tag!(prewrite);
+    ts!(start_ts);
 }
 
 impl Prewrite {
@@ -385,8 +434,6 @@ command! {
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
     PrewritePessimistic:
         cmd_ty => Vec<Result<()>>,
-        tag => prewrite,
-        ts => start_ts,
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
             mutations: Vec<(Mutation, bool)>,
@@ -402,14 +449,18 @@ command! {
         }
 }
 
+impl CommandExt for PrewritePessimistic {
+    tag!(prewrite);
+    ts!(start_ts);
+    requires_pessimistic_txn!(true);
+}
+
 command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => Result<PessimisticLockRes>,
-        tag => acquire_pessimistic_lock,
-        ts => start_ts,
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -429,14 +480,19 @@ command! {
         }
 }
 
+impl CommandExt for AcquirePessimisticLock {
+    tag!(acquire_pessimistic_lock);
+    ts!(start_ts);
+    requires_pessimistic_txn!(true);
+    can_pipelined!(true);
+}
+
 command! {
     /// Commit the transaction that started at `lock_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        tag => commit,
-        ts => commit_ts,
         content => {
             /// The keys affected.
             keys: Vec<Key>,
@@ -447,14 +503,17 @@ command! {
         }
 }
 
+impl CommandExt for Commit {
+    tag!(commit);
+    ts!(commit_ts);
+}
+
 command! {
     /// Rollback mutations on a single key.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
     Cleanup:
         cmd_ty => (),
-        tag => cleanup,
-        ts => start_ts,
         content => {
             key: Key,
             /// The transaction timestamp.
@@ -465,19 +524,27 @@ command! {
         }
 }
 
+impl CommandExt for Cleanup {
+    tag!(cleanup);
+    ts!(start_ts);
+}
+
 command! {
     /// Rollback from the transaction that was started at `start_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        tag => rollback,
-        ts => start_ts,
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
             start_ts: TimeStamp,
         }
+}
+
+impl CommandExt for Rollback {
+    tag!(rollback);
+    ts!(start_ts);
 }
 
 command! {
@@ -486,8 +553,6 @@ command! {
     /// This can roll back an [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<Result<()>>,
-        tag => pessimistic_rollback,
-        ts => start_ts,
         content => {
             /// The keys to be rolled back.
             keys: Vec<Key>,
@@ -495,6 +560,12 @@ command! {
             start_ts: TimeStamp,
             for_update_ts: TimeStamp,
         }
+}
+
+impl CommandExt for PessimisticRollback {
+    tag!(pessimistic_rollback);
+    ts!(start_ts);
+    requires_pessimistic_txn!(true);
 }
 
 command! {
@@ -505,8 +576,6 @@ command! {
     /// [`Prewrite`](CommandKind::Prewrite).
     TxnHeartBeat:
         cmd_ty => TxnStatus,
-        tag => txn_heart_beat,
-        ts => start_ts,
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -516,6 +585,11 @@ command! {
             /// greater than `advise_ttl`, nothing will happen.
             advise_ttl: u64,
         }
+}
+
+impl CommandExt for TxnHeartBeat {
+    tag!(txn_heart_beat);
+    ts!(start_ts);
 }
 
 command! {
@@ -529,8 +603,6 @@ command! {
     /// [`Prewrite`](CommandKind::Prewrite).
     CheckTxnStatus:
         cmd_ty => TxnStatus,
-        tag => check_txn_status,
-        ts => lock_ts,
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -546,12 +618,15 @@ command! {
         }
 }
 
+impl CommandExt for CheckTxnStatus {
+    tag!(check_txn_status);
+    ts!(lock_ts);
+}
+
 command! {
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock:
         cmd_ty => Vec<LockInfo>,
-        tag => scan_lock,
-        ts => max_ts,
         content => {
             /// The maximum transaction timestamp to scan.
             max_ts: TimeStamp,
@@ -562,6 +637,13 @@ command! {
         }
 }
 
+impl CommandExt for ScanLock {
+    tag!(scan_lock);
+    ts!(max_ts);
+    readonly!(true);
+    is_sys_cmd!(true);
+}
+
 command! {
     /// Resolve locks according to `txn_status`.
     ///
@@ -569,7 +651,6 @@ command! {
     /// before safe point.
     ResolveLock:
         cmd_ty => (),
-        tag => resolve_lock,
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///
@@ -593,12 +674,20 @@ command! {
         }
 }
 
+impl CommandExt for ResolveLock {
+    tag!(resolve_lock);
+
+    fn readonly(&self) -> bool {
+        self.key_locks.is_empty()
+    }
+
+    is_sys_cmd!(true);
+}
+
 command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ResolveLockLite:
         cmd_ty => (),
-        tag => resolve_lock_lite,
-        ts => start_ts,
         content => {
             /// The transaction timestamp.
             start_ts: TimeStamp,
@@ -609,13 +698,18 @@ command! {
         }
 }
 
+impl CommandExt for ResolveLockLite {
+    tag!(resolve_lock_lite);
+    ts!(start_ts);
+    is_sys_cmd!(true);
+}
+
 command! {
     /// **Testing functionality:** Latch the given keys for given duration.
     ///
     /// This means other write operations that involve these keys will be blocked.
     Pause:
         cmd_ty => (),
-        tag => pause,
         content => {
             /// The keys to hold latches on.
             keys: Vec<Key>,
@@ -624,25 +718,37 @@ command! {
         }
 }
 
+impl CommandExt for Pause {
+    tag!(pause);
+}
+
 command! {
     /// Retrieve MVCC information for the given key.
     MvccByKey:
         cmd_ty => MvccInfo,
-        tag => key_mvcc,
         content => {
             key: Key,
         }
+}
+
+impl CommandExt for MvccByKey {
+    tag!(key_mvcc);
+    readonly!(true);
 }
 
 command! {
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs:
         cmd_ty => Option<(Key, MvccInfo)>,
-        tag => start_ts_mvcc,
-        ts => start_ts,
         content => {
             start_ts: TimeStamp,
         }
+}
+
+impl CommandExt for MvccByStartTs {
+    tag!(start_ts_mvcc);
+    ts!(start_ts);
+    readonly!(true);
 }
 
 pub enum CommandKind {
@@ -664,16 +770,6 @@ pub enum CommandKind {
 }
 
 impl Command {
-    pub fn readonly(&self) -> bool {
-        match self.kind {
-            CommandKind::ScanLock(_)
-            | CommandKind::MvccByKey(_)
-            | CommandKind::MvccByStartTs(_) => true,
-            CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => key_locks.is_empty(),
-            _ => false,
-        }
-    }
-
     // This is for backward compatibility, after some other refactors are done
     // we can remove CommandKind totally and use `&dyn CommandExt` instead
     fn command_ext(&self) -> &dyn CommandExt {
@@ -695,6 +791,9 @@ impl Command {
             CommandKind::MvccByStartTs(t) => t,
         }
     }
+    pub fn readonly(&self) -> bool {
+        self.command_ext().readonly()
+    }
 
     pub fn incr_cmd_metric(&self) {
         self.command_ext().incr_cmd_metric()
@@ -705,12 +804,7 @@ impl Command {
     }
 
     pub fn is_sys_cmd(&self) -> bool {
-        match self.kind {
-            CommandKind::ScanLock(_)
-            | CommandKind::ResolveLock(_)
-            | CommandKind::ResolveLockLite(_) => true,
-            _ => false,
-        }
+        self.command_ext().is_sys_cmd()
     }
 
     pub fn need_flow_control(&self) -> bool {
@@ -844,19 +938,11 @@ impl Command {
     }
 
     pub fn requires_pessimistic_txn(&self) -> bool {
-        match &self.kind {
-            CommandKind::PrewritePessimistic(_)
-            | CommandKind::AcquirePessimisticLock(_)
-            | CommandKind::PessimisticRollback(_) => true,
-            _ => false,
-        }
+        self.command_ext().requires_pessimistic_txn()
     }
 
     pub fn can_pipelined(&self) -> bool {
-        match &self.kind {
-            CommandKind::AcquirePessimisticLock(_) => true,
-            _ => false,
-        }
+        self.command_ext().can_pipelined()
     }
 }
 
