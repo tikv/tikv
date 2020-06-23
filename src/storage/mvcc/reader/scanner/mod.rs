@@ -5,7 +5,7 @@ mod forward;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, TsSet, Value};
+use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -357,6 +357,41 @@ pub fn has_data_in_range<S: Snapshot>(
         }
     }
     Ok(false)
+}
+
+pub fn seek_for_valid_write<I>(
+    write_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Write>>
+where
+    I: Iterator,
+{
+    let mut ret = None;
+    while write_cursor.valid()?
+        && Key::is_user_key_eq(
+            write_cursor.key(&mut statistics.write),
+            user_key.as_encoded(),
+        )
+    {
+        assert_ge!(
+            after_ts,
+            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+        );
+        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        match write_ref.write_type {
+            WriteType::Put | WriteType::Delete => {
+                ret = Some(write_ref.to_owned());
+                break;
+            }
+            WriteType::Lock | WriteType::Rollback => {
+                // Move to the next write record.
+                write_cursor.next(&mut statistics.write);
+            }
+        }
+    }
+    Ok(ret)
 }
 
 #[cfg(test)]

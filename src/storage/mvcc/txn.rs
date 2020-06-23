@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
+    is_short_value, Key, Lock, LockType, Mutation, MutationType, TimeStamp, TxnExtra, Value, Write,
+    WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -41,9 +42,10 @@ pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
     write_size: usize,
-    writes: Vec<Modify>,
+    writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
+    extra_op: ExtraOp,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -82,8 +84,9 @@ impl<S: Snapshot> MvccTxn<S> {
             reader,
             start_ts,
             write_size: 0,
-            writes: vec![],
+            writes: WriteData::default(),
             collapse_rollback: true,
+            extra_op: ExtraOp::Noop,
         }
     }
 
@@ -96,7 +99,15 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {
-        self.writes
+        self.writes.modifies
+    }
+
+    pub fn set_extra_op(&mut self, extra_op: ExtraOp) {
+        self.extra_op = extra_op;
+    }
+
+    pub fn take_extra(&mut self) -> TxnExtra {
+        std::mem::take(&mut self.writes.extra)
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
@@ -112,39 +123,39 @@ impl<S: Snapshot> MvccTxn<S> {
     fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
         Some(released)
     }
 
     fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn delete_write(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.push(write);
+        self.writes.modifies.push(write);
     }
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
@@ -531,6 +542,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
         let should_not_write = mutation.should_not_write();
+        let mutation_type = mutation.mutation_type();
         let (key, value) = mutation.into_key_value();
 
         fail_point!("prewrite", |err| Err(make_txn_error(
@@ -540,6 +552,7 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
+        let mut prev_write = None;
         // Check whether there is a newer version.
         if !skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
@@ -559,6 +572,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+                prev_write = Some(write);
             }
         }
         if should_not_write {
@@ -583,6 +597,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
+        self.check_extra_op(&key, mutation_type, prev_write)?;
         self.prewrite_key_value(
             key,
             lock_type.unwrap(),
@@ -1002,6 +1017,44 @@ impl<S: Snapshot> MvccTxn<S> {
             deleted_versions,
             is_completed,
         })
+    }
+
+    fn check_extra_op(
+        &mut self,
+        key: &Key,
+        mutation_type: MutationType,
+        write: Option<Write>,
+    ) -> Result<()> {
+        use crate::storage::mvcc::reader::seek_for_valid_write;
+
+        if self.extra_op == ExtraOp::ReadOldValue
+            && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
+        {
+            let old_value = if let Some(w) = write {
+                // If write is Rollback or Lock, seek for valid write record.
+                if w.write_type == WriteType::Rollback || w.write_type == WriteType::Lock {
+                    let write_cursor = self.reader.write_cursor.as_mut().unwrap();
+                    // Skip the current write record.
+                    write_cursor.next(&mut self.reader.statistics.write);
+                    let valid_write = seek_for_valid_write(
+                        write_cursor,
+                        key,
+                        self.start_ts,
+                        &mut self.reader.statistics,
+                    )?;
+                    valid_write.map(|w| (w.short_value, w.start_ts))
+                } else {
+                    Some((w.short_value, w.start_ts))
+                }
+            } else {
+                None
+            };
+            // If write is None or cannot find a previously valid write record.
+            self.writes
+                .extra
+                .add_old_value(key.clone().append_ts(self.start_ts), old_value);
+        }
+        Ok(())
     }
 }
 

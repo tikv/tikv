@@ -19,7 +19,7 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
 };
 use crate::storage::mvcc::{
     check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
@@ -356,7 +356,7 @@ impl<E: Engine> GcRunner<E> {
         if !modifies.is_empty() {
             self.refresh_cfg();
             self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, modifies)?;
+            self.engine.write(ctx, WriteData::with_modifies(modifies))?;
         }
         Ok(next_scan_key)
     }
@@ -958,7 +958,7 @@ mod tests {
         fn async_write(
             &self,
             ctx: &Context,
-            mut batch: Vec<Modify>,
+            mut batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
             batch.iter_mut().for_each(|modify| match modify {

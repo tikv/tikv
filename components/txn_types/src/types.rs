@@ -6,6 +6,7 @@ use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::collections::HashMap;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -224,6 +225,15 @@ impl Display for Key {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum MutationType {
+    Put,
+    Delete,
+    Lock,
+    Insert,
+    Other,
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -251,6 +261,16 @@ impl Mutation {
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
             Mutation::CheckNotExists(ref key) => key,
+        }
+    }
+
+    pub fn mutation_type(&self) -> MutationType {
+        match self {
+            Mutation::Put(_) => MutationType::Put,
+            Mutation::Delete(_) => MutationType::Delete,
+            Mutation::Lock(_) => MutationType::Lock,
+            Mutation::Insert(_) => MutationType::Insert,
+            _ => MutationType::Other,
         }
     }
 
@@ -289,6 +309,46 @@ impl From<kvrpcpb::Mutation> for Mutation {
             kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
         }
+    }
+}
+
+// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
+// key with current ts -> (short value of the prev txn, start ts of the prev txn).
+// the value is None when the mutation is `Insert`.
+pub type OldValues = HashMap<Key, Option<(Option<Value>, TimeStamp)>>;
+
+// Extra data fields filled by kvrpcpb::ExtraOp.
+#[derive(Default, Debug, Clone)]
+pub struct TxnExtra {
+    old_values: Option<OldValues>,
+}
+
+impl TxnExtra {
+    pub fn add_old_value(&mut self, key: Key, value: Option<(Option<Value>, TimeStamp)>) {
+        let old_values = match self.old_values.as_mut() {
+            Some(o) => o,
+            None => {
+                self.old_values = Some(HashMap::default());
+                self.old_values.as_mut().unwrap()
+            }
+        };
+        old_values.insert(key, value);
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        self.old_values.is_none()
+    }
+
+    pub fn append(&mut self, other: &mut Self) {
+        if let Some(old_values) = other.old_values.as_mut() {
+            for (k, v) in old_values.drain() {
+                self.add_old_value(k, v)
+            }
+        }
+    }
+
+    pub fn mut_old_values(&mut self) -> Option<&mut OldValues> {
+        self.old_values.as_mut()
     }
 }
 
