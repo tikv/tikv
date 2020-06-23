@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use smallvec::SmallVec;
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
