@@ -5,7 +5,7 @@ mod forward;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use txn_types::{Key, TimeStamp, TsSet, Value};
+use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
@@ -363,19 +363,16 @@ pub fn has_data_in_range<S: Snapshot>(
     Ok(false)
 }
 
-pub fn seek_for_valid_value<I>(
+pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
-    default_cursor: Option<&mut Cursor<I>>,
     user_key: &Key,
     after_ts: TimeStamp,
     statistics: &mut Statistics,
-) -> Result<Option<Value>>
+) -> Result<Option<Write>>
 where
     I: Iterator,
 {
-    use txn_types::{WriteRef, WriteType};
-
-    let mut value = None;
+    let mut ret = None;
     while write_cursor.valid()?
         && Key::is_user_key_eq(
             write_cursor.key(&mut statistics.write),
@@ -388,30 +385,40 @@ where
         );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         match write_ref.write_type {
-            WriteType::Put => {
-                // Read the value of the write record.
-                value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
-                    Some(v)
-                } else if let Some(default_cursor) = default_cursor {
-                    Some(near_load_data_by_write(
-                        default_cursor,
-                        user_key,
-                        write_ref.start_ts,
-                        statistics,
-                    )?)
-                } else {
-                    None
-                };
+            WriteType::Put | WriteType::Delete => {
+                ret = Some(write_ref.to_owned());
                 break;
             }
-            WriteType::Delete => break,
             WriteType::Lock | WriteType::Rollback => {
                 // Move to the next write record.
                 write_cursor.next(&mut statistics.write);
             }
         }
     }
-    Ok(value)
+    Ok(ret)
+}
+
+pub fn seek_for_valid_value<I>(
+    write_cursor: &mut Cursor<I>,
+    default_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>>
+where
+    I: Iterator,
+{
+    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+        if write.write_type == WriteType::Put {
+            let value = if let Some(v) = write.short_value {
+                v
+            } else {
+                near_load_data_by_write(default_cursor, user_key, write.start_ts, statistics)?
+            };
+            return Ok(Some(value));
+        }
+    };
+    Ok(None)
 }
 
 #[cfg(test)]

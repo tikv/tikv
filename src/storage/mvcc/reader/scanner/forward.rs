@@ -608,7 +608,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 // Seek for the last valid committed here.
                 super::seek_for_valid_value(
                     &mut cursors.write,
-                    cursors.default.as_mut(),
+                    cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     lock.ts,
                     statistics,
@@ -700,7 +700,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             {
                 super::seek_for_valid_value(
                     &mut cursors.write,
-                    cursors.default.as_mut(),
+                    cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     start_ts,
                     statistics,
