@@ -569,6 +569,50 @@ impl DeltaEntryPolicy {
     }
 }
 
+fn seek_for_valid_value<S: Snapshot>(
+    cursors: &mut Cursors<S>,
+    user_key: &Key,
+    before_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>> {
+    let mut value = None;
+    while cursors.write.valid()?
+        && Key::is_user_key_eq(
+            cursors.write.key(&mut statistics.write),
+            user_key.as_encoded(),
+        )
+    {
+        assert_ge!(
+            before_ts,
+            Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
+        );
+        let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+        match write_ref.write_type {
+            WriteType::Put => {
+                // Read the value of the write record.
+                value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
+                    Some(v)
+                } else {
+                    let default_cursor = cursors.default.as_mut().unwrap();
+                    Some(super::near_load_data_by_write(
+                        default_cursor,
+                        user_key,
+                        write_ref.start_ts,
+                        statistics,
+                    )?)
+                };
+                break;
+            }
+            WriteType::Delete => break,
+            WriteType::Lock | WriteType::Rollback => {
+                // Move to the next write record.
+                cursors.write.next(&mut statistics.write);
+            }
+        }
+    }
+    Ok(value)
+}
+
 impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     type Output = TxnEntry;
 
@@ -580,8 +624,8 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         // TODO: Skip pessimistic locks.
-        let lock_value = cursors.lock.value(&mut statistics.lock);
-        let lock = Lock::parse(lock_value)?;
+        let lock_value = cursors.lock.value(&mut statistics.lock).to_owned();
+        let lock = Lock::parse(&lock_value)?;
         let result = if lock.ts > cfg.ts {
             Ok(HandleRes::Skip(current_user_key))
         } else {
@@ -601,51 +645,19 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             } else {
                 Ok((vec![], vec![]))
             };
-            let mut old_value = None;
-            if self.extra_op == ExtraOp::ReadOldValue
+            let old_value = if self.extra_op == ExtraOp::ReadOldValue
                 && (lock.lock_type == LockType::Put || lock.lock_type == LockType::Delete)
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                while cursors.write.valid()?
-                    && Key::is_user_key_eq(
-                        cursors.write.key(&mut statistics.write),
-                        current_user_key.as_encoded(),
-                    )
-                {
-                    assert_ge!(
-                        lock.ts,
-                        Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
-                    );
-                    let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-                    match write_ref.write_type {
-                        WriteType::Put => {
-                            // Read the value of the write record.
-                            old_value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
-                                Some(v)
-                            } else {
-                                let default_cursor = cursors.default.as_mut().unwrap();
-                                Some(super::near_load_data_by_write(
-                                    default_cursor,
-                                    &current_user_key,
-                                    lock.ts,
-                                    statistics,
-                                )?)
-                            };
-                            break;
-                        }
-                        WriteType::Delete => break,
-                        WriteType::Lock | WriteType::Rollback => {
-                            // Move to the next write record.
-                            cursors.write.next(&mut statistics.write);
-                        }
-                    }
-                }
-            }
+                seek_for_valid_value(cursors, &current_user_key, lock.ts, statistics)?
+            } else {
+                None
+            };
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
-                    lock: (current_user_key.into_encoded(), lock_value.to_owned()),
+                    lock: (current_user_key.into_encoded(), lock_value),
                     old_value,
                 })
             })
@@ -721,38 +733,13 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             // Move to the next write record early for getting the old value.
             cursors.write.next(&mut statistics.write);
 
-            let mut old_value = None;
-            if self.extra_op == ExtraOp::ReadOldValue
+            let old_value = if self.extra_op == ExtraOp::ReadOldValue
                 && (write_type == WriteType::Put || write_type == WriteType::Delete)
             {
-                while cursors.write.valid()?
-                    && Key::is_user_key_eq(
-                        cursors.write.key(&mut statistics.write),
-                        current_user_key.as_encoded(),
-                    )
-                {
-                    let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-                    // Skip the Rollback and Lock write record.
-                    if write_ref.write_type == WriteType::Put
-                        || write_ref.write_type == WriteType::Delete
-                    {
-                        old_value =
-                            if write_type == WriteType::Put && write_ref.short_value.is_none() {
-                                let default_cursor = cursors.default.as_mut().unwrap();
-                                Some(super::near_load_data_by_write(
-                                    default_cursor,
-                                    &current_user_key,
-                                    start_ts,
-                                    statistics,
-                                )?)
-                            } else {
-                                write_ref.short_value.map(|v| v.to_vec())
-                            };
-                        break;
-                    }
-                    cursors.write.next(&mut statistics.write);
-                }
-            }
+                seek_for_valid_value(cursors, &current_user_key, start_ts, statistics)?
+            } else {
+                None
+            };
 
             let res = Ok(HandleRes::Return(TxnEntry::Commit {
                 default,
