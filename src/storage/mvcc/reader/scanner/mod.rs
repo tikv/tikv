@@ -363,6 +363,9 @@ pub fn has_data_in_range<S: Snapshot>(
     Ok(false)
 }
 
+/// Seek for the next valid (write type == Put or Delete) write record.
+/// The write cursor must indicate the first data key of the user key.
+/// Return None if cannot find any valid write record.
 pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
@@ -398,6 +401,9 @@ where
     Ok(ret)
 }
 
+/// Seek for the last written value.
+/// The write cursor must indicate the first data key of the user key.
+/// Return None if cannot find any valid write record or found a delete record.
 pub fn seek_for_valid_value<I>(
     write_cursor: &mut Cursor<I>,
     default_cursor: &mut Cursor<I>,
