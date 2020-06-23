@@ -363,6 +363,57 @@ pub fn has_data_in_range<S: Snapshot>(
     Ok(false)
 }
 
+fn seek_for_valid_value<I>(
+    write_cursor: &mut Cursor<I>,
+    default_cursor: Option<&mut Cursor<I>>,
+    user_key: &Key,
+    after_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<Option<Value>>
+where
+    I: Iterator,
+{
+    use txn_types::{WriteRef, WriteType};
+
+    let mut value = None;
+    while write_cursor.valid()?
+        && Key::is_user_key_eq(
+            write_cursor.key(&mut statistics.write),
+            user_key.as_encoded(),
+        )
+    {
+        assert_ge!(
+            after_ts,
+            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+        );
+        let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        match write_ref.write_type {
+            WriteType::Put => {
+                // Read the value of the write record.
+                value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
+                    Some(v)
+                } else if let Some(default_cursor) = default_cursor {
+                    Some(near_load_data_by_write(
+                        default_cursor,
+                        user_key,
+                        write_ref.start_ts,
+                        statistics,
+                    )?)
+                } else {
+                    None
+                };
+                break;
+            }
+            WriteType::Delete => break,
+            WriteType::Lock | WriteType::Rollback => {
+                // Move to the next write record.
+                write_cursor.next(&mut statistics.write);
+            }
+        }
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

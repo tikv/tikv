@@ -569,50 +569,6 @@ impl DeltaEntryPolicy {
     }
 }
 
-fn seek_for_valid_value<S: Snapshot>(
-    cursors: &mut Cursors<S>,
-    user_key: &Key,
-    after_ts: TimeStamp,
-    statistics: &mut Statistics,
-) -> Result<Option<Value>> {
-    let mut value = None;
-    while cursors.write.valid()?
-        && Key::is_user_key_eq(
-            cursors.write.key(&mut statistics.write),
-            user_key.as_encoded(),
-        )
-    {
-        assert_ge!(
-            after_ts,
-            Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
-        );
-        let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-        match write_ref.write_type {
-            WriteType::Put => {
-                // Read the value of the write record.
-                value = if let Some(v) = write_ref.short_value.map(|v| v.to_vec()) {
-                    Some(v)
-                } else {
-                    let default_cursor = cursors.default.as_mut().unwrap();
-                    Some(super::near_load_data_by_write(
-                        default_cursor,
-                        user_key,
-                        write_ref.start_ts,
-                        statistics,
-                    )?)
-                };
-                break;
-            }
-            WriteType::Delete => break,
-            WriteType::Lock | WriteType::Rollback => {
-                // Move to the next write record.
-                cursors.write.next(&mut statistics.write);
-            }
-        }
-    }
-    Ok(value)
-}
-
 impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     type Output = TxnEntry;
 
@@ -650,7 +606,13 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                seek_for_valid_value(cursors, &current_user_key, lock.ts, statistics)?
+                super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut(),
+                    &current_user_key,
+                    lock.ts,
+                    statistics,
+                )?
             } else {
                 None
             };
@@ -696,7 +658,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                 )
             };
 
-            if write_type == WriteType::Rollback {
+            if write_type == WriteType::Rollback || write_type == WriteType::Lock {
                 // Skip it and try the next record.
                 cursors.write.next(&mut statistics.write);
                 if !cursors.write.valid()? {
@@ -736,7 +698,13 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             let old_value = if self.extra_op == ExtraOp::ReadOldValue
                 && (write_type == WriteType::Put || write_type == WriteType::Delete)
             {
-                seek_for_valid_value(cursors, &current_user_key, start_ts, statistics)?
+                super::seek_for_valid_value(
+                    &mut cursors.write,
+                    cursors.default.as_mut(),
+                    &current_user_key,
+                    start_ts,
+                    statistics,
+                )?
             } else {
                 None
             };
@@ -1927,7 +1895,7 @@ mod delta_entry_tests {
                         }
 
                         // Rollbacks are ignored.
-                        if *write_type == WriteType::Rollback {
+                        if *write_type == WriteType::Rollback || *write_type == WriteType::Lock {
                             continue;
                         }
 
@@ -2050,7 +2018,7 @@ mod delta_entry_tests {
                 assert_eq!(
                     actual[i], expected[i],
                     "item {} not match: expected {:?}, but got {:?}",
-                    i, actual[i], expected[i]
+                    i, &expected[i], &actual[i]
                 );
             }
         };
