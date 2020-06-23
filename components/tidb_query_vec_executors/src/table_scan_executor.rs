@@ -61,7 +61,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_indices.push(index);
             } else {
-                is_key_only = false;
+                if !primary_column_ids.contains(&ci.get_column_id()) {
+                    is_key_only = false;
+                }
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
