@@ -607,10 +607,12 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             {
                 // When meet a lock, the write cursor must indicate the same user key.
                 // Seek for the last valid committed here.
-                while Key::is_user_key_eq(
-                    cursors.write.key(&mut statistics.write),
-                    current_user_key.as_encoded(),
-                ) {
+                while cursors.write.valid()?
+                    && Key::is_user_key_eq(
+                        cursors.write.key(&mut statistics.write),
+                        current_user_key.as_encoded(),
+                    )
+                {
                     assert_ge!(
                         lock.ts,
                         Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
@@ -723,15 +725,12 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             if self.extra_op == ExtraOp::ReadOldValue
                 && (write_type == WriteType::Put || write_type == WriteType::Delete)
             {
-                loop {
-                    if !cursors.write.valid()?
-                        || !Key::is_user_key_eq(
-                            cursors.write.key(&mut statistics.write),
-                            current_user_key.as_encoded(),
-                        )
-                    {
-                        break;
-                    }
+                while cursors.write.valid()?
+                    && Key::is_user_key_eq(
+                        cursors.write.key(&mut statistics.write),
+                        current_user_key.as_encoded(),
+                    )
+                {
                     let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
                     // Skip the Rollback and Lock write record.
                     if write_ref.write_type == WriteType::Put
