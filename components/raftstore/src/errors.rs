@@ -162,6 +162,12 @@ impl std::error::Error for Error {
     }
 }
 
+impl From<ErrorInner> for Error {
+    fn from(e: ErrorInner) -> Error {
+        return Error(Box::new(e))
+    }
+}
+
 impl<T: Into<ErrorInner>> From<T> for Error {
     #[inline]
     default fn from(err: T) -> Self {
