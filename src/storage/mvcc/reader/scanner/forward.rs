@@ -572,7 +572,7 @@ impl DeltaEntryPolicy {
 fn seek_for_valid_value<S: Snapshot>(
     cursors: &mut Cursors<S>,
     user_key: &Key,
-    before_ts: TimeStamp,
+    after_ts: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Option<Value>> {
     let mut value = None;
@@ -583,7 +583,7 @@ fn seek_for_valid_value<S: Snapshot>(
         )
     {
         assert_ge!(
-            before_ts,
+            after_ts,
             Key::decode_ts_from(cursors.write.key(&mut statistics.write))?
         );
         let write_ref = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
