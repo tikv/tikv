@@ -656,7 +656,12 @@ macro_rules! report_perf_context {
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
             observe_perf_context_type!($ctx, $metric, write_thread_wait);
-            observe_perf_context_type!($ctx, perf_context, $metric, write_scheduling_flushes_compactions_time);
+            observe_perf_context_type!(
+                $ctx,
+                perf_context,
+                $metric,
+                write_scheduling_flushes_compactions_time
+            );
             observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
             observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
         }
