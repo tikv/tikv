@@ -2,6 +2,7 @@
 
 use smallvec::SmallVec;
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
@@ -48,6 +49,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
 
+        let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -61,7 +63,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_indices.push(index);
             } else {
-                if !primary_column_ids.contains(&ci.get_column_id()) {
+                if !primary_column_ids_set.contains(&ci.get_column_id()) {
                     is_key_only = false;
                 }
                 column_id_index.insert(ci.get_column_id(), index);
