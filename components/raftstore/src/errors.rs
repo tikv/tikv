@@ -164,7 +164,7 @@ impl std::error::Error for Error {
 
 impl From<ErrorInner> for Error {
     fn from(e: ErrorInner) -> Error {
-        return Error(Box::new(e))
+        Error(Box::new(e))
     }
 }
 
