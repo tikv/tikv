@@ -363,7 +363,7 @@ pub fn has_data_in_range<S: Snapshot>(
     Ok(false)
 }
 
-fn seek_for_valid_value<I>(
+pub fn seek_for_valid_value<I>(
     write_cursor: &mut Cursor<I>,
     default_cursor: Option<&mut Cursor<I>>,
     user_key: &Key,
