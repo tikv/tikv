@@ -150,10 +150,14 @@ impl VectorValue {
     /// Panics if index is out of range.
     #[inline]
     pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
-            }
+        match self {
+            VectorValue::Int(v) => ScalarValueRef::Int(v[index].as_ref()),
+            VectorValue::Duration(v) => ScalarValueRef::Duration(v[index].as_ref()),
+            VectorValue::DateTime(v) => ScalarValueRef::DateTime(v[index].as_ref()),
+            VectorValue::Real(v) => ScalarValueRef::Real(v[index].as_ref()),
+            VectorValue::Decimal(v) => ScalarValueRef::Decimal(v[index].as_ref()),
+            VectorValue::Bytes(v) => ScalarValueRef::Bytes(v[index].as_deref()),
+            VectorValue::Json(v) => ScalarValueRef::Json(v[index].as_ref().map(|x| x.as_ref())),
         }
     }
 
@@ -344,7 +348,7 @@ impl VectorValue {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_json(val)?;
+                        output.write_evaluable_datum_json(val.as_ref())?;
                     }
                 }
                 Ok(())
@@ -440,7 +444,7 @@ impl_as_slice! { Json, as_json_slice }
 
 /// Additional `VectorValue` methods available via generics. These methods support different
 /// concrete types but have same names and should be specified via the generic parameter type.
-pub trait VectorValueExt<T: Evaluable> {
+pub trait VectorValueExt<T: EvaluableRet> {
     /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);
 }

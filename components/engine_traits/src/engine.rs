@@ -9,6 +9,7 @@ use crate::*;
 // Consider moving everything into other traits and making KvEngine essentially
 // a trait typedef.
 
+/// A TiKV key-value store
 pub trait KvEngine:
     Peekable
     + SyncMutable
@@ -28,17 +29,27 @@ pub trait KvEngine:
     + Debug
     + 'static
 {
+    /// A consistent read-only snapshot of the database
     type Snapshot: Snapshot;
 
+    /// Create a snapshot
     fn snapshot(&self) -> Self::Snapshot;
+
+    /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;
 
-    /// Flush out metrics. `instance` indicates its name.
+    /// Flush metrics to prometheus
+    ///
+    /// `instance` is the label of the metric to flush.
+    ///
     /// TODO: remove `shared_block_cache`.
     fn flush_metrics(&self, _instance: &str, _shared_block_cache: bool) {}
-    /// Reset internal statistics.
+
+    /// Reset internal statistics
     fn reset_statistics(&self) {}
 
+    /// Cast to a concrete engine type
+    ///
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
