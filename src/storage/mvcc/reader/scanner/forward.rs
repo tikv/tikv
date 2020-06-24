@@ -610,7 +610,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    lock.ts,
+                    std::cmp::max(lock.ts, lock.for_update_ts),
                     statistics,
                 )?
             } else {
@@ -2061,12 +2061,13 @@ mod delta_entry_tests {
             must_rollback(&engine, b"b", ts);
         }
 
-        // Generate delete for [b] at 9.
-        must_prewrite_delete(&engine, b"b", b"b", 9);
-        must_commit(&engine, b"b", 9, 9);
+        // Generate delete for [b] at 10.
+        must_prewrite_delete(&engine, b"b", b"b", 10);
+        must_commit(&engine, b"b", 10, 10);
 
-        // Generate put for [b] at 10.
-        must_prewrite_put(&engine, b"b", b"b_10", b"b", 10);
+        // Generate put for [b] at 15.
+        must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
+        must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, true);
 
         let entry_a_1 = EntryBuilder::default()
             .key(b"a")
@@ -2093,17 +2094,18 @@ mod delta_entry_tests {
             .start_ts(2.into())
             .commit_ts(2.into())
             .build_commit(WriteType::Put, true);
-        let entry_b_9 = EntryBuilder::default()
-            .key(b"b")
-            .start_ts(9.into())
-            .commit_ts(9.into())
-            .old_value(b"b_2")
-            .build_commit(WriteType::Delete, true);
         let entry_b_10 = EntryBuilder::default()
             .key(b"b")
-            .value(b"b_10")
-            .primary(b"b")
             .start_ts(10.into())
+            .commit_ts(10.into())
+            .old_value(b"b_2")
+            .build_commit(WriteType::Delete, true);
+        let entry_b_15 = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_15")
+            .primary(b"b")
+            .start_ts(9.into())
+            .for_update_ts(15.into())
             .build_prewrite(LockType::Put, true);
 
         let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
@@ -2119,19 +2121,19 @@ mod delta_entry_tests {
             assert!(last.is_none(), "{:?}", last);
         };
 
-        // Scanning entries in (10, 15] should get all prewrites
-        check(10, vec![&entry_a_5, &entry_b_10]);
-        // Scanning entries include delete in (7, 10] should get a_5, b_9 and b_10
-        check(7, vec![&entry_a_5, &entry_b_10, &entry_b_9]);
-        // Scanning entries in (0, 10] should get a_1, a_3, a_5, b_2, b_9, and b_10
+        // Scanning entries in (10, max] should get all prewrites
+        check(10, vec![&entry_a_5, &entry_b_15]);
+        // Scanning entries include delete in (7, max] should get a_5, b_9 and b_10
+        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10]);
+        // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_9, and b_10
         check(
             0,
             vec![
                 &entry_a_5,
                 &entry_a_3,
                 &entry_a_1,
+                &entry_b_15,
                 &entry_b_10,
-                &entry_b_9,
                 &entry_b_2,
             ],
         );
