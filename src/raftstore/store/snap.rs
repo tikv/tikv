@@ -16,6 +16,7 @@ use std::{error, result, str, thread, time, u64};
 use engine::rocks::util::{
     get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
 };
+<<<<<<< HEAD:src/raftstore/store/snap.rs
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::{
     self, CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter,
@@ -23,6 +24,11 @@ use engine::rocks::{
 };
 use engine::Iterable;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+=======
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{EncryptionKeyManager, KvEngine};
+>>>>>>> 8caa025... raftstore: do not send store heartbeat when snapshot received (#8123):components/raftstore/src/store/snap.rs
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::metapb::Region;
@@ -32,12 +38,19 @@ use protobuf::Message;
 use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
+<<<<<<< HEAD:src/raftstore/store/snap.rs
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+=======
+use crate::errors::Error as RaftStoreError;
+use crate::store::RaftRouter;
+use crate::Result as RaftStoreResult;
+use keys::{enc_end_key, enc_start_key};
+>>>>>>> 8caa025... raftstore: do not send store heartbeat when snapshot received (#8123):components/raftstore/src/store/snap.rs
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::{duration_to_sec, Limiter};
@@ -1131,6 +1144,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
+<<<<<<< HEAD:src/raftstore/store/snap.rs
 fn notify_stats(ch: Option<&RaftRouter>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
@@ -1142,6 +1156,8 @@ fn notify_stats(ch: Option<&RaftRouter>) {
     }
 }
 
+=======
+>>>>>>> 8caa025... raftstore: do not send store heartbeat when snapshot received (#8123):components/raftstore/src/store/snap.rs
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
@@ -1376,8 +1392,6 @@ impl SnapManager {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1399,7 +1413,6 @@ impl SnapManager {
             core.registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(
