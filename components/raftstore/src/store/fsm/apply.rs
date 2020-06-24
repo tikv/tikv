@@ -2284,6 +2284,7 @@ where
     pub committed_term: u64,
     pub cbs: Vec<Proposal<S>>,
     entries_mem_size: i64,
+    entries_count: i64,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2300,6 +2301,8 @@ impl<S: Snapshot> Apply<S> {
         let entries_mem_size =
             (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
         APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
+        let entries_count = entries.len() as i64;
+        APPLY_PENDING_ENTRIES_GAUGE.add(entries_count);
         Apply {
             peer_id,
             region_id,
@@ -2310,6 +2313,7 @@ impl<S: Snapshot> Apply<S> {
             committed_term,
             cbs,
             entries_mem_size,
+            entries_count,
         }
     }
 }
@@ -2317,6 +2321,7 @@ impl<S: Snapshot> Apply<S> {
 impl<S: Snapshot> Drop for Apply<S> {
     fn drop(&mut self) {
         APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
+        APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
     }
 }
 
@@ -2371,6 +2376,7 @@ where
 pub struct Destroy {
     region_id: u64,
     async_remove: bool,
+    merge_from_snapshot: bool,
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2520,10 +2526,11 @@ where
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool) -> Msg<E> {
+    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<E> {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
+            merge_from_snapshot,
         })
     }
 }
@@ -2593,6 +2600,8 @@ where
         region_id: u64,
         // ID of peer that has been destroyed.
         peer_id: u64,
+        // Whether destroy request is from its target region's snapshot
+        merge_from_snapshot: bool,
     },
 }
 
@@ -2747,6 +2756,9 @@ where
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
+        if d.merge_from_snapshot {
+            assert_eq!(self.delegate.stopped, false);
+        }
         if !self.delegate.stopped {
             self.destroy(ctx);
             if d.async_remove {
@@ -2756,6 +2768,7 @@ where
                         res: TaskRes::Destroy {
                             region_id: self.delegate.region_id(),
                             peer_id: self.delegate.id,
+                            merge_from_snapshot: d.merge_from_snapshot,
                         },
                     },
                 );
@@ -3679,10 +3692,12 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2, true));
+        router.schedule_task(2, Msg::destroy(2, true, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
+                TaskRes::Destroy {
+                    region_id, peer_id, ..
+                } => (region_id, peer_id),
                 e => panic!("expected destroy result, but got {:?}", e),
             },
             e => panic!("expected destroy result, but got {:?}", e),
