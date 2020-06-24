@@ -73,6 +73,13 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        // `handle_indices` and `primary_column_ids` mutexes.
+        if !handle_indices.is_empty() && !primary_column_ids.is_empty() {
+            return Err(other_err!(
+                "`handle_indices` and `primary_column_ids` should mutexes"
+            ));
+        }
+
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -301,13 +308,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
-
-        // `handle_indices` and `primary_column_ids` mutexes.
-        if !self.handle_indices.is_empty() && !self.primary_column_ids.is_empty() {
-            return Err(other_err!(
-                "`handle_indices` and `primary_column_ids` should mutexes"
-            ));
-        }
 
         if !self.handle_indices.is_empty() {
             // In this case, An int handle is expected.
