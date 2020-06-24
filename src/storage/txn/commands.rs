@@ -242,20 +242,26 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 pub trait CommandExt {
     fn tag(&self) -> metrics::CommandKind;
+
     fn incr_cmd_metric(&self);
+
     fn ts(&self) -> TimeStamp {
         TimeStamp::zero()
     }
+
     fn readonly(&self) -> bool {
         false
     }
+
     fn is_sys_cmd(&self) -> bool {
         false
     }
+
     fn requires_pessimistic_txn(&self) -> bool {
         false
     }
-    fn can_pipelined(&self) -> bool {
+
+    fn can_be_pipelined(&self) -> bool {
         false
     }
 }
@@ -311,34 +317,10 @@ macro_rules! tag {
     };
 }
 
-macro_rules! readonly {
-    ($readonly: expr) => {
-        fn readonly(&self) -> bool {
-            $readonly
-        }
-    };
-}
-
-macro_rules! is_sys_cmd {
-    ($is_sys_cmd: expr) => {
-        fn is_sys_cmd(&self) -> bool {
-            $is_sys_cmd
-        }
-    };
-}
-
-macro_rules! requires_pessimistic_txn {
-    ($requires_pessimistic_txn: expr) => {
-        fn requires_pessimistic_txn(&self) -> bool {
-            $requires_pessimistic_txn
-        }
-    };
-}
-
-macro_rules! can_pipelined {
-    ($can_pipelined: expr) => {
-        fn can_pipelined(&self) -> bool {
-            $can_pipelined
+macro_rules! command_method {
+    ($name:ident, $return_ty: ty, $value: expr) => {
+        fn $name(&self) -> $return_ty {
+            $value
         }
     };
 }
@@ -452,7 +434,7 @@ command! {
 impl CommandExt for PrewritePessimistic {
     tag!(prewrite);
     ts!(start_ts);
-    requires_pessimistic_txn!(true);
+    command_method!(requires_pessimistic_txn, bool, true);
 }
 
 command! {
@@ -483,8 +465,8 @@ command! {
 impl CommandExt for AcquirePessimisticLock {
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    requires_pessimistic_txn!(true);
-    can_pipelined!(true);
+    command_method!(requires_pessimistic_txn, bool, true);
+    command_method!(can_be_pipelined, bool, true);
 }
 
 command! {
@@ -565,7 +547,7 @@ command! {
 impl CommandExt for PessimisticRollback {
     tag!(pessimistic_rollback);
     ts!(start_ts);
-    requires_pessimistic_txn!(true);
+    command_method!(requires_pessimistic_txn, bool, true);
 }
 
 command! {
@@ -640,8 +622,8 @@ command! {
 impl CommandExt for ScanLock {
     tag!(scan_lock);
     ts!(max_ts);
-    readonly!(true);
-    is_sys_cmd!(true);
+    command_method!(readonly, bool, true);
+    command_method!(is_sys_cmd, bool, true);
 }
 
 command! {
@@ -681,7 +663,7 @@ impl CommandExt for ResolveLock {
         self.key_locks.is_empty()
     }
 
-    is_sys_cmd!(true);
+    command_method!(is_sys_cmd, bool, true);
 }
 
 command! {
@@ -701,7 +683,7 @@ command! {
 impl CommandExt for ResolveLockLite {
     tag!(resolve_lock_lite);
     ts!(start_ts);
-    is_sys_cmd!(true);
+    command_method!(is_sys_cmd, bool, true);
 }
 
 command! {
@@ -733,7 +715,7 @@ command! {
 
 impl CommandExt for MvccByKey {
     tag!(key_mvcc);
-    readonly!(true);
+    command_method!(readonly, bool, true);
 }
 
 command! {
@@ -748,7 +730,7 @@ command! {
 impl CommandExt for MvccByStartTs {
     tag!(start_ts_mvcc);
     ts!(start_ts);
-    readonly!(true);
+    command_method!(readonly, bool, true);
 }
 
 pub enum CommandKind {
@@ -941,8 +923,8 @@ impl Command {
         self.command_ext().requires_pessimistic_txn()
     }
 
-    pub fn can_pipelined(&self) -> bool {
-        self.command_ext().can_pipelined()
+    pub fn can_be_pipelined(&self) -> bool {
+        self.command_ext().can_be_pipelined()
     }
 }
 
