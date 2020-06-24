@@ -303,7 +303,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let mut decoded_columns = 0;
 
         // `handle_indices` and `primary_column_ids` mutexes.
-        assert!(self.handle_indices.is_empty() || self.primary_column_ids.is_empty());
+        if !self.handle_indices.is_empty() && !self.primary_column_ids.is_empty() {
+            return Err(other_err!(
+                "`handle_indices` and `primary_column_ids` should mutexes"
+            ));
+        }
 
         if !self.handle_indices.is_empty() {
             // In this case, An int handle is expected.
