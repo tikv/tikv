@@ -484,7 +484,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
-                StoreMsg::SnapshotStats => self.store_heartbeat_pd(),
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
                 }
