@@ -182,7 +182,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut col_len = cols_info.len();
         let vec_cols_info = if cols_info[0].get_pk_handle() {
             col_len -= 1;
-            cols_info.to_vec()[1..col_len + 1].to_vec()
+            cols_info.to_vec()[1..].to_vec()
         } else {
             cols_info.to_vec()
         };
