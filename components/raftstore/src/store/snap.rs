@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -29,7 +29,7 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::{RaftRouter, StoreMsg};
+use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
@@ -1092,6 +1092,7 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
+<<<<<<< HEAD
 fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
@@ -1103,6 +1104,8 @@ fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
     }
 }
 
+=======
+>>>>>>> 8caa025... raftstore: do not send store heartbeat when snapshot received (#8123)
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
@@ -1344,8 +1347,6 @@ impl SnapManager {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1367,7 +1368,6 @@ impl SnapManager {
             registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(

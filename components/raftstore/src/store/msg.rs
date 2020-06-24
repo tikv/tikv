@@ -347,8 +347,6 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
 
 pub enum StoreMsg {
     RaftMessage(RaftMessage),
-    // For snapshot stats.
-    SnapshotStats,
 
     ValidateSSTResult {
         invalid_ssts: Vec<SstMeta>,
@@ -380,7 +378,6 @@ impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
