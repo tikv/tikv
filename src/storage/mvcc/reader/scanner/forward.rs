@@ -2123,9 +2123,9 @@ mod delta_entry_tests {
 
         // Scanning entries in (10, max] should get all prewrites
         check(10, vec![&entry_a_5, &entry_b_15]);
-        // Scanning entries include delete in (7, max] should get a_5, b_9 and b_10
+        // Scanning entries include delete in (7, max] should get a_5, b_10 and b_15
         check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10]);
-        // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_9, and b_10
+        // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_10, and b_15
         check(
             0,
             vec![
