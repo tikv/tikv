@@ -122,7 +122,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
             use std::ops::Index;
 
             let batch = scanner.next_batch(1000);
+            println!("row size: {},col size: {}",batch.logical_rows.len(),batch.physical_columns.as_slice().len());
             is_drained = batch.is_drained?;
+            println!("is drained: {}",is_drained);
 
             for logical_row in batch.logical_rows {
                 let mut bytes = vec![];
