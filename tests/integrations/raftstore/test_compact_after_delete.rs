@@ -2,7 +2,7 @@
 
 use engine::rocks::Range;
 use engine_rocks::util::get_cf_handle;
-use engine_traits::{CF_WRITE, MiscExt};
+use engine_traits::{MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -71,7 +71,8 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
         let cf_handle = get_cf_handle(&engines.kv.as_inner(), CF_WRITE).unwrap();
         let approximate_size = engines
-            .kv.as_inner()
+            .kv
+            .as_inner()
             .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
         assert_eq!(approximate_size, 0);
     }

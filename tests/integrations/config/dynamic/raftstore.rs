@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{RocksSnapshot, RocksEngine};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -14,7 +14,7 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
-use engine_traits::{ALL_CFS, KvEngines};
+use engine_traits::{KvEngines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
@@ -51,7 +51,11 @@ fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
         .unwrap(),
     );
     let shared_block_cache = false;
-    KvEngines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db), shared_block_cache)
+    KvEngines::new(
+        RocksEngine::from_db(db),
+        RocksEngine::from_db(raft_db),
+        shared_block_cache,
+    )
 }
 
 fn start_raftstore(

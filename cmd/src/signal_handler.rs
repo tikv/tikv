@@ -4,7 +4,7 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
-    use engine_rocks::{RocksEngine};
+    use engine_rocks::RocksEngine;
     use engine_traits::{KvEngines, MiscExt};
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};

@@ -120,8 +120,8 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use engine_rocks::Compat;
     use engine_traits::KvEngines;
-    use engine_rocks::{Compat};
     use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]

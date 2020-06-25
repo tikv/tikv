@@ -732,10 +732,12 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine::rocks::{ColumnFamilyOptions};
-    use engine_traits::{KvEngines, KvEngine};
-    use engine_rocks::{RocksEngine};
-    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt, SyncMutable, MiscExt, CFHandleExt, CFNamesExt};
+    use engine::rocks::ColumnFamilyOptions;
+    use engine_rocks::RocksEngine;
+    use engine_traits::{
+        CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+    };
+    use engine_traits::{KvEngine, KvEngines};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -837,11 +839,7 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;
-        let engines = KvEngines::new(
-            engine.kv.clone(),
-            engine.raft.clone(),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines,
@@ -907,18 +905,19 @@ mod tests {
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    engine_rocks::util::get_cf_num_files_at_level(&engine.kv.as_inner(), cf.as_inner(), 0).unwrap(),
+                    engine_rocks::util::get_cf_num_files_at_level(
+                        &engine.kv.as_inner(),
+                        cf.as_inner(),
+                        0
+                    )
+                    .unwrap(),
                     u64::from(i) + 1
                 );
             }
         }
 
         let shared_block_cache = false;
-        let engines = KvEngines::new(
-            engine.kv.clone(),
-            engine.raft.clone(),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
@@ -1021,10 +1020,7 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        engine
-            .kv
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0
@@ -1066,10 +1062,7 @@ mod tests {
         );
 
         // compact all files to the bottomest level
-        engine
-            .kv
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0
@@ -1086,10 +1079,7 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        engine
-            .kv
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
             engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0

@@ -12,7 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{Peekable, KvEngines};
+use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -198,9 +198,7 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
-        let res = engines
-            .kv
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -295,7 +293,11 @@ where
         }
     }
 
-    fn bootstrap_cluster(&mut self, engines: &KvEngines<RocksEngine, RocksEngine>, first_region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &mut self,
+        engines: &KvEngines<RocksEngine, RocksEngine>,
+        first_region: metapb::Region,
+    ) -> Result<()> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {

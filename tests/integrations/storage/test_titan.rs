@@ -11,8 +11,8 @@ use engine_rocks::util::get_cf_handle;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
-    KvEngines, KvEngine,
-    CompactExt, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE,
+    CompactExt, KvEngine, KvEngines, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT,
+    CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
@@ -174,8 +174,13 @@ fn test_delete_files_in_range_for_titan() {
             .unwrap(),
         )),
         RocksEngine::from_db(Arc::new(
-            engine_rocks::raw_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
+            engine_rocks::raw_util::new_engine(
+                raft_path.to_str().unwrap(),
+                None,
+                &[CF_DEFAULT],
+                None,
+            )
+            .unwrap(),
         )),
         shared_block_cache,
     );

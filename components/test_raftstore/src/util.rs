@@ -22,10 +22,10 @@ use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine::rocks::DB;
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::encryption::get_env;
+use engine_rocks::RocksEngine;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksSnapshot};
-use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, Peekable, KvEngines};
+use engine_traits::{Iterable, KvEngines, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -84,11 +84,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 pub fn must_region_cleared(engine: &KvEngines<RocksEngine, RocksEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
-    let state: RegionLocalState = engine
-        .kv
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
@@ -474,7 +470,11 @@ pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksSnapshot>>,
     cfg: &TiKvConfig,
-) -> (KvEngines<RocksEngine, RocksEngine>, Option<Arc<DataKeyManager>>, TempDir) {
+) -> (
+    KvEngines<RocksEngine, RocksEngine>,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+) {
     let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let key_manager =
         DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
@@ -522,7 +522,11 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
-    let engines = KvEngines::new(RocksEngine::from_db(engine), RocksEngine::from_db(raft_engine), cache.is_some());
+    let engines = KvEngines::new(
+        RocksEngine::from_db(engine),
+        RocksEngine::from_db(raft_engine),
+        cache.is_some(),
+    );
     (engines, key_manager, dir)
 }
 

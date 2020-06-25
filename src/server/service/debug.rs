@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use engine_rocks::{RocksSnapshot, RocksEngine};
-use engine_traits::{MiscExt, KvEngines};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt};
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};

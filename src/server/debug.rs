@@ -12,9 +12,8 @@ use engine::{self};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    KvEngines,
-    IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, SeekKey, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable, SeekKey,
+    TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
 };
 use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
@@ -128,7 +127,10 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(engines: KvEngines<RocksEngine, RocksEngine>, cfg_controller: ConfigController) -> Debugger {
+    pub fn new(
+        engines: KvEngines<RocksEngine, RocksEngine>,
+        cfg_controller: ConfigController,
+    ) -> Debugger {
         Debugger {
             engines,
             cfg_controller,
@@ -192,10 +194,7 @@ impl Debugger {
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
         let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self
-            .engines
-            .raft
-            .get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state = box_try!(self
@@ -405,12 +404,15 @@ impl Debugger {
         let db = self.engines.kv.clone();
 
         v1!("Calculating split keys...");
-        let split_keys = divide_db(db.as_inner(), threads).unwrap().into_iter().map(|k| {
-            let k = Key::from_encoded(keys::origin_key(&k).to_vec())
-                .truncate_ts()
-                .unwrap();
-            k.as_encoded().clone()
-        });
+        let split_keys = divide_db(db.as_inner(), threads)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                let k = Key::from_encoded(keys::origin_key(&k).to_vec())
+                    .truncate_ts()
+                    .unwrap();
+                k.as_encoded().clone()
+            });
 
         let mut range_borders = vec![b"".to_vec()];
         range_borders.extend(split_keys);
@@ -433,7 +435,13 @@ impl Debugger {
                         hex::encode_upper(&end_key)
                     );
 
-                    recover_mvcc_for_range(db.as_inner(), &start_key, &end_key, read_only, thread_index)
+                    recover_mvcc_for_range(
+                        db.as_inner(),
+                        &start_key,
+                        &end_key,
+                        read_only,
+                        thread_index,
+                    )
                 })
                 .unwrap();
 
@@ -684,8 +692,7 @@ impl Debugger {
 
     pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
@@ -695,8 +702,7 @@ impl Debugger {
 
     pub fn get_cluster_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_cluster_id()),
@@ -733,8 +739,7 @@ impl Debugger {
 
         let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
 
-        let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region))
-        {
+        let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -1577,15 +1582,18 @@ mod tests {
         );
 
         let shared_block_cache = false;
-        let engines = KvEngines::new(RocksEngine::from_db(Arc::clone(&engine)), RocksEngine::from_db(engine), shared_block_cache);
+        let engines = KvEngines::new(
+            RocksEngine::from_db(Arc::clone(&engine)),
+            RocksEngine::from_db(engine),
+            shared_block_cache,
+        );
         Debugger::new(engines, ConfigController::default())
     }
 
     impl Debugger {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
-            db
-                .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
                 .map_err(|e| box_err!(e))
                 .and_then(|ident| match ident {
                     Some(ident) => Ok(ident),
@@ -1658,9 +1666,7 @@ mod tests {
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(42);
-        raft_engine
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
         assert_eq!(
             raft_engine
                 .get_msg::<RaftLocalState>(&raft_state_key)
@@ -1841,8 +1847,14 @@ mod tests {
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 3);
-        assert_eq!(get_region_state(engine.as_inner(), 1).take_region(), region_1);
-        assert_eq!(get_region_state(engine.as_inner(), 2).take_region(), region_2);
+        assert_eq!(
+            get_region_state(engine.as_inner(), 1).take_region(),
+            region_1
+        );
+        assert_eq!(
+            get_region_state(engine.as_inner(), 2).take_region(),
+            region_2
+        );
 
         // After set_region_tombstone success, all region should be adjusted.
         let target_regions = vec![target_region_1, target_region_2];
@@ -1989,9 +2001,7 @@ mod tests {
             mock_region_state(&mut wb2, 13, &[]);
         }
 
-        raft_engine
-            .write_opt(&wb1, &WriteOptions::new())
-            .unwrap();
+        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
         kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();

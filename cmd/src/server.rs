@@ -365,11 +365,8 @@ impl TiKVServer {
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(
-            engines.kv.clone(),
-            store_meta.clone(),
-            self.router.clone(),
-        );
+        let local_reader =
+            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -382,10 +379,7 @@ impl TiKVServer {
             Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(
-            raft_router.clone(),
-            engines.kv.clone(),
-        );
+        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
         self.engines = Some(Engines {
             engines,

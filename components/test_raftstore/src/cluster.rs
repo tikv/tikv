@@ -17,9 +17,11 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use encryption::DataKeyManager;
-use engine::{DB};
+use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngines, CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_RAFT, MiscExt};
+use engine_traits::{
+    CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -974,7 +976,8 @@ impl<T: Simulator> Cluster<T> {
             keys::region_meta_prefix(region_id + 1),
         );
         let mut kv_wb = self.engines[&store_id].kv.write_batch();
-        self.engines[&store_id].kv
+        self.engines[&store_id]
+            .kv
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
@@ -990,7 +993,8 @@ impl<T: Simulator> Cluster<T> {
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
-        self.engines[&store_id].kv
+        self.engines[&store_id]
+            .kv
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
@@ -1010,7 +1014,8 @@ impl<T: Simulator> Cluster<T> {
             keys::region_raft_prefix(region_id + 1),
         );
         let mut raft_wb = self.engines[&store_id].raft.write_batch();
-        self.engines[&store_id].raft
+        self.engines[&store_id]
+            .raft
             .scan(&raft_start, &raft_end, false, |k, _| {
                 raft_wb.delete(k).unwrap();
                 Ok(true)
@@ -1021,10 +1026,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id]
-            .raft
-            .write(&raft_wb)
-            .unwrap();
+        self.engines[&store_id].raft.write(&raft_wb).unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

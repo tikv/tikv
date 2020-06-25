@@ -1524,9 +1524,9 @@ pub mod tests {
     use std::sync::{Arc, RwLock};
 
     use engine::rocks::{DBOptions, Env, DB};
-    use engine_traits::KvEngines;
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_traits::KvEngines;
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
@@ -2443,14 +2443,8 @@ pub mod tests {
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
-            s.build(
-                &engine.kv,
-                &snapshot,
-                &region,
-                &mut snap_data,
-                &mut stat,
-            )
-            .unwrap();
+            s.build(&engine.kv, &snapshot, &region, &mut snap_data, &mut stat)
+                .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1658;
