@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use criterion::{Bencher, Criterion};
-use engine::rocks::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::Compat;
 use engine_traits::{Mutable, WriteBatchExt};
 use test_raftstore::*;
