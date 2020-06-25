@@ -482,6 +482,9 @@
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
 
+# RocksDB log levels
+# info-log-level = "info"
+
 ## Options for `Titan`.
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
@@ -743,6 +746,7 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# info-log-level = "info"
 # optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
@@ -865,3 +869,9 @@
 ## Max bytes that GC worker can write to rocksdb in one second.
 ## If it is set to 0, there is no limit.
 # max-write-bytes-per-sec = "0"
+
+## Enable GC by compaction filter or not.
+# enable-compaction-filter = false
+
+## Garbage ratio threshold to trigger a GC.
+# ratio-threshold = 1.1

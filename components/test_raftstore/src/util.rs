@@ -20,7 +20,6 @@ use raft::eraftpb::ConfChangeType;
 
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine::rocks::DB;
-use engine::*;
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::encryption::get_env;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
@@ -508,7 +507,9 @@ pub fn create_test_engine(
 
     let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
 
-    let engine = Arc::new(rocks::util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap());
+    let engine = Arc::new(
+        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
+    );
 
     let raft_path = dir.path().join("raft");
     let raft_path_str = raft_path.to_str().unwrap();
@@ -517,8 +518,9 @@ pub fn create_test_engine(
     raft_db_opt.set_env(env);
 
     let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine =
-        Arc::new(rocks::util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap());
+    let raft_engine = Arc::new(
+        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
+    );
 
     let engines = KvEngines::new(RocksEngine::from_db(engine), RocksEngine::from_db(raft_engine), cache.is_some());
     (engines, key_manager, dir)
@@ -556,6 +558,11 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     // When isolated, follower relies on stale check tick to detect failure leader,
     // choose a smaller number to make it recover faster.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
+}
+
+pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.dev_assert = false;
+    cluster.pd_client.ignore_merge_target_integrity();
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

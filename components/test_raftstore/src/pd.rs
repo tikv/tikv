@@ -135,7 +135,22 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    new_pd_merge_region(region)
+                    if cluster.check_merge_target_integrity {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::default()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::SplitRegion {
@@ -234,6 +249,9 @@ struct Cluster {
 
     replication_status: Option<ReplicationStatus>,
     region_replication_status: HashMap<u64, RegionReplicationStatus>,
+
+    // for merging
+    pub check_merge_target_integrity: bool,
 }
 
 impl Cluster {
@@ -264,6 +282,7 @@ impl Cluster {
             gc_safe_point: 0,
             replication_status: None,
             region_replication_status: HashMap::default(),
+            check_merge_target_integrity: true,
         }
     }
 
@@ -1060,6 +1079,10 @@ impl TestPdClient {
             }
         }
     }
+
+    pub fn ignore_merge_target_integrity(&self) {
+        self.cluster.wl().check_merge_target_integrity = false;
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1272,7 +1295,7 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
@@ -1281,7 +1304,12 @@ impl PdClient for TestPdClient {
         let store_id = stats.get_store_id();
         let mut cluster = self.cluster.wl();
         cluster.store_stats.insert(store_id, stats);
-        Box::new(ok(cluster.replication_status.clone()))
+
+        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        if let Some(ref status) = cluster.replication_status {
+            resp.set_replication_status(status.clone());
+        }
+        Box::new(ok(resp))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {

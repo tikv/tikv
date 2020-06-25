@@ -8,6 +8,7 @@ use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
+use rocksdb::rocksdb::supported_compression;
 use rocksdb::DBCompressionType;
 use rocksdb::DBIterator;
 use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
@@ -19,7 +20,6 @@ use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
 use crate::engine_iterator::RocksSeekKey;
-use engine::rocks::util::get_fastest_supported_compression_type;
 use std::path::PathBuf;
 
 impl SstExt for RocksEngine {
@@ -246,6 +246,21 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
     fn num_entries(&self) -> u64 {
         self.0.num_entries()
     }
+}
+
+// Zlib and bzip2 are too slow.
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
+    DBCompressionType::Lz4,
+    DBCompressionType::Snappy,
+    DBCompressionType::Zstd,
+];
+
+fn get_fastest_supported_compression_type() -> DBCompressionType {
+    let all_supported_compression = supported_compression();
+    *COMPRESSION_PRIORITY
+        .iter()
+        .find(|c| all_supported_compression.contains(c))
+        .unwrap_or(&DBCompressionType::No)
 }
 
 #[cfg(test)]

@@ -126,6 +126,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::MakeDate
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
@@ -341,6 +342,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::Replace => (3, 3),
 
+            ScalarFuncSig::Insert => (4, 4),
+
             ScalarFuncSig::JsonArraySig
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::RealAnyValue
@@ -393,6 +396,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::Elt
+            | ScalarFuncSig::MakeSet
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -880,6 +884,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         MonthName => month_name,
+        MakeSet => make_set,
         DayName => day_name,
         Bin => bin,
         Concat => concat,
@@ -896,6 +901,7 @@ dispatch_call! {
         InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
+        Insert => insert,
         Md5 => md5,
         Uuid => uuid,
         Sha1 => sha1,
@@ -948,6 +954,7 @@ dispatch_call! {
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
         FromDays => from_days,
+        MakeDate => make_date,
 
         IfNullTime => if_null_time,
         IfTime => if_time,

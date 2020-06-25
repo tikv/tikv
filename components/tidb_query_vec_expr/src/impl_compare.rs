@@ -13,17 +13,43 @@ use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn]
 #[inline]
-pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>>
+pub fn compare<C: Comparer>(lhs: Option<&C::T>, rhs: Option<&C::T>) -> Result<Option<i64>>
 where
     C: Comparer,
 {
     C::compare(lhs, rhs)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(&rhs)) as i64),
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn compare_bytes<C: Collator, F: CmpOp>(
+    lhs: Option<BytesRef>,
+    rhs: Option<BytesRef>,
+) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => {
+            let ord = C::sort_compare(lhs, rhs)?;
+            Some(F::compare_order(ord) as i64)
+        }
+    })
+}
+
 pub trait Comparer {
     type T: Evaluable;
 
-    fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
+    fn compare(lhs: Option<&Self::T>, rhs: Option<&Self::T>) -> Result<Option<i64>>;
 }
 
 pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
@@ -34,31 +60,11 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
     #[inline]
-    fn compare(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&T>, rhs: Option<&T>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(rhs)) as i64),
-        })
-    }
-}
-
-pub struct StringComparer<C: Collator, F: CmpOp> {
-    _phantom: std::marker::PhantomData<(C, F)>,
-}
-
-impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
-    type T = Bytes;
-
-    #[inline]
-    fn compare(lhs: &Option<Bytes>, rhs: &Option<Bytes>) -> Result<Option<i64>> {
-        Ok(match (lhs, rhs) {
-            (None, None) => F::compare_null(),
-            (None, _) | (_, None) => F::compare_partial_null(),
-            (Some(lhs), Some(rhs)) => {
-                let ord = C::sort_compare(lhs, rhs)?;
-                Some(F::compare_order(ord) as i64)
-            }
         })
     }
 }
@@ -71,7 +77,7 @@ impl<F: CmpOp> Comparer for UintUintComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -92,7 +98,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -116,7 +122,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
     type T = Int;
 
     #[inline]
-    fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
+    fn compare(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
@@ -221,10 +227,32 @@ impl CmpOp for CmpOpNullEQ {
 
 #[rpn_fn(varg)]
 #[inline]
-pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
+pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
         if arg.is_some() {
-            return Ok((*arg).clone());
+            return Ok(arg.cloned());
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_vec()));
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_owned()));
         }
     }
     Ok(None)
@@ -232,19 +260,19 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+pub fn greatest_int(args: &[Option<&Int>]) -> Result<Option<Int>> {
     do_get_extremum(args, max)
 }
 
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn greatest_real(args: &[&Option<Real>]) -> Result<Option<Real>> {
+pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
     do_get_extremum(args, |x, y| x.max(y))
 }
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {
@@ -276,7 +304,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[&Option<Bytes>]) -> Result<O
 }
 
 #[inline]
-fn do_get_extremum<T, E>(args: &[&Option<T>], chooser: E) -> Result<Option<T>>
+fn do_get_extremum<T, E>(args: &[Option<&T>], chooser: E) -> Result<Option<T>>
 where
     T: Ord + Copy,
     E: Fn(T, T) -> T,
@@ -292,7 +320,7 @@ where
                         return Ok(None);
                     }
                     Some(v) => {
-                        res = chooser(res, *v);
+                        res = chooser(res, **v);
                     }
                 }
             }

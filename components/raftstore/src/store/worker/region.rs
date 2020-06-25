@@ -656,6 +656,7 @@ where
                 });
             }
             task @ Task::Apply { .. } => {
+                fail_point!("on_region_worker_apply", true, |_| {});
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
@@ -669,6 +670,7 @@ where
                 start_key,
                 end_key,
             } => {
+                fail_point!("on_region_worker_destroy", true, |_| {});
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
                 self.ctx
@@ -730,11 +732,10 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions};
-    use engine_traits::KvEngines;
+    use engine_traits::{KvEngines, KvEngine};
     use engine_rocks::{RocksEngine};
-    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt, SyncMutable, KvEngine, CFNamesExt, CFHandleExt, MiscExt};
+    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt, SyncMutable, MiscExt, CFHandleExt, CFNamesExt};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -882,12 +883,12 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            rocks::util::CFOptions::new("default", cf_opts.clone()),
-            rocks::util::CFOptions::new("write", cf_opts.clone()),
-            rocks::util::CFOptions::new("lock", cf_opts.clone()),
-            rocks::util::CFOptions::new("raft", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("default", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("write", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("lock", cf_opts.clone()),
+            engine_rocks::raw_util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
+        let raft_cfs_opt = engine_rocks::raw_util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,

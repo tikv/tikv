@@ -10,7 +10,6 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use engine::rocks;
 use engine::rocks::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
@@ -86,7 +85,7 @@ impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = Builder::new().prefix("bench_rafkv").tempdir().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
+    let db = engine_rocks::raw_util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 

@@ -175,7 +175,7 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine::rocks::util;
+    use crate::raw_util;
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
@@ -188,7 +188,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         let mut r = Region::default();
@@ -225,7 +225,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         engine.put(b"k1", b"v1").unwrap();
@@ -241,7 +241,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = RocksEngine::from_db(Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
         engine.put(b"a1", b"v1").unwrap();

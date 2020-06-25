@@ -11,19 +11,19 @@ use tidb_query_datatype::codec::mysql::json::*;
 
 #[rpn_fn]
 #[inline]
-fn json_depth(arg: &Option<Json>) -> Result<Option<i64>> {
+fn json_depth(arg: Option<JsonRef>) -> Result<Option<i64>> {
     match arg {
-        Some(j) => Ok(Some(j.as_ref().depth()?)),
+        Some(j) => Ok(Some(j.depth()?)),
         None => Ok(None),
     }
 }
 
 #[rpn_fn]
 #[inline]
-fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
+fn json_type(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
     Ok(arg
         .as_ref()
-        .map(|json_arg| Bytes::from(json_arg.as_ref().json_type())))
+        .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
@@ -48,10 +48,8 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
     // base Json argument
-    let base: &Option<Json> = args[0].as_ref();
-    let base = base
-        .as_ref()
-        .map_or(Json::none(), |json| Ok(json.to_owned()))?;
+    let base: Option<JsonRef> = args[0].as_json();
+    let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
     let buf_size = args.len() / 2;
 
@@ -59,8 +57,8 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     let mut values = Vec::with_capacity(buf_size);
 
     for chunk in args[1..].chunks(2) {
-        let path: &Option<Bytes> = chunk[0].as_ref();
-        let value: &Option<Json> = chunk[1].as_ref();
+        let path: Option<BytesRef> = chunk[0].as_bytes();
+        let value: Option<JsonRef> = chunk[1].as_json();
 
         path_expr_list.push(try_opt!(parse_json_path(path)));
 
@@ -72,7 +70,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))
 }
 
-/// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
+/// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>, Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     assert!(children.len() >= 2);
@@ -91,12 +89,12 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
 
 #[rpn_fn(varg)]
 #[inline]
-fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
+fn json_array(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     let mut jsons = vec![];
     for arg in args {
         match arg {
             None => jsons.push(Json::none()?),
-            Some(j) => jsons.push(j.to_owned()),
+            Some(j) => jsons.push((*j).to_owned()),
         }
     }
     Ok(Some(Json::from_array(jsons)?))
@@ -116,23 +114,23 @@ fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-/// Required args like `&[(&Option<Byte>, &Option<Json>)]`.
+/// Required args like `&[(Option<&Byte>, Option<JsonRef>)]`.
 #[rpn_fn(raw_varg, extra_validator = json_object_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
         assert_eq!(chunk.len(), 2);
-        let key: &Option<Bytes> = chunk[0].as_ref();
+        let key: Option<BytesRef> = chunk[0].as_bytes();
         if key.is_none() {
             return Err(other_err!(
                 "Data truncation: JSON documents may not contain NULL member names."
             ));
         }
-        let key = String::from_utf8(key.as_ref().unwrap().to_owned())
+        let key = String::from_utf8(key.unwrap().to_owned())
             .map_err(|e| tidb_query_datatype::codec::Error::from(e))?;
 
-        let value: &Option<Json> = chunk[1].as_ref();
+        let value: Option<JsonRef> = chunk[1].as_json();
         let value = match value {
             None => Json::none()?,
             Some(v) => v.to_owned(),
@@ -147,17 +145,17 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 // arguments of json_merge should not be less than 2.
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
+pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     // min_args = 2, so it's ok to call args[0]
     if args[0].is_none() {
         return Ok(None);
     }
-    let mut jsons = vec![];
+    let mut jsons: Vec<JsonRef> = vec![];
     let json_none = Json::none()?;
     for arg in args {
         match arg {
             None => jsons.push(json_none.as_ref()),
-            Some(j) => jsons.push(j.as_ref()),
+            Some(j) => jsons.push(*j),
         }
     }
     Ok(Some(Json::merge(jsons)?))
@@ -165,16 +163,16 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
 
 #[rpn_fn]
 #[inline]
-fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
+fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.as_ref().unquote()?)))
+        Ok(Some(Bytes::from(json_arg.unquote()?)))
     })
 }
 
-// Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
+// Args should be like `(Option<JsonRef> , &[Option<BytesRef>])`.
 fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
     assert!(expr.get_children().len() >= 2);
-    // args should be like `&Option<Json> , &[&Option<Bytes>]`.
+    // args should be like `Option<JsonRef> , &[Option<BytesRef>]`.
     valid_paths(expr)
 }
 
@@ -191,8 +189,8 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
-    let j: &Option<Json> = args[0].as_ref();
-    let j = match j.as_ref() {
+    let j: Option<JsonRef> = args[0].as_json();
+    let j = match j {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
@@ -202,7 +200,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     Ok(j.as_ref().extract(&path_expr_list)?)
 }
 
-// Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
+// Args should be like `(Option<JsonRef> , &[Option<BytesRef>])`.
 fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
     assert!(expr.get_children().len() == 2 || expr.get_children().len() == 1);
     valid_paths(expr)
@@ -214,7 +212,7 @@ fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
     if let Some(j) = args[0].as_json() {
         if let Some(list) = parse_json_path_list(&args[1..])? {
-            return Ok(j.as_ref().keys(&list)?);
+            return Ok(j.keys(&list)?);
         }
     }
     Ok(None)
@@ -224,8 +222,8 @@ fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[inline]
 fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() <= 2);
-    let j: &Option<Json> = args[0].as_ref();
-    let j = match j.as_ref() {
+    let j: Option<JsonRef> = args[0].as_json();
+    let j = match j {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
@@ -239,8 +237,8 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
-    let j: &Option<Json> = args[0].as_ref();
-    let j = match j.as_ref() {
+    let j: Option<JsonRef> = args[0].as_json();
+    let j = match j {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
@@ -253,7 +251,7 @@ fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
     let mut path_expr_list = Vec::with_capacity(args.len());
     for arg in args {
-        let json_path: &Option<Bytes> = arg.as_ref();
+        let json_path: Option<BytesRef> = arg.as_bytes();
 
         path_expr_list.push(try_opt!(parse_json_path(json_path)));
     }
@@ -261,8 +259,8 @@ fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpres
 }
 
 #[inline]
-fn parse_json_path(path: &Option<Bytes>) -> Result<Option<PathExpression>> {
-    let json_path = match path.as_ref() {
+fn parse_json_path(path: Option<BytesRef>) -> Result<Option<PathExpression>> {
+    let json_path = match path {
         None => return Ok(None),
         Some(p) => std::str::from_utf8(&p).map_err(tidb_query_datatype::codec::Error::from),
     }?;

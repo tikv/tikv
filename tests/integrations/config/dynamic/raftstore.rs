@@ -3,7 +3,6 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine::rocks;
 use engine_rocks::{RocksSnapshot, RocksEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
@@ -34,12 +33,22 @@ impl Transport for MockTransport {
 
 fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
     let db = Arc::new(
-        rocks::util::new_engine(dir.path().join("db").to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap(),
+        engine_rocks::raw_util::new_engine(
+            dir.path().join("db").to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+        )
+        .unwrap(),
     );
     let raft_db = Arc::new(
-        rocks::util::new_engine(dir.path().join("raft").to_str().unwrap(), None, &[], None)
-            .unwrap(),
+        engine_rocks::raw_util::new_engine(
+            dir.path().join("raft").to_str().unwrap(),
+            None,
+            &[],
+            None,
+        )
+        .unwrap(),
     );
     let shared_block_cache = false;
     KvEngines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db), shared_block_cache)

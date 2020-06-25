@@ -3,20 +3,24 @@
 use async_stream::stream;
 use engine_traits::Snapshot;
 use futures03::compat::Compat01As03;
+use futures03::executor::block_on;
 use futures03::future::{ok, poll_fn};
 use futures03::prelude::*;
+use hyper::client::HttpConnector;
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use openssl::x509::X509StoreContextRef;
+use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
+use hyper_openssl::HttpsConnector;
+use openssl::ssl::{
+    SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
+};
+use openssl::x509::X509;
 use pin_project::pin_project;
 use pprof::protos::Message;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
-use reqwest::{self, blocking::Client};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -35,6 +39,7 @@ use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::config::ConfigController;
+use configuration::Configuration;
 use pd_client::RpcClient;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
@@ -88,9 +93,11 @@ pub struct StatusServer<S, R> {
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
+    advertise_addr: Option<String>,
     pd_client: Option<Arc<RpcClient>>,
     cfg_controller: ConfigController,
     router: R,
+    security_config: Arc<SecurityConfig>,
     _snap: PhantomData<S>,
 }
 
@@ -141,6 +148,7 @@ where
         status_thread_pool_size: usize,
         pd_client: Option<Arc<RpcClient>>,
         cfg_controller: ConfigController,
+        security_config: Arc<SecurityConfig>,
         router: R,
     ) -> Result<Self> {
         let thread_pool = Builder::new()
@@ -161,9 +169,11 @@ where
             tx,
             rx: Some(rx),
             addr: None,
+            advertise_addr: None,
             pd_client,
             cfg_controller,
             router,
+            security_config,
             _snap: PhantomData,
         })
     }
@@ -229,8 +239,35 @@ where
         }
     }
 
-    async fn get_config(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
-        Ok(match serde_json::to_string(&cfg_controller.get_current()) {
+    async fn get_config(
+        req: Request<Body>,
+        cfg_controller: &ConfigController,
+    ) -> hyper::Result<Response<Body>> {
+        let mut full = false;
+        if let Some(query) = req.uri().query() {
+            let query_pairs: HashMap<_, _> =
+                url::form_urlencoded::parse(query.as_bytes()).collect();
+            full = match query_pairs.get("full") {
+                Some(val) => match val.parse() {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return Ok(StatusServer::err_response(
+                            StatusCode::BAD_REQUEST,
+                            err.to_string(),
+                        ));
+                    }
+                },
+                None => false,
+            };
+        }
+        let encode_res = if full {
+            // Get all config
+            serde_json::to_string(&cfg_controller.get_current())
+        } else {
+            // Filter hidden config
+            serde_json::to_string(&cfg_controller.get_current().get_encoder())
+        };
+        Ok(match encode_res {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
@@ -364,7 +401,7 @@ where
         }
     }
 
-    pub fn stop(self) {
+    pub fn stop(mut self) {
         // unregister the status address to pd
         self.unregister_addr();
         let _ = self.tx.send(());
@@ -378,67 +415,146 @@ where
         self.addr.unwrap()
     }
 
-    fn register_addr(&self, status_addr: String) {
+    // Conveniently generate ssl connector according to SecurityConfig for https client
+    // Return `None` if SecurityConfig is not set up.
+    fn generate_ssl_connector(&self) -> Option<SslConnectorBuilder> {
+        if !self.security_config.cert_path.is_empty()
+            && !self.security_config.key_path.is_empty()
+            && !self.security_config.ca_path.is_empty()
+        {
+            let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+            ssl.set_ca_file(&self.security_config.ca_path).unwrap();
+            ssl.set_certificate_file(&self.security_config.cert_path, SslFiletype::PEM)
+                .unwrap();
+            ssl.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)
+                .unwrap();
+            Some(ssl)
+        } else {
+            None
+        }
+    }
+
+    fn register_addr(&mut self, advertise_addr: String) {
+        if let Some(ssl) = self.generate_ssl_connector() {
+            let mut connector = HttpConnector::new();
+            connector.enforce_http(false);
+            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
+            self.register_addr_core(https_conn, advertise_addr);
+        } else {
+            self.register_addr_core(HttpConnector::new(), advertise_addr);
+        }
+    }
+
+    fn register_addr_core<C>(&mut self, conn: C, advertise_addr: String)
+    where
+        C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+    {
         if self.pd_client.is_none() {
             return;
         }
         let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::new();
+        let client = Client::builder().build::<_, Body>(conn);
+
         let json = {
             let mut body = std::collections::HashMap::new();
             body.insert("component".to_owned(), COMPONENT.to_owned());
-            body.insert("addr".to_owned(), status_addr);
+            body.insert("addr".to_owned(), advertise_addr.clone());
             serde_json::to_string(&body).unwrap()
         };
+
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
-                let mut url = url::Url::parse(pd_addr).unwrap();
-                url.set_path("pd/api/v1/component");
-                let res = client
-                    .post(url.as_str())
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(json.clone())
-                    .send();
-                match res {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
-                    Ok(resp) => error!("failed to register addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to register addr to pd"; "error" => ?e),
+                let client = client.clone();
+                let uri: Uri = (pd_addr.to_owned() + "/pd/api/v1/component")
+                    .parse()
+                    .unwrap();
+                let req = Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json.clone()))
+                    .expect("construct post request failed");
+                let req_handle = self
+                    .thread_pool
+                    .spawn(async move { client.request(req).await });
+
+                match block_on(req_handle).unwrap() {
+                    Ok(resp) if resp.status() == StatusCode::OK => {
+                        self.advertise_addr = Some(advertise_addr);
+                        return;
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to register addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
+                    }
+                    Err(e) => warn!("failed to register addr to pd"; "error" => ?e),
                 }
             }
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
+                warn!("failed to reconnect pd client"; "err" => ?e);
             }
         }
-        error!(
+        warn!(
             "failed to register addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
     }
 
-    fn unregister_addr(&self) {
-        if self.pd_client.is_none() {
+    fn unregister_addr(&mut self) {
+        if let Some(ssl) = self.generate_ssl_connector() {
+            let mut connector = HttpConnector::new();
+            connector.enforce_http(false);
+            let https_conn = HttpsConnector::with_connector(connector, ssl).unwrap();
+            self.unregister_addr_core(https_conn);
+        } else {
+            self.unregister_addr_core(HttpConnector::new());
+        }
+    }
+
+    fn unregister_addr_core<C>(&mut self, conn: C)
+    where
+        C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+    {
+        if self.pd_client.is_none() || self.advertise_addr.is_none() {
             return;
         }
-        let status_addr = format!("{}", self.listening_addr());
+        let advertise_addr = self.advertise_addr.as_ref().unwrap().to_owned();
         let pd_client = self.pd_client.as_ref().unwrap();
-        let client = Client::new();
+        let client = Client::builder().build::<_, Body>(conn);
+
         for _ in 0..COMPONENT_REQUEST_RETRY {
             for pd_addr in pd_client.get_leader().get_client_urls() {
-                let mut url = url::Url::parse(pd_addr).unwrap();
-                url.set_path(format!("pd/api/v1/component/{}/{}", COMPONENT, status_addr).as_str());
-                match client.delete(url.as_str()).send() {
-                    Ok(resp) if resp.status() == reqwest::StatusCode::OK => return,
-                    Ok(resp) => error!("failed to unregister addr to pd"; "response" => ?resp),
-                    Err(e) => error!("failed to unregister addr to pd"; "error" => ?e),
+                let client = client.clone();
+                let uri: Uri = (pd_addr.to_owned()
+                    + &format!("/pd/api/v1/component/{}/{}", COMPONENT, advertise_addr))
+                    .parse()
+                    .unwrap();
+                let req = Request::delete(uri)
+                    .body(Body::empty())
+                    .expect("construct delete request failed");
+                let req_handle = self
+                    .thread_pool
+                    .spawn(async move { client.request(req).await });
+
+                match block_on(req_handle).unwrap() {
+                    Ok(resp) if resp.status() == StatusCode::OK => {
+                        self.advertise_addr = None;
+                        return;
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        warn!("failed to unregister addr to pd"; "status code" => status.as_str(), "body" => ?resp.body());
+                    }
+                    Err(e) => warn!("failed to unregister addr to pd"; "error" => ?e),
                 }
             }
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
-                error!("failed to reconnect pd client"; "err" => ?e);
+                warn!("failed to reconnect pd client"; "err" => ?e);
             }
         }
-        error!(
+        warn!(
             "failed to unregister addr to pd after {} tries",
             COMPONENT_REQUEST_RETRY
         );
@@ -532,21 +648,27 @@ where
         }
     }
 
-    fn start_serve<I>(&mut self, builder: HyperBuilder<I>)
+    fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
-        I: Accept + Send + 'static,
+        I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
         I::Error: Into<Box<dyn StdError + Send + Sync>>,
         I::Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        C: ServerConnection,
     {
+        let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         // Start to serve.
-        let server = builder.serve(make_service_fn(move |_| {
+        let server = builder.serve(make_service_fn(move |conn: &C| {
+            let x509 = conn.get_x509();
+            let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+                    let x509 = x509.clone();
+                    let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     async move {
@@ -560,13 +682,35 @@ where
                             }
                         }
 
+                        let should_check_cert = match (&method, path.as_ref()) {
+                            (&Method::GET, "/metrics") => false,
+                            (&Method::GET, "/status") => false,
+                            (&Method::GET, "/config") => false,
+                            (&Method::GET, "/debug/pprof/profile") => false,
+                            // 1. POST "/config" will modify the configuration of TiKV.
+                            // 2. GET "/region" will get start key and end key. These keys could be actual
+                            // user data since in some cases the data itself is stored in the key.
+                            _ => true,
+                        };
+
+                        if should_check_cert {
+                            if !check_cert(security_config, x509) {
+                                return Ok(StatusServer::err_response(
+                                    StatusCode::FORBIDDEN,
+                                    "certificate role error",
+                                ));
+                            }
+                        }
+
                         match (method, path.as_ref()) {
                             (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_prof_to_resp(req).await
                             }
-                            (Method::GET, "/config") => Self::get_config(&cfg_controller).await,
+                            (Method::GET, "/config") => {
+                                Self::get_config(req, &cfg_controller).await
+                            }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
@@ -595,50 +739,21 @@ where
         self.thread_pool.spawn(graceful);
     }
 
-    pub fn start(&mut self, status_addr: String, security_config: &SecurityConfig) -> Result<()> {
+    pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
         let incoming = self.thread_pool.enter(|| AddrIncoming::bind(&addr))?;
         self.addr = Some(incoming.local_addr());
-        if !security_config.cert_path.is_empty()
-            && !security_config.key_path.is_empty()
-            && !security_config.ca_path.is_empty()
+        if !self.security_config.cert_path.is_empty()
+            && !self.security_config.key_path.is_empty()
+            && !self.security_config.ca_path.is_empty()
         {
             let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&security_config.cert_path)?;
-            acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
-            if !security_config.cert_allowed_cn.is_empty() {
-                let allowed_cn = security_config.cert_allowed_cn.clone();
-                // The verification callback to check if the peer CN is allowed.
-                let verify_cb = move |flag: bool, x509_ctx: &mut X509StoreContextRef| {
-                    if !flag || x509_ctx.error_depth() != 0 {
-                        return flag;
-                    }
-                    if let Some(chains) = x509_ctx.chain() {
-                        if chains.len() != 0 {
-                            if let Some(pattern) = chains
-                                .get(0)
-                                .unwrap()
-                                .subject_name()
-                                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                                .next()
-                            {
-                                let data = pattern.data().as_slice();
-                                return security::match_peer_names(
-                                    &allowed_cn,
-                                    std::str::from_utf8(data).unwrap(),
-                                );
-                            }
-                        }
-                    }
-                    false
-                };
-                // Request and require cert from client-side.
-                acceptor.set_verify_callback(
-                    SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
-                    verify_cb,
-                );
+            acceptor.set_ca_file(&self.security_config.ca_path)?;
+            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
+            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
+            if !self.security_config.cert_allowed_cn.is_empty() {
+                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
             }
             let acceptor = acceptor.build();
             let tls_incoming = tls_incoming(acceptor, incoming);
@@ -648,9 +763,53 @@ where
             let server = Server::builder(incoming);
             self.start_serve(server);
         }
-        // register the status address to pd
-        self.register_addr(status_addr);
+        // register the advertise status address to pd
+        self.register_addr(advertise_status_addr);
         Ok(())
+    }
+}
+
+// To unify TLS/Plain connection usage in start_serve function
+trait ServerConnection {
+    fn get_x509(&self) -> Option<X509>;
+}
+
+impl ServerConnection for SslStream<AddrStream> {
+    fn get_x509(&self) -> Option<X509> {
+        self.ssl().peer_certificate()
+    }
+}
+
+impl ServerConnection for AddrStream {
+    fn get_x509(&self) -> Option<X509> {
+        None
+    }
+}
+
+// Check if the peer's x509 certificate meets the requirements, this should
+// be called where the access should be controlled.
+//
+// For now, the check only verifies the role of the peer certificate.
+fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
+    // if `cert_allowed_cn` is empty, skip check and return true
+    if !security_config.cert_allowed_cn.is_empty() {
+        if let Some(x509) = cert {
+            if let Some(name) = x509
+                .subject_name()
+                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                .next()
+            {
+                let data = name.data().as_slice();
+                // Check common name in peer cert
+                return security::match_peer_names(
+                    &security_config.cert_allowed_cn,
+                    std::str::from_utf8(data).unwrap(),
+                );
+            }
+        }
+        false
+    } else {
+        true
     }
 }
 
@@ -810,9 +969,11 @@ mod tests {
 
     use std::env;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
+    use configuration::Configuration;
     use engine_rocks::RocksSnapshot;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
@@ -831,9 +992,16 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -871,9 +1039,16 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -894,7 +1069,7 @@ mod tests {
                 .unwrap();
             let resp_json = String::from_utf8_lossy(&v).to_string();
             let cfg = TiKvConfig::default();
-            serde_json::to_string(&cfg)
+            serde_json::to_string(&cfg.get_encoder())
                 .map(|cfg_json| {
                     assert_eq!(resp_json, cfg_json);
                 })
@@ -908,9 +1083,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1016,9 +1198,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1052,9 +1241,16 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let addr = status_server.listening_addr().to_string();
 
@@ -1108,12 +1304,16 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start(
-            "127.0.0.1:0".to_string(),
-            &new_security_cfg(Some(allowed_cn)),
-        );
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(new_security_cfg(Some(allowed_cn))),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
 
         let mut connector = HttpConnector::new();
         connector.enforce_http(false);
@@ -1176,10 +1376,18 @@ mod tests {
 
     #[cfg(feature = "mem-profiling")]
     #[test]
+    #[ignore]
     fn test_pprof_heap_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
@@ -1198,9 +1406,16 @@ mod tests {
 
     #[test]
     fn test_pprof_profile_service() {
-        let mut status_server =
-            StatusServer::new(1, None, ConfigController::default(), MockRouter).unwrap();
-        let _ = status_server.start("127.0.0.1:0".to_string(), &SecurityConfig::default());
+        let mut status_server = StatusServer::new(
+            1,
+            None,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr.clone(), addr);
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
