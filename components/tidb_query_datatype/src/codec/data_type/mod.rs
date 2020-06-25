@@ -43,6 +43,13 @@ impl AsMySQLBool for Real {
     }
 }
 
+impl <'a, T: AsMySQLBool> AsMySQLBool for &'a T {
+    #[inline]
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        (&**self).as_mysql_bool(context)
+    }
+}
+
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
@@ -69,7 +76,7 @@ where
     }
 }
 
-impl<'a> AsMySQLBool for Option<JsonRef<'a>>
+impl<'a> AsMySQLBool for JsonRef<'a>
 where
 {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
@@ -79,6 +86,17 @@ where
 }
 
 impl<'a> AsMySQLBool for Option<BytesRef<'a>>
+where
+{
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<JsonRef<'a>>
 where
 {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
@@ -186,8 +204,8 @@ impl_evaluable_ret! { Json }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
-    type ChunkedType: ChunkRef<'a, Self>;
-    type EvaluableType;
+    type ChunkedType: ChunkRef<'a, Self> + 'a;
+    type EvaluableType : EvaluableRet;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
     /// panics if the varient mismatches.
@@ -202,8 +220,8 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 }
 
-impl<'a, T: Evaluable> EvaluableRef<'a> for &'a T {
-    const EVAL_TYPE: EvalType = T::EVAL_TYPE;
+impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
+    const EVAL_TYPE: EvalType = <T as Evaluable>::EVAL_TYPE;
     type ChunkedType = &'a NotChunkedVec<T>;
     type EvaluableType = T;
 
