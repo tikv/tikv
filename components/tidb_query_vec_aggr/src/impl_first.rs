@@ -53,9 +53,12 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
             src_schema.len(),
         )?);
 
-        match_template_evaluable! {
-            TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new()))
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_type {
+                EvalType::TT => Ok(Box::new(AggrFnFirst::<&'static TT>::new())),
+                EvalType::Json => Ok(Box::new(AggrFnFirst::<JsonRef<'static>>::new())),
+                EvalType::Bytes => Ok(Box::new(AggrFnFirst::<BytesRef<'static>>::new())),
             }
         }
     }
@@ -66,13 +69,13 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
 #[aggr_function(state = AggrFnStateFirst::<T>::new())]
 pub struct AggrFnFirst<T>(PhantomData<T>)
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>;
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>;
 
 impl<T> AggrFnFirst<T>
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>,
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     fn new() -> Self {
         AggrFnFirst(PhantomData)
@@ -83,8 +86,8 @@ where
 #[derive(Debug)]
 pub enum AggrFnStateFirst<T>
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>,
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     Empty,
     Valued(Option<T>),
@@ -92,8 +95,8 @@ where
 
 impl<T> AggrFnStateFirst<T>
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>,
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     pub fn new() -> Self {
         AggrFnStateFirst::Empty
@@ -104,11 +107,13 @@ where
 // `ConcreteAggrFunctionState` so that `update_repeat` and `update_vector` can be faster.
 impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateFirst<T>
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>,
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
+    // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
+
     #[inline]
-    fn update(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    fn update(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         if let AggrFnStateFirst::Empty = self {
             // TODO: avoid this clone
             *self = AggrFnStateFirst::Valued(value.as_ref().cloned());
@@ -120,7 +125,7 @@ where
     fn update_repeat(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         assert!(repeat_times > 0);
@@ -131,11 +136,11 @@ where
     fn update_vector(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         if let Some(physical_index) = logical_rows.first() {
-            self.update(ctx, &physical_values[*physical_index])?;
+            self.update(ctx, physical_values.get_option_ref(*physical_index))?;
         }
         Ok(())
     }
@@ -145,12 +150,14 @@ where
 // `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
 impl<T1, T2> super::AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
 where
-    T1: EvaluableRet,
-    T2: EvaluableRet,
-    VectorValue: VectorValueExt<T2>,
+    T1: EvaluableRef<'static> + 'static,
+    T2: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T2::EvaluableType>,
 {
+    type ChunkedType = T1::ChunkedType;
+    
     #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T1>) -> Result<()> {
+    default fn update(&mut self, _ctx: &mut EvalContext, _value: Option<T1>) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
@@ -158,7 +165,7 @@ where
     default fn update_repeat(
         &mut self,
         _ctx: &mut EvalContext,
-        _value: &Option<T1>,
+        _value: Option<T1>,
         _repeat_times: usize,
     ) -> Result<()> {
         panic!("Unmatched parameter type")
@@ -168,7 +175,7 @@ where
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        _physical_values: &[Option<T1>],
+        _physical_values: T1::ChunkedType,
         _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
@@ -177,8 +184,8 @@ where
 
 impl<T> super::AggrFunctionState for AggrFnStateFirst<T>
 where
-    T: EvaluableRet,
-    VectorValue: VectorValueExt<T>,
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         assert_eq!(target.len(), 1);
@@ -192,6 +199,7 @@ where
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::super::AggrFunction;
@@ -293,3 +301,4 @@ mod tests {
             .unwrap_err();
     }
 }
+*/

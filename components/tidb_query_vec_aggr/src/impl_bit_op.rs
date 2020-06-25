@@ -106,13 +106,13 @@ impl<T: BitOp> AggrFnStateBitOp<T> {
 }
 
 impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
-    type ParameterType = Int;
+    type ParameterType = &'static Int;
 
     #[inline]
     fn update_concrete(
         &mut self,
         _ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()> {
         match value {
             None => Ok(()),
@@ -130,6 +130,7 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::super::AggrFunction;
@@ -454,3 +455,4 @@ mod tests {
         );
     }
 }
+*/

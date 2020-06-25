@@ -118,10 +118,10 @@ where
     T: Summable,
     VectorValue: VectorValueExt<T>,
 {
-    type ParameterType = T;
+    type ParameterType = &'static T;
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<&'static T>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -143,6 +143,7 @@ where
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,3 +219,4 @@ mod tests {
             .unwrap_err();
     }
 }
+*/

@@ -80,9 +80,12 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             src_schema.len(),
         )?);
 
-        match_template_evaluable! {
-            TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT, T>::new()))
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_type {
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<&'static TT, T>::new())),
+                EvalType::Json => Ok(Box::new(AggFnExtremum::<BytesRef<'static>, T>::new())),
+                EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new()))
             }
         }
     }
@@ -93,18 +96,18 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 #[aggr_function(state = AggFnStateExtremum::<T, E>::new())]
 pub struct AggFnExtremum<T, E>
 where
-    T: EvaluableRet + Ord,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     _phantom: std::marker::PhantomData<(T, E)>,
 }
 
 impl<T, E> AggFnExtremum<T, E>
 where
-    T: EvaluableRet + Ord,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     fn new() -> Self {
         Self {
@@ -117,9 +120,9 @@ where
 #[derive(Debug)]
 pub struct AggFnStateExtremum<T, E>
 where
-    T: EvaluableRet + Ord,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     extremum_value: Option<T>,
     _phantom: std::marker::PhantomData<E>,
@@ -127,9 +130,9 @@ where
 
 impl<T, E> AggFnStateExtremum<T, E>
 where
-    T: EvaluableRet + Ord,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     pub fn new() -> Self {
         Self {
@@ -141,9 +144,9 @@ where
 
 impl<T, E> super::ConcreteAggrFunctionState for AggFnStateExtremum<T, E>
 where
-    T: EvaluableRet + Ord,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<T::EvaluableType>,
 {
     type ParameterType = T;
 
@@ -151,7 +154,7 @@ where
     fn update_concrete(
         &mut self,
         _ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()> {
         if value.is_some()
             && (self.extremum_value.is_none() || self.extremum_value.cmp(value) == E::ORD)
@@ -168,6 +171,7 @@ where
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::EvalType;
@@ -385,3 +389,4 @@ mod tests {
             .unwrap_err();
     }
 }
+*/

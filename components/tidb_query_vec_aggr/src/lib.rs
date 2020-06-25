@@ -62,13 +62,13 @@ pub trait AggrFunctionState:
     std::fmt::Debug
     + Send
     + 'static
-    + AggrFunctionStateUpdatePartial<Int>
-    + AggrFunctionStateUpdatePartial<Real>
-    + AggrFunctionStateUpdatePartial<Decimal>
-    + AggrFunctionStateUpdatePartial<Bytes>
-    + AggrFunctionStateUpdatePartial<DateTime>
-    + AggrFunctionStateUpdatePartial<Duration>
-    + AggrFunctionStateUpdatePartial<Json>
+    + AggrFunctionStateUpdatePartial<&'static Int, ChunkedType = &'static NotChunkedVec<Int>>
+    + AggrFunctionStateUpdatePartial<&'static  Real, ChunkedType = &'static NotChunkedVec<Real>>
+    + AggrFunctionStateUpdatePartial<&'static Decimal, ChunkedType = &'static NotChunkedVec<Decimal>>
+    + AggrFunctionStateUpdatePartial<BytesRef<'static>, ChunkedType = &'static NotChunkedVec<Bytes>>
+    + AggrFunctionStateUpdatePartial<&'static DateTime, ChunkedType = &'static NotChunkedVec<DateTime>>
+    + AggrFunctionStateUpdatePartial<&'static Duration, ChunkedType = &'static NotChunkedVec<Duration>>
+    + AggrFunctionStateUpdatePartial<JsonRef<'static>, ChunkedType = &'static NotChunkedVec<Json>>
 {
     // TODO: A better implementation is to specialize different push result targets. However
     // current aggregation executor cannot utilize it.
@@ -83,12 +83,12 @@ pub trait AggrFunctionState:
 /// any eval types (but will panic when eval type does not match expectation) will be generated via
 /// implementations over this trait.
 pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
-    type ParameterType: EvaluableRet;
+    type ParameterType: EvaluableRef <'static>;
 
     fn update_concrete(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()>;
 
     fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()>;
@@ -96,14 +96,16 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
 
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
-pub trait AggrFunctionStateUpdatePartial<T: EvaluableRet> {
+pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
+    type ChunkedType: ChunkRef<'static, TT> + 'static;
+
     /// Updates the internal state giving one row data.
     ///
     /// # Panics
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()>;
+    fn update(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>;
 
     /// Repeatedly updates the internal state giving one row data.
     ///
@@ -114,7 +116,7 @@ pub trait AggrFunctionStateUpdatePartial<T: EvaluableRet> {
     fn update_repeat(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<TT>,
         repeat_times: usize,
     ) -> Result<()>;
 
@@ -127,20 +129,22 @@ pub trait AggrFunctionStateUpdatePartial<T: EvaluableRet> {
     fn update_vector(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        physical_values: Self::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()>;
 }
 
-impl<T: EvaluableRet, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRef<'static>, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState,
 {
+    type ChunkedType = T::ChunkedType;
+
     // All `ConcreteAggrFunctionState` implement `AggrFunctionStateUpdatePartial<T>`, which is
     // one of the trait bound that `AggrFunctionState` requires.
 
     #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T>) -> Result<()> {
+    default fn update(&mut self, _ctx: &mut EvalContext, _value: Option<T>) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
@@ -148,7 +152,7 @@ where
     default fn update_repeat(
         &mut self,
         _ctx: &mut EvalContext,
-        _value: &Option<T>,
+        _value: Option<T>,
         _repeat_times: usize,
     ) -> Result<()> {
         panic!("Unmatched parameter type")
@@ -158,19 +162,19 @@ where
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        _physical_values: &[Option<T>],
+        _physical_values: Self::ChunkedType,
         _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 }
 
-impl<T: EvaluableRet, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRef<'static>, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState<ParameterType = T>,
 {
     #[inline]
-    fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         self.update_concrete(ctx, value)
     }
 
@@ -178,7 +182,7 @@ where
     fn update_repeat(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         for _ in 0..repeat_times {
@@ -191,11 +195,11 @@ where
     fn update_vector(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         for physical_index in logical_rows {
-            self.update_concrete(ctx, &physical_values[*physical_index])?;
+            self.update_concrete(ctx, physical_values.get_option_ref(*physical_index))?;
         }
         Ok(())
     }
@@ -210,6 +214,7 @@ where
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,12 +236,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnStateFoo {
-            type ParameterType = Int;
+            type ParameterType = &'static Int;
 
             fn update_concrete(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Int>,
+                value: Option<&'static Int>,
             ) -> Result<()> {
                 if let Some(v) = value {
                     self.sum += *v;
@@ -316,3 +321,4 @@ mod tests {
         assert!(result.is_err());
     }
 }
+*/

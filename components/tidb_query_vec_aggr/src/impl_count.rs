@@ -71,9 +71,11 @@ impl AggrFnStateCount {
 // `update_vector` can be faster. Also note that we support all kind of
 // `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
 
-impl<T: EvaluableRet> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
+impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
+    type ChunkedType = T::ChunkedType;
+
     #[inline]
-    fn update(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    fn update(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         if value.is_some() {
             self.count += 1;
         }
@@ -84,7 +86,7 @@ impl<T: EvaluableRet> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCo
     fn update_repeat(
         &mut self,
         _ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         // Will be used for expressions like `COUNT(1)`.
@@ -98,12 +100,12 @@ impl<T: EvaluableRet> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCo
     fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         // Will be used for expressions like `COUNT(col)`.
         for physical_index in logical_rows {
-            if physical_values[*physical_index].is_some() {
+            if physical_values.get_option_ref(*physical_index).is_some() {
                 self.count += 1;
             }
         }
@@ -120,6 +122,7 @@ impl super::AggrFunctionState for AggrFnStateCount {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::EvalType;
@@ -170,3 +173,4 @@ mod tests {
         assert_eq!(result[0].as_int_slice(), &[Some(7)]);
     }
 }
+*/
