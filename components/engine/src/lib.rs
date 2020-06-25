@@ -5,7 +5,6 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-pub mod rocks;
-pub use crate::rocks::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
+pub use rocksdb::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
 mod errors;
 pub use crate::errors::*;

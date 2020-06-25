@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::Range;
+use engine_rocks::raw::Range;
 use engine_rocks::util::get_cf_handle;
 use engine_traits::{MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};

@@ -1523,7 +1523,7 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine::rocks::{DBOptions, Env, DB};
+    use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngines;

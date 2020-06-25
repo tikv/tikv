@@ -19,12 +19,11 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
-use engine::rocks::DB;
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::encryption::get_env;
-use engine_rocks::RocksEngine;
+use engine_rocks::raw::DB;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Iterable, KvEngines, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;

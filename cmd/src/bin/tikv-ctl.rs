@@ -2416,7 +2416,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 
-    engine::rocks::run_ldb_tool(&args, &opts);
+    engine_rocks::raw::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

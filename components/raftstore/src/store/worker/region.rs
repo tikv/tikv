@@ -732,7 +732,7 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine::rocks::ColumnFamilyOptions;
+    use engine_rocks::raw::ColumnFamilyOptions;
     use engine_rocks::RocksEngine;
     use engine_traits::{
         CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
