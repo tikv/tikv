@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine::Engines;
+use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{Compat, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
