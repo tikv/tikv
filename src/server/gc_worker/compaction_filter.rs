@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use super::GcWorkerConfigManager;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use engine::rocks::{
+use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
     DBCompactionFilter, DBIterator, ReadOptions, SeekKey, WriteOptions, DB,
 };
