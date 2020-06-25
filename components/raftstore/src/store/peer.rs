@@ -752,7 +752,7 @@ impl Peer {
             .map_or(0, |v| v.len() as u64);
         metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if !ready.snapshot().is_empty() {
             metrics.snapshot += 1;
         }
     }
@@ -1310,9 +1310,61 @@ impl Peer {
             ctx.current_time.replace(monotonic_raw_now());
         }
 
-        // The leader can write to disk and replicate to the followers concurrently
-        // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
+            if let Some(hs) = ready.hs() {
+                // Correctness depends on the fact that the leader lease must be suspected before
+                // other followers know the `PrepareMerge` log is committed, i.e. sends msg to others.
+                // Because other followers may complete the merge process, if so, the source region's
+                // leader may get a stale data.
+                //
+                // Check the committed entries.
+                // TODO: It can change to not rely on the `committed_entries` must have the latest committed entry
+                // and become O(1) by maintaining these not-committed admin requests that changes epoch.
+                if hs.get_commit() > self.get_store().committed_index() {
+                    assert_eq!(
+                        ready
+                            .committed_entries
+                            .as_ref()
+                            .unwrap()
+                            .last()
+                            .unwrap()
+                            .index,
+                        hs.get_commit()
+                    );
+                    let mut split_to_be_updated = true;
+                    let mut merge_to_be_updated = true;
+                    for entry in ready.committed_entries.as_ref().unwrap().iter().rev() {
+                        // We care about split/merge commands that are committed in the current term.
+                        if entry.term == self.term() && (split_to_be_updated || merge_to_be_updated)
+                        {
+                            let ctx = ProposalContext::from_bytes(&entry.context);
+                            if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
+                                // We don't need to suspect its lease because peers of new region that
+                                // in other store do not start election before theirs election timeout
+                                // which is longer than the max leader lease.
+                                // It's safe to read local within its current lease, however, it's not
+                                // safe to renew its lease.
+                                self.last_committed_split_idx = entry.index;
+                                split_to_be_updated = false;
+                            } else if merge_to_be_updated
+                                && ctx.contains(ProposalContext::PREPARE_MERGE)
+                            {
+                                // We committed prepare merge, to prevent unsafe read index,
+                                // we must record its index.
+                                self.last_committed_prepare_merge_idx = entry.get_index();
+                                // After prepare_merge is committed, the leader can not know
+                                // when the target region merges majority of this region, also
+                                // it can not know when the target region writes new values.
+                                // To prevent unsafe local read, we suspect its leader lease.
+                                self.leader_lease.suspect(monotonic_raw_now());
+                                merge_to_be_updated = false;
+                            }
+                        }
+                    }
+                }
+            }
+            // The leader can write to disk and replicate to the followers concurrently
+            // For more details, check raft thesis 10.2.1.
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
@@ -1404,13 +1456,11 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
+        if ready.snapshot().is_empty() {
             debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
-            let mut split_to_be_updated = self.is_leader();
-            let mut merge_to_be_update = self.is_leader();
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
@@ -1427,30 +1477,16 @@ impl Peer {
                     }
                 }
 
-                // We care about split/merge commands that are committed in the current term.
-                if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
-                    let ctx = ProposalContext::from_bytes(&entry.context);
-                    if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
-                        // We don't need to suspect its lease because peers of new region that
-                        // in other store do not start election before theirs election timeout
-                        // which is longer than the max leader lease.
-                        // It's safe to read local within its current lease, however, it's not
-                        // safe to renew its lease.
-                        self.last_committed_split_idx = entry.index;
-                        split_to_be_updated = false;
-                    }
-                    if merge_to_be_update && ctx.contains(ProposalContext::PREPARE_MERGE) {
-                        // We committed prepare merge, to prevent unsafe read index,
-                        // we must record its index.
-                        self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_merge is committed, the leader can not know
-                        // when the target region merges majority of this region, also
-                        // it can not know when the target region writes new values.
-                        // To prevent unsafe local read, we suspect its leader lease.
-                        self.leader_lease.suspect(monotonic_raw_now());
-                        merge_to_be_update = false;
-                    }
-                }
+                fail_point!(
+                    "leader_commit_prepare_merge",
+                    {
+                        let ctx = ProposalContext::from_bytes(&entry.context);
+                        self.is_leader()
+                            && entry.term == self.term()
+                            && ctx.contains(ProposalContext::PREPARE_MERGE)
+                    },
+                    |_| {}
+                );
 
                 fail_point!(
                     "before_send_rollback_merge_1003",
@@ -1511,7 +1547,7 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
-        if !raft::is_empty_snap(ready.snapshot()) {
+        if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append(ready);
@@ -2199,9 +2235,11 @@ impl Peer {
         true
     }
 
-    // For now, it is only used in merge.
-    pub fn get_min_progress(&self) -> Result<u64> {
-        let mut min = None;
+    /// Returns (minimal matched, minimal committed_index)
+    ///
+    /// For now, it is only used in merge.
+    pub fn get_min_progress(&self) -> Result<(u64, u64)> {
+        let (mut min_m, mut min_c) = (None, None);
         if let Some(progress) = self.raft_group.status().progress {
             for (id, pr) in progress.iter() {
                 // Reject merge if there is any pending request snapshot,
@@ -2216,15 +2254,15 @@ impl Peer {
                         pr
                     ));
                 }
-                if min.is_none() {
-                    min = Some(pr.matched);
+                if min_m.unwrap_or(u64::MAX) > pr.matched {
+                    min_m = Some(pr.matched);
                 }
-                if min.unwrap() > pr.matched {
-                    min = Some(pr.matched);
+                if min_c.unwrap_or(u64::MAX) > pr.committed_index {
+                    min_c = Some(pr.committed_index);
                 }
             }
         }
-        Ok(min.unwrap_or(0))
+        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -2233,18 +2271,31 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress()?;
-        let min_index = min_progress + 1;
-        if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
+        let (min_matched, min_committed) = self.get_min_progress()?;
+        if min_matched == 0
+            || min_committed == 0
+            || last_index - min_matched > ctx.cfg.merge_max_log_gap
+            || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+        {
             return Err(box_err!(
-                "log gap ({}, {}] is too large, skip merge",
-                min_progress,
+                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                min_matched,
+                min_committed,
                 last_index
             ));
         }
+        assert!(min_matched >= min_committed);
         let mut entry_size = 0;
-        for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
-            entry_size += entry.get_data().len();
+        for entry in self
+            .raft_group
+            .raft
+            .raft_log
+            .entries(min_committed + 1, NO_LIMIT)?
+        {
+            // commit merge only contains entries start from min_matched + 1
+            if entry.index > min_matched {
+                entry_size += entry.get_data().len();
+            }
             if entry.get_entry_type() == EntryType::EntryConfChange {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
@@ -2280,7 +2331,7 @@ impl Peer {
         }
         req.mut_admin_request()
             .mut_prepare_merge()
-            .set_min_index(min_index);
+            .set_min_index(min_matched + 1);
         Ok(())
     }
 
