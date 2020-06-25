@@ -73,7 +73,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // now another node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
-    bootstrap_store(&engines.c(), 0, 1).unwrap();
+    bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(engine
         .c()
