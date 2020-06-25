@@ -15,7 +15,7 @@ use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use engine::rocks::{
+use engine_rocks::raw::{
     ColumnFamilyOptions, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
 };
 use engine_rocks::raw_util::{new_engine, CFOptions};
