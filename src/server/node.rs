@@ -379,7 +379,7 @@ where
         self.system.spawn(
             store,
             cfg,
-            engines.clone(),
+            engines,
             trans,
             pd_client,
             snap_mgr,
