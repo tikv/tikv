@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<'a, T: Evaluable> ChunkRef<'a, &'a T> for &'a NotChunkedVec<T> {
+impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a NotChunkedVec<T> {
     fn get_option_ref(self, idx: usize) -> Option<&'a T> {
         self.data[idx].as_ref()
     }
@@ -58,5 +58,13 @@ impl <T: Sized> NotChunkedVec <T> {
 
     pub fn as_slice(&self) -> &[Option<T>] {
         self.data.as_slice()
+    }
+}
+
+impl <T> Into<NotChunkedVec<T>> for Vec<Option<T>> {
+    fn into(self) -> NotChunkedVec<T> {
+        NotChunkedVec {
+            data: self
+        }
     }
 }
