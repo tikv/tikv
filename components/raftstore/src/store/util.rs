@@ -656,6 +656,14 @@ macro_rules! report_perf_context {
             observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
             observe_perf_context_type!($ctx, $metric, pre_and_post_process);
             observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            observe_perf_context_type!(
+                $ctx,
+                perf_context,
+                $metric,
+                write_scheduling_flushes_compactions_time
+            );
+            observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
         }
     };
 }
@@ -680,6 +688,9 @@ pub struct PerfContextStatistics {
     pub write_memtable_time: u64,
     pub write_thread_wait: u64,
     pub db_mutex_lock_nanos: u64,
+    pub write_scheduling_flushes_compactions_time: u64,
+    pub db_condition_wait_nanos: u64,
+    pub write_delay_time: u64,
 }
 
 impl PerfContextStatistics {
@@ -692,6 +703,9 @@ impl PerfContextStatistics {
             write_thread_wait: 0,
             write_memtable_time: 0,
             db_mutex_lock_nanos: 0,
+            write_scheduling_flushes_compactions_time: 0,
+            db_condition_wait_nanos: 0,
+            write_delay_time: 0,
         }
     }
 
@@ -706,6 +720,9 @@ impl PerfContextStatistics {
         self.db_mutex_lock_nanos = 0;
         self.write_thread_wait = 0;
         self.write_memtable_time = 0;
+        self.write_scheduling_flushes_compactions_time = 0;
+        self.db_condition_wait_nanos = 0;
+        self.write_delay_time = 0;
     }
 }
 

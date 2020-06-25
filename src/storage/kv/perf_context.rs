@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::PerfContext;
+use engine_rocks::raw::PerfContext;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
