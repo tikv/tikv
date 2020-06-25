@@ -344,13 +344,14 @@ macro_rules! gen_lock {
             latches.gen_lock(&[&self.$field])
         }
     };
-    ($field: ident, multiple) => {
+    ($field: ident: multiple) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
             latches.gen_lock(&self.$field)
         }
     };
-    ($field: ident, multiple, $transform: tt) => {
+    ($field: ident: multiple$transform: tt) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
+            #![allow(unused_parens)]
             let keys: Vec<&Key> = self.$field.iter().map($transform).collect();
             latches.gen_lock(&keys)
         }
@@ -408,7 +409,7 @@ impl CommandExt for Prewrite {
         bytes
     }
 
-    gen_lock!(mutations, multiple, (|x| x.key()));
+    gen_lock!(mutations: multiple(|x| x.key()));
 }
 
 impl Prewrite {
@@ -512,7 +513,7 @@ impl CommandExt for PrewritePessimistic {
         bytes
     }
 
-    gen_lock!(mutations, multiple, (|(x, _)| x.key()));
+    gen_lock!(mutations:multiple(|(x, _)| x.key()));
 }
 
 command! {
@@ -553,7 +554,7 @@ impl CommandExt for AcquirePessimisticLock {
             .sum()
     }
 
-    gen_lock!(keys, multiple, (|x| &x.0));
+    gen_lock!(keys: multiple(|x| &x.0));
 }
 
 command! {
@@ -576,7 +577,7 @@ impl CommandExt for Commit {
     tag!(commit);
     ts!(commit_ts);
     write_bytes!(keys, multiple);
-    gen_lock!(keys, multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -619,7 +620,7 @@ impl CommandExt for Rollback {
     tag!(rollback);
     ts!(start_ts);
     write_bytes!(keys, multiple);
-    gen_lock!(keys, multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -642,7 +643,7 @@ impl CommandExt for PessimisticRollback {
     ts!(start_ts);
     command_method!(requires_pessimistic_txn, bool, true);
     write_bytes!(keys, multiple);
-    gen_lock!(keys, multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -771,7 +772,7 @@ impl CommandExt for ResolveLock {
             .sum()
     }
 
-    gen_lock!(key_locks, multiple, (|(key, _)| key));
+    gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 
 command! {
@@ -793,7 +794,7 @@ impl CommandExt for ResolveLockLite {
     ts!(start_ts);
     command_method!(is_sys_cmd, bool, true);
     write_bytes!(resolve_keys, multiple);
-    gen_lock!(resolve_keys, multiple);
+    gen_lock!(resolve_keys: multiple);
 }
 
 command! {
@@ -813,7 +814,7 @@ command! {
 impl CommandExt for Pause {
     tag!(pause);
     write_bytes!(keys, multiple);
-    gen_lock!(keys, multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
