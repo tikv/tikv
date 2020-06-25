@@ -9,10 +9,10 @@ use std::time::Duration;
 use engine::rocks;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable};
-use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
 use engine_traits::{
+    KvEngines,
     CompactExt, MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
@@ -164,8 +164,8 @@ fn test_delete_files_in_range_for_titan() {
 
     let raft_path = path.path().join(Path::new("titan"));
     let shared_block_cache = false;
-    let engines = Engines::new(
-        Arc::new(
+    let engines = KvEngines::new(
+        RocksEngine::from_db(Arc::new(
             rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 Some(kv_db_opts),
@@ -173,11 +173,11 @@ fn test_delete_files_in_range_for_titan() {
                 Some(kv_cfs_opts),
             )
             .unwrap(),
-        ),
-        Arc::new(
+        )),
+        RocksEngine::from_db(Arc::new(
             rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
-        ),
+        )),
         shared_block_cache,
     );
 

@@ -9,8 +9,8 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
-use engine_rocks::{CloneCompat, Compat};
-use engine_traits::{Peekable, ALL_CFS, CF_RAFT};
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Peekable, ALL_CFS, CF_RAFT, KvEngines};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
@@ -51,9 +51,9 @@ fn test_node_bootstrap_with_prepared_data() {
         rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
     let shared_block_cache = false;
-    let engines = Engines::new(
-        Arc::clone(&engine),
-        Arc::clone(&raft_engine),
+    let engines = KvEngines::new(
+        RocksEngine::from_db(Arc::clone(&engine)),
+        RocksEngine::from_db(Arc::clone(&raft_engine)),
         shared_block_cache,
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
