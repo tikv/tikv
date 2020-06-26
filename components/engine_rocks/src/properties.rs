@@ -626,8 +626,8 @@ mod tests {
 
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use crate::raw::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
     use test::Bencher;
 
