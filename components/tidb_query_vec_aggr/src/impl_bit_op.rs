@@ -3,6 +3,7 @@
 use tidb_query_codegen::AggrFunction;
 use tipb::{Expr, ExprType, FieldType};
 
+use super::{update, update_concrete, update_repeat, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -109,7 +110,7 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
     type ParameterType = &'static Int;
 
     #[inline]
-    fn update_concrete(
+    unsafe fn update_concrete_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
         value: Option<Self::ParameterType>,
@@ -130,7 +131,6 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::super::AggrFunction;
@@ -157,7 +157,7 @@ mod tests {
             &[Some(0xffff_ffff_ffff_ffff_u64 as i64)]
         );
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
@@ -166,20 +166,18 @@ mod tests {
         );
 
         // 7 & 4 == 4
-        state.update(&mut ctx, &Some(7i64)).unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(7)]);
 
-        state.update(&mut ctx, &Some(4i64)).unwrap();
+        update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(4)]);
 
-        state.update_repeat(&mut ctx, &Some(4), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&4), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -188,16 +186,16 @@ mod tests {
         // Reset the state
         let mut state = function.create_state();
         // 7 & 1 == 1
-        state.update(&mut ctx, &Some(7i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(1i64), None, Some(1i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
+        let int_vec = vec![Some(1i64), None, Some(1i64)];
+        let int_vec: NotChunkedVec<Int> = int_vec.into();
+        update_vector!(state, &mut ctx, &int_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(1)]);
 
         // 7 & 1 & 2 == 0
-        state.update(&mut ctx, &Some(2i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
@@ -214,48 +212,45 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
         // 1 | 4 == 5
-        state.update(&mut ctx, &Some(1i64)).unwrap();
+        update!(state, &mut ctx, Some(&1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(1)]);
 
-        state.update(&mut ctx, &Some(4i64)).unwrap();
+        update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(5)]);
 
-        state.update_repeat(&mut ctx, &Some(8), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&8), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(13)]);
 
         // 13 | 2 == 15
-        state.update(&mut ctx, &Some(2i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
+        let chunked_vec: NotChunkedVec<Int> = vec![Some(2i64), None, Some(1i64)].into();
+        update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(15)]);
 
         // 15 | 2 == 15
-        state.update(&mut ctx, &Some(2i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(15)]);
 
         // 15 | 2 | -1 == 18446744073709551615
-        state.update(&mut ctx, &Some(-1i64)).unwrap();
+        update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
@@ -275,56 +270,53 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
         // 1 ^ 5 == 4
-        state.update(&mut ctx, &Some(1i64)).unwrap();
+        update!(state, &mut ctx, Some(&1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(1)]);
 
-        state.update(&mut ctx, &Some(5i64)).unwrap();
+        update!(state, &mut ctx, Some(&5i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(4)]);
 
         // 1 ^ 5 ^ 8 == 12
-        state.update_repeat(&mut ctx, &Some(8), 9).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&8), 9).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(12)]);
 
         // Will not change due to xor even times
-        state.update_repeat(&mut ctx, &Some(9), 10).unwrap();
+        update_repeat!(state, &mut ctx, Some(&9), 10).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(12)]);
 
         // 1 ^ 5 ^ 8 ^ ^ 2 ^ 2 ^ 1 == 13
-        state.update(&mut ctx, &Some(2i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
+        let chunked_vec: NotChunkedVec<Int> = vec![Some(2i64), None, Some(1i64)].into();
+        update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(13)]);
 
         // 13 ^ 2 == 15
-        state.update(&mut ctx, &Some(2i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(15)]);
 
         // 15 ^ 2 ^ -1 == 18446744073709551602
-        state.update(&mut ctx, &Some(2i64)).unwrap();
-        state.update(&mut ctx, &Some(-1i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
+        update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
@@ -407,9 +399,15 @@ mod tests {
                 .unwrap();
             let bit_and_result = bit_and_result.vector_value().unwrap();
             let bit_and_slice: &[Option<Int>] = bit_and_result.as_ref().as_ref();
-            bit_and_state
-                .update_vector(&mut ctx, bit_and_slice, bit_and_result.logical_rows())
-                .unwrap();
+            let bit_and_vec: NotChunkedVec<Int> = bit_and_slice.to_vec().into();
+
+            update_vector!(
+                bit_and_state,
+                &mut ctx,
+                &bit_and_vec,
+                bit_and_result.logical_rows()
+            )
+            .unwrap();
             bit_and_state
                 .push_result(&mut ctx, &mut aggr_result)
                 .unwrap();
@@ -422,9 +420,15 @@ mod tests {
                 .unwrap();
             let bit_or_result = bit_or_result.vector_value().unwrap();
             let bit_or_slice: &[Option<Int>] = bit_or_result.as_ref().as_ref();
-            bit_or_state
-                .update_vector(&mut ctx, bit_or_slice, bit_or_result.logical_rows())
-                .unwrap();
+            let bit_or_vec: NotChunkedVec<Int> = bit_or_slice.to_vec().into();
+
+            update_vector!(
+                bit_or_state,
+                &mut ctx,
+                &bit_or_vec,
+                bit_or_result.logical_rows()
+            )
+            .unwrap();
             bit_or_state
                 .push_result(&mut ctx, &mut aggr_result)
                 .unwrap();
@@ -437,9 +441,15 @@ mod tests {
                 .unwrap();
             let bit_xor_result = bit_xor_result.vector_value().unwrap();
             let bit_xor_slice: &[Option<Int>] = bit_xor_result.as_ref().as_ref();
-            bit_xor_state
-                .update_vector(&mut ctx, bit_xor_slice, bit_xor_result.logical_rows())
-                .unwrap();
+            let bit_xor_vec: NotChunkedVec<Int> = bit_xor_slice.to_vec().into();
+
+            update_vector!(
+                bit_xor_state,
+                &mut ctx,
+                &bit_xor_vec,
+                bit_xor_result.logical_rows()
+            )
+            .unwrap();
             bit_xor_state
                 .push_result(&mut ctx, &mut aggr_result)
                 .unwrap();
@@ -455,4 +465,3 @@ mod tests {
         );
     }
 }
-*/

@@ -7,6 +7,7 @@ use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
+use super::{update, update_concrete, update_repeat, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -151,13 +152,13 @@ where
     type ParameterType = T;
 
     #[inline]
-    fn update_concrete(
+    unsafe fn update_concrete_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
         value: Option<Self::ParameterType>,
     ) -> Result<()> {
         if value.is_some()
-            && (self.extremum_value.is_none() || self.extremum_value.cmp(value) == E::ORD)
+            && (self.extremum_value.is_none() || self.extremum_value.cmp(&value) == E::ORD)
         {
             self.extremum_value = value.clone();
         }
@@ -166,12 +167,11 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push(self.extremum_value.clone());
+        target[0].push(self.extremum_value.clone().map(|x| x.to_owned_value()));
         Ok(())
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::EvalType;
@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn test_max() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int, Max>::new();
+        let function = AggFnExtremum::<&'static Int, Max>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -194,40 +194,43 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update(&mut ctx, &Some(7i64)).unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(7)]);
 
-        state.update(&mut ctx, &Some(4i64)).unwrap();
+        update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(7)]);
 
-        state.update_repeat(&mut ctx, &Some(20), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&20), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(20)]);
 
         // update vector
-        state.update(&mut ctx, &Some(7i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(21i64), None, Some(22i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[Some(21i64), None, Some(22i64)]);
+        update_vector!(
+            state,
+            &mut ctx,
+            &chunked_vec,
+            &[0, 1, 2]
+        )
+        .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(22)]);
 
-        state.update(&mut ctx, &Some(40i64)).unwrap();
+        update!(state, &mut ctx, Some(&40i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(40)]);
@@ -236,7 +239,7 @@ mod tests {
     #[test]
     fn test_min() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int, Min>::new();
+        let function = AggFnExtremum::<&'static Int, Min>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -244,45 +247,48 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update(&mut ctx, &Some(100i64)).unwrap();
+        update!(state, &mut ctx, Some(&100i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(100)]);
 
-        state.update(&mut ctx, &Some(90i64)).unwrap();
+        update!(state, &mut ctx, Some(&90i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(90)]);
 
-        state.update_repeat(&mut ctx, &Some(80), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 10)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&80), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 10).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(80)]);
 
         // update vector
-        state.update(&mut ctx, &Some(70i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(69i64), None, Some(68i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&70i64)).unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[Some(69i64), None, Some(68i64)]);
+        update_vector!(
+            state,
+            &mut ctx,
+            &chunked_vec,
+            &[0, 1, 2]
+        )
+        .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(68)]);
 
-        state.update(&mut ctx, &Some(2i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(2)]);
 
-        state.update(&mut ctx, &Some(-1i64)).unwrap();
+        update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(-1i64)]);
@@ -349,9 +355,14 @@ mod tests {
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
-            max_state
-                .update_vector(&mut ctx, max_slice, max_result.logical_rows())
-                .unwrap();
+            let chunked_vec = NotChunkedVec::from_slice(max_slice);
+            update_vector!(
+                max_state,
+                &mut ctx,
+                &chunked_vec,
+                max_result.logical_rows()
+            )
+            .unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -362,9 +373,14 @@ mod tests {
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
-            min_state
-                .update_vector(&mut ctx, min_slice, min_result.logical_rows())
-                .unwrap();
+            let chunked_vec = NotChunkedVec::from_slice(min_slice);
+            update_vector!(
+                min_state,
+                &mut ctx,
+                &chunked_vec,
+                min_result.logical_rows()
+            )
+            .unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -389,4 +405,3 @@ mod tests {
             .unwrap_err();
     }
 }
-*/

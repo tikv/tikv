@@ -5,6 +5,7 @@ use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
+use super::{update, update_concrete, update_repeat, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -72,10 +73,8 @@ impl AggrFnStateCount {
 // `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
 
 impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
-    type ChunkedType = T::ChunkedType;
-
     #[inline]
-    fn update(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+    unsafe fn update_unsafe(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         if value.is_some() {
             self.count += 1;
         }
@@ -83,7 +82,7 @@ impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for Aggr
     }
 
     #[inline]
-    fn update_repeat(
+    unsafe fn update_repeat_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
         value: Option<T>,
@@ -97,9 +96,10 @@ impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for Aggr
     }
 
     #[inline]
-    fn update_vector(
+    unsafe fn update_vector_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
+        _phantom_data: Option<T>,
         physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
@@ -122,7 +122,6 @@ impl super::AggrFunctionState for AggrFnStateCount {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::EvalType;
@@ -141,36 +140,32 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
 
-        state.update(&mut ctx, &Real::new(5.0).ok()).unwrap();
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
-        state.update(&mut ctx, &Some(7i64)).unwrap();
+        update!(state, &mut ctx, Real::new(5.0).ok().as_ref()).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(2)]);
 
-        state.update_repeat(&mut ctx, &Some(3i64), 4).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&3i64), 4).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(6)]);
 
-        state
-            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)], &[1, 2])
-            .unwrap();
+        let chunked_vec: NotChunkedVec<Int> = vec![Some(1i64), None, Some(-1i64)].into();
+        update_vector!(state, &mut ctx, &chunked_vec, &[1, 2]).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(7)]);
     }
 }
-*/

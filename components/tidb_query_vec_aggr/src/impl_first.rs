@@ -6,6 +6,7 @@ use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType, FieldType};
 
+use super::{update, update_concrete, update_repeat, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -113,7 +114,7 @@ where
     // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
 
     #[inline]
-    fn update(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+    unsafe fn update_unsafe(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         if let AggrFnStateFirst::Empty = self {
             // TODO: avoid this clone
             *self = AggrFnStateFirst::Valued(value.as_ref().cloned());
@@ -122,25 +123,26 @@ where
     }
 
     #[inline]
-    fn update_repeat(
+    unsafe fn update_repeat_unsafe(
         &mut self,
         ctx: &mut EvalContext,
         value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         assert!(repeat_times > 0);
-        self.update(ctx, value)
+        self.update_unsafe(ctx, value)
     }
 
     #[inline]
-    fn update_vector(
+    unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
+        _phantom_data: Option<T>,
         physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         if let Some(physical_index) = logical_rows.first() {
-            self.update(ctx, physical_values.get_option_ref(*physical_index))?;
+            self.update_unsafe(ctx, physical_values.get_option_ref(*physical_index))?;
         }
         Ok(())
     }
@@ -154,15 +156,17 @@ where
     T2: EvaluableRef<'static> + 'static,
     VectorValue: VectorValueExt<T2::EvaluableType>,
 {
-    type ChunkedType = T1::ChunkedType;
-    
     #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: Option<T1>) -> Result<()> {
+    default unsafe fn update_unsafe(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _value: Option<T1>,
+    ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
     #[inline]
-    default fn update_repeat(
+    default unsafe fn update_repeat_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
         _value: Option<T1>,
@@ -172,9 +176,10 @@ where
     }
 
     #[inline]
-    default fn update_vector(
+    default unsafe fn update_vector_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
+        _phantom_data: Option<T1>,
         _physical_values: T1::ChunkedType,
         _logical_rows: &[usize],
     ) -> Result<()> {
@@ -194,12 +199,11 @@ where
         } else {
             None
         };
-        target[0].push(res);
+        target[0].push(res.map(|x| x.to_owned_value()));
         Ok(())
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::super::AggrFunction;
@@ -213,18 +217,18 @@ mod tests {
     #[test]
     fn test_update() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnFirst::<Int>::new();
+        let function = AggrFnFirst::<&'static Int>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update(&mut ctx, &Some(1)).unwrap();
+        update!(state, &mut ctx, Some(&1)).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None, Some(1)]);
 
-        state.update(&mut ctx, &Some(2)).unwrap();
+        update!(state, &mut ctx, Some(&2)).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None, Some(1), Some(1)]);
     }
@@ -232,16 +236,16 @@ mod tests {
     #[test]
     fn test_update_repeat() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnFirst::<Bytes>::new();
+        let function = AggrFnFirst::<BytesRef<'static>>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Bytes)];
 
-        state.update_repeat(&mut ctx, &Some(vec![1]), 2).unwrap();
+        update_repeat!(state, &mut ctx, Some(&vec![1 as u8] as BytesRef), 2).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_bytes_slice(), &[Some(vec![1])]);
 
-        state.update_repeat(&mut ctx, &Some(vec![2]), 3).unwrap();
+        update_repeat!(state, &mut ctx, Some(&vec![2 as u8] as BytesRef), 3).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_bytes_slice(), &[Some(vec![1]), Some(vec![1])]);
     }
@@ -249,28 +253,30 @@ mod tests {
     #[test]
     fn test_update_vector() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnFirst::<Int>::new();
+        let function = AggrFnFirst::<&'static Int>::new();
         let mut state = function.create_state();
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
-        state.update_vector(&mut ctx, &[Some(0); 0], &[]).unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[Some(0); 0]);
+        update_vector!(state, &mut ctx, &chunked_vec, &[]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        state.update_vector(&mut ctx, &[Some(1)], &[]).unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[Some(1)]);
+        update_vector!(state, &mut ctx, &chunked_vec, &[]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        state
-            .update_vector(&mut ctx, &[None, Some(2)], &[0, 1])
-            .unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[None, Some(2)]);
+        update_vector!(state, &mut ctx, &chunked_vec, &[0, 1]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        state.update_vector(&mut ctx, &[Some(1)], &[0]).unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[Some(1)]);
+        update_vector!(state, &mut ctx, &chunked_vec, &[0]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
@@ -278,9 +284,14 @@ mod tests {
         let mut state = function.create_state();
 
         result[0].clear();
-        state
-            .update_vector(&mut ctx, &[None, Some(2)], &[1, 0])
-            .unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(&[None, Some(2)]);
+        update_vector!(
+            state,
+            &mut ctx,
+            &chunked_vec,
+            &[1, 0]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(2)]);
     }
@@ -301,4 +312,3 @@ mod tests {
             .unwrap_err();
     }
 }
-*/
