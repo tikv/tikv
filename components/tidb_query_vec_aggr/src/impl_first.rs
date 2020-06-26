@@ -91,7 +91,7 @@ where
     VectorValue: VectorValueExt<T::EvaluableType>,
 {
     Empty,
-    Valued(Option<T>),
+    Valued(Option<T::EvaluableType>),
 }
 
 impl<T> AggrFnStateFirst<T>
@@ -117,7 +117,7 @@ where
     unsafe fn update_unsafe(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
         if let AggrFnStateFirst::Empty = self {
             // TODO: avoid this clone
-            *self = AggrFnStateFirst::Valued(value.as_ref().cloned());
+            *self = AggrFnStateFirst::Valued(value.map(|x| x.to_owned_value()));
         }
         Ok(())
     }
@@ -199,7 +199,7 @@ where
         } else {
             None
         };
-        target[0].push(res.map(|x| x.to_owned_value()));
+        target[0].push(res);
         Ok(())
     }
 }
@@ -257,26 +257,40 @@ mod tests {
         let mut state = function.create_state();
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
-        let chunked_vec = NotChunkedVec::from_slice(&[Some(0); 0]);
-        update_vector!(state, &mut ctx, &chunked_vec, &[]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[Some(0); 0]),
+            &[]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        let chunked_vec = NotChunkedVec::from_slice(&[Some(1)]);
-        update_vector!(state, &mut ctx, &chunked_vec, &[]).unwrap();
+        update_vector!(state, &mut ctx, &NotChunkedVec::from_slice(&[Some(1)]), &[]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        let chunked_vec = NotChunkedVec::from_slice(&[None, Some(2)]);
-        update_vector!(state, &mut ctx, &chunked_vec, &[0, 1]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[None, Some(2)]),
+            &[0, 1]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
         result[0].clear();
-        let chunked_vec = NotChunkedVec::from_slice(&[Some(1)]);
-        update_vector!(state, &mut ctx, &chunked_vec, &[0]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[Some(1)]),
+            &[0]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
@@ -284,11 +298,10 @@ mod tests {
         let mut state = function.create_state();
 
         result[0].clear();
-        let chunked_vec = NotChunkedVec::from_slice(&[None, Some(2)]);
         update_vector!(
             state,
             &mut ctx,
-            &chunked_vec,
+            &NotChunkedVec::from_slice(&[None, Some(2)]),
             &[1, 0]
         )
         .unwrap();

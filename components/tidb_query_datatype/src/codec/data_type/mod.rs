@@ -221,6 +221,8 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
 
     /// Convert this reference to owned type
     fn to_owned_value(self) -> Self::EvaluableType;
+
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self;
 }
 
 impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
@@ -246,6 +248,11 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     #[inline]
     fn to_owned_value(self) -> Self::EvaluableType {
         self.clone()
+    }
+
+    #[inline]
+    fn from_owned_value(value: &'a T) -> Self {
+        &value
     }
 }
 
@@ -294,6 +301,11 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn to_owned_value(self) -> Self::EvaluableType {
         self.to_vec()
     }
+
+    #[inline]
+    fn from_owned_value(value: &'a Bytes) -> Self {
+        value.as_slice()
+    }
 }
 
 impl<'a> UnsafeRefInto<BytesRef<'static>> for BytesRef<'a> {
@@ -340,6 +352,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     #[inline]
     fn to_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
+    }
+
+    #[inline]
+    fn from_owned_value(value: &'a Json) -> Self {
+        value.as_ref()
     }
 }
 
