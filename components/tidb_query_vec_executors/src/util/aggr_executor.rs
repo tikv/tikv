@@ -329,7 +329,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 
 /// Shared test facilities for different aggregation executors.
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use tidb_query_codegen::AggrFunction;
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeTp};
