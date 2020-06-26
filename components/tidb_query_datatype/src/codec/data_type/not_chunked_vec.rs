@@ -89,3 +89,15 @@ impl<'a, T: Evaluable> UnsafeRefInto<&'static NotChunkedVec<T>> for &'a NotChunk
         std::mem::transmute(self)
     }
 }
+
+impl<'a> UnsafeRefInto<&'static NotChunkedVec<Bytes>> for &'a NotChunkedVec<Bytes> {
+    unsafe fn unsafe_into(self) -> &'static NotChunkedVec<Bytes> {
+        std::mem::transmute(self)
+    }
+}
+
+impl<'a> UnsafeRefInto<&'static NotChunkedVec<Json>> for &'a NotChunkedVec<Json> {
+    unsafe fn unsafe_into(self) -> &'static NotChunkedVec<Json> {
+        std::mem::transmute(self)
+    }
+}
