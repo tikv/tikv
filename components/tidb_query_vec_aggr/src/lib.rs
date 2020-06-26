@@ -58,17 +58,16 @@ pub trait AggrFunction: std::fmt::Debug + Send + 'static {
 /// parameter in the correct data type for an aggregate function states that calculates over this
 /// data type. To be safely boxed and placed in a vector, interfaces are provided in a form that
 /// accept all kinds of data type. However, unmatched types will result in panics in runtime.
-pub trait AggrFunctionState:
-    std::fmt::Debug
+pub trait AggrFunctionState: std::fmt::Debug
     + Send
     + 'static
-    + AggrFunctionStateUpdatePartial<&'static Int, ChunkedType = &'static NotChunkedVec<Int>>
-    + AggrFunctionStateUpdatePartial<&'static  Real, ChunkedType = &'static NotChunkedVec<Real>>
-    + AggrFunctionStateUpdatePartial<&'static Decimal, ChunkedType = &'static NotChunkedVec<Decimal>>
-    + AggrFunctionStateUpdatePartial<BytesRef<'static>, ChunkedType = &'static NotChunkedVec<Bytes>>
-    + AggrFunctionStateUpdatePartial<&'static DateTime, ChunkedType = &'static NotChunkedVec<DateTime>>
-    + AggrFunctionStateUpdatePartial<&'static Duration, ChunkedType = &'static NotChunkedVec<Duration>>
-    + AggrFunctionStateUpdatePartial<JsonRef<'static>, ChunkedType = &'static NotChunkedVec<Json>>
+    + AggrFunctionStateUpdatePartial<&'static Int>
+    + AggrFunctionStateUpdatePartial<&'static Real>
+    + AggrFunctionStateUpdatePartial<&'static Decimal>
+    + AggrFunctionStateUpdatePartial<BytesRef<'static>>
+    + AggrFunctionStateUpdatePartial<&'static DateTime>
+    + AggrFunctionStateUpdatePartial<&'static Duration>
+    + AggrFunctionStateUpdatePartial<JsonRef<'static>>
 {
     // TODO: A better implementation is to specialize different push result targets. However
     // current aggregation executor cannot utilize it.
@@ -83,9 +82,9 @@ pub trait AggrFunctionState:
 /// any eval types (but will panic when eval type does not match expectation) will be generated via
 /// implementations over this trait.
 pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
-    type ParameterType: EvaluableRef <'static>;
+    type ParameterType: EvaluableRef<'static>;
 
-    fn update_concrete(
+    unsafe fn update_concrete_unsafe(
         &mut self,
         ctx: &mut EvalContext,
         value: Option<Self::ParameterType>,
@@ -94,18 +93,44 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
     fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()>;
 }
 
+#[macro_export]
+macro_rules! update_concrete {
+    ( $state:expr, $ctx:expr, $value:expr ) => {
+        unsafe { $state.update_concrete_unsafe($ctx, $value.unsafe_into()) }
+    };
+}
+
+#[macro_export]
+macro_rules! update_vector {
+    ( $state:expr, $ctx:expr, $physical_values:expr, $logical_rows:expr ) => {
+        unsafe { $state.update_vector_unsafe($ctx, $physical_values.phantom_data().unsafe_into(), $physical_values.unsafe_into(), $logical_rows) }
+    };
+}
+
+#[macro_export]
+macro_rules! update_repeat {
+    ( $state:expr, $ctx:expr, $value:expr, $repeat_times:expr ) => {
+        unsafe { $state.update_repeat_unsafe($ctx, $value.unsafe_into(), $repeat_times) }
+    };
+}
+
+#[macro_export]
+macro_rules! update {
+    ( $state:expr, $ctx:expr, $value:expr ) => {
+        unsafe { $state.update_unsafe($ctx, $value.unsafe_into()) }
+    };
+}
+
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
 pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
-    type ChunkedType: ChunkRef<'static, TT> + 'static;
-
     /// Updates the internal state giving one row data.
     ///
     /// # Panics
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>;
+    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>;
 
     /// Repeatedly updates the internal state giving one row data.
     ///
@@ -113,7 +138,7 @@ pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_repeat(
+    unsafe fn update_repeat_unsafe(
         &mut self,
         ctx: &mut EvalContext,
         value: Option<TT>,
@@ -126,10 +151,11 @@ pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_vector(
+    unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: Self::ChunkedType,
+        phantom_data: Option<TT>,
+        physical_values: TT::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()>;
 }
@@ -138,18 +164,20 @@ impl<T: EvaluableRef<'static>, State> AggrFunctionStateUpdatePartial<T> for Stat
 where
     State: ConcreteAggrFunctionState,
 {
-    type ChunkedType = T::ChunkedType;
-
     // All `ConcreteAggrFunctionState` implement `AggrFunctionStateUpdatePartial<T>`, which is
     // one of the trait bound that `AggrFunctionState` requires.
 
     #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: Option<T>) -> Result<()> {
+    default unsafe fn update_unsafe(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _value: Option<T>,
+    ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
     #[inline]
-    default fn update_repeat(
+    default unsafe fn update_repeat_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
         _value: Option<T>,
@@ -159,10 +187,11 @@ where
     }
 
     #[inline]
-    default fn update_vector(
+    default unsafe fn update_vector_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
-        _physical_values: Self::ChunkedType,
+        _phantom_data: Option<T>,
+        _physical_values: T::ChunkedType,
         _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
@@ -174,32 +203,33 @@ where
     State: ConcreteAggrFunctionState<ParameterType = T>,
 {
     #[inline]
-    fn update(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
-        self.update_concrete(ctx, value)
+    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+        self.update_concrete_unsafe(ctx, value)
     }
 
     #[inline]
-    fn update_repeat(
+    unsafe fn update_repeat_unsafe(
         &mut self,
         ctx: &mut EvalContext,
         value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         for _ in 0..repeat_times {
-            self.update_concrete(ctx, value)?;
+            self.update_concrete_unsafe(ctx, value.clone())?;
         }
         Ok(())
     }
 
     #[inline]
-    fn update_vector(
+    unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
+        _phantom_data: Option<T>,
         physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         for physical_index in logical_rows {
-            self.update_concrete(ctx, physical_values.get_option_ref(*physical_index))?;
+            self.update_concrete_unsafe(ctx, physical_values.get_option_ref(*physical_index))?;
         }
         Ok(())
     }
