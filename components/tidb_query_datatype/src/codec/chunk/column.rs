@@ -10,7 +10,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::{VectorValue, ChunkRef};
+use crate::codec::data_type::{ChunkRef, VectorValue};
 use crate::codec::datum;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::{
@@ -19,7 +19,9 @@ use crate::codec::mysql::decimal::{
 use crate::codec::mysql::duration::{
     Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
 };
-use crate::codec::mysql::json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef};
+use crate::codec::mysql::json::{
+    Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef,
+};
 use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder};
 use crate::codec::Datum;
 use crate::expr::EvalContext;

@@ -421,7 +421,12 @@ mod tests {
             assert_eq!(result[0].as_bytes_slice(), &[None]);
 
             for arg in args {
-                update!(state, &mut ctx, Some(&String::from(arg).into_bytes() as BytesRef)).unwrap();
+                update!(
+                    state,
+                    &mut ctx,
+                    Some(&String::from(arg).into_bytes() as BytesRef)
+                )
+                .unwrap();
             }
             result[0].clear();
             state.push_result(&mut ctx, &mut result).unwrap();

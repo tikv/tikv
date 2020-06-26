@@ -645,24 +645,30 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![
-                            Some(b"foo".to_vec()),
-                            None,
-                            Some(b"ABC".to_vec()),
-                            None,
-                            None,
-                            None,
-                            Some(b"ABC".to_vec()),
-                        ].into()),
-                        VectorValue::Real(vec![
-                            Real::new(100.0).ok(),
-                            Real::new(1.5).ok(),
-                            Real::new(-5.0).ok(),
-                            None,
-                            Real::new(1.5).ok(),
-                            None,
-                            Real::new(-5.0).ok(),
-                        ].into()),
+                        VectorValue::Bytes(
+                            vec![
+                                Some(b"foo".to_vec()),
+                                None,
+                                Some(b"ABC".to_vec()),
+                                None,
+                                None,
+                                None,
+                                Some(b"ABC".to_vec()),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Real(
+                            vec![
+                                Real::new(100.0).ok(),
+                                Real::new(1.5).ok(),
+                                Real::new(-5.0).ok(),
+                                None,
+                                Real::new(1.5).ok(),
+                                None,
+                                Real::new(-5.0).ok(),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![3, 1, 4, 2, 6],
                     warnings: EvalWarnings::default(),
@@ -671,7 +677,9 @@ mod tests {
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Bytes(vec![None, None, Some(b"ABC".to_vec())].into()),
-                        VectorValue::Real(vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()].into()),
+                        VectorValue::Real(
+                            vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()].into(),
+                        ),
                     ]),
                     logical_rows: vec![2],
                     warnings: EvalWarnings::default(),
@@ -679,7 +687,9 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())].into()),
+                        VectorValue::Bytes(
+                            vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())].into(),
+                        ),
                         VectorValue::Real(vec![Real::new(-5.0).ok(), Real::new(-5.0).ok()].into()),
                     ]),
                     logical_rows: (0..2).collect(),

@@ -303,13 +303,10 @@ mod tests {
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Int(vec![None, None, Some(1), None, Some(5)].into()),
-                        VectorValue::Real(vec![
-                            Real::new(7.0).ok(),
-                            Real::new(-5.0).ok(),
-                            None,
-                            None,
-                            None,
-                        ].into()),
+                        VectorValue::Real(
+                            vec![Real::new(7.0).ok(), Real::new(-5.0).ok(), None, None, None]
+                                .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 0],
                     warnings: EvalWarnings::default(),

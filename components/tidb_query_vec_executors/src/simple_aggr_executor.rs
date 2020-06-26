@@ -600,9 +600,9 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
-                        5,
-                    )].into())]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(5)].into(),
+                    )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
