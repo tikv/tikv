@@ -5,6 +5,7 @@ use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
+use super::*;
 use super::summable::Summable;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
