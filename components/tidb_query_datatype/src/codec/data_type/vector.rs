@@ -412,25 +412,6 @@ macro_rules! impl_as_slice {
                 self.$name()
             }
         }
-
-        /*
-
-        // TODO: We should only expose interface for push value, not the entire Vec.
-        impl AsMut<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
-            fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
-                match self {
-                    VectorValue::$ty(ref mut vec) => vec,
-                    other => panic!(
-                        "Cannot retrieve a mutable `{}` vector over a {} column",
-                        stringify!($ty),
-                        other.eval_type()
-                    ),
-                }
-            }
-        }
-
-        */
     };
 }
 
