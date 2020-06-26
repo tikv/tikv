@@ -58,7 +58,8 @@ pub trait AggrFunction: std::fmt::Debug + Send + 'static {
 /// parameter in the correct data type for an aggregate function states that calculates over this
 /// data type. To be safely boxed and placed in a vector, interfaces are provided in a form that
 /// accept all kinds of data type. However, unmatched types will result in panics in runtime.
-pub trait AggrFunctionState: std::fmt::Debug
+pub trait AggrFunctionState:
+    std::fmt::Debug
     + Send
     + 'static
     + AggrFunctionStateUpdatePartial<&'static Int>
@@ -103,7 +104,14 @@ macro_rules! update_concrete {
 #[macro_export]
 macro_rules! update_vector {
     ( $state:expr, $ctx:expr, $physical_values:expr, $logical_rows:expr ) => {
-        unsafe { $state.update_vector_unsafe($ctx, $physical_values.phantom_data().unsafe_into(), $physical_values.unsafe_into(), $logical_rows) }
+        unsafe {
+            $state.update_vector_unsafe(
+                $ctx,
+                $physical_values.phantom_data().unsafe_into(),
+                $physical_values.unsafe_into(),
+                $logical_rows,
+            )
+        }
     };
 }
 
@@ -244,7 +252,6 @@ where
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,7 +275,7 @@ mod tests {
         impl ConcreteAggrFunctionState for AggrFnStateFoo {
             type ParameterType = &'static Int;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
                 value: Option<&'static Int>,
@@ -293,25 +300,37 @@ mod tests {
         let mut s = AggrFnStateFoo::new();
 
         // Update using `Int` should success.
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(1))
-            .is_ok());
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(3))
-            .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&3)
+        )
+        .is_ok());
 
         // Update using other data type should panic.
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
-            let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Real::new(1.0).ok());
+            let _ = update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Real::new(1.0).ok().as_ref()
+            );
         });
         assert!(result.is_err());
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
-            let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Some(vec![1u8]));
+            let _ = update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Some(&vec![1u8] as BytesRef)
+            );
         });
         assert!(result.is_err());
 
@@ -324,9 +343,12 @@ mod tests {
         assert_eq!(target[0].as_real_slice(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(1))
-            .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .is_ok());
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
@@ -351,4 +373,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-*/
