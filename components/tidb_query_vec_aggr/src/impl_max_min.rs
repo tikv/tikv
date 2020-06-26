@@ -83,7 +83,6 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             src_schema.len(),
         )?);
 
-
         if out_et == EvalType::Bytes {
             return match_template_collator! {
                 C, match out_coll {
@@ -158,25 +157,25 @@ where
     C: Collator,
     E: Extremum,
 {
-    type ParameterType = Bytes;
+    type ParameterType = BytesRef<'static>;
 
     #[inline]
-    fn update_concrete(
+    unsafe fn update_concrete_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()> {
         if value.is_none() {
             return Ok(());
         }
 
         if self.extremum.is_none() {
-            self.extremum = value.clone();
+            self.extremum = value.map(|x| x.to_owned_value());
             return Ok(());
         }
 
         if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
-            self.extremum = value.clone();
+            self.extremum = value.map(|x| x.to_owned_value());
         }
         Ok(())
     }
@@ -253,10 +252,8 @@ where
         _ctx: &mut EvalContext,
         value: Option<Self::ParameterType>,
     ) -> Result<()> {
-        let extreme_ref: Option<&'static T::EvaluableType> = self
-            .extremum_value
-            .as_ref()
-            .map(|x| std::mem::transmute(x));
+        let extreme_ref: Option<&'static T::EvaluableType> =
+            self.extremum_value.as_ref().map(|x| std::mem::transmute(x));
         if value.is_some()
             && (self.extremum_value.is_none()
                 || extreme_ref.map(|x| T::from_owned_value(x)).cmp(&value) == E::ORD)
@@ -371,7 +368,13 @@ mod tests {
 
         // update vector
         update!(state, &mut ctx, Some(&70i64)).unwrap();
-        update_vector!(state, &mut ctx, &NotChunkedVec::from_slice(&[Some(69i64), None, Some(68i64)]), &[0, 1, 2]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[Some(69i64), None, Some(68i64)]),
+            &[0, 1, 2]
+        )
+        .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(68)]);
@@ -418,9 +421,7 @@ mod tests {
             assert_eq!(result[0].as_bytes_slice(), &[None]);
 
             for arg in args {
-                state
-                    .update(&mut ctx, &Some(String::from(arg).into_bytes()))
-                    .unwrap();
+                update!(state, &mut ctx, Some(&String::from(arg).into_bytes() as BytesRef)).unwrap();
             }
             result[0].clear();
             state.push_result(&mut ctx, &mut result).unwrap();
@@ -492,7 +493,13 @@ mod tests {
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
-            update_vector!(max_state, &mut ctx, &NotChunkedVec::from_slice(max_slice), max_result.logical_rows()).unwrap();
+            update_vector!(
+                max_state,
+                &mut ctx,
+                &NotChunkedVec::from_slice(max_slice),
+                max_result.logical_rows()
+            )
+            .unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -503,7 +510,13 @@ mod tests {
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
-            update_vector!(min_state, &mut ctx, &NotChunkedVec::from_slice(min_slice), min_result.logical_rows()).unwrap();
+            update_vector!(
+                min_state,
+                &mut ctx,
+                &NotChunkedVec::from_slice(min_slice),
+                min_result.logical_rows()
+            )
+            .unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
