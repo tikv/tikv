@@ -230,7 +230,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
-        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
+        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,

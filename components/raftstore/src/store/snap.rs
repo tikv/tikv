@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -29,7 +29,7 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::{RaftRouter, StoreMsg};
+use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
@@ -1098,17 +1098,6 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<impl EngineSnapshot>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
-            error!(
-                "failed to notify snapshot stats";
-                "err" => ?e,
-            )
-        }
-    }
-}
-
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager<E: KvEngine> {
     core: SnapManagerCore,
@@ -1362,8 +1351,6 @@ impl<E: KvEngine> SnapManager<E> {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1385,7 +1372,6 @@ impl<E: KvEngine> SnapManager<E> {
             registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(
@@ -1537,8 +1523,8 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine::rocks::{DBOptions, Env, DB};
     use engine::Engines;
+    use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{Iterable, Peekable, SyncMutable};

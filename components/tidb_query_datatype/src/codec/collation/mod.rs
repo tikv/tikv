@@ -46,7 +46,7 @@ impl Charset for CharsetBinary {
     }
 }
 
-pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
+pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
 
     fn validate(bstr: &[u8]) -> Result<()>;
@@ -71,6 +71,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
 }
 
 /// Collator for binary collation without padding.
+#[derive(Debug)]
 pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
