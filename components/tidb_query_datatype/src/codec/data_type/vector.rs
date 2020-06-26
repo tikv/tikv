@@ -636,14 +636,13 @@ mod tests {
             ]
         );
     }
-    /*
+
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Real::new(1.0).ok()];
-        let vec = slice.to_vec();
-        let column = VectorValue::from(vec);
+        let chunked_vec = NotChunkedVec::from_slice(slice);
+        let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
         assert_eq!(column.as_real_slice(), slice);
     }
-    */
 }
