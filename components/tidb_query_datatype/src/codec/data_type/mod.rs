@@ -43,7 +43,7 @@ impl AsMySQLBool for Real {
     }
 }
 
-impl <'a, T: AsMySQLBool> AsMySQLBool for &'a T {
+impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         (&**self).as_mysql_bool(context)
@@ -57,7 +57,7 @@ impl AsMySQLBool for Bytes {
     }
 }
 
-impl <'a> AsMySQLBool for BytesRef<'a> {
+impl<'a> AsMySQLBool for BytesRef<'a> {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
@@ -76,18 +76,14 @@ where
     }
 }
 
-impl<'a> AsMySQLBool for JsonRef<'a>
-where
-{
+impl<'a> AsMySQLBool for JsonRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
         Ok(false)
     }
 }
 
-impl<'a> AsMySQLBool for Option<BytesRef<'a>>
-where
-{
+impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -96,9 +92,7 @@ where
     }
 }
 
-impl<'a> AsMySQLBool for Option<JsonRef<'a>>
-where
-{
+impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -116,6 +110,12 @@ pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
 
 pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Send + Sync {
     fn get_option_ref(self, idx: usize) -> Option<T>;
+
+    fn phantom_data(self) -> Option<T>;
+}
+
+pub trait UnsafeRefInto<T> {
+    unsafe fn unsafe_into(self) -> T;
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
@@ -205,7 +205,7 @@ impl_evaluable_ret! { Json }
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
     type ChunkedType: ChunkRef<'a, Self> + 'a;
-    type EvaluableType : EvaluableRet;
+    type EvaluableType: EvaluableRet;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
     /// panics if the varient mismatches.
@@ -218,6 +218,9 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
+
+    /// Convert this reference to owned type
+    fn to_owned_value(self) -> Self::EvaluableType;
 }
 
 impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
@@ -238,6 +241,23 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     #[inline]
     fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<T> {
         Evaluable::borrow_vector_value(v)
+    }
+
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.clone()
+    }
+}
+
+impl<'a, A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
+    unsafe fn unsafe_into(self) -> Option<B> {
+        self.map(|x| x.unsafe_into())
+    }
+}
+
+impl<'a, T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &'a T {
+    unsafe fn unsafe_into(self) -> &'static T {
+        std::mem::transmute(self)
     }
 }
 
@@ -269,6 +289,23 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
             _ => unimplemented!(),
         }
     }
+
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_vec()
+    }
+}
+
+impl<'a> UnsafeRefInto<BytesRef<'static>> for BytesRef<'a> {
+    unsafe fn unsafe_into(self) -> BytesRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
+impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
+    unsafe fn unsafe_into(self) -> JsonRef<'static> {
+        std::mem::transmute(self)
+    }
 }
 
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
@@ -298,6 +335,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),
         }
+    }
+
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_owned()
     }
 }
 

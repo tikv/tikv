@@ -6,11 +6,19 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a NotChunkedVec<
     fn get_option_ref(self, idx: usize) -> Option<&'a T> {
         self.data[idx].as_ref()
     }
+
+    fn phantom_data(self) -> Option<&'a T> {
+        None
+    }
 }
 
 impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a NotChunkedVec<Bytes> {
     fn get_option_ref(self, idx: usize) -> Option<BytesRef<'a>> {
         self.data[idx].as_deref()
+    }
+
+    fn phantom_data(self) -> Option<BytesRef<'a>> {
+        None
     }
 }
 
@@ -18,17 +26,26 @@ impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a NotChunkedVec<Json> {
     fn get_option_ref(self, idx: usize) -> Option<JsonRef<'a>> {
         self.data[idx].as_ref().map(|x| x.as_ref())
     }
+
+    fn phantom_data(self) -> Option<JsonRef<'a>> {
+        None
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct NotChunkedVec<T> {
-    data: Vec<Option<T>>
+    data: Vec<Option<T>>,
 }
 
-impl <T: Sized> NotChunkedVec <T> {
+impl<T: Sized + Clone> NotChunkedVec<T> {
+    pub fn from_slice(slice: &[Option<T>]) -> Self {
+        Self {
+            data: slice.to_vec(),
+        }
+    }
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            data: Vec::with_capacity(capacity)
+            data: Vec::with_capacity(capacity),
         }
     }
 
@@ -61,10 +78,14 @@ impl <T: Sized> NotChunkedVec <T> {
     }
 }
 
-impl <T> Into<NotChunkedVec<T>> for Vec<Option<T>> {
+impl<T> Into<NotChunkedVec<T>> for Vec<Option<T>> {
     fn into(self) -> NotChunkedVec<T> {
-        NotChunkedVec {
-            data: self
-        }
+        NotChunkedVec { data: self }
+    }
+}
+
+impl<'a, T: Evaluable> UnsafeRefInto<&'static NotChunkedVec<T>> for &'a NotChunkedVec<T> {
+    unsafe fn unsafe_into(self) -> &'static NotChunkedVec<T> {
+        std::mem::transmute(self)
     }
 }
