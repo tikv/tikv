@@ -6,7 +6,6 @@ use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
-use super::{update, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;

@@ -61,6 +61,10 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
         self.data.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     pub fn truncate(&mut self, len: usize) {
         self.data.truncate(len)
     }

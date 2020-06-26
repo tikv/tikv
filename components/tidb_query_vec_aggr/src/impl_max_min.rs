@@ -7,7 +7,6 @@ use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
-use super::{update, update_repeat, update_vector};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
