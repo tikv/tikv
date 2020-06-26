@@ -86,7 +86,7 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
     type ParameterType: EvaluableRef<'static>;
 
     /// # Safety
-    /// 
+    ///
     /// This function should be called with `update_concrete` macro.
     unsafe fn update_concrete_unsafe(
         &mut self,
@@ -141,9 +141,9 @@ pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// This function should be called with `update` macro.
     unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>;
 
@@ -153,9 +153,9 @@ pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// This function should be called with `update_repeat_unsafe` macro.
     unsafe fn update_repeat_unsafe(
         &mut self,
@@ -170,9 +170,9 @@ pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// This function should be called with `update_vector` macro.
     unsafe fn update_vector_unsafe(
         &mut self,

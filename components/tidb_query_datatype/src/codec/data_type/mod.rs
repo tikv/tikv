@@ -116,7 +116,7 @@ pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Se
 
 pub trait UnsafeRefInto<T> {
     /// # Safety
-    /// 
+    ///
     /// This function uses `std::mem::transmute`.
     /// The only place that copr uses this function is in
     /// `tidb_query_vec_aggr`, together with a set of `update` macros.
