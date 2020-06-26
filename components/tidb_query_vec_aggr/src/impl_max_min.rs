@@ -265,7 +265,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push(self.extremum_value.clone().map(|x| x));
+        target[0].push(self.extremum_value.clone());
         Ok(())
     }
 }
