@@ -27,7 +27,7 @@ impl Logger for RaftDBLogger {
         match log_level {
             InfoLogLevel::Debug => debug!(#"raftdb_log","{}", log),
             InfoLogLevel::Info | InfoLogLevel::Header | InfoLogLevel::NumInfoLog => {
-                info!(#"raft_log","{}", log)
+                info!(#"raftdb_log","{}", log)
             }
             InfoLogLevel::Warn => warn!(#"raftdb_log","{}", log),
             InfoLogLevel::Error => error!(#"raftdb_log","{}", log),
