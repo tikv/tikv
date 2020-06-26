@@ -344,7 +344,7 @@ mod tests {
             let _ = update!(
                 &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
                 &mut ctx,
-                Some(&vec![1u8] as BytesRef)
+                Some(&[1u8] as BytesRef)
             );
         });
         assert!(result.is_err());
