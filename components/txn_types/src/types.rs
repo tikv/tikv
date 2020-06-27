@@ -39,8 +39,8 @@ impl Version {
     #[inline]
     pub fn from_raw(version: u64) -> Version {
         let mut encoded = Vec::with_capacity(8);
-        // Being 8 bytes(u64), serialize u64 to byte array to include in key
-        let bytes: Vec<u8> = version.to_le_bytes();
+        // Being 8 bytes(u64), serialize u64 to little endian byte array to include in key
+        let bytes: Vec<u8> = version.to_le_bytes().to_vec();
         Version(encoded)
     }
 
@@ -49,7 +49,7 @@ impl Version {
     pub fn into_raw(self) -> Result<u64, codec::Error> {
         let v = self.0;
         // Being 8 bytes(u64), deserialize byte array into u64
-        // TODO: choose
+        // Deserialize little endian byte array to u64
         let converted: u64 = ((v[0] as u64) << 0)
             + ((v[1] as u64) << 8)
             + ((v[2] as u64) << 16)
