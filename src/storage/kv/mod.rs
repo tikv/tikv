@@ -13,7 +13,7 @@ use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{CfName, CF_DEFAULT, CF_VER_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
@@ -96,9 +96,9 @@ pub trait Engine: Send + Clone + 'static {
         self.put_cf(ctx, CF_DEFAULT, key, value)
     }
 
-    fn ver_put(&self, ctx: &Context, key: Key, version: Version, value: Value) -> Result<()> {
+    fn ver_put(&self, ctx: &Context, key: Key, _version: Version, value: Value) -> Result<()> {
         // TODO: encode version and include in key
-        self.put_cf(ctx, CF_DEFAULT, key, value)
+        self.put_cf(ctx, CF_VER_DEFAULT, key, value)
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
