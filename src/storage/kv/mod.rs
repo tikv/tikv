@@ -17,7 +17,7 @@ use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
+use txn_types::{Key, Value, Version};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -93,6 +93,11 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
+        self.put_cf(ctx, CF_DEFAULT, key, value)
+    }
+
+    fn ver_put(&self, ctx: &Context, key: Key, version: Version, value: Value) -> Result<()> {
+        // TODO: encode version and include in key
         self.put_cf(ctx, CF_DEFAULT, key, value)
     }
 

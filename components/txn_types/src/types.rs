@@ -24,6 +24,17 @@ pub type Value = Vec<u8>;
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
 
+/// Version type.
+///
+/// Keys have 2 types of binary representation - raw and encoded. The raw
+/// representation is for public interface(timestamp or integer value set by developer), the encoded representation is for
+/// internal storage. We can get both representations from an instance of this
+/// type.
+///
+/// TODO: implement methods
+#[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Version(u64);
+
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
