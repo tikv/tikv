@@ -135,6 +135,27 @@ where
     Ok(drain)
 }
 
+/// Same as file_drainer, but without extra header and formatting for the logs.
+pub fn plain_file_drainer<N>(
+    path: impl AsRef<Path>,
+    rotation_timespan: ReadableDuration,
+    rotation_size: ReadableSize,
+    rename: N,
+) -> io::Result<PlainFormat<RotatingFileDecorator>>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
+    let logger = BufWriter::new(
+        RotatingFileLoggerBuilder::new(path, rename)
+            .add_rotator(RotateByTime::new(rotation_timespan))
+            .add_rotator(RotateBySize::new(rotation_size))
+            .build()?,
+    );
+    let decorator = PlainDecorator::new(logger);
+    let drain = PlainFormat::new(decorator);
+    Ok(drain)
+}
+
 /// Constructs a new terminal drainer which outputs logs to stderr.
 pub fn term_drainer() -> TikvFormat<TermDecorator> {
     let decorator = TermDecorator::new().stderr().build();
@@ -228,6 +249,44 @@ where
             write_log_msg(decorator, record)?;
             write_log_fields(decorator, record, values)?;
 
+            decorator.start_whitespace()?;
+            writeln!(decorator)?;
+
+            decorator.flush()?;
+
+            Ok(())
+        })
+    }
+}
+
+pub struct PlainFormat<D>
+where
+    D: Decorator
+{
+    decorator: D,
+}
+
+impl<D> PlainFormat<D>
+where
+    D: Decorator,
+{
+    pub fn new(decorator: D) -> Self {
+        Self { decorator }
+    }
+}
+
+impl<D> Drain for PlainFormat<D>
+where
+    D: Decorator,
+{
+    type Ok = ();
+    type Err = io::Error;
+    
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        self.decorator.with_record(record, values, |decorator| {
+            decorator.start_msg()?;
+            write_log_fields(decorator, record, values)?;
+            
             decorator.start_whitespace()?;
             writeln!(decorator)?;
 
@@ -337,8 +396,8 @@ impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
         Self {
             normal,
             rocksdb,
-            slow,
             raftdb,
+            slow,
         }
     }
 }
