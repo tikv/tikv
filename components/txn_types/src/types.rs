@@ -33,7 +33,34 @@ pub type KvPair = (Vec<u8>, Value);
 ///
 /// TODO: implement methods
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Version(u64);
+pub struct Version(Vec<u8>);
+
+impl Version {
+    // Returns Version byte array(not encoded) from timestamp or specified version(u64)
+    #[inline]
+    pub fn from_raw(version: u64) -> Version {
+        let mut encoded = Vec::with_capacity(8);
+        // Being 8 bytes(u64) serialize u64 to byte array to be included in key
+        let bytes: Vec<u8> = version.to_be_bytes();
+        Version(encoded)
+    }
+
+    // Returns timestamp or specified version from version byte array(not encoded)
+    #[inline]
+    pub fn into_raw(self) -> Result<u64, codec::Error> {
+        let v = self.0;
+        // Being 8 bytes(u64), deserialize byte array into u64
+        let converted: u64 = ((v[0] as u64) << 0)
+            + ((v[1] as u64) << 8)
+            + ((v[2] as u64) << 16)
+            + ((v[3] as u64) << 24)
+            + ((v[4] as u64) << 32)
+            + ((v[5] as u64) << 40)
+            + ((v[6] as u64) << 48)
+            + ((v[7] as u64) << 56);
+        Ok(converted)
+    }
+}
 
 /// Key type.
 ///
