@@ -8,6 +8,7 @@ use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::thread;
 
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
@@ -136,12 +137,12 @@ where
 }
 
 /// Same as file_drainer, but only logging log message without headers and associated fields.
-pub fn plain_file_drainer<N>(
+pub fn rocks_file_drainer<N>(
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
     rename: N,
-) -> io::Result<PlainFormat<RotatingFileDecorator>>
+) -> io::Result<RocksFormat<RotatingFileDecorator>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
@@ -152,7 +153,7 @@ where
             .build()?,
     );
     let decorator = PlainDecorator::new(logger);
-    let drain = PlainFormat::new(decorator);
+    let drain = RocksFormat::new(decorator);
     Ok(drain)
 }
 
@@ -259,14 +260,14 @@ where
     }
 }
 
-pub struct PlainFormat<D>
+pub struct RocksFormat<D>
 where
-    D: Decorator
+    D: Decorator,
 {
     decorator: D,
 }
 
-impl<D> PlainFormat<D>
+impl<D> RocksFormat<D>
 where
     D: Decorator,
 {
@@ -275,16 +276,25 @@ where
     }
 }
 
-impl<D> Drain for PlainFormat<D>
+impl<D> Drain for RocksFormat<D>
 where
     D: Decorator,
 {
     type Ok = ();
     type Err = io::Error;
-    
+
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
-            let msg = format!("{}", record.msg());
+            decorator.start_timestamp()?;
+            write!(
+                decorator,
+                "[{}]",
+                chrono::Local::now().format(TIMESTAMP_FORMAT)
+            )?;
+            decorator.start_level()?;
+            write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
+            decorator.start_msg()?;
+            let msg = format!("[{:?}]{}", thread::current().id(), record.msg());
             write!(decorator, "{}", msg)?;
             if msg.chars().last() != Some('\n') {
                 writeln!(decorator)?;
