@@ -135,7 +135,7 @@ where
     Ok(drain)
 }
 
-/// Same as file_drainer, but without extra header and formatting for the logs.
+/// Same as file_drainer, but only logging log message without headers and associated fields.
 pub fn plain_file_drainer<N>(
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
@@ -284,12 +284,7 @@ where
     
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
-            decorator.start_msg()?;
-            write_log_fields(decorator, record, values)?;
-            
-            decorator.start_whitespace()?;
-            writeln!(decorator)?;
-
+            writeln!(decorator, "{}", record.msg())?;
             decorator.flush()?;
 
             Ok(())
