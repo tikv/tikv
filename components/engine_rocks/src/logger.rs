@@ -8,7 +8,7 @@ pub struct RocksdbLogger;
 impl Logger for RocksdbLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
         match log_level {
-            InfoLogLevel::Header => trace!(#"rocksdb_log", "{}", log),
+            InfoLogLevel::Header => info!(#"rocksdb_log_header", "{}", log),
             InfoLogLevel::Debug => debug!(#"rocksdb_log", "{}", log),
             InfoLogLevel::Info => info!(#"rocksdb_log", "{}", log),
             InfoLogLevel::Warn => warn!(#"rocksdb_log", "{}", log),
@@ -25,7 +25,7 @@ pub struct RaftDBLogger;
 impl Logger for RaftDBLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
         match log_level {
-            InfoLogLevel::Header => trace!(#"raftdb_log", "{}", log),
+            InfoLogLevel::Header => info!(#"raftdb_log_header", "{}", log),
             InfoLogLevel::Debug => debug!(#"raftdb_log", "{}", log),
             InfoLogLevel::Info => info!(#"raftdb_log", "{}", log),
             InfoLogLevel::Warn => warn!(#"raftdb_log", "{}", log),

@@ -285,8 +285,7 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
-            // We borrow the trace level to use as rocksdb's header level.
-            if record.level() != Level::Trace {
+            if !record.tag().ends_with("_header") {
                 decorator.start_timestamp()?;
                 write!(
                     decorator,
