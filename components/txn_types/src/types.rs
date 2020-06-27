@@ -38,10 +38,9 @@ impl Version {
     // Returns Version byte array(not encoded) from timestamp or specified version(u64)
     #[inline]
     pub fn from_raw(version: u64) -> Version {
-        let mut encoded = Vec::with_capacity(8);
         // Being 8 bytes(u64), serialize u64 to little endian byte array to include in key
         let bytes: Vec<u8> = version.to_le_bytes().to_vec();
-        Version(encoded)
+        Version(bytes)
     }
 
     // Returns timestamp or specified version from version byte array(not encoded)
