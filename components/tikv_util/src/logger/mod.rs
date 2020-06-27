@@ -285,16 +285,22 @@ where
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
-            decorator.start_timestamp()?;
-            write!(
-                decorator,
-                "[{}]",
-                chrono::Local::now().format(TIMESTAMP_FORMAT)
-            )?;
-            decorator.start_level()?;
-            write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
+            // We borrow the trace level to use as rocksdb's header level.
+            if record.level() != Level::Trace {
+                decorator.start_timestamp()?;
+                write!(
+                    decorator,
+                    "[{}][{}]",
+                    chrono::Local::now().format(TIMESTAMP_FORMAT),
+                    thread::current().id().as_u64(),
+                )?;
+                decorator.start_level()?;
+                write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
+                decorator.start_whitespace()?;
+                write!(decorator, " ")?;
+            }
             decorator.start_msg()?;
-            let msg = format!("[{:?}]{}", thread::current().id(), record.msg());
+            let msg = format!("{}", record.msg());
             write!(decorator, "{}", msg)?;
             if msg.chars().last() != Some('\n') {
                 writeln!(decorator)?;
