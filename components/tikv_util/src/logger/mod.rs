@@ -284,7 +284,7 @@ where
     
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
-            writeln!(decorator, "{}", record.msg())?;
+            write!(decorator, "{}", record.msg())?;
             decorator.flush()?;
 
             Ok(())
