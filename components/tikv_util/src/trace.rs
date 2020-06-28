@@ -18,24 +18,40 @@ pub fn encode_spans(span_sets: Vec<SpanSet>) -> impl Iterator<Item = spanpb::Spa
                 s.set_event(span.event);
 
                 #[cfg(feature = "prost-codec")]
-                use minitrace::Link;
-
-                #[cfg(feature = "prost-codec")]
-                match span.link {
-                    Link::Root => {
-                        s.link = spanpb::Link::Root;
-                    }
-                    Link::Parent(id) => {
-                        s.link = spanpb::Link::Parent(id);
-                    }
-                    Link::Continue(id) => {
-                        s.link = spanpb::Link::Continue(id);
-                    }
+                {
+                    use minitrace::Link;
+                    s.link = Some(spanpb::Link {
+                        link: Some(match span.link {
+                            Link::Root => spanpb::link::Link::Root(spanpb::Root {}),
+                            Link::Parent { id } => {
+                                spanpb::link::Link::Parent(spanpb::Parent { id })
+                            }
+                            Link::Continue { id } => {
+                                spanpb::link::Link::Continue(spanpb::Continue { id })
+                            }
+                        }),
+                    });
                 }
 
                 #[cfg(feature = "protobuf-codec")]
-                s.set_link(span.link.into());
-
+                {
+                    use minitrace::Link;
+                    let mut link = spanpb::Link::new();
+                    match span.link {
+                        Link::Root => link.set_root(spanpb::Root::new()),
+                        Link::Parent { id } => {
+                            let mut parent = spanpb::Parent::new();
+                            parent.set_id(id);
+                            link.set_parent(parent);
+                        }
+                        Link::Continue { id } => {
+                            let mut cont = spanpb::Continue::new();
+                            cont.set_id(id);
+                            link.set_continue(cont);
+                        }
+                    };
+                    s.set_link(link);
+                }
                 s
             });
 
