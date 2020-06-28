@@ -6,5 +6,3 @@
 extern crate tikv_alloc;
 
 pub use rocksdb::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
-mod errors;
-pub use crate::errors::*;
