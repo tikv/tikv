@@ -103,19 +103,19 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
 
             match config.log_format {
-                LogFormat::Text => build_loggers(
+                LogFormat::Text => build_logger_with_slow_log(
                     logger::text_format(writer),
                     logger::text_format(slow_log_writer),
                     config,
                 ),
-                LogFormat::Json => build_loggers(
+                LogFormat::Json => build_logger_with_slow_log(
                     logger::json_format(writer),
                     logger::json_format(slow_log_writer),
                     config,
                 ),
             };
 
-            fn build_loggers<N, S>(normal: N, slow: S, config: &TiKvConfig)
+            fn build_logger_with_slow_log<N, S>(normal: N, slow: S, config: &TiKvConfig)
             where
                 N: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
                 S: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
