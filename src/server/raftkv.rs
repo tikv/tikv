@@ -29,9 +29,8 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
-use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::Instant;
-use time::Timespec;
+use tikv_util::time::ThreadReadId;
 
 quick_error! {
     #[derive(Debug)]
@@ -434,10 +433,6 @@ impl Snapshot for RegionSnapshot<RocksSnapshot> {
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_create_time(&self) -> Timespec {
-        self.get_ts()
     }
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {

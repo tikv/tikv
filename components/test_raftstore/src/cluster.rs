@@ -31,7 +31,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id

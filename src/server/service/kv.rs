@@ -37,7 +37,7 @@ use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};

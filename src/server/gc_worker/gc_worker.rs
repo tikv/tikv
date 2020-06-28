@@ -941,8 +941,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
-    use tikv_util::threadpool::ThreadReadId;
-    use time::Timespec;
+    use tikv_util::time::ThreadReadId;
     use txn_types::Mutation;
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
@@ -994,11 +993,7 @@ mod tests {
                             let mut fake_region = metapb::Region::default();
                             // Add a peer to pass initialized check.
                             fake_region.mut_peers().push(metapb::Peer::default());
-                            RegionSnapshot::from_snapshot(
-                                snap,
-                                Arc::new(fake_region),
-                                Timespec::new(0, 0),
-                            )
+                            RegionSnapshot::from_snapshot(snap, Arc::new(fake_region))
                         }),
                     ))
                 }),

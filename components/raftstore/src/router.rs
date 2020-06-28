@@ -12,7 +12,7 @@ use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
 use std::cell::RefCell;
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<S>: Send + Clone

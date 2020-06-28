@@ -53,8 +53,8 @@ use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest}
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
-use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::Instant;
+use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;

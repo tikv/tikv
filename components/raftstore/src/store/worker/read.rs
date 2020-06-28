@@ -9,24 +9,125 @@ use std::time::Duration;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{
+    CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
+};
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
-    cmd_resp, execute_read_request, Peer, ProposalRouter, RaftCommand, ReadResponse,
-    RegionSnapshot, RequestInspector, RequestPolicy,
+    cmd_resp, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot, RequestInspector,
+    RequestPolicy,
 };
 use crate::Result;
 use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
-use tikv_util::threadpool::ThreadReadId;
 use tikv_util::time::monotonic_raw_now;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, ThreadReadId};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
+
+pub trait ReadExecutor<E: KvEngine> {
+    fn engine(&self) -> &E;
+    fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+    fn get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+        let key = req.get_get().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, region)?;
+
+        let engine = self.engine();
+        let mut resp = Response::default();
+        let res = if !req.get_get().get_cf().is_empty() {
+            let cf = req.get_get().get_cf();
+            engine
+                .get_value_cf(cf, &keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] failed to get {} with cf {}: {:?}",
+                        region.get_id(),
+                        hex::encode_upper(key),
+                        cf,
+                        e
+                    )
+                })
+        } else {
+            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
+                panic!(
+                    "[region {}] failed to get {}: {:?}",
+                    region.get_id(),
+                    hex::encode_upper(key),
+                    e
+                )
+            })
+        };
+        if let Some(res) = res {
+            resp.mut_get().set_value(res.to_vec());
+        }
+
+        Ok(resp)
+    }
+
+    fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &Arc<metapb::Region>,
+        read_index: Option<u64>,
+        mut ts: Option<ThreadReadId>,
+    ) -> ReadResponse<E::Snapshot> {
+        let requests = msg.get_requests();
+        let mut response = ReadResponse {
+            response: RaftCmdResponse::default(),
+            snapshot: None,
+        };
+        let mut responses = Vec::with_capacity(requests.len());
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Get => match self.get(req, region.as_ref()) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(
+                            "failed to execute get command";
+                            "region_id" => region.get_id(),
+                            "err" => ?e,
+                        );
+                        response.response = cmd_resp::new_error(e);
+                        return response;
+                    }
+                },
+                CmdType::Snap => {
+                    let snapshot =
+                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                    response.snapshot = Some(snapshot);
+                    Response::default()
+                }
+                CmdType::ReadIndex => {
+                    let mut resp = Response::default();
+                    if let Some(read_index) = read_index {
+                        let mut res = ReadIndexResponse::default();
+                        res.set_read_index(read_index);
+                        resp.set_read_index(res);
+                    } else {
+                        panic!("[region {}] can not get readindex", region.get_id());
+                    }
+                    resp
+                }
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::Invalid => unreachable!(),
+            };
+            resp.set_cmd_type(cmd_type);
+            responses.push(resp);
+        }
+        response.response.set_responses(responses.into());
+        response
+    }
+}
 
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
@@ -65,8 +166,6 @@ impl ReadDelegate {
 
     pub fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
-        // We add one second to make sure that snapshot-cache sent by other thread is really created after this region has applied to current term exactly
-        self.last_valid_ts.sec += 1;
     }
 
     pub fn update(&mut self, progress: Progress) {
@@ -162,11 +261,38 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     delegates: HashMap<u64, Option<ReadDelegate>>,
-    snap_cache: Option<RegionSnapshot<E::Snapshot>>,
+    snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
-    tag: String,
+}
+
+impl<C, E> ReadExecutor<E> for LocalReader<C, E>
+where
+    C: ProposalRouter<E::Snapshot>,
+    E: KvEngine,
+{
+    fn engine(&self) -> &E {
+        &self.kv_engine
+    }
+
+    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
+        if let Some(ts) = create_time {
+            if ts == self.cache_read_id {
+                if let Some(snap) = self.snap_cache.as_ref() {
+                    self.metrics.local_executed_cache_requests += 1;
+                    return snap.clone();
+                }
+            }
+            self.metrics.local_executed_requests += 1;
+            let snap = Arc::new(self.kv_engine.snapshot());
+            self.cache_read_id = ts;
+            self.snap_cache = Some(snap.clone());
+            return snap;
+        }
+        self.metrics.local_executed_requests += 1;
+        Arc::new(self.kv_engine.snapshot())
+    }
 }
 
 impl<C, E> LocalReader<C, E>
@@ -185,12 +311,11 @@ where
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: HashMap::default(),
-            tag: "[local_reader]".to_string(),
         }
     }
 
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
-        debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
+        debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
         match self.router.send(cmd) {
@@ -295,64 +420,32 @@ where
 
     pub fn propose_raft_command(
         &mut self,
-        read_id: Option<ThreadReadId>,
+        mut read_id: Option<ThreadReadId>,
         cmd: RaftCommand<E::Snapshot>,
     ) {
         let region_id = cmd.request.get_header().get_region_id();
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let use_cache_snapshot = read_id
-                        .as_ref()
-                        .map_or(false, |id| *id == self.cache_read_id)
-                        && self.snap_cache.as_ref().map_or(false, |snap_cache| {
-                            // If this peer became Leader not long ago and just after the cached
-                            // snapshot was created, this snapshot can not see all data of the peer.
-                            snap_cache.get_ts() > delegate.last_valid_ts
-                        });
-                    let snapshot_ts = if use_cache_snapshot {
-                        self.snap_cache.as_ref().unwrap().get_ts()
+                    let snapshot_ts = if let Some(id) = read_id.as_mut() {
+                        // If this peer became Leader not long ago and just after the cached
+                        // snapshot was created, this snapshot can not see all data of the peer.
+                        if id.create_time <= delegate.last_valid_ts {
+                            // If the time is not valid, create a new ThreadReadId, which will call
+                            // monotonic_raw_now for create_time.
+                            *id = ThreadReadId::new();
+                        }
+                        id.create_time
                     } else {
                         monotonic_raw_now()
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
-                        let (mut response, need_snapshot) = execute_read_request(
-                            &self.kv_engine,
-                            &cmd.request,
-                            delegate.region.as_ref(),
-                            None,
-                        );
-                        let snapshot = if need_snapshot {
-                            if use_cache_snapshot {
-                                self.metrics.local_executed_cache_requests += 1;
-                                let mut snapshot = self.snap_cache.clone();
-                                snapshot
-                                    .as_mut()
-                                    .unwrap()
-                                    .set_region(delegate.region.clone());
-                                snapshot
-                            } else {
-                                let snap = RegionSnapshot::from_snapshot(
-                                    Arc::new(self.kv_engine.snapshot()),
-                                    delegate.region.clone(),
-                                    snapshot_ts,
-                                );
-                                if let Some(id) = read_id {
-                                    self.snap_cache = Some(snap.clone());
-                                    self.cache_read_id = id;
-                                }
-                                self.metrics.local_executed_requests += 1;
-                                Some(snap)
-                            }
-                        } else {
-                            self.metrics.local_executed_requests += 1;
-                            None
-                        };
+                        let mut response =
+                            self.execute(&cmd.request, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut response, delegate.term);
-                        cmd.callback
-                            .invoke_read(ReadResponse { response, snapshot });
+                        cmd_resp::bind_term(&mut response.response, delegate.term);
+                        cmd.callback.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
                         return;
                     }
@@ -424,7 +517,6 @@ where
             store_id: self.store_id.clone(),
             metrics: Default::default(),
             delegates: HashMap::default(),
-            tag: self.tag.clone(),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
         }

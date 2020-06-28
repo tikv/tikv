@@ -27,8 +27,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
-use tikv_util::threadpool::ThreadReadId;
-use time::Timespec;
+use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -143,9 +142,6 @@ pub trait Snapshot: Sync + Send + Clone {
         iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
-    fn get_create_time(&self) -> Timespec {
-        Timespec::new(0, 0)
-    }
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {

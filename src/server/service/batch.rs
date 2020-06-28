@@ -11,7 +11,7 @@ use crate::storage::{
 use futures::Future;
 use kvproto::kvrpcpb::*;
 use tikv_util::mpsc::batch::Sender;
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 use tikv_util::time::{duration_to_sec, Instant};
 
 pub struct ReqBatcher {

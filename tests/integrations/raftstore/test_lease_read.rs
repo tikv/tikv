@@ -332,7 +332,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         .zip(regions)
         .map(|(p, r)| (p.clone(), r))
         .collect();
-    let responses = batch_read_on_peer(cluster, requests);
+    let responses = batch_read_on_peer(cluster, &requests);
     let snaps: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()
         .map(|response| {
@@ -342,8 +342,35 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         .collect();
 
     // Snapshot 0 and 1 will use one RocksSnapshot because we have renew their lease.
-    assert_eq!(snaps[0].get_ts(), snaps[1].get_ts());
-    assert_ne!(snaps[0].get_ts(), snaps[2].get_ts());
+    assert!(std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps[1].get_snapshot()
+    ));
+    assert!(!std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps[2].get_snapshot()
+    ));
+    let responses = batch_read_on_peer(cluster, &requests);
+    let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
+        .into_iter()
+        .map(|response| {
+            assert!(!response.response.get_header().has_error());
+            response.snapshot.unwrap()
+        })
+        .collect();
+    assert_eq!(3, snaps2.len());
+    assert!(!std::ptr::eq(
+        snaps[0].get_snapshot(),
+        snaps2[0].get_snapshot()
+    ));
+    assert!(std::ptr::eq(
+        snaps2[0].get_snapshot(),
+        snaps2[1].get_snapshot()
+    ));
+    assert!(std::ptr::eq(
+        snaps2[0].get_snapshot(),
+        snaps2[2].get_snapshot()
+    ));
 }
 
 /// test whether the read index callback will be handled when a region is destroyed.

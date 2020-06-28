@@ -38,7 +38,7 @@ use super::*;
 
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -409,7 +409,7 @@ pub fn async_read_on_peer<T: Simulator>(
 
 pub fn batch_read_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
-    requests: Vec<(metapb::Peer, metapb::Region)>,
+    requests: &[(metapb::Peer, metapb::Region)],
 ) -> Vec<ReadResponse<RocksSnapshot>> {
     let batch_id = Some(ThreadReadId::new());
     let (tx, rx) = mpsc::sync_channel(3);
@@ -423,7 +423,7 @@ pub fn batch_read_on_peer<T: Simulator>(
             vec![new_snap_cmd()],
             false,
         );
-        request.mut_header().set_peer(peer);
+        request.mut_header().set_peer(peer.clone());
         let t = tx.clone();
         let cb = Callback::Read(Box::new(move |resp| {
             t.send((len, resp)).unwrap();

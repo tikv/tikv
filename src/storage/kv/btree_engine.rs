@@ -15,7 +15,7 @@ use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
 };
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 

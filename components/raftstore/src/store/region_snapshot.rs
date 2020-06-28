@@ -18,14 +18,12 @@ use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
-use time::Timespec;
 
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
-    ts: Timespec,
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
@@ -37,24 +35,15 @@ where
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
     pub fn new(ps: &PeerStorage<RocksEngine, RocksEngine>) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(
-            Arc::new(ps.raw_snapshot()),
-            Arc::new(ps.region().clone()),
-            Timespec::new(0, 0),
-        )
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
     pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(
-            Arc::new(db.snapshot()),
-            Arc::new(region),
-            Timespec::new(0, 0),
-        )
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>, ts: Timespec) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
         RegionSnapshot {
-            ts,
             snap,
             region,
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
@@ -63,17 +52,14 @@ where
         }
     }
 
-    pub fn set_region(&mut self, region: Arc<Region>) {
-        self.region = region;
-    }
-
-    pub fn get_ts(&self) -> Timespec {
-        self.ts
-    }
-
     #[inline]
     pub fn get_region(&self) -> &Region {
         &self.region
+    }
+
+    #[inline]
+    pub fn get_snapshot(&self) -> &S {
+        self.snap.as_ref()
     }
 
     #[inline]
@@ -174,7 +160,6 @@ where
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
-            ts: self.ts,
         }
     }
 }

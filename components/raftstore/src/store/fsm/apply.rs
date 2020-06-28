@@ -2948,7 +2948,6 @@ where
                     snapshot: Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.delegate.region.clone()),
-                        Timespec::new(0, 0),
                     )),
                 }
             }

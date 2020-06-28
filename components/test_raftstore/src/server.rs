@@ -44,7 +44,7 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;

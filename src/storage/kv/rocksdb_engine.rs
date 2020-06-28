@@ -21,7 +21,7 @@ use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{

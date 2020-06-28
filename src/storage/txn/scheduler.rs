@@ -48,7 +48,7 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
-use tikv_util::threadpool::ThreadReadId;
+use tikv_util::time::ThreadReadId;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
