@@ -523,70 +523,68 @@ mod tests {
         }
     }
 
-    macro_rules! log_format_cases {
-        ($logger:ident) => {
-            use std::time::Duration;
+    fn log_format_cases(logger: slog::Logger) {
+        use std::time::Duration;
 
-            // Empty message is not recommend, just for test purpose here.
-            slog_info!($logger, "");
-            slog_info!($logger, "Welcome");
-            slog_info!($logger, "Welcome TiKV");
-            slog_info!($logger, "欢迎");
-            slog_info!($logger, "欢迎 TiKV");
+        // Empty message is not recommend, just for test purpose here.
+        slog_info!(logger, "");
+        slog_info!(logger, "Welcome");
+        slog_info!(logger, "Welcome TiKV");
+        slog_info!(logger, "欢迎");
+        slog_info!(logger, "欢迎 TiKV");
 
-            slog_info!($logger, "failed to fetch URL";
-                        "url" => "http://example.com",
-                        "attempt" => 3,
-                        "backoff" => ?Duration::new(3, 0),
-            );
+        slog_info!(logger, "failed to fetch URL";
+            "url" => "http://example.com",
+            "attempt" => 3,
+            "backoff" => ?Duration::new(3, 0),
+        );
 
-            slog_info!(
-                $logger,
-                "failed to \"fetch\" [URL]: {}",
-                "http://example.com"
-            );
+        slog_info!(
+            logger,
+            "failed to \"fetch\" [URL]: {}",
+            "http://example.com"
+        );
 
-            slog_debug!($logger, "Slow query";
-                "sql" => "SELECT * FROM TABLE WHERE ID=\"abc\"",
-                "duration" => ?Duration::new(0, 123),
-                "process keys" => 1500,
-            );
+        slog_debug!(logger, "Slow query";
+            "sql" => "SELECT * FROM TABLE WHERE ID=\"abc\"",
+            "duration" => ?Duration::new(0, 123),
+            "process keys" => 1500,
+        );
 
-            slog_warn!($logger, "Type";
-                "Counter" => std::f64::NAN,
-                "Score" => std::f64::INFINITY,
-                "Other" => std::f64::NEG_INFINITY
-            );
+        slog_warn!(logger, "Type";
+            "Counter" => std::f64::NAN,
+            "Score" => std::f64::INFINITY,
+            "Other" => std::f64::NEG_INFINITY
+        );
 
-            let none: Option<u8> = None;
-            slog_info!($logger, "more type tests";
-                "field1" => "no_quote",
-                "field2" => "in quote",
-                "urls" => ?["http://xxx.com:2347", "http://xxx.com:2432"],
-                "url-peers" => ?["peer1", "peer 2"],
-                "store ids" => ?[1, 2, 3],
-                "is_true" => true,
-                "is_false" => false,
-                "is_None" => none,
-                "u8" => 34 as u8,
-                "str_array" => ?["💖",
-                    "�",
-                    "☺☻☹",
-                    "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-                    "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-                    "\\x80\\x80\\x80\\x80",
-                    "<car><mirror>XML</mirror></car>"]
-            );
-        };
+        let none: Option<u8> = None;
+        slog_info!(logger, "more type tests";
+            "field1" => "no_quote",
+            "field2" => "in quote",
+            "urls" => ?["http://xxx.com:2347", "http://xxx.com:2432"],
+            "url-peers" => ?["peer1", "peer 2"],
+            "store ids" => ?[1, 2, 3],
+            "is_true" => true,
+            "is_false" => false,
+            "is_None" => none,
+            "u8" => 34 as u8,
+            "str_array" => ?["💖",
+                "�",
+                "☺☻☹",
+                "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                "\\x80\\x80\\x80\\x80",
+                "<car><mirror>XML</mirror></car>"]
+        );
     }
 
     #[test]
     fn test_log_format_text() {
         let decorator = PlainSyncDecorator::new(TestWriter);
         let drain = TikvFormat::new(decorator).fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!());
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
-        log_format_cases!(logger);
+        log_format_cases(logger);
 
         let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
@@ -632,9 +630,9 @@ mod tests {
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
         let drain = Mutex::new(json_format(TestWriter)).map(slog::Fuse);
-        let logger = slog::Logger::root_typed(drain, slog_o!());
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
-        log_format_cases!(logger);
+        log_format_cases(logger);
 
         let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
 {"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
