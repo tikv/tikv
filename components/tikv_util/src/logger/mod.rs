@@ -136,7 +136,7 @@ where
     Ok(drain)
 }
 
-/// Same as file_drainer, but only logging log message without headers and associated fields.
+/// Same as file_drainer, but is adjusted to be closer to vanilla RocksDB logger format.
 pub fn rocks_file_drainer<N>(
     path: impl AsRef<Path>,
     rotation_timespan: ReadableDuration,
