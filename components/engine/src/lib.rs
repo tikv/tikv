@@ -7,8 +7,7 @@ extern crate tikv_alloc;
 
 use std::sync::Arc;
 
-pub mod rocks;
-pub use crate::rocks::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
+pub use rocksdb::{CFHandle, DBIterator, Env, Range, ReadOptions, WriteOptions, DB};
 mod errors;
 pub use crate::errors::*;
 
