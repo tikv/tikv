@@ -1332,15 +1332,12 @@ impl ConfigManager for DBConfigManger {
             }
         }
 
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .next()
         {
-            let mut rate_bytes_iter = change
-                .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
-                .into_iter();
-            if let Some(rate_bytes_config) = rate_bytes_iter.next() {
-                let (_, v) = rate_bytes_config;
-                let rate_bytes_per_sec: ReadableSize = v.into();
-                self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
-            }
+            let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
+            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
         }
 
         if !change.is_empty() {
@@ -1356,7 +1353,6 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
-
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
