@@ -93,7 +93,10 @@ impl LeaderClient {
         client: PdClient,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client.region_heartbeat().unwrap();
+        let (tx, rx) = client
+            .region_heartbeat()
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
@@ -172,8 +175,10 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap();
-            warn!("heartbeat sender and receiver are stale, refreshing ...");
+            let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
+            });
+            info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
             if let Either::Left(Some(ref mut r)) = inner.hb_sender {
