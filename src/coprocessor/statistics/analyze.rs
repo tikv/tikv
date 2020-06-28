@@ -121,7 +121,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while !is_drained {
             use std::ops::Index;
 
-            let batch = scanner.next_batch(1000);
+            let batch = scanner.next_batch(4);
             println!("row size: {},col size: {}",batch.logical_rows.len(),batch.physical_columns.as_slice().len());
             is_drained = batch.is_drained?;
             println!("is drained: {}",is_drained);
@@ -154,6 +154,18 @@ impl<S: Snapshot> AnalyzeContext<S> {
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
+            // AnalyzeType::TypeIndex => {
+            //     let req = self.req.take_idx_req();
+            //     let mut scanner = ScanExecutor::index_scan_with_cols_len(
+            //         EvalContext::default(),
+            //         i64::from(req.get_num_columns()),
+            //         mem::replace(&mut self.ranges, Vec::new()),
+            //         self.storage.take().unwrap(),
+            //     )?;
+            //     let res = AnalyzeContext::handle_index(req, &mut scanner);
+            //     scanner.collect_storage_stats(&mut self.storage_stats);
+            //     res
+            // }
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut batch_scanner: BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>> =

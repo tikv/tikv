@@ -9,6 +9,7 @@ const KEY_BUFFER_CAPACITY: usize = 64;
 
 /// A scanner that scans over multiple ranges. Each range can be a point range containing only
 /// one row, or an interval range containing multiple rows.
+///TODO show details about range scanner
 pub struct RangesScanner<T> {
     storage: T,
     ranges_iter: RangesIterator,

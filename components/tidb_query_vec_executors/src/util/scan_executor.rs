@@ -100,7 +100,10 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 
         for _ in 0..scan_rows {
             let some_row = self.scanner.next()?;
+            println!("has next: {}",some_row.is_some());
+            println!("columns size: {}",columns.rows_len());
             if let Some((key, value)) = some_row {
+                println!("is some");
                 // Retrieved one row from point range or non-point range.
 
                 if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
@@ -111,14 +114,16 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     // further cause future executors to panic. So let's truncate these columns to
                     // make they all have N-1 rows in that case.
                     columns.truncate_into_equal_length();
+                    println!("return err");
                     return Err(e);
                 }
             } else {
                 // Drained
+                println!("return drained");
                 return Ok(true);
             }
         }
-
+        println!("not drained");
         // Not drained
         Ok(false)
     }
@@ -166,6 +171,7 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
 
         let mut logical_columns = self.imp.build_column_vec(scan_rows);
         let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns);
+        println!("rows len: {}",logical_columns.rows_len());
 
         logical_columns.assert_columns_equal_length();
         let logical_rows = (0..logical_columns.rows_len()).collect();
