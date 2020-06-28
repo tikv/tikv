@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
 use std::{mem, thread};
 
+use kvproto::metapb;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
@@ -327,7 +328,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         .map(|key| pd_client.get_region(key).unwrap())
         .collect();
 
-    let requests = peers
+    let requests: Vec<(metapb::Peer, metapb::Region)> = peers
         .iter()
         .zip(regions)
         .map(|(p, r)| (p.clone(), r))
