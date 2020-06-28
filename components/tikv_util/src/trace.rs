@@ -6,6 +6,7 @@ pub fn encode_spans(span_sets: Vec<SpanSet>) -> impl Iterator<Item = spanpb::Spa
         .into_iter()
         .map(|span_set| {
             let mut pb_set = spanpb::SpanSet::default();
+            pb_set.set_create_time_ns(span_set.create_time_ns);
             pb_set.set_start_time_ns(span_set.start_time_ns);
             pb_set.set_cycles_per_sec(span_set.cycles_per_sec);
 
