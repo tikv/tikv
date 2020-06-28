@@ -4,7 +4,7 @@ use std::io::Result;
 use std::sync::Arc;
 
 use encryption::{self, DataKeyManager};
-use engine::Env;
+use crate::raw::Env;
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
