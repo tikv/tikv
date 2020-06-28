@@ -105,7 +105,8 @@ mod tests {
 
         #[cfg(feature = "protobuf-codec")]
         {
-
+            assert!(spanpb_span_set.get_spans()[0].get_link().clone().has_root(),"Here should be Root");
+            assert!(spanpb_span_set.get_spans()[1].get_link().clone().has_parent(),"Here should be Parent")
         }
     }
 }
