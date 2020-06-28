@@ -211,7 +211,7 @@ codegen-units = 4
 lto = false
 incremental = true
 panic = 'abort'
-debug-assertions = false
+debug-assertions = true
 overflow-checks = false
 rpath = false
 
