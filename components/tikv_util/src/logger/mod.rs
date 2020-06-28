@@ -301,7 +301,7 @@ where
             decorator.start_msg()?;
             let msg = format!("{}", record.msg());
             write!(decorator, "{}", msg)?;
-            if !msg.ends_with("\n") {
+            if !msg.ends_with('\n') {
                 writeln!(decorator)?;
             }
             decorator.flush()?;
