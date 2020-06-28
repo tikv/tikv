@@ -99,7 +99,7 @@ mod tests {
                     .clone()
                     .unwrap(),
                 spanpb::Link{link: Some(spanpb::link::Link::Parent(spanpb::Parent { id : 1}))},
-                "Here should be root"
+                "Here should be Parent"
             )
         }
 
