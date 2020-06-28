@@ -12,9 +12,11 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
-use test_util;
-use tikv::raftstore::store;
-use tikv_util::security::{SecurityConfig, SecurityManager};
+use raftstore::store;
+use security::{SecurityConfig, SecurityManager};
+use semver::Version;
+use tikv_util::config::ReadableDuration;
+use txn_types::TimeStamp;
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -30,6 +32,18 @@ fn new_config(eps: Vec<(String, u16)>) -> Config {
 
 fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {
     let cfg = new_config(eps);
+    let mgr =
+        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
+    RpcClient::new(&cfg, mgr).unwrap()
+}
+
+fn new_client_with_update_interval(
+    eps: Vec<(String, u16)>,
+    mgr: Option<Arc<SecurityManager>>,
+    interval: ReadableDuration,
+) -> RpcClient {
+    let mut cfg = new_config(eps);
+    cfg.update_interval = interval;
     let mgr =
         mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
     RpcClient::new(&cfg, mgr).unwrap()
@@ -101,6 +115,9 @@ fn test_rpc_client() {
     let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
+    let ts = client.get_tso().wait().unwrap();
+    assert_ne!(ts, TimeStamp::zero());
+
     let mut prev_id = 0;
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);
@@ -124,6 +141,7 @@ fn test_rpc_client() {
             region.clone(),
             peer.clone(),
             RegionStat::default(),
+            None,
         ))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -154,7 +172,7 @@ fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let client = new_client(eps.clone(), None);
+    let client = new_client(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -163,11 +181,9 @@ fn test_get_tombstone_stores() {
     let region_id = client.alloc_id().unwrap();
     let mut region = metapb::Region::default();
     region.set_id(region_id);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store.clone(), region).unwrap();
 
-    all_stores.push(store.clone());
+    all_stores.push(store);
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
     let s = client.get_all_stores(false).unwrap();
     assert_eq!(s, all_stores);
@@ -190,11 +206,11 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     // Add another tombstone store.
-    let mut store199 = store99.clone();
+    let mut store199 = store99;
     store199.set_id(199);
     server.default_handler().add_store(store199.clone());
 
-    all_stores.push(store199.clone());
+    all_stores.push(store199);
     all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     let mut s = client.get_all_stores(false).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
@@ -235,7 +251,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), &mgr).is_err());
+    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -335,9 +351,7 @@ fn restart_leader(mgr: SecurityManager) {
     let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer);
-    client
-        .bootstrap_cluster(store.clone(), region.clone())
-        .unwrap();
+    client.bootstrap_cluster(store, region.clone()).unwrap();
 
     let region = client
         .get_region_by_id(region.get_id())
@@ -364,7 +378,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = test_util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg(None);
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }
@@ -423,6 +437,7 @@ fn test_region_heartbeat_on_leader_change() {
             region.clone(),
             peer.clone(),
             stat.clone(),
+            None,
         ))
         .forget();
     rx.recv_timeout(LeaderChange::get_leader_interval())
@@ -448,6 +463,7 @@ fn test_region_heartbeat_on_leader_change() {
                 region.clone(),
                 peer.clone(),
                 stat.clone(),
+                None,
             ))
             .forget();
         rx.recv_timeout(LeaderChange::get_leader_interval())
@@ -459,4 +475,81 @@ fn test_region_heartbeat_on_leader_change() {
 
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
+}
+
+#[test]
+fn test_periodical_update() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
+    let eps = server.bind_addrs();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
+    let leader = client.get_leader();
+
+    for _ in 0..5 {
+        let new = client.get_leader();
+        if new != leader {
+            assert!(counter.load(Ordering::SeqCst) >= 1);
+            return;
+        }
+        thread::sleep(LeaderChange::get_leader_interval());
+    }
+
+    panic!("failed, leader should changed");
+}
+
+#[test]
+fn test_cluster_version() {
+    let server = MockServer::<Service>::new(3);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let cluster_version = client.cluster_version();
+    assert!(cluster_version.get().is_none());
+
+    let emit_heartbeat = || {
+        let req = pdpb::StoreStats::default();
+        client.store_heartbeat(req).wait().unwrap();
+    };
+
+    let set_cluster_version = |version: &str| {
+        let h = server.default_handler();
+        h.set_cluster_version(version.to_owned());
+    };
+
+    // Empty version string will be treated as invalid.
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    // Explicitly invalid version string.
+    set_cluster_version("invalid-version");
+    emit_heartbeat();
+    assert!(cluster_version.get().is_none());
+
+    let v_500 = Version::parse("5.0.0").unwrap();
+    let v_501 = Version::parse("5.0.1").unwrap();
+
+    // Correct version string.
+    set_cluster_version("5.0.0");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can't go backwards.
+    set_cluster_version("4.99");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // After reconnect the version should be still accessable.
+    client.reconnect().unwrap();
+    assert_eq!(cluster_version.get().unwrap(), v_500,);
+
+    // Version can go forwards.
+    set_cluster_version("5.0.1");
+    emit_heartbeat();
+    assert_eq!(cluster_version.get().unwrap(), v_501);
 }

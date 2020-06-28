@@ -1,20 +1,23 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use clap::ArgMatches;
-
-use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
-use tikv_util::collections::HashMap;
-use tikv_util::{self, logger};
-
-use chrono::Local;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chrono::Local;
+use clap::ArgMatches;
+use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
+use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
+use tikv_util::collections::HashMap;
+use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+// The info log file names does not end with ".log" since it conflict with rocksdb WAL files.
+pub const DEFAULT_ROCKSDB_LOG_FILE: &str = "rocksdb.info";
+pub const DEFAULT_RAFTDB_LOG_FILE: &str = "raftdb.info";
 
 #[macro_export]
 macro_rules! fatal {
@@ -34,8 +37,31 @@ macro_rules! fatal {
 // number while rotate by size.
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!("{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    new_path.push(format!(
+        ".{}",
+        Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
+    ));
     Ok(PathBuf::from(new_path))
+}
+
+fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
+    let mut path = Path::new(path).to_path_buf();
+    if !sub_path.is_empty() {
+        path = path.join(Path::new(sub_path));
+    }
+    let path = path.to_str().unwrap_or_else(|| {
+        fatal!(
+            "failed to construct engine log dir {:?}, {:?}",
+            path,
+            sub_path
+        );
+    });
+    config::ensure_dir_exist(path).unwrap_or_else(|e| {
+        fatal!("failed to create engine log dir: {}", e);
+    });
+    config::canonicalize_log_dir(&path, filename).unwrap_or_else(|e| {
+        fatal!("failed to canonicalize engine log dir {:?}: {}", path, e);
+    })
 }
 
 #[allow(dead_code)]
@@ -43,7 +69,15 @@ pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        logger::init_log(
+            drainer,
+            config.log_level,
+            true,
+            true,
+            vec![],
+            config.slow_log_threshold.as_millis(),
+        )
+        .unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -61,8 +95,89 @@ pub fn initial_logger(config: &TiKvConfig) {
             );
         });
 
-        // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        let slow_log_drainer = if config.slow_log_file.is_empty() {
+            None
+        } else {
+            let slow_log_drainer = logger::file_drainer(
+                &config.slow_log_file,
+                config.log_rotation_timespan,
+                config.log_rotation_size,
+                rename_by_timestamp,
+            )
+            .unwrap_or_else(|e| {
+                fatal!(
+                    "failed to initialize slow-log with file {}: {}",
+                    config.slow_log_file,
+                    e
+                );
+            });
+            Some(slow_log_drainer)
+        };
+
+        let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
+            make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
+        } else {
+            make_engine_log_path(
+                &config.storage.data_dir,
+                DEFAULT_ROCKSDB_SUB_DIR,
+                DEFAULT_ROCKSDB_LOG_FILE,
+            )
+        };
+        let raftdb_info_log_path = if !config.raftdb.info_log_dir.is_empty() {
+            make_engine_log_path(&config.raftdb.info_log_dir, "", DEFAULT_RAFTDB_LOG_FILE)
+        } else {
+            if !config.raft_store.raftdb_path.is_empty() {
+                make_engine_log_path(
+                    &config.raft_store.raftdb_path.clone(),
+                    "",
+                    DEFAULT_RAFTDB_LOG_FILE,
+                )
+            } else {
+                make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
+            }
+        };
+        let rocksdb_log_drainer = logger::file_drainer(
+            &rocksdb_info_log_path,
+            config.log_rotation_timespan,
+            config.log_rotation_size,
+            rename_by_timestamp,
+        )
+        .unwrap_or_else(|e| {
+            fatal!(
+                "failed to initialize rocksdb log with file {}: {}",
+                rocksdb_info_log_path,
+                e
+            );
+        });
+
+        let raftdb_log_drainer = logger::file_drainer(
+            &raftdb_info_log_path,
+            config.log_rotation_timespan,
+            config.log_rotation_size,
+            rename_by_timestamp,
+        )
+        .unwrap_or_else(|e| {
+            fatal!(
+                "failed to initialize raftdb log with file {}: {}",
+                raftdb_info_log_path,
+                e
+            );
+        });
+        let drainer = logger::LogDispatcher::new(
+            drainer,
+            rocksdb_log_drainer,
+            raftdb_log_drainer,
+            slow_log_drainer,
+        );
+        logger::init_log(
+            drainer,
+            config.log_level,
+            true,
+            true,
+            vec![],
+            config.slow_log_threshold.as_millis(),
+        )
+        .unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     };
@@ -71,8 +186,10 @@ pub fn initial_logger(config: &TiKvConfig) {
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    tikv_util::metrics::monitor_process()
+        .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
     tikv_util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
     tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
@@ -109,6 +226,10 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(status_addr) = matches.value_of("status-addr") {
         config.server.status_addr = status_addr.to_owned();
+    }
+
+    if let Some(advertise_status_addr) = matches.value_of("advertise-status-addr") {
+        config.server.advertise_status_addr = advertise_status_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {
@@ -150,18 +271,18 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
 #[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e);
+    }
+
     if let Err(e) = check_critical_config(config) {
         fatal!("critical config check failed: {}", e);
     }
 
     if persist {
-        if let Err(e) = persist_critical_config(&config) {
+        if let Err(e) = persist_config(&config) {
             fatal!("persist critical config failed: {}", e);
         }
-    }
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
     }
 }

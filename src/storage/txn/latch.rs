@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
-use spin::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;

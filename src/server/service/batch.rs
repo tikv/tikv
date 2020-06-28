@@ -10,7 +10,7 @@ use crate::server::service::kv::{
     batch_commands_request, batch_commands_response, future_batch_get_command,
     future_raw_batch_get_command, poll_future_notify,
 };
-use crate::storage::{kv::Engine, lock_manager::LockManager, txn::PointGetCommand, Storage};
+use crate::storage::{kv::Engine, lock_manager::LockManager, PointGetCommand, Storage};
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::HistogramReader;
@@ -83,16 +83,6 @@ enum BatchableRequestKind {
     PointGet,
     Prewrite,
     Commit,
-}
-
-impl BatchableRequestKind {
-    fn as_str(&self) -> &str {
-        match self {
-            BatchableRequestKind::PointGet => &"point_get",
-            BatchableRequestKind::Prewrite => &"prewrite",
-            BatchableRequestKind::Commit => &"commit",
-        }
-    }
 }
 
 /// BatchLimiter controls submit timing of request batch.
@@ -201,13 +191,37 @@ impl BatchLimiter {
     fn observe_submit(&mut self, now: Instant, size: usize) {
         self.last_submit_time = now;
         if self.enable_batch {
-            REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-                .with_label_values(&[self.cmd.as_str()])
-                .observe(self.batch_input as f64);
-            if size > 0 {
-                REQUEST_BATCH_RATIO_HISTOGRAM_VEC
-                    .with_label_values(&[self.cmd.as_str()])
-                    .observe(self.batch_input as f64 / size as f64);
+            match self.cmd {
+                BatchableRequestKind::PointGet => {
+                    REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                        .point_get
+                        .observe(self.batch_input as f64);
+                    if size > 0 {
+                        REQUEST_BATCH_RATIO_HISTOGRAM_VEC
+                            .point_get
+                            .observe(self.batch_input as f64 / size as f64);
+                    }
+                }
+                BatchableRequestKind::Prewrite => {
+                    REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                        .prewrite
+                        .observe(self.batch_input as f64);
+                    if size > 0 {
+                        REQUEST_BATCH_RATIO_HISTOGRAM_VEC
+                            .prewrite
+                            .observe(self.batch_input as f64 / size as f64);
+                    }
+                }
+                BatchableRequestKind::Commit => {
+                    REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                        .commit
+                        .observe(self.batch_input as f64);
+                    if size > 0 {
+                        REQUEST_BATCH_RATIO_HISTOGRAM_VEC
+                            .commit
+                            .observe(self.batch_input as f64 / size as f64);
+                    }
+                }
             }
         }
         self.batch_input = 0;
@@ -334,7 +348,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 BatchLimiter::new(
                     BatchableRequestKind::PointGet,
                     timeout,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.clone()),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),

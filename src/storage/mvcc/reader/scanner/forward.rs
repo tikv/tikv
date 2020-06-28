@@ -2,13 +2,13 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
+use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Lock, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
 
@@ -115,6 +115,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     is_started: bool,
     statistics: Statistics,
     scan_policy: P,
+    met_newer_ts_data: NewerTsCheckState,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -131,6 +132,11 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             default: default_cursor,
         };
         ForwardScanner {
+            met_newer_ts_data: if cfg.check_has_newer_ts_data {
+                NewerTsCheckState::NotMetYet
+            } else {
+                NewerTsCheckState::Unknown
+            },
             cfg,
             cursors,
             statistics: Statistics::default(),
@@ -141,7 +147,14 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
+    }
+
+    /// Whether we met newer ts data.
+    /// The result is always `Unknown` if `check_has_newer_ts_data` is not set.
+    #[inline]
+    pub fn met_newer_ts_data(&self) -> NewerTsCheckState {
+        self.met_newer_ts_data
     }
 
     /// Get the next key-value pair, in forward order.
@@ -239,6 +252,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             };
 
             if has_lock {
+                if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
+                }
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
                     &mut self.cfg,
@@ -296,6 +312,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
+                } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                    self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
             }
         }
@@ -472,11 +490,15 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         write: entry_write,
                     });
                 }
-                WriteType::Delete if self.output_delete => {
-                    break Some(TxnEntry::Commit {
-                        default: (Vec::new(), Vec::new()),
-                        write: (write_key.to_vec(), write_value.to_vec()),
-                    });
+                WriteType::Delete => {
+                    if self.output_delete {
+                        break Some(TxnEntry::Commit {
+                            default: (Vec::new(), Vec::new()),
+                            write: (write_key.to_vec(), write_value.to_vec()),
+                        });
+                    } else {
+                        break None;
+                    }
                 }
                 _ => {}
             }
@@ -530,6 +552,137 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
         .map_err(Into::into)
 }
 
+/// The ScanPolicy for outputting `TxnEntry` for every locks or commits in specified ts range.
+///
+/// The `ForwardScanner` with this policy scans all entries whose `commit_ts`s
+/// (or locks' `start_ts`s) in range (`from_ts`, `cfg.ts`].
+pub struct DeltaEntryPolicy {
+    from_ts: TimeStamp,
+}
+
+impl DeltaEntryPolicy {
+    pub fn new(from_ts: TimeStamp) -> Self {
+        Self { from_ts }
+    }
+}
+
+impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
+    type Output = TxnEntry;
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        // TODO: Skip pessimistic locks.
+        let lock_value = cursors.lock.value(&mut statistics.lock);
+        let lock = Lock::parse(lock_value)?;
+        let result = if lock.ts > cfg.ts {
+            Ok(HandleRes::Skip(current_user_key))
+        } else {
+            let load_default_res = if lock.lock_type == LockType::Put && lock.short_value.is_none()
+            {
+                let default_cursor = cursors.default.as_mut().unwrap();
+                super::near_load_data_by_write(
+                    default_cursor,
+                    &current_user_key,
+                    lock.ts,
+                    statistics,
+                )
+                .map(|v| {
+                    let key = default_cursor.key(&mut statistics.data).to_vec();
+                    (key, v)
+                })
+            } else {
+                Ok((vec![], vec![]))
+            };
+            load_default_res.map(|default| {
+                HandleRes::Return(TxnEntry::Prewrite {
+                    default,
+                    lock: (current_user_key.into_encoded(), lock_value.to_owned()),
+                })
+            })
+        };
+
+        cursors.lock.next(&mut statistics.lock);
+
+        result.map_err(Into::into)
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        _cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        loop {
+            let write_value = cursors.write.value(&mut statistics.write);
+            let commit_ts = Key::decode_ts_from(cursors.write.key(&mut statistics.write))?;
+
+            // commit_ts > cfg.ts never happens since the ForwardScanner will skip those greater
+            // versions.
+
+            if commit_ts <= self.from_ts {
+                cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+
+            let (write_type, start_ts, has_short_value) = {
+                let write_ref = WriteRef::parse(write_value)?;
+                (
+                    write_ref.write_type,
+                    write_ref.start_ts,
+                    write_ref.short_value.is_some(),
+                )
+            };
+
+            if write_type == WriteType::Rollback {
+                // Skip it and try the next record.
+                cursors.write.next(&mut statistics.write);
+                if !cursors.write.valid()? {
+                    return Ok(HandleRes::Skip(current_user_key));
+                }
+                if !Key::is_user_key_eq(
+                    cursors.write.key(&mut statistics.write),
+                    current_user_key.as_encoded(),
+                ) {
+                    return Ok(HandleRes::Skip(current_user_key));
+                }
+
+                continue;
+            }
+
+            let default = if write_type == WriteType::Put && !has_short_value {
+                let default_cursor = cursors.default.as_mut().unwrap();
+                let value = super::near_load_data_by_write(
+                    default_cursor,
+                    &current_user_key,
+                    start_ts,
+                    statistics,
+                )?;
+                let key = default_cursor.key(&mut statistics.data).to_vec();
+                (key, value)
+            } else {
+                (vec![], vec![])
+            };
+
+            let res = Ok(HandleRes::Return(TxnEntry::Commit {
+                default,
+                write: (
+                    cursors.write.key(&mut statistics.write).to_owned(),
+                    cursors.write.value(&mut statistics.write).to_owned(),
+                ),
+            }));
+
+            cursors.write.next(&mut statistics.write);
+            return res;
+        }
+    }
+}
+
 /// This type can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
@@ -541,12 +694,129 @@ pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 /// This scanner is like `ForwardKvScanner` but outputs `TxnEntry`.
 pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
 
-impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
+/// This scanner scans all entries whose commit_ts (or locks' start_ts) is in range
+/// (from_ts, cfg.ts].
+pub type DeltaScanner<S> = ForwardScanner<S, DeltaEntryPolicy>;
+
+impl<S, P> TxnEntryScanner for ForwardScanner<S, P>
+where
+    S: Snapshot,
+    P: ScanPolicy<S, Output = TxnEntry> + Send,
+{
     fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
         Ok(self.read_next()?)
     }
     fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::take(&mut self.statistics)
+    }
+}
+
+pub mod test_util {
+    use super::*;
+    use crate::storage::mvcc::Write;
+
+    #[derive(Default)]
+    pub struct EntryBuilder {
+        pub key: Vec<u8>,
+        pub value: Vec<u8>,
+        pub primary: Vec<u8>,
+        pub start_ts: TimeStamp,
+        pub commit_ts: TimeStamp,
+        pub for_update_ts: TimeStamp,
+    }
+
+    impl EntryBuilder {
+        pub fn key(&mut self, key: &[u8]) -> &mut Self {
+            self.key = key.to_owned();
+            self
+        }
+        pub fn value(&mut self, val: &[u8]) -> &mut Self {
+            self.value = val.to_owned();
+            self
+        }
+        pub fn primary(&mut self, val: &[u8]) -> &mut Self {
+            self.primary = val.to_owned();
+            self
+        }
+        pub fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
+            self.start_ts = start_ts;
+            self
+        }
+        pub fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
+            self.commit_ts = commit_ts;
+            self
+        }
+        pub fn for_update_ts(&mut self, for_update_ts: TimeStamp) -> &mut Self {
+            self.for_update_ts = for_update_ts;
+            self
+        }
+        pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
+            let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
+            let (key, value, short) = if is_short_value {
+                let short = if wt == WriteType::Put {
+                    Some(self.value.clone())
+                } else {
+                    None
+                };
+                (vec![], vec![], short)
+            } else {
+                (
+                    Key::from_raw(&self.key)
+                        .append_ts(self.start_ts)
+                        .into_encoded(),
+                    self.value.clone(),
+                    None,
+                )
+            };
+            let write_value = Write::new(wt, self.start_ts, short);
+            TxnEntry::Commit {
+                default: (key, value),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+            }
+        }
+        pub fn build_prewrite(&self, lt: LockType, is_short_value: bool) -> TxnEntry {
+            let lock_key = Key::from_raw(&self.key);
+            let (key, value, short) = if is_short_value {
+                // TODO: Rollback records may use short value to mark it as protected. Keep it.
+                let short = if lt == LockType::Put {
+                    Some(self.value.clone())
+                } else {
+                    None
+                };
+                (vec![], vec![], short)
+            } else {
+                (
+                    Key::from_raw(&self.key)
+                        .append_ts(self.start_ts)
+                        .into_encoded(),
+                    self.value.clone(),
+                    None,
+                )
+            };
+            let lock_value = Lock::new(
+                lt,
+                self.primary.clone(),
+                self.start_ts,
+                0,
+                short,
+                self.for_update_ts,
+                0,
+                0.into(),
+            );
+            TxnEntry::Prewrite {
+                default: (key, value),
+                lock: (lock_key.into_encoded(), lock_value.to_bytes()),
+            }
+        }
+        pub fn build_rollback(&self) -> TxnEntry {
+            let write_key = Key::from_raw(&self.key).append_ts(self.start_ts.into());
+            let write_value = Write::new(WriteType::Rollback, self.start_ts, None);
+            // For now, rollback is enclosed in Commit.
+            TxnEntry::Commit {
+                default: (vec![], vec![]),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+            }
+        }
     }
 }
 
@@ -806,7 +1076,7 @@ mod latest_kv_tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -843,61 +1113,11 @@ mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::Write;
     use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
-    #[derive(Default)]
-    struct EntryBuilder {
-        key: Vec<u8>,
-        value: Vec<u8>,
-        start_ts: TimeStamp,
-        commit_ts: TimeStamp,
-    }
-
-    impl EntryBuilder {
-        fn key(&mut self, key: &[u8]) -> &mut Self {
-            self.key = key.to_owned();
-            self
-        }
-        fn value(&mut self, val: &[u8]) -> &mut Self {
-            self.value = val.to_owned();
-            self
-        }
-        fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
-            self.start_ts = start_ts;
-            self
-        }
-        fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
-            self.commit_ts = commit_ts;
-            self
-        }
-        fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
-            let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
-            let (key, value, short) = if is_short_value {
-                let short = if wt == WriteType::Put {
-                    Some(self.value.clone())
-                } else {
-                    None
-                };
-                (vec![], vec![], short)
-            } else {
-                (
-                    Key::from_raw(&self.key)
-                        .append_ts(self.start_ts)
-                        .into_encoded(),
-                    self.value.clone(),
-                    None,
-                )
-            };
-            let write_value = Write::new(wt, self.start_ts, short);
-            TxnEntry::Commit {
-                default: (key, value),
-                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
-            }
-        }
-    }
+    use super::test_util::EntryBuilder;
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
     #[test]
@@ -1154,7 +1374,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();
@@ -1230,13 +1450,545 @@ mod latest_entry_tests {
 
         // Scanning entries in (10, 15] should get None
         check(15, 10, true, vec![]);
-        // Scanning entries without delete in (7, 10]  should get None
+        // Scanning entries without delete in (7, 10] should get None
         check(10, 7, false, vec![]);
-        // Scanning entries include delete in (7, 10]  should get entry_b_10
+        // Scanning entries include delete in (7, 10] should get entry_b_10
         check(10, 7, true, vec![&entry_b_10]);
         // Scanning entries include delete in (3, 10] should get a_7 and b_10
         check(10, 3, true, vec![&entry_a_7, &entry_b_10]);
         // Scanning entries in (0, 5] should get a_3 and b_1
         check(5, 0, true, vec![&entry_a_3, &entry_b_1]);
+        // Scanning entries without delete in (0, 10] should get a_7
+        check(10, 0, false, vec![&entry_a_7]);
+    }
+}
+
+#[cfg(test)]
+mod delta_entry_tests {
+
+    use super::super::ScannerBuilder;
+    use super::*;
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::{Engine, TestEngineBuilder};
+
+    use kvproto::kvrpcpb::Context;
+    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+
+    use super::test_util::EntryBuilder;
+
+    /// Check whether everything works as usual when `Delta::get()` goes out of bound.
+    #[test]
+    fn test_get_out_of_bound() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"value", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate 5 rollback for [b].
+        for ts in 0..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_delta_scanner(0.into())
+            .unwrap();
+
+        // Initial position: 1 seek_to_first:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //       ^cursor
+
+        let mut builder: EntryBuilder = EntryBuilder::default();
+        let entry = builder
+            .key(b"a")
+            .value(b"value")
+            .start_ts(7.into())
+            .commit_ts(7.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Use 5 next and reach out of bound:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //                           ^cursor
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 5);
+
+        // Cursor remains invalid, so nothing should happen.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `DeltaScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 1. next() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_1() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
+        for ts in 0..SEEK_BOUND / 2 {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
+        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+            .range(None, None)
+            .build_delta_scanner(0.into())
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_value")
+            .start_ts(16.into())
+            .commit_ts(16.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
+        //           ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_value")
+            .start_ts(4.into())
+            .commit_ts(4.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 1);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 4);
+    }
+
+    /// Check whether everything works as usual when
+    /// `EntryScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 2. seek() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_2() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND rollback and 1 put for [b] .
+        // It differs from EntryScanner that this will try to fetch multiple versions of each key.
+        // So in this test it needs one more next than EntryScanner.
+        for ts in 1..=SEEK_BOUND {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND + 1);
+        must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+            .range(None, None)
+            .build_delta_scanner(8.into())
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_4 b_3 b_2 b_1
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_value")
+            .start_ts(16.into())
+            .commit_ts(16.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry));
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND-1 next: (TODO: fix it to SEEK_BOUND)
+        //   a_8 b_4 b_3 b_2 b_1
+        //                   ^cursor
+        // We still pointing at current user key, so a seek:
+        //   a_8 b_4 b_3 b_2 b_1
+        //                       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_value")
+            .start_ts(9.into())
+            .commit_ts(9.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 1);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+    }
+
+    /// Range is left open right closed.
+    #[test]
+    fn test_range() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [1], [2] ... [6].
+        for i in 1..7 {
+            // ts = 1: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 1);
+            must_commit(&engine, &[i], 1, 1);
+
+            // ts = 7: value = [ts]
+            must_prewrite_put(&engine, &[i], &[i], &[i], 7);
+            must_commit(&engine, &[i], 7, 7);
+
+            // ts = 14: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 14);
+            must_commit(&engine, &[i], 14, 14);
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
+            .build_delta_scanner(4.into())
+            .unwrap();
+
+        let entry = |key, ts| {
+            EntryBuilder::default()
+                .key(key)
+                .value(key)
+                .start_ts(ts)
+                .commit_ts(ts)
+                .build_commit(WriteType::Put, true)
+        };
+
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test left bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(None, Some(Key::from_raw(&[3u8])))
+            .build_delta_scanner(4.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test right bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(Some(Key::from_raw(&[5u8])), None)
+            .build_delta_scanner(4.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test both bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_delta_scanner(4.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+    }
+
+    #[test]
+    fn test_mess() {
+        // TODO: non-pessimistic lock should be returned enven if its ts < from_ts.
+        // (key, lock, [commit1, commit2, ...])
+        // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it will be saved
+        // in default cf.
+        let test_data = vec![
+            (
+                b"a" as &[u8],
+                None,
+                vec![
+                    (2, 4, WriteType::Put, b"va1" as &[u8]),
+                    (12, 14, WriteType::Put, b"va2"),
+                    (22, 24, WriteType::Put, b"va3"),
+                ],
+            ),
+            (b"b", Some((12, LockType::Put, b"vb1" as &[u8])), vec![]),
+            (b"c", Some((22, LockType::Put, b"vc1")), vec![]),
+            (b"d", Some((22, LockType::Put, b"vdL")), vec![]),
+            (b"e", Some((100, LockType::Delete, b"")), vec![]),
+            (
+                b"f",
+                Some((15, LockType::Pessimistic, b"")),
+                vec![
+                    (2, 10, WriteType::Put, b"vf1"),
+                    (5, 22, WriteType::Delete, b""),
+                    (23, 25, WriteType::Lock, b""),
+                    (26, 26, WriteType::Rollback, b""),
+                    (21, 27, WriteType::Put, b"vf2L"),
+                    (24, 50, WriteType::Delete, b""),
+                ],
+            ),
+            (
+                b"g",
+                Some((51, LockType::Put, b"vg1L")),
+                vec![
+                    (2, 10, WriteType::Put, b"vg2L"),
+                    (5, 22, WriteType::Put, b"vg3L"),
+                    (23, 25, WriteType::Put, b"vg4L"),
+                    (26, 26, WriteType::Rollback, b""),
+                    (21, 27, WriteType::Put, b"vg5L"),
+                    (24, 50, WriteType::Put, b"vg6L"),
+                ],
+            ),
+            (
+                b"h",
+                None,
+                vec![
+                    (8, 10, WriteType::Put, b"vh1"),
+                    (12, 12, WriteType::Rollback, b""),
+                    (14, 14, WriteType::Rollback, b""),
+                    (16, 16, WriteType::Rollback, b""),
+                    (18, 18, WriteType::Rollback, b""),
+                    (22, 24, WriteType::Put, b"vh2"),
+                ],
+            ),
+        ];
+
+        let make_value = |v: &[u8]| {
+            let mut res = v.to_vec();
+            if res.last().map(|b| *b == b'L').unwrap_or(false) {
+                res = res
+                    .into_iter()
+                    .cycle()
+                    .take(SHORT_VALUE_MAX_LEN + 5)
+                    .collect();
+            }
+            res
+        };
+        let expected_entries = |from_key: &[u8], to_key: &[u8], from_ts: u64, to_ts: u64| {
+            test_data
+                .iter()
+                .filter(|(key, _, _)| *key >= from_key && (to_key.is_empty() || *key < to_key))
+                .map(|(key, lock, writes)| {
+                    let mut entries_of_key = vec![];
+
+                    if let Some((ts, lock_type, value)) = lock {
+                        let max_commit_ts = writes
+                            .last()
+                            .cloned()
+                            .map(|(_, commit_ts, _, _)| commit_ts)
+                            .unwrap_or(0);
+                        let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
+
+                        if *ts <= to_ts {
+                            let value = make_value(value);
+                            let entry = EntryBuilder::default()
+                                .key(key)
+                                .start_ts(ts.into())
+                                .for_update_ts(for_update_ts.into())
+                                .primary(key)
+                                .value(&value)
+                                .build_prewrite(*lock_type, is_short_value(&value));
+                            entries_of_key.push(entry);
+                        }
+                    }
+
+                    for (start_ts, commit_ts, write_type, value) in writes.iter().rev() {
+                        // Commits not in timestamp range will not be scanned
+                        if *commit_ts > to_ts || *commit_ts <= from_ts {
+                            continue;
+                        }
+
+                        // Rollbacks are ignored.
+                        if *write_type == WriteType::Rollback {
+                            continue;
+                        }
+
+                        let value = make_value(value);
+                        let entry = EntryBuilder::default()
+                            .key(key)
+                            .start_ts(start_ts.into())
+                            .commit_ts(commit_ts.into())
+                            .value(&value)
+                            .build_commit(*write_type, is_short_value(&value));
+                        entries_of_key.push(entry);
+                    }
+
+                    entries_of_key
+                })
+                .flatten()
+                .collect::<Vec<TxnEntry>>()
+        };
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        for (key, lock, writes) in &test_data {
+            for (start_ts, commit_ts, write_type, value) in writes {
+                let value = make_value(value);
+                if *write_type != WriteType::Rollback {
+                    must_acquire_pessimistic_lock(&engine, key, key, start_ts, commit_ts - 1);
+                }
+                match write_type {
+                    WriteType::Put => must_pessimistic_prewrite_put(
+                        &engine,
+                        key,
+                        &value,
+                        key,
+                        start_ts,
+                        commit_ts - 1,
+                        true,
+                    ),
+                    WriteType::Delete => must_pessimistic_prewrite_delete(
+                        &engine,
+                        key,
+                        key,
+                        start_ts,
+                        commit_ts - 1,
+                        true,
+                    ),
+                    WriteType::Lock => must_pessimistic_prewrite_lock(
+                        &engine,
+                        key,
+                        key,
+                        start_ts,
+                        commit_ts - 1,
+                        true,
+                    ),
+                    WriteType::Rollback => must_rollback(&engine, key, start_ts),
+                }
+                if *write_type != WriteType::Rollback {
+                    must_commit(&engine, key, start_ts, commit_ts);
+                }
+            }
+
+            if let Some((ts, lock_type, value)) = lock {
+                let value = make_value(value);
+                let max_commit_ts = writes
+                    .last()
+                    .cloned()
+                    .map(|(_, commit_ts, _, _)| commit_ts)
+                    .unwrap_or(0);
+                let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
+                must_acquire_pessimistic_lock(&engine, key, key, *ts, for_update_ts);
+                match lock_type {
+                    LockType::Put => must_pessimistic_prewrite_put(
+                        &engine,
+                        key,
+                        &value,
+                        key,
+                        ts,
+                        for_update_ts,
+                        true,
+                    ),
+                    LockType::Delete => {
+                        must_pessimistic_prewrite_delete(&engine, key, key, ts, for_update_ts, true)
+                    }
+                    LockType::Lock => {
+                        must_pessimistic_prewrite_lock(&engine, key, key, ts, for_update_ts, true)
+                    }
+                    LockType::Pessimistic => {}
+                }
+            }
+        }
+
+        let check = |from_key, to_key, from_ts, to_ts| {
+            let expected = expected_entries(from_key, to_key, from_ts, to_ts);
+
+            let from_key = if from_key.is_empty() {
+                None
+            } else {
+                Some(Key::from_raw(from_key))
+            };
+            let to_key = if to_key.is_empty() {
+                None
+            } else {
+                Some(Key::from_raw(to_key))
+            };
+            let mut scanner = ScannerBuilder::new(
+                engine.snapshot(&Context::default()).unwrap(),
+                to_ts.into(),
+                false,
+            )
+            .hint_min_ts(Some(from_ts.into()))
+            .hint_max_ts(Some(to_ts.into()))
+            .range(from_key, to_key)
+            .build_delta_scanner(from_ts.into())
+            .unwrap();
+
+            let mut actual = vec![];
+            while let Some(entry) = scanner.next_entry().unwrap() {
+                actual.push(entry);
+            }
+            // Do assertions one by one so that if it fails it won't print too long panic message.
+            for i in 0..std::cmp::max(actual.len(), expected.len()) {
+                assert_eq!(
+                    actual[i], expected[i],
+                    "item {} not match: expected {:?}, but got {:?}",
+                    i, actual[i], expected[i]
+                );
+            }
+        };
+
+        check(b"", b"", 0, u64::max_value());
+        check(b"", b"", 20, 30);
+        check(b"", b"", 14, 24);
+        check(b"", b"", 15, 16);
+        check(b"", b"", 80, 90);
+        check(b"", b"", 24, u64::max_value());
+        check(b"a", b"g", 0, u64::max_value());
+        check(b"b", b"c", 20, 30);
+        check(b"g", b"h", 14, 24);
+        check(b"", b"a", 80, 90);
+        check(b"h", b"", 24, u64::max_value());
+        check(b"c", b"d", 0, u64::max_value());
     }
 }

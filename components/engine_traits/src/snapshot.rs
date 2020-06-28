@@ -1,20 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::KvEngine;
 use crate::iterable::Iterable;
 use crate::peekable::Peekable;
 use std::fmt::Debug;
-use std::ops::Deref;
 
-pub trait Snapshot: 'static + Peekable + Iterable + Send + Sync + Sized + Debug {
-    type SyncSnapshot: SyncSnapshot<Self>;
-    type KvEngine: KvEngine;
-
+/// A consistent read-only view of the database.
+///
+/// Snapshots can be sent and shared, but not cloned. To make a snapshot
+/// clonable, call `into_sync` to create a `SyncSnapshot`.
+pub trait Snapshot
+where
+    Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
+{
     fn cf_names(&self) -> Vec<&str>;
-
-    fn into_sync(self) -> Self::SyncSnapshot;
-
-    fn get_db(&self) -> &Self::KvEngine;
 }
-
-pub trait SyncSnapshot<T>: Clone + Send + Sync + Sized + Debug + Deref<Target = T> {}

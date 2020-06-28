@@ -48,13 +48,13 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
 
     fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
         // We should not throw error at any time if `count == 0`.
-        if unsafe { unlikely(count == 0) } {
+        if unlikely(count == 0) {
             return Ok(&[]);
         }
 
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
-        if unsafe { unlikely(pos + count >= slice.len()) } {
+        if unlikely(pos + count >= slice.len()) {
             return Err(ErrorInner::eof().into());
         }
         let new_pos = pos + count;
@@ -75,7 +75,7 @@ impl<'a> BufferReader for &'a [u8] {
     }
 
     fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
-        if unsafe { unlikely(self.len() < count) } {
+        if unlikely(self.len() < count) {
             return Err(ErrorInner::eof().into());
         }
         let (left, right) = self.split_at(count);
@@ -132,12 +132,16 @@ pub trait BufferWriter {
     /// The size of the returned slice may be less than `size` given. For example,
     /// when underlying buffer is fixed sized and there is no enough space any more.
     ///
+    /// # Safety
+    ///
     /// The returned mutable slice is for writing only and should be never used for
     /// reading since it might contain uninitialized memory when underlying buffer
     /// is dynamically sized. For this reason, this function is marked `unsafe`.
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8];
 
     /// Advances the position of internal cursor for a previous write.
+    ///
+    /// # Safety
     ///
     /// The caller should ensure that advanced positions have been all written
     /// previously. If the cursor is moved beyond actually written data, it will
@@ -180,13 +184,13 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         let write_len = values.len();
 
         // We should not throw error at any time if there is no byte to write.
-        if unsafe { unlikely(write_len == 0) } {
+        if unlikely(write_len == 0) {
             return Ok(());
         }
 
         let pos = self.position() as usize;
         let slice = self.get_mut().as_mut();
-        if unsafe { unlikely(pos + write_len >= slice.len()) } {
+        if unlikely(pos + write_len >= slice.len()) {
             return Err(ErrorInner::eof().into());
         }
         let new_pos = pos + write_len;
@@ -210,7 +214,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
 
     fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
         let write_len = values.len();
-        if unsafe { unlikely(self.len() < write_len) } {
+        if unlikely(self.len() < write_len) {
             return Err(ErrorInner::eof().into());
         }
         let original_self = std::mem::replace(self, &mut []);
@@ -280,8 +284,6 @@ impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand;
-
     use super::*;
 
     #[test]

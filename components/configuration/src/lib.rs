@@ -1,21 +1,51 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
+use std::fmt::{self, Debug, Display, Formatter};
 
 pub use configuration_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum ConfigValue {
     Duration(u64),
     Size(u64),
     U64(u64),
     F64(f64),
+    I32(i32),
+    U32(u32),
     Usize(usize),
     Bool(bool),
     String(String),
+    BlobRunMode(String),
     Module(ConfigChange),
+    Skip,
+}
+
+impl Display for ConfigValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigValue::Duration(v) => write!(f, "{}ms", v),
+            ConfigValue::Size(v) => write!(f, "{}b", v),
+            ConfigValue::U64(v) => write!(f, "{}", v),
+            ConfigValue::F64(v) => write!(f, "{}", v),
+            ConfigValue::I32(v) => write!(f, "{}", v),
+            ConfigValue::U32(v) => write!(f, "{}", v),
+            ConfigValue::Usize(v) => write!(f, "{}", v),
+            ConfigValue::Bool(v) => write!(f, "{}", v),
+            ConfigValue::String(v) => write!(f, "{}", v),
+            ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
+            ConfigValue::Module(v) => write!(f, "{:?}", v),
+            ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
+        }
+    }
+}
+
+impl Debug for ConfigValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
 }
 
 macro_rules! impl_from {
@@ -29,6 +59,8 @@ macro_rules! impl_from {
 }
 impl_from!(u64, U64);
 impl_from!(f64, F64);
+impl_from!(i32, I32);
+impl_from!(u32, U32);
 impl_from!(usize, Usize);
 impl_from!(bool, Bool);
 impl_from!(String, String);
@@ -53,24 +85,42 @@ macro_rules! impl_into {
 }
 impl_into!(u64, U64);
 impl_into!(f64, F64);
+impl_into!(i32, I32);
+impl_into!(u32, U32);
 impl_into!(usize, Usize);
 impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
-/// the Configuration trait
-/// There are three type of fields inside derived Configuration struct:
+/// The Configuration trait
+///
+/// There are four type of fields inside derived Configuration struct:
 /// 1. `#[config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
-/// 2. `#[config(submodule)]` field, these fields represent the
+/// 2. `#[config(hidden)]` field, these fields have the same effect of
+/// `#[config(skip)]` field, in addition, these fields will not appear
+/// at the output of serializing `Self::Encoder`
+/// 3. `#[config(submodule)]` field, these fields represent the
 /// submodule, and should also derive `Configuration`
-/// 3. normal fields, the type of these fields should be implment
+/// 4. normal fields, the type of these fields should be implment
 /// `Into` and `From` for `ConfigValue`
-pub trait Configuration {
+pub trait Configuration<'a> {
+    type Encoder: serde::Serialize;
     /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
     /// Update config with difference returned by `diff`
     fn update(&mut self, _: ConfigChange);
+    /// Get encoder that can be serialize with `serde::Serializer`
+    /// with the disappear of `#[config(hidden)]` field
+    fn get_encoder(&'a self) -> Self::Encoder;
+    /// Get all fields and their type of the config
+    fn typed(&self) -> ConfigChange;
+}
+
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub trait ConfigManager: Send + Sync {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -174,5 +224,52 @@ mod tests {
             "submodule should be updated"
         );
         assert_eq!(cfg, updated_cfg, "cfg should be updated");
+    }
+
+    #[test]
+    fn test_hidden_field() {
+        use serde::Serialize;
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct TestConfig {
+            #[config(skip)]
+            skip_field: String,
+            #[config(hidden)]
+            hidden_field: u64,
+            #[config(submodule)]
+            submodule_field: SubConfig,
+        }
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct SubConfig {
+            #[serde(rename = "rename_field")]
+            bool_field: bool,
+            #[config(hidden)]
+            hidden_field: usize,
+        }
+
+        let cfg = SubConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "rename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "rename_field = false\n"
+        );
+
+        let cfg = TestConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "skip-field = \"\"\nhidden-field = 0\n\n[submodule-field]\nrename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "skip-field = \"\"\n\n[submodule-field]\nrename_field = false\n"
+        );
     }
 }

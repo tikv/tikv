@@ -11,13 +11,13 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use engine::Iterable;
-use engine::CF_WRITE;
+use engine_rocks::Compat;
+use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
+use raftstore::store::{Callback, WriteResponse};
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -200,6 +200,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut size = 0;
     cluster.engines[&store_id]
         .kv
+        .c()
         .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
             size += k.len() as u64;
             size += v.len() as u64;
@@ -278,14 +279,22 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             Some(l) => break l,
         }
     };
+    let mut missing_count = 0;
     for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
             must_get_equal(&engine, k, v);
         } else {
-            must_get_none(&engine, k);
+            // Note that a follower can still commit the log by an empty MsgAppend
+            // when bcast commit is disabled. A heartbeat response comes to leader
+            // before MsgAppendResponse will trigger MsgAppend.
+            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+                Some(res) => assert_eq!(v, &res[..]),
+                None => missing_count += 1,
+            }
         }
     }
+    assert!(all_committed || missing_count > 0);
 }
 
 /// TiKV enables lazy broadcast commit optimization, which can delay split
@@ -812,7 +821,7 @@ fn test_node_split_update_region_right_derive() {
     must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
 
     // Transfer leadership to another peer.
-    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+    cluster.must_transfer_leader(right.get_id(), new_leader);
 
     // Make sure the new_leader is in lease.
     cluster.must_put(b"k4", b"v5");

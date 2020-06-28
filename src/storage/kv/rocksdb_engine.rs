@@ -7,16 +7,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine::rocks;
-use engine::rocks::util::CFOptions;
-use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
-};
 use engine::Engines;
-use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::RocksEngineIterator;
-use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
+use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
+use engine_rocks::raw_util::CFOptions;
+use engine_rocks::{Compat, RocksEngineIterator};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, SeekKey, WriteBatchExt,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -30,13 +28,13 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RocksSnapshot>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -56,10 +54,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
-            )),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.c().snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -108,7 +103,9 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
+        let db = Arc::new(engine_rocks::raw_util::new_engine(
+            &path, None, cfs, cfs_opts,
+        )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
         let engines = Engines::new(db.clone(), db, shared_block_cache);
@@ -214,7 +211,9 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::default();
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = engine.kv.c().write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -223,8 +222,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_cf(handle, k.as_encoded())
+                    wb.delete_cf(cf, k.as_encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
@@ -233,8 +231,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.put_cf(handle, k.as_encoded(), &v)
+                    wb.put_cf(cf, k.as_encoded(), &v)
                 }
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
@@ -246,8 +243,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     "notify_only" => notify_only,
                 );
                 if !notify_only {
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
                 } else {
                     Ok(())
                 }
@@ -258,14 +254,16 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
             return Err(box_err!("{}", msg));
         }
     }
-    engine.write_kv(&wb)?;
+    engine.kv.c().write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
-    type Snap = RocksSnapshot;
+    type Snap = Arc<RocksSnapshot>;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+
         if modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
@@ -282,19 +280,18 @@ impl Engine for RocksEngine {
             header.mut_not_leader().set_region_id(100);
             header
         };
-        let _not_leader = not_leader.clone();
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::from(ErrorInner::Request(not_leader)))
+            Err(Error::from(ErrorInner::Request(not_leader.clone())))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::from(ErrorInner::Request(_not_leader)));
+            return Err(Error::from(ErrorInner::Request(not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -309,7 +306,7 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
         let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
@@ -318,7 +315,7 @@ impl Snapshot for RocksSnapshot {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
@@ -484,7 +481,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Forward)
+            .iter(IterOptions::default(), ScanMode::Forward)
             .unwrap();
 
         let mut statistics = CfStatistics::default();

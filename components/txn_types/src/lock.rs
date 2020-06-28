@@ -2,7 +2,7 @@
 
 use crate::timestamp::{TimeStamp, TsSet};
 use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
@@ -27,11 +27,12 @@ const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
-    pub fn from_mutation(mutation: &Mutation) -> LockType {
+    pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
-            Mutation::Delete(_) => LockType::Delete,
-            Mutation::Lock(_) => LockType::Lock,
+            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
+            Mutation::Delete(_) => Some(LockType::Delete),
+            Mutation::Lock(_) => Some(LockType::Lock),
+            Mutation::CheckNotExists(_) => None,
         }
     }
 
@@ -99,9 +100,9 @@ impl Lock {
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
-            return Err(Error::BadFormatLock);
+            return Err(Error::from(ErrorInner::BadFormatLock));
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
         let primary = bytes::decode_compact_bytes(&mut b)?;
         let ts = number::decode_var_u64(&mut b)?.into();
         let ttl = if b.is_empty() {
@@ -173,6 +174,7 @@ impl Lock {
             LockType::Pessimistic => Op::PessimisticLock,
         };
         info.set_lock_type(lock_type);
+        info.set_lock_for_update_ts(self.for_update_ts.into_inner());
         info
     }
 
@@ -183,6 +185,11 @@ impl Lock {
             || self.lock_type == LockType::Pessimistic
         {
             // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+            return Ok(());
+        }
+
+        if self.min_commit_ts > ts {
+            // Ignore lock when min_commit_ts > ts
             return Ok(());
         }
 
@@ -199,7 +206,9 @@ impl Lock {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked(self.into_lock_info(raw_key)))
+        Err(Error::from(ErrorInner::KeyIsLocked(
+            self.into_lock_info(raw_key),
+        )))
     }
 }
 
@@ -228,7 +237,7 @@ mod tests {
             ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
-            let lt = LockType::from_mutation(&mutation);
+            let lt = LockType::from_mutation(&mutation).unwrap();
             assert_eq!(
                 lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
@@ -432,6 +441,17 @@ mod tests {
         lock.primary = b"bar".to_vec();
         lock.clone()
             .check_ts_conflict(&key, TimeStamp::max(), &empty)
+            .unwrap_err();
+
+        // Ignore the lock if read ts is less than min_commit_ts
+        lock.min_commit_ts = 150.into();
+        lock.clone()
+            .check_ts_conflict(&key, 140.into(), &empty)
+            .unwrap();
+        lock.clone()
+            .check_ts_conflict(&key, 150.into(), &empty)
+            .unwrap_err();
+        lock.check_ts_conflict(&key, 160.into(), &empty)
             .unwrap_err();
     }
 }

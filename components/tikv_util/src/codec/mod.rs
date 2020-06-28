@@ -24,11 +24,11 @@ quick_error! {
         Io(err: io::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
-        KeyLength {description("bad format key(length)")}
-        KeyPadding {description("bad format key(padding)")}
-        KeyNotFound {description("key not found")}
+        KeyLength {display("bad format key(length)")}
+        KeyPadding {display("bad format key(padding)")}
+        KeyNotFound {display("key not found")}
     }
 }
 

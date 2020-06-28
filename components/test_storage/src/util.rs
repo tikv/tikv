@@ -21,7 +21,7 @@ pub fn new_raft_engine(
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     (cluster, engine, ctx)
 }
 

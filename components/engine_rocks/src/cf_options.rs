@@ -4,6 +4,7 @@ use crate::db_options::RocksTitanDBOptions;
 use engine_traits::ColumnFamilyOptions;
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
 
+#[derive(Clone)]
 pub struct RocksColumnFamilyOptions(RawCFOptions);
 
 impl RocksColumnFamilyOptions {
@@ -49,5 +50,13 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
         self.0.set_titandb_options(opts.as_raw())
+    }
+
+    fn get_target_file_size_base(&self) -> u64 {
+        self.0.get_target_file_size_base()
+    }
+
+    fn get_disable_auto_compactions(&self) -> bool {
+        self.0.get_disable_auto_compactions()
     }
 }

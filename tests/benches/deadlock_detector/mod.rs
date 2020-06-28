@@ -33,7 +33,7 @@ impl DetectGenerator {
                     if self.timestamp < self.range {
                         0
                     } else {
-                        (self.timestamp - self.range)
+                        self.timestamp - self.range
                     },
                     self.timestamp + self.range,
                 );

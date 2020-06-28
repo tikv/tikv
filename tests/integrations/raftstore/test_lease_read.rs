@@ -10,9 +10,11 @@ use std::{mem, thread};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-use engine::Peekable;
+use engine_rocks::Compat;
+use engine_traits::Peekable;
+use pd_client::PdClient;
+use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -61,7 +63,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_transfer_leader(region_id, peer.clone());
     let engine = cluster.get_raft_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
     let detector = LeaseReadFilter::default();
@@ -94,11 +96,11 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Check if the leader has renewed its lease so that it can do lease read.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
+    must_read_on_peer(cluster, peer, region, key, b"v2");
 
     // Check if the leader does a local read.
     assert_eq!(detector.ctx.rl().len(), expect_lease_read);
@@ -151,13 +153,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    must_error_read_on_peer(
-        cluster,
-        peer.clone(),
-        region.clone(),
-        key,
-        Duration::from_secs(1),
-    );
+    must_error_read_on_peer(cluster, peer, region, key, Duration::from_secs(1));
 }
 
 #[test]
@@ -207,14 +203,17 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
     let engine = cluster.get_raft_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
+
+    // Ensure peer 3 is ready to transfer leader.
+    must_get_equal(&cluster.get_engine(3), key, b"v1");
 
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
     cluster.add_send_filter(CloneFilterFactory(
@@ -248,15 +247,15 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(detector.ctx.rl().len(), 3);
 
     // Check if the leader also propose an entry to renew its lease.
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // wait some time for the proposal to be applied.
     thread::sleep(election_timeout / 2);
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    must_read_on_peer(cluster, peer, region, key, b"v1");
+    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
     assert_eq!(detector.ctx.rl().len(), 3);
 }
@@ -344,28 +343,41 @@ fn test_lease_read_callback_destroy() {
     cluster.must_put(b"k2", b"v2");
 }
 
+/// A read index request will be appended to waiting list when there is an on-going request
+/// to reduce heartbeat messages. But when leader is in suspect lease, requests should not
+/// be batched because lease can be expired at anytime.
 #[test]
-fn test_read_index_when_transfer_leader_1() {
+fn test_read_index_stale_in_suspect_lease() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
+    let r1 = cluster.get_region(b"k1");
     // Put and test again to ensure that peer 3 get the latest writes by message append
     // instead of snapshot, so that transfer leader to peer 3 can 100% success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    let r1 = cluster.get_region(b"k1");
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    // Ensure peer 3 is ready to become leader.
+    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(
+        resp.get_responses()[0].get_get().get_value(),
+        b"v2",
+        "{:?}",
+        resp
+    );
     let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
     // Use a macro instead of a closure to avoid any capture of local variables.
@@ -393,9 +405,9 @@ fn test_read_index_when_transfer_leader_1() {
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
     let filter = Box::new(
-        RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
+        RegionPacketFilter::new(r1.id, old_leader.store_id)
             .direction(Direction::Recv)
-            .when(Arc::new(AtomicBool::new(true)))
+            .skip(MessageType::MsgTransferLeader)
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
     cluster
@@ -512,4 +524,75 @@ fn test_not_leader_read_lease() {
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
     // Even the leader steps down, it should respond to read index in time.
     rx.recv_timeout(heartbeat_interval).unwrap();
+}
+
+/// Test whether read index is greater than applied index.
+/// 1. Add hearbeat msg filter.
+/// 2. Propose a read index request.
+/// 3. Put a key and get the latest applied index.
+/// 4. Propose another read index request.
+/// 5. Remove the filter and check whether the latter read index is greater than applied index.
+///
+/// In previous implementation, these two read index request will be batched and
+/// will get the same read index which breaks the correctness because the latter one
+/// is proposed after the applied index has increased and replied to client.
+#[test]
+fn test_read_index_after_write() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    let region = pd_client.get_region(b"k1").unwrap();
+    let region_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), region_on_store1.clone());
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Add heartbeat msg filter to prevent the leader to reply the read index response.
+    let filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat),
+    );
+    cluster.sim.wl().add_recv_filter(2, filter);
+
+    let mut req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
+    // Don't care about the first one's read index
+    let (cb, _) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
+
+    cluster.must_put(b"k2", b"v2");
+    let applied_index = cluster.apply_state(region.get_id(), 1).get_applied_index();
+
+    let mut req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    req.mut_header()
+        .set_peer(new_peer(1, region_on_store1.get_id()));
+    let (cb, rx) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let response = rx.recv_timeout(heartbeat_interval).unwrap();
+    assert!(
+        response.get_responses()[0]
+            .get_read_index()
+            .get_read_index()
+            >= applied_index
+    );
 }

@@ -17,6 +17,7 @@ pub struct Service {
     stores: Mutex<HashMap<u64, Store>>,
     regions: Mutex<HashMap<u64, Region>>,
     leaders: Mutex<HashMap<u64, Peer>>,
+    cluster_version: Mutex<String>,
 }
 
 impl Service {
@@ -28,10 +29,11 @@ impl Service {
             stores: Mutex::new(HashMap::default()),
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
+            cluster_version: Mutex::new(String::default()),
         }
     }
 
-    fn header() -> ResponseHeader {
+    pub fn header() -> ResponseHeader {
         let mut header = ResponseHeader::default();
         header.set_cluster_id(DEFAULT_CLUSTER_ID);
         header
@@ -41,6 +43,10 @@ impl Service {
     pub fn add_store(&self, store: Store) {
         let store_id = store.get_id();
         self.stores.lock().unwrap().insert(store_id, store);
+    }
+
+    pub fn set_cluster_version(&self, version: String) {
+        *self.cluster_version.lock().unwrap() = version;
     }
 }
 
@@ -229,6 +235,7 @@ impl PdMocker for Service {
         let mut resp = StoreHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
+        resp.set_cluster_version(self.cluster_version.lock().unwrap().to_owned());
         Some(Ok(resp))
     }
 

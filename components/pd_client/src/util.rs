@@ -1,59 +1,32 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use tikv_util::collections::HashSet;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use futures03::compat::Future01CompatExt;
+use futures03::executor::block_on;
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
-use kvproto::configpb::ConfigClient;
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
-    RegionHeartbeatResponse, ResponseHeader,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
-use tokio_timer::timer::Handle;
-
-use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use tikv_util::security::SecurityManager;
+use security::SecurityManager;
+use tikv_util::collections::HashSet;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
+use tokio_timer::timer::Handle;
 
-pub struct PdClientStub {
-    pd_client: PdClient,
-    config_client: ConfigClient,
-}
-
-impl PdClientStub {
-    fn new(ch: Channel) -> Self {
-        // reuse the same channel for tow different client
-        PdClientStub {
-            pd_client: PdClient::new(ch.clone()),
-            config_client: ConfigClient::new(ch),
-        }
-    }
-
-    pub fn config(&self) -> &ConfigClient {
-        &self.config_client
-    }
-}
-
-impl Deref for PdClientStub {
-    type Target = PdClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pd_client
-    }
-}
+use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -68,6 +41,8 @@ pub struct Inner {
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
+
+    pub cluster_version: ClusterVersion,
 }
 
 pub struct HeartbeatReceiver {
@@ -111,7 +86,7 @@ impl Stream for HeartbeatReceiver {
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     timer: Handle,
-    inner: Arc<RwLock<Inner>>,
+    pub(crate) inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
@@ -121,7 +96,10 @@ impl LeaderClient {
         client_stub: PdClientStub,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client_stub.region_heartbeat().unwrap();
+        let (tx, rx) = client_stub
+            .region_heartbeat()
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
@@ -134,6 +112,7 @@ impl LeaderClient {
                 on_reconnect: None,
 
                 last_update: Instant::now(),
+                cluster_version: ClusterVersion::default(),
             })),
         }
     }
@@ -182,9 +161,9 @@ impl LeaderClient {
         self.inner.rl().members.get_leader().clone()
     }
 
-    /// Re-establishes connection with PD leader in synchronized fashion.
-    pub fn reconnect(&self) -> Result<()> {
-        let ((client, members), start) = {
+    /// Re-establishes connection with PD leader in asynchronized fashion.
+    pub async fn reconnect(&self) -> Result<()> {
+        let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -192,15 +171,23 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
+
             (
-                try_connect_leader(Arc::clone(&inner.env), &inner.security_mgr, &inner.members)?,
+                try_connect_leader(
+                    Arc::clone(&inner.env),
+                    Arc::clone(&inner.security_mgr),
+                    inner.members.clone(),
+                ),
                 start,
             )
         };
+        let (client, members) = future.await?;
 
         {
             let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap();
+            let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
+                panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
+            });
             info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
@@ -259,7 +246,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect() {
+        match block_on(self.client.reconnect()) {
             Ok(_) => {
                 self.request_sent = 0;
                 Box::new(ok(self))
@@ -344,6 +331,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
+    let mut err = None;
     for _ in 0..retry {
         // DO NOT put any lock operation in match statement, or it will cause dead lock!
         let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
@@ -353,20 +341,21 @@ where
             }
             Err(e) => {
                 error!("request failed"; "err" => ?e);
-                if let Err(e) = client.reconnect() {
+                if let Err(e) = block_on(client.reconnect()) {
                     error!("reconnect failed"; "err" => ?e);
                 }
+                err.replace(e);
             }
         }
     }
 
-    Err(box_err!("fail to request"))
+    Err(err.unwrap_or(box_err!("fail to request")))
 }
 
 pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
-    security_mgr: &SecurityManager,
+    security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
@@ -378,7 +367,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(Arc::clone(&env), security_mgr, ep) {
+        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -409,7 +398,8 @@ pub fn validate_endpoints(
 
     match members {
         Some(members) => {
-            let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
+            let (client, members) =
+                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -417,7 +407,7 @@ pub fn validate_endpoints(
     }
 }
 
-fn connect(
+async fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
@@ -426,23 +416,29 @@ fn connect(
     let addr = addr
         .trim_start_matches("http://")
         .trim_start_matches("https://");
-    let cb = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
-
-    let channel = security_mgr.connect(cb, addr);
+    let channel = {
+        let cb = ChannelBuilder::new(env)
+            .keepalive_time(Duration::from_secs(10))
+            .keepalive_timeout(Duration::from_secs(3));
+        security_mgr.connect(cb, addr)
+    };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    match client.get_members_opt(&GetMembersRequest::default(), option) {
+    let response = client
+        .get_members_async_opt(&GetMembersRequest::default(), option)
+        .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
+        .compat()
+        .await;
+    match response {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
     }
 }
 
-pub fn try_connect_leader(
+pub async fn try_connect_leader(
     env: Arc<Environment>,
-    security_mgr: &SecurityManager,
-    previous: &GetMembersResponse,
+    security_mgr: Arc<SecurityManager>,
+    previous: GetMembersResponse,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
     let members = previous.get_members();
@@ -455,7 +451,7 @@ pub fn try_connect_leader(
         .chain(&[previous_leader.clone()])
     {
         for ep in m.get_client_urls() {
-            match connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            match connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -480,7 +476,7 @@ pub fn try_connect_leader(
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
+            if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }

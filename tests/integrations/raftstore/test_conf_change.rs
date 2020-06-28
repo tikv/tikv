@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use futures::Future;
 
@@ -12,10 +12,11 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
-use engine::*;
+use engine_rocks::Compat;
+use engine_traits::{Peekable, CF_RAFT};
 use pd_client::PdClient;
+use raftstore::Result;
 use test_raftstore::*;
-use tikv::raftstore::Result;
 use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
@@ -171,6 +172,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
     assert!(engine_2
+        .c()
         .get_value(&keys::data_key(b"k1"))
         .unwrap()
         .is_none());
@@ -192,7 +194,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k1", b"v1");
 
     // Remove peer2 from first region.
-    pd_client.must_remove_peer(region_id, peer2.clone());
+    pd_client.must_remove_peer(region_id, peer2);
 
     let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
@@ -209,7 +211,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
     pd_client.must_add_peer(region_id, peer4.clone());
     // Remove peer3 from first region.
-    pd_client.must_remove_peer(region_id, peer3.clone());
+    pd_client.must_remove_peer(region_id, peer3);
 
     let (key, value) = (b"k4", b"v4");
     cluster.must_put(key, value);
@@ -311,7 +313,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
     must_get_equal(&engine, b"k1", b"v1");
     peer.set_is_learner(false);
-    pd_client.must_add_peer(region_id, peer.clone());
+    pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
     pd_client.enable_default_operator();
@@ -402,6 +404,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..250 {
         let region: RegionLocalState = engine1
+            .c()
             .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
             .unwrap()
             .unwrap();
@@ -411,6 +414,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         sleep_ms(20);
     }
     let region: RegionLocalState = engine1
+        .c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
         .unwrap()
         .unwrap();
@@ -925,4 +929,23 @@ where
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+}
+
+/// Tests if conf change relies on heartbeat.
+#[test]
+fn test_conf_change_fast() {
+    let mut cluster = new_server_cluster(0, 3);
+    // Sets heartbeat timeout to more than 5 seconds. It also changes the election timeout,
+    // but it's OK as the cluster starts with only one peer, it will campaigns immediately.
+    configure_for_lease_read(&mut cluster, Some(5000), None);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    let timer = Instant::now();
+    // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
+    // hence it must timeout.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    assert!(timer.elapsed() < Duration::from_secs(5));
 }

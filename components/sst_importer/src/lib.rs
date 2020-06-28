@@ -16,11 +16,13 @@ extern crate tikv_alloc;
 mod config;
 mod errors;
 pub mod metrics;
+mod util;
 #[macro_use]
 pub mod service;
 pub mod import_mode;
 pub mod sst_importer;
 
 pub use self::config::Config;
-pub use self::errors::{Error, Result};
-pub use self::sst_importer::SSTImporter;
+pub use self::errors::{error_inc, Error, Result};
+pub use self::sst_importer::{SSTImporter, SSTWriter};
+pub use self::util::prepare_sst_for_ingestion;

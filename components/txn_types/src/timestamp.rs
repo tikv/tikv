@@ -54,6 +54,10 @@ impl TimeStamp {
         self.0 == 0
     }
 
+    pub fn is_max(self) -> bool {
+        self.0 == std::u64::MAX
+    }
+
     pub fn into_inner(self) -> u64 {
         self.0
     }

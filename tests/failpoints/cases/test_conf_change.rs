@@ -1,18 +1,20 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use fail;
-use futures::Future;
-use pd_client::PdClient;
-use raft::eraftpb::ConfChangeType;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
+
+use futures::Future;
+use kvproto::raft_serverpb::RaftMessage;
+use pd_client::PdClient;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
 #[test]
 fn test_destroy_local_reader() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -73,8 +75,6 @@ fn test_destroy_local_reader() {
 
 #[test]
 fn test_write_after_destroy() {
-    let _guard = crate::setup();
-
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
@@ -144,7 +144,6 @@ fn test_write_after_destroy() {
 
 #[test]
 fn test_tick_after_destroy() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
@@ -189,7 +188,6 @@ fn test_tick_after_destroy() {
 
 #[test]
 fn test_stale_peer_cache() {
-    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
 
@@ -203,4 +201,111 @@ fn test_stale_peer_cache() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("stale_peer_cache_2", "return").unwrap();
     cluster.must_put(b"k2", b"v2");
+}
+
+// The test is for this situation:
+// suppose there are 3 peers (1, 2, and 3) in a Raft group, and then
+// 1. propose to add peer 4 on the current leader 1;
+// 2. leader 1 appends entries to peer 3, and peer 3 applys them;
+// 3. a new proposal to remove peer 4 is proposed;
+// 4. peer 1 sends a snapshot with latest configuration [1, 2, 3] to peer 3;
+// 5. peer 3 restores the snapshot into memory;
+// 6. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
+// 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
+#[test]
+fn test_redundant_conf_change_by_snapshot() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.merge_max_log_gap = 4;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Add voter 2 and learner 3.
+    cluster.run_conf_change();
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    fail::cfg("apply_on_conf_change_3_1", "pause").unwrap();
+    cluster.pd_client.must_add_peer(1, new_peer(4, 4));
+
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+
+    // propose to remove peer 4, and append more entries to compact raft logs.
+    cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    sleep_ms(50);
+
+    // Clear filters on peer 3, so it can receive and restore a snapshot.
+    cluster.sim.wl().clear_recv_filters(3);
+    sleep_ms(100);
+
+    // Use a filter to capture messages sent from 3 to 4.
+    let (tx, rx) = mpsc::sync_channel(128);
+    let cb = Arc::new(move |msg: &RaftMessage| {
+        if msg.get_message().get_to() == 4 {
+            let _ = tx.send(());
+        }
+    }) as Arc<dyn Fn(&RaftMessage) + Send + Sync>;
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgRequestVote)
+            .when(Arc::new(AtomicBool::new(false)))
+            .set_msg_callback(cb),
+    );
+    cluster.sim.wl().add_send_filter(3, filter);
+
+    // Unpause the fail point, so peer 3 can apply the redundant conf change result.
+    fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
+
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    assert!(rx.try_recv().is_err());
+
+    fail::remove("apply_on_conf_change_3_1");
+}
+
+#[test]
+fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k", b"v");
+
+    let region = pd_client.get_region(b"k").unwrap();
+
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    let yield_apply_conf_change_3_fp = "yield_apply_conf_change_3";
+    fail::cfg(yield_apply_conf_change_3_fp, "return()").unwrap();
+
+    // Make store 1 and 3 become quorum
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    // Wait for peer fsm to send committed entries to apply fsm
+    sleep_ms(100);
+    fail::remove(yield_apply_conf_change_3_fp);
+    cluster.clear_send_filters();
+    // Add new peer 4 to store 3
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+
+    for i in 0..10 {
+        cluster.must_put(format!("kk{}", i).as_bytes(), b"v1");
+    }
 }
