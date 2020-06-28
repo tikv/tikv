@@ -14,7 +14,7 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
@@ -73,7 +73,6 @@ crc64fast = "0.1"
 crossbeam = "0.7.2"
 derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
-engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
