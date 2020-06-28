@@ -3,8 +3,8 @@
 use std::io::Result;
 use std::sync::Arc;
 
-use encryption::{self, DataKeyManager};
 use crate::raw::Env;
+use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
