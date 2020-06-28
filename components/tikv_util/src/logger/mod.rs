@@ -153,10 +153,14 @@ where
         .set_flush(true)
         .add_key_value(slog_o!(
             "message" => PushFnValue(|record, ser| ser.emit(record.msg())),
-            "caller" => FnValue(|record| Path::new(record.file())
-                .file_name()
-                .and_then(|path| path.to_str()).unwrap_or("<unknown>")
-            ),
+            "caller" => PushFnValue(|record, ser| ser.emit(format_args!(
+                "{}:{}",
+                Path::new(record.file())
+                    .file_name()
+                    .and_then(|path| path.to_str())
+                    .unwrap_or("<unknown>"),
+                record.line(),
+            ))),
             "level" => FnValue(|record| get_unified_log_level(record.level())),
             "time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),
         ))
@@ -632,16 +636,16 @@ mod tests {
 
         log_format_cases!(logger);
 
-        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs","message":""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"Welcome"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"Welcome TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"欢迎"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"欢迎 TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs","message":"failed to \"fetch\" [URL]: http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs","message":"Type","Other":null,"Score":null,"Counter":null}
-{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
+        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com"}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
+{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null}
+{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
 "#;
 
         BUFFER.with(|buffer| {
@@ -658,8 +662,8 @@ mod tests {
                 let _ = expect_json["time"].take();
 
                 validate_log_source_file(
-                    output_json["caller"].as_str().unwrap(),
-                    expect_json["caller"].as_str().unwrap(),
+                    output_json["caller"].take().as_str().unwrap(),
+                    expect_json["caller"].take().as_str().unwrap(),
                 );
 
                 assert_eq!(expect_json, output_json);
