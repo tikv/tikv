@@ -1332,13 +1332,15 @@ impl ConfigManager for DBConfigManger {
             }
         }
 
-        let rate_bytes_config = change
-            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
-            .collect::<Vec<_>>();
-        if !rate_bytes_config.is_empty() {
-            let (_, v) = rate_bytes_config[0].to_owned();
-            let rate_bytes_per_sec: ReadableSize = v.into();
-            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        {
+            let mut rate_bytes_iter = change
+                .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+                .into_iter();
+            if let Some(rate_bytes_config) = rate_bytes_iter.next() {
+                let (_, v) = rate_bytes_config;
+                let rate_bytes_per_sec: ReadableSize = v.into();
+                self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+            }
         }
 
         if !change.is_empty() {
@@ -2900,11 +2902,11 @@ mod tests {
         );
     }
 
-    fn new_engines(cfg: TiKvConfig, db_opt: DBOptions) -> (RocksEngine, ConfigController) {
+    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-                db_opt,
+                cfg.rocksdb.build_opt(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
@@ -2926,14 +2928,13 @@ mod tests {
     #[test]
     fn test_change_rocksdb_config() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
-        let mut init_db_opts = DBOptions::new();
-        init_db_opts.set_ratelimiter(ReadableSize::mb(64).0 as i64);
         cfg.rocksdb.max_background_jobs = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.validate().unwrap();
-        let (db, cfg_controller) = new_engines(cfg, init_db_opts);
+        let (db, cfg_controller) = new_engines(cfg);
 
         // update max_background_jobs
         let db_opts = db.get_db_options();
