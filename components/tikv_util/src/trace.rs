@@ -87,7 +87,7 @@ mod tests {
                     .clone()
                     .unwrap(),
                 spanpb::Link{link: Some(spanpb::link::Link::Root(spanpb::Root {}))},
-                "Here should be root"
+                "Here should be Root"
             );
             assert_eq!(
                 spanpb_span_set
