@@ -264,6 +264,11 @@ impl<T: PdClient> Runner<T> {
         right_derive: bool,
         callback: Callback,
     ) {
+        if split_keys.is_empty() {
+            info!("empty split key, skip ask batch split";
+                "region_id" => region.get_id());
+            return;
+        }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let f = self
