@@ -557,14 +557,14 @@ mod tests {
             column.as_real_vec(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
         );
-        assert_eq!(column.clone().as_real_vec(), column.as_real_vec());
+        assert_eq!(column.as_real_vec(), column.as_real_vec());
 
         column.truncate(2);
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_vec(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().as_real_vec(), column.as_real_vec());
+        assert_eq!(column.as_real_vec(), column.as_real_vec());
 
         let column = VectorValue::with_capacity(10, EvalType::DateTime);
         assert_eq!(column.eval_type(), EvalType::DateTime);
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
         assert_eq!(column.as_date_time_vec(), &[]);
-        assert_eq!(column.clone().as_date_time_vec(), column.as_date_time_vec());
+        assert_eq!(column.as_date_time_vec(), column.as_date_time_vec());
     }
 
     #[test]
