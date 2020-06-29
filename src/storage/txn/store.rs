@@ -124,8 +124,16 @@ pub trait TxnEntryScanner: Send {
 /// A transaction entry in underlying storage.
 #[derive(PartialEq, Debug)]
 pub enum TxnEntry {
-    Prewrite { default: KvPair, lock: KvPair },
-    Commit { default: KvPair, write: KvPair },
+    Prewrite {
+        default: KvPair,
+        lock: KvPair,
+        old_value: Option<Value>,
+    },
+    Commit {
+        default: KvPair,
+        write: KvPair,
+        old_value: Option<Value>,
+    },
     // TOOD: Add more entry if needed.
 }
 
@@ -135,7 +143,7 @@ impl TxnEntry {
     /// reture by ```StoreScanner::next```
     pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self {
-            TxnEntry::Commit { default, write } => {
+            TxnEntry::Commit { default, write, .. } => {
                 if !default.0.is_empty() {
                     let k = Key::from_encoded(default.0).truncate_ts()?;
                     let k = k.into_raw()?;

@@ -155,7 +155,7 @@ impl BackupWriter {
         for e in entries {
             let mut value_in_default = false;
             match &e {
-                TxnEntry::Commit { default, write } => {
+                TxnEntry::Commit { default, write, .. } => {
                     // Default may be empty if value is small.
                     if !default.0.is_empty() {
                         self.default.write(&default.0, &default.1)?;
@@ -360,6 +360,7 @@ mod tests {
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
+                    old_value: None,
                 }]
                 .into_iter(),
                 false,
@@ -386,10 +387,12 @@ mod tests {
                     TxnEntry::Commit {
                         default: (vec![b'a'], vec![b'a']),
                         write: (vec![b'a'], vec![b'a']),
+                        old_value: None,
                     },
                     TxnEntry::Commit {
                         default: (vec![], vec![]),
                         write: (vec![b'b'], vec![]),
+                        old_value: None,
                     },
                 ]
                 .into_iter(),
