@@ -572,10 +572,7 @@ mod tests {
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
         assert_eq!(column.as_date_time_vec(), &[]);
-        assert_eq!(
-            column.clone().as_date_time_vec(),
-            column.as_date_time_vec()
-        );
+        assert_eq!(column.clone().as_date_time_vec(), column.as_date_time_vec());
     }
 
     #[test]
