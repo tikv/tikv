@@ -277,6 +277,7 @@ where
     }
 
     fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
+        self.metrics.local_executed_requests += 1;
         if let Some(ts) = create_time {
             if ts == self.cache_read_id {
                 if let Some(snap) = self.snap_cache.as_ref() {
@@ -284,13 +285,11 @@ where
                     return snap.clone();
                 }
             }
-            self.metrics.local_executed_requests += 1;
             let snap = Arc::new(self.kv_engine.snapshot());
             self.cache_read_id = ts;
             self.snap_cache = Some(snap.clone());
             return snap;
         }
-        self.metrics.local_executed_requests += 1;
         Arc::new(self.kv_engine.snapshot())
     }
 }
@@ -427,17 +426,11 @@ where
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
-                    let snapshot_ts = if let Some(id) = read_id.as_mut() {
+                    let snapshot_ts = match read_id.as_mut() {
                         // If this peer became Leader not long ago and just after the cached
                         // snapshot was created, this snapshot can not see all data of the peer.
-                        if id.create_time <= delegate.last_valid_ts {
-                            // If the time is not valid, create a new ThreadReadId, which will call
-                            // monotonic_raw_now for create_time.
-                            *id = ThreadReadId::new();
-                        }
-                        id.create_time
-                    } else {
-                        monotonic_raw_now()
+                        Some(id) if id.create_time <= delegate.last_valid_ts => id.create_time,
+                        _ => monotonic_raw_now(),
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.

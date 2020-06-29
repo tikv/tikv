@@ -829,7 +829,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch {
+            let mut batcher = if enable_req_batch && requests.len() > 2 {
                 Some(ReqBatcher::new())
             } else {
                 None
