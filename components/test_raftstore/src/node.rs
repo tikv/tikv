@@ -12,15 +12,16 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
-use engine::*;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::Peekable;
+use encryption::DataKeyManager;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
@@ -174,8 +175,9 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
-        router: RaftRouter<RocksEngine>,
+        engines: KvEngines<RocksEngine, RocksEngine>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -202,7 +204,9 @@ impl Simulator for NodeCluster {
                 .contains_key(&node_id)
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(router.clone()));
+            let snap_mgr = SnapManagerBuilder::default()
+                .encryption_key_manager(key_manager)
+                .build(tmp.path().to_str().unwrap(), Some(router.clone()));
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
@@ -223,13 +227,12 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),
@@ -261,7 +264,6 @@ impl Simulator for NodeCluster {
         )?;
         assert!(engines
             .kv
-            .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
@@ -380,7 +382,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

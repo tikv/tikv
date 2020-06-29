@@ -62,7 +62,7 @@ prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
-rand = "0.6.5"
+rand = "0.7.3"
 serde = "1.0"
 serde_derive = "1.0"
 serde_with = "1.4"

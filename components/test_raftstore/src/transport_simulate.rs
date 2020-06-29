@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -186,7 +186,7 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateTransport<C> {
+impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for SimulateTransport<C> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
@@ -195,7 +195,7 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
         self.ch.send_command(req, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksSnapshot>) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 
@@ -337,21 +337,22 @@ impl Filter for RegionPacketFilter {
                 && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
                 && !self.skip_type.contains(&msg_type)
             {
-                if let Some(f) = self.msg_callback.as_ref() {
-                    f(m)
-                }
-                return match self.block {
+                let res = match self.block {
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
                         if left == 0 {
-                            return false;
+                            break false;
                         }
                         if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
-                            return true;
+                            break true;
                         }
                     },
                     Either::Right(ref block) => !block.load(Ordering::SeqCst),
                 };
+                if let Some(f) = self.msg_callback.as_ref() {
+                    f(m)
+                }
+                return res;
             }
             true
         };

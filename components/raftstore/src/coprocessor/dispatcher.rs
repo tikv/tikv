@@ -291,7 +291,7 @@ impl<E> CoprocessorHost<E>
 where
     E: KvEngine,
 {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+    pub fn new<C: CasualRouter<E::Snapshot> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,

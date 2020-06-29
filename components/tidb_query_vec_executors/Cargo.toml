@@ -12,7 +12,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 match_template = { path = "../match_template" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-smallvec = "0.6"
+smallvec = "1.4"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
 tidb_query_vec_expr = { path = "../tidb_query_vec_expr" }

@@ -135,7 +135,22 @@ impl Operator {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
-                    new_pd_merge_region(region)
+                    if cluster.check_merge_target_integrity {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::default()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::SplitRegion {
@@ -234,6 +249,9 @@ struct Cluster {
 
     replication_status: Option<ReplicationStatus>,
     region_replication_status: HashMap<u64, RegionReplicationStatus>,
+
+    // for merging
+    pub check_merge_target_integrity: bool,
 }
 
 impl Cluster {
@@ -264,6 +282,7 @@ impl Cluster {
             gc_safe_point: 0,
             replication_status: None,
             region_replication_status: HashMap::default(),
+            check_merge_target_integrity: true,
         }
     }
 
@@ -970,10 +989,8 @@ impl TestPdClient {
         if right.get_start_key() != split_key {
             return false;
         }
-
-        assert!(left.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        assert!(right.get_region_epoch().get_version() > region.get_region_epoch().get_version());
-        true
+        left.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+            && right.get_region_epoch().get_version() > region.get_region_epoch().get_version()
     }
 
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
@@ -1000,8 +1017,13 @@ impl TestPdClient {
         let mut status = ReplicationStatus::default();
         status.set_mode(ReplicationMode::DrAutoSync);
         status.mut_dr_auto_sync().label_key = label_key.to_owned();
-        status.mut_dr_auto_sync().state_id = 1;
-        self.cluster.wl().replication_status = Some(status);
+        let mut cluster = self.cluster.wl();
+        status.mut_dr_auto_sync().state_id = cluster
+            .replication_status
+            .as_ref()
+            .map(|s| s.get_dr_auto_sync().state_id + 1)
+            .unwrap_or(1);
+        cluster.replication_status = Some(status);
     }
 
     pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
@@ -1056,6 +1078,10 @@ impl TestPdClient {
                 }
             }
         }
+    }
+
+    pub fn ignore_merge_target_integrity(&self) {
+        self.cluster.wl().check_merge_target_integrity = false;
     }
 }
 
@@ -1269,7 +1295,7 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
@@ -1278,7 +1304,12 @@ impl PdClient for TestPdClient {
         let store_id = stats.get_store_id();
         let mut cluster = self.cluster.wl();
         cluster.store_stats.insert(store_id, stats);
-        Box::new(ok(cluster.replication_status.clone()))
+
+        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        if let Some(ref status) = cluster.replication_status {
+            resp.set_replication_status(status.clone());
+        }
+        Box::new(ok(resp))
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {

@@ -8,10 +8,10 @@ extern crate vlog;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
 use std::iter::FromIterator;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
@@ -23,12 +23,15 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use encryption::DataKeyManager;
-use engine::rocks;
-use engine::Engines;
+use encryption::{
+    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+};
 use engine_rocks::encryption::get_env;
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngines;
+use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -40,7 +43,7 @@ use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, file::calc_crc32, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -73,22 +76,33 @@ fn new_debug_executor(
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+            let kv_path = kv_path.to_str().unwrap();
+            let kv_db =
+                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
-            let raft_path = raft_db.map(ToString::to_string).unwrap_or_else(|| {
-                let db_path = PathBuf::from(format!("{}/../raft", kv_path))
-                    .canonicalize()
-                    .unwrap();
-                String::from(db_path.to_str().unwrap())
-            });
+            let mut raft_path = raft_db
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("{}/../raft", kv_path));
+            raft_path = PathBuf::from(raft_path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .map(ToString::to_string)
+                .unwrap();
             let mut raft_db_opts = cfg.raftdb.build_opt();
             raft_db_opts.set_env(env);
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
             let raft_db =
-                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                engine_rocks::raw_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts)
+                    .unwrap();
 
             Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
+                KvEngines::new(
+                    RocksEngine::from_db(Arc::new(kv_db)),
+                    RocksEngine::from_db(Arc::new(raft_db)),
+                    cache.is_some(),
+                ),
                 ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
@@ -560,6 +574,8 @@ trait DebugExecutor {
 
     fn dump_region_properties(&self, region_id: u64);
 
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>);
+
     fn dump_store_info(&self);
 
     fn dump_cluster_info(&self);
@@ -747,6 +763,10 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_range_properties(&self, _: Vec<u8>, _: Vec<u8>) {
+        unimplemented!("only available for local mode");
     }
 
     fn dump_store_info(&self) {
@@ -965,6 +985,15 @@ impl DebugExecutor for Debugger {
         }
     }
 
+    fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+        let props = self
+            .get_range_properties(&start, &end)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::get_range_properties", e));
+        for (name, value) in props {
+            v1!("{}: {}", name, value);
+        }
+    }
+
     fn dump_store_info(&self) {
         let store_id = self.get_store_id();
         if let Ok(id) = store_id {
@@ -977,6 +1006,22 @@ impl DebugExecutor for Debugger {
         if let Ok(id) = cluster_id {
             v1!("cluster id: {}", id);
         }
+    }
+}
+
+fn warning_prompt(message: &str) -> bool {
+    const EXPECTED: &str = "I consent";
+    println!("{}", message);
+    let input: String = promptly::prompt(format!(
+        "Type \"{}\" to continue, anything else to exit",
+        EXPECTED
+    ))
+    .unwrap();
+    if input == EXPECTED {
+        true
+    } else {
+        println!("exit.");
+        false
     }
 }
 
@@ -1646,6 +1691,26 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("range-properties")
+                .about("Show range properties")
+                .arg(
+                    Arg::with_name("start")
+                        .long("start")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex start key"),
+                )
+                .arg(
+                    Arg::with_name("end")
+                        .long("end")
+                        .required(true)
+                        .takes_value(true)
+                        .default_value("")
+                        .help("hex end key"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("split-region")
                 .about("Split the region")
                 .arg(
@@ -1704,25 +1769,55 @@ fn main() {
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
         )
         .subcommand(
-            SubCommand::with_name("random-hex")
-                .about("Generate random bytes with specified length and print as hex")
-                .arg(
-                    Arg::with_name("len")
-                        .short("l")
-                        .long("len")
-                        .takes_value(true)
-                        .required(true)
-                        .default_value("1024")
-                        .help("the length"),
-                ),
-        )
-        .subcommand(
             SubCommand::with_name("store")
                 .about("Print the store id"),
         )
         .subcommand(
             SubCommand::with_name("cluster")
                 .about("Print the cluster id"),
+        )
+        .subcommand(
+            SubCommand::with_name("decrypt-file")
+                .about("Decrypt an encrypted file")
+                .arg(
+                    Arg::with_name("file")
+                        .long("file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("input file path"),
+                )
+                .arg(
+                    Arg::with_name("out-file")
+                        .long("out-file")
+                        .takes_value(true)
+                        .required(true)
+                        .help("output file path"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("encryption-meta")
+                .about("Dump encryption metadata")
+                .subcommand(
+                    SubCommand::with_name("dump-key")
+                        .about("Dump data keys")
+                        .arg(
+                            Arg::with_name("ids")
+                                .long("ids")
+                                .takes_value(true)
+                                .use_delimiter(true)
+                                .help("List of data key ids. Dump all keys if not provided."),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("dump-file")
+                        .about("Dump file encryption info")
+                        .arg(
+                            Arg::with_name("path")
+                                .long("path")
+                                .takes_value(true)
+                                .help("Path to the file. Dump for all files if not provided."),
+                        ),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1746,11 +1841,6 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(matches) = matches.subcommand_matches("random-hex") {
-        let len = value_t_or_exit!(matches.value_of("len"), usize);
-        let random_bytes = gen_random_bytes(len);
-        v1!("{}", hex::encode_upper(&random_bytes));
-        return;
     }
 
     if matches.args.is_empty() {
@@ -1774,6 +1864,86 @@ fn main() {
         return;
     } else if let Some(decoded) = matches.value_of("encode") {
         v1!("{}", Key::from_raw(&unescape(decoded)));
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("decrypt-file") {
+        let message = "This action will expose sensitive data as plaintext on persistent storage";
+        if !warning_prompt(message) {
+            return;
+        }
+        let infile = matches.value_of("file").unwrap();
+        let outfile = matches.value_of("out-file").unwrap();
+        v1!("infile: {}, outfile: {}", infile, outfile);
+
+        let key_manager =
+            match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .expect("DataKeyManager::from_config should success")
+            {
+                Some(mgr) => mgr,
+                None => {
+                    v1!("Encryption is disabled");
+                    v1!("crc32: {}", calc_crc32(infile).unwrap());
+                    return;
+                }
+            };
+
+        let infile1 = Path::new(infile).canonicalize().unwrap();
+        let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
+
+        let mthd = encryption_method_from_db_encryption_method(file_info.method);
+        if mthd == EncryptionMethod::Plaintext {
+            v1!(
+                "{} is not encrypted, skip to decrypt it into {}",
+                infile,
+                outfile
+            );
+            v1!("crc32: {}", calc_crc32(infile).unwrap());
+            return;
+        }
+
+        let mut outf = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(outfile)
+            .unwrap();
+
+        let iv = Iv::from_slice(&file_info.iv).unwrap();
+        let f = File::open(&infile).unwrap();
+        let mut reader = DecrypterReader::new(f, mthd, &file_info.key, iv).unwrap();
+
+        io::copy(&mut reader, &mut outf).unwrap();
+        v1!("crc32: {}", calc_crc32(outfile).unwrap());
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("encryption-meta") {
+        match matches.subcommand() {
+            ("dump-key", Some(matches)) => {
+                let message =
+                    "This action will expose encryption key(s) as plaintext. Do not output the \
+                    result in file on disk.";
+                if !warning_prompt(message) {
+                    return;
+                }
+                DataKeyManager::dump_key_dict(
+                    &cfg.security.encryption,
+                    &cfg.storage.data_dir,
+                    matches
+                        .values_of("ids")
+                        .map(|ids| ids.map(|id| id.parse::<u64>().unwrap()).collect()),
+                )
+                .unwrap();
+            }
+            ("dump-file", Some(matches)) => {
+                let path = matches
+                    .value_of("path")
+                    .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
+            }
+            _ => ve1!("{}", matches.usage()),
+        }
         return;
     }
 
@@ -1990,6 +2160,10 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("range-properties") {
+        let start_key = from_hex(matches.value_of("start").unwrap()).unwrap();
+        let end_key = from_hex(matches.value_of("end").unwrap()).unwrap();
+        debug_executor.dump_range_properties(start_key, end_key);
     } else if let Some(matches) = matches.subcommand_matches("fail") {
         if host.is_none() {
             ve1!("command fail requires host");
@@ -2049,10 +2223,6 @@ fn main() {
     } else {
         let _ = app.print_help();
     }
-}
-
-fn gen_random_bytes(len: usize) -> Vec<u8> {
-    (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
 fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
@@ -2246,7 +2416,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 
-    engine::rocks::run_ldb_tool(&args, &opts);
+    engine_rocks::raw::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]
@@ -2259,11 +2429,5 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
-    }
-
-    #[test]
-    fn test_gen_random_bytes() {
-        assert_eq!(gen_random_bytes(8).len(), 8);
-        assert_eq!(gen_random_bytes(0).len(), 0);
     }
 }

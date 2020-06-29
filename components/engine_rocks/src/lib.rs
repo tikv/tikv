@@ -45,6 +45,8 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
 mod snapshot;
@@ -60,6 +62,7 @@ mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
+pub mod raw_util;
 pub mod util;
 
 mod compat;
@@ -86,3 +89,5 @@ pub mod encryption;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod raw;

@@ -8,6 +8,7 @@ use std::{thread, u64};
 use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{
     ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
@@ -17,12 +18,13 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::DB;
-use engine::*;
+use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine_rocks::config::BlobRunMode;
+use engine_rocks::encryption::get_env;
+use engine_rocks::raw::DB;
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Iterable, Peekable};
+use engine_traits::{Iterable, KvEngines, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -78,22 +80,16 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &KvEngines<RocksEngine, RocksEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
-    let state: RegionLocalState = engine
-        .kv
-        .c()
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
     let start_key = keys::data_key(region.get_start_key());
     let end_key = keys::data_key(region.get_end_key());
     for cf in ALL_CFS {
         engine
             .kv
-            .c()
             .scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
@@ -106,13 +102,12 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
     let log_max_key = keys::raft_log_key(id, u64::MAX);
     engine
         .raft
-        .c()
         .scan(&log_min_key, &log_max_key, false, |k, v| {
             panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
         })
         .unwrap();
     let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.c().get_msg(&state_key).unwrap();
+    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",
@@ -471,45 +466,67 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 }
 
 pub fn create_test_engine(
-    engines: Option<Engines>,
-    router: RaftRouter<RocksEngine>,
+    // TODO: pass it in for all cases.
+    router: Option<RaftRouter<RocksSnapshot>>,
     cfg: &TiKvConfig,
-) -> (Engines, Option<TempDir>) {
-    // Create engine
-    let mut path = None;
-    let engines = match engines {
-        Some(e) => e,
-        None => {
-            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
-            let mut kv_db_opt = cfg.rocksdb.build_opt();
-            let router = Mutex::new(router);
-            let cmpacted_handler = Box::new(move |event| {
-                router
-                    .lock()
-                    .unwrap()
-                    .send_control(StoreMsg::CompactedEvent(event))
-                    .unwrap();
-            });
-            kv_db_opt.add_event_listener(CompactionListener::new(
-                cmpacted_handler,
-                Some(dummpy_filter),
-            ));
-            let cache = cfg.storage.block_cache.build_shared_cache();
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_path = path.as_ref().unwrap().path().join(DEFAULT_ROCKSDB_SUB_DIR);
-            let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
-                    .unwrap(),
-            );
-            let raft_path = path.as_ref().unwrap().path().join("raft");
-            let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
-            Engines::new(engine, raft_engine, cache.is_some())
-        }
-    };
-    (engines, path)
+) -> (
+    KvEngines<RocksEngine, RocksEngine>,
+    Option<Arc<DataKeyManager>>,
+    TempDir,
+) {
+    let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let key_manager =
+        DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
+            .unwrap()
+            .map(|key_manager| Arc::new(key_manager));
+
+    let env = get_env(key_manager.clone(), None).unwrap();
+    let cache = cfg.storage.block_cache.build_shared_cache();
+
+    let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
+    let kv_path_str = kv_path.to_str().unwrap();
+
+    let mut kv_db_opt = cfg.rocksdb.build_opt();
+    kv_db_opt.set_env(env.clone());
+
+    if let Some(router) = router {
+        let router = Mutex::new(router);
+        let cmpacted_handler = Box::new(move |event| {
+            router
+                .lock()
+                .unwrap()
+                .send_control(StoreMsg::CompactedEvent(event))
+                .unwrap();
+        });
+        kv_db_opt.add_event_listener(CompactionListener::new(
+            cmpacted_handler,
+            Some(dummpy_filter),
+        ));
+    }
+
+    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+
+    let engine = Arc::new(
+        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
+    );
+
+    let raft_path = dir.path().join("raft");
+    let raft_path_str = raft_path.to_str().unwrap();
+
+    let mut raft_db_opt = cfg.raftdb.build_opt();
+    raft_db_opt.set_env(env);
+
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+    let raft_engine = Arc::new(
+        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
+    );
+
+    let engines = KvEngines::new(
+        RocksEngine::from_db(engine),
+        RocksEngine::from_db(raft_engine),
+        cache.is_some(),
+    );
+    (engines, key_manager, dir)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -544,6 +561,11 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     // When isolated, follower relies on stale check tick to detect failure leader,
     // choose a smaller number to make it recover faster.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
+}
+
+pub fn ignore_merge_target_integrity<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.dev_assert = false;
+    cluster.pd_client.ignore_merge_target_integrity();
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -590,6 +612,20 @@ pub fn configure_for_enable_titan<T: Simulator>(
 
 pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.rocksdb.titan.enabled = false;
+}
+
+pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let master_key_file = manifest_dir.join("src/master-key.data");
+
+    let cfg = &mut cluster.cfg.security.encryption;
+    cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
+    cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
+    cfg.master_key = MasterKeyConfig::File {
+        config: FileConfig {
+            path: master_key_file.to_str().unwrap().to_owned(),
+        },
+    }
 }
 
 /// Keep putting random kvs until specified size limit is reached.

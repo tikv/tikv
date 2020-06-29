@@ -18,7 +18,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
@@ -45,7 +45,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
@@ -289,7 +289,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
@@ -320,7 +320,7 @@ mod tests {
         significant_msg_sender: Sender<SignificantMsg>,
     }
 
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+    impl RaftStoreRouter<RocksSnapshot> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
@@ -340,7 +340,7 @@ mod tests {
             Ok(())
         }
 
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+        fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

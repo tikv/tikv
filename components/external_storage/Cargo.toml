@@ -16,10 +16,11 @@ futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-reqwest = { version = "0.10.4", features = ["stream"] }
+hyper = "0.13.3"
+hyper-tls = "0.4.1"
 rand = "0.7"
-rusoto_core = "0.43.0"
-rusoto_s3 = "0.43.0"
+rusoto_core = "0.44.0"
+rusoto_s3 = "0.44.0"
 rusoto_util = { path = "../rusoto_util" }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -28,11 +29,11 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tame-gcs = { version = "0.7.0", features = ["async-multipart"] }
 tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
-tokio = "0.2.13"
+tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
 
 [dev-dependencies]
 structopt = "0.3"
-rusoto_mock = "0.43.0"
+rusoto_mock = "0.44.0"
 tempfile = "3.1"
 rust-ini = "0.14.0"

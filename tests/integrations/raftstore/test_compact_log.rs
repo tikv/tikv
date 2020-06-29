@@ -2,18 +2,19 @@
 
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
-use engine::*;
-use engine_rocks::Compat;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_rocks::RocksEngine;
+use engine_traits::{KvEngines, Peekable, CF_RAFT};
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 
-fn get_raft_msg_or_default<M: protobuf::Message + Default>(engines: &Engines, key: &[u8]) -> M {
+fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+    engines: &KvEngines<RocksEngine, RocksEngine>,
+    key: &[u8],
+) -> M {
     engines
         .kv
-        .c()
         .get_msg_cf(CF_RAFT, key)
         .unwrap()
         .unwrap_or_default()
@@ -45,7 +46,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn check_compacted(
-    all_engines: &HashMap<u64, Engines>,
+    all_engines: &HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {
@@ -76,10 +77,10 @@ fn check_compacted(
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
             let key = keys::raft_log_key(1, i);
-            if engines.raft.get(&key).unwrap().is_none() {
+            if engines.raft.get_value(&key).unwrap().is_none() {
                 break;
             }
-            assert!(engines.raft.get(&key).unwrap().is_none());
+            assert!(engines.raft.get_value(&key).unwrap().is_none());
         }
     }
     true
@@ -96,7 +97,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(&engines.kv, b"k1", b"v1");
+        must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
             get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
@@ -152,7 +153,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(&engines.kv, b"k1", b"v1");
+        must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
             get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
@@ -212,7 +213,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         if id == 1 {
             continue;
         }
-        must_get_equal(&engines.kv, b"k1", b"v1");
+        must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
             get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
@@ -274,7 +275,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engines.raft.get(&key).unwrap().is_none());
+            assert!(engines.raft.get_value(&key).unwrap().is_none());
         }
     }
 }
