@@ -1,5 +1,5 @@
 use kvproto::span as spanpb;
-use minitrace::{Link, SpanSet};
+use minitrace::{Link, Span, SpanSet};
 
 pub fn encode_spans(span_sets: Vec<SpanSet>) -> impl Iterator<Item = spanpb::SpanSet> {
     span_sets
@@ -60,6 +60,70 @@ pub fn encode_spans(span_sets: Vec<SpanSet>) -> impl Iterator<Item = spanpb::Spa
         .into_iter()
 }
 
+pub fn decode_spans(span_sets: Vec<spanpb::SpanSet>) -> impl Iterator<Item = SpanSet> {
+    span_sets.into_iter().map(|span_set| {
+        let spans = span_set
+            .spans
+            .into_iter()
+            .map(|span| {
+                #[cfg(feature = "prost-codec")]
+                {
+                    if let Some(link) = span.link {
+                        let link = match link.link {
+                            Some(spanpb::link::Link::Root(spanpb::Root {})) => Link::Root,
+                            Some(spanpb::link::Link::Parent(spanpb::Parent { id })) => {
+                                Link::Parent { id }
+                            }
+                            Some(spanpb::link::Link::Continue(spanpb::Continue { id })) => {
+                                Link::Continue { id }
+                            }
+                            _ => panic!("Link should not be none from spanpb"),
+                        };
+                        Span {
+                            id: span.id,
+                            begin_cycles: span.begin_cycles,
+                            end_cycles: span.end_cycles,
+                            event: span.event,
+                            link,
+                        }
+                    } else {
+                        panic!("Link should not be none from spanpb")
+                    }
+                }
+                #[cfg(feature = "protobuf-codec")]
+                {
+                    let link = if span.get_link().has_root() {
+                        Link::Root
+                    } else if span.get_link().has_parent() {
+                        Link::Parent {
+                            id: span.get_link().get_parent().id,
+                        }
+                    } else if span.get_link().has_continue() {
+                        Link::Continue {
+                            id: span.get_link().get_continue().id,
+                        }
+                    } else {
+                        panic!("Link must be one of root, parent or continue")
+                    };
+                    Span {
+                        id: span.id,
+                        begin_cycles: span.begin_cycles,
+                        end_cycles: span.end_cycles,
+                        event: span.event,
+                        link,
+                    }
+                }
+            })
+            .collect();
+        SpanSet {
+            create_time_ns: span_set.create_time_ns,
+            start_time_ns: span_set.start_time_ns,
+            cycles_per_sec: span_set.cycles_per_sec,
+            spans,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::span as spanpb;
@@ -72,7 +136,7 @@ mod tests {
         std::mem::drop(guard);
 
         let raw_span_set = collector.collect();
-        let spanpb_set_vec = crate::trace::encode_spans(raw_span_set).collect::<Vec<_>>();
+        let spanpb_set_vec = crate::trace::encode_spans(raw_span_set.clone()).collect::<Vec<_>>();
         let spanpb_span_set: spanpb::SpanSet = spanpb_set_vec.get(0).unwrap().clone();
 
         #[cfg(feature = "prost-codec")]
@@ -121,5 +185,7 @@ mod tests {
                 "Here should be Parent"
             )
         }
+        let encode_and_decode: Vec<_> = crate::trace::decode_spans(spanpb_set_vec).collect();
+        assert_eq!(raw_span_set, encode_and_decode)
     }
 }
