@@ -17,7 +17,7 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use encryption::DataKeyManager;
-use engine::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
     CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
