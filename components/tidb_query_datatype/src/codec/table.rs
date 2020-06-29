@@ -163,6 +163,13 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     key
 }
 
+pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
+    key.append_table_record_prefix(table_id).unwrap();
+    key.extend(handle);
+    key
+}
+
 /// `encode_column_key` encodes the table id, row handle and column id into a byte array.
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
@@ -172,30 +179,20 @@ pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> 
     key
 }
 
-/// `decode_handle` decodes the key and gets the handle.
-pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
-    let mut buf = encoded;
-    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
-        return Err(invalid_type!(
-            "record key expected, but got {}",
-            hex::encode_upper(encoded)
-        ));
-    }
-    buf.read_i64()?;
-
-    if buf.read_bytes(RECORD_PREFIX_SEP.len())? != RECORD_PREFIX_SEP {
-        return Err(invalid_type!(
-            "record key expected, but got {}",
-            hex::encode_upper(encoded)
-        ));
-    }
-    buf.read_i64().map_err(Error::from)
+/// `decode_int_handle` decodes the key and gets the int handle.
+#[inline]
+pub fn decode_int_handle(mut key: &[u8]) -> Result<i64> {
+    check_record_key(key)?;
+    key = &key[PREFIX_LEN..];
+    key.read_i64().map_err(Error::from)
 }
 
-/// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
-pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
-    decode_handle(key)?;
-    Ok(&key[..RECORD_ROW_KEY_LEN])
+/// `decode_common_handle` decodes key key and gets the common handle.
+#[inline]
+pub fn decode_common_handle(mut key: &[u8]) -> Result<&[u8]> {
+    check_record_key(key)?;
+    key = &key[PREFIX_LEN..];
+    Ok(key)
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.
@@ -542,7 +539,7 @@ mod tests {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
             let k = encode_row_key(1, t);
-            assert_eq!(t, decode_handle(&k).unwrap());
+            assert_eq!(t, decode_int_handle(&k).unwrap());
         }
     }
 

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
@@ -289,7 +289,7 @@ mod tests {
             .unwrap();
         let db = rocks.get_rocksdb();
 
-        let opt = engine::rocks::IngestExternalFileOptions::new();
+        let opt = engine_rocks::raw::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
             let handle = db.cf_handle(cf).unwrap();
             db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
