@@ -1863,7 +1863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#427b752161cd71e84ca0919b83390dbbb00ce608"
+source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/lock-info-parallel-commit#82b8bf4d5a63a347246ce68321a14fa9ed56221b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
