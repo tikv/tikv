@@ -2,3 +2,6 @@
 
 mod lock_table;
 mod memory_lock;
+
+pub use self::lock_table::LockTable;
+pub use self::memory_lock::MemoryLock;

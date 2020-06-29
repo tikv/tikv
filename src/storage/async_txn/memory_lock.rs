@@ -133,3 +133,13 @@ impl<'a> Drop for Listener<'a> {
         self.count.fetch_sub(1, Ordering::SeqCst);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_txn_mutex() {
+        let memory_lock = Arc::new(MemoryLock::default());
+    }
+}
