@@ -1863,7 +1863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#8037ca08f377c8f041ff4a2bf9a7cdbce5479d9a"
+source = "git+https://github.com/pingcap/kvproto.git#427b752161cd71e84ca0919b83390dbbb00ce608"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1938,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1957,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2126,7 +2126,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#fb87d43a38ca6f323e08df7e814d1f2cc56ada23"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2139,7 +2139,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#fb87d43a38ca6f323e08df7e814d1f2cc56ada23"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -3301,7 +3301,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
 dependencies = [
  "libc",
  "librocksdb_sys",
