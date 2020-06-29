@@ -43,7 +43,7 @@ impl InnerExecutor for TableInnerExecutor {
     ) -> Result<Option<Row>> {
         check_record_key(key.as_slice())?;
         let row_data = box_try!(table::cut_row(value, &self.col_ids, columns.clone()));
-        let h = box_try!(table::decode_handle(&key));
+        let h = box_try!(table::decode_int_handle(&key));
         Ok(Some(Row::origin(h, row_data, columns)))
     }
 }
