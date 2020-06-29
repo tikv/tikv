@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
