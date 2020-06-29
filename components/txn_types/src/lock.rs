@@ -7,7 +7,7 @@ use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
 use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -25,6 +25,7 @@ const FLAG_PESSIMISTIC: u8 = b'S';
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
+const PARALLEL_COMMIT_PREFIX: u8 = b'p';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -67,13 +68,15 @@ pub struct Lock {
     pub for_update_ts: TimeStamp,
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
+    pub is_parallel_commit: bool,
+    // Only valid when `is_parallel_commit` is true, and the lock is primary. Do not set
+    // `secondaries` for secondaries.
+    pub secondaries: Vec<Vec<u8>>,
 }
 
 impl Lock {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(
-            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2,
-        );
+        let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts.into_inner()).unwrap();
@@ -95,7 +98,28 @@ impl Lock {
             b.push(MIN_COMMIT_TS_PREFIX);
             b.encode_u64(self.min_commit_ts.into_inner()).unwrap();
         }
+        if self.is_parallel_commit {
+            b.push(PARALLEL_COMMIT_PREFIX);
+            b.encode_var_u64(self.secondaries.len() as _).unwrap();
+            for k in &self.secondaries {
+                b.encode_compact_bytes(k).unwrap();
+            }
+        }
         b
+    }
+
+    fn pre_allocate_size(&self) -> usize {
+        let mut size =
+            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2;
+        if self.is_parallel_commit {
+            size += 1
+                + MAX_VAR_U64_LEN
+                + self
+                    .secondaries
+                    .iter()
+                    .fold(0, |acc, k| acc + MAX_VAR_I64_LEN + k.len());
+        }
+        size
     }
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
@@ -121,6 +145,8 @@ impl Lock {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ));
         }
 
@@ -128,6 +154,8 @@ impl Lock {
         let mut for_update_ts = TimeStamp::zero();
         let mut txn_size: u64 = 0;
         let mut min_commit_ts = TimeStamp::zero();
+        let mut is_parallel_commit = false;
+        let mut secondaries = Vec::new();
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -145,6 +173,14 @@ impl Lock {
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
                 MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
+                PARALLEL_COMMIT_PREFIX => {
+                    is_parallel_commit = true;
+                    let len = number::decode_var_u64(&mut b)? as _;
+                    secondaries.reserve(len);
+                    for _i in 0..len {
+                        secondaries.push(bytes::decode_compact_bytes(&mut b)?)
+                    }
+                }
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
@@ -157,6 +193,8 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
+            is_parallel_commit,
+            secondaries,
         ))
     }
 
@@ -271,6 +309,8 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -281,6 +321,8 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -291,6 +333,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -301,6 +345,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -311,6 +357,8 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -321,6 +369,8 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -331,6 +381,8 @@ mod tests {
                 10.into(),
                 16,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -341,6 +393,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                false,
+                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -351,12 +405,56 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                false,
+                Vec::default(),
+            ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+                true,
+                vec![],
+            ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+                true,
+                vec![b"k".to_vec()],
+            ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+                true,
+                vec![
+                    b"k1".to_vec(),
+                    b"kkkkk2".to_vec(),
+                    b"k3k3k3k3k3k3".to_vec(),
+                    b"k".to_vec(),
+                ],
             ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
             let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
+            assert!(lock.pre_allocate_size() >= v.len());
         }
 
         // Test `Lock::parse()` handles incorrect input.
@@ -371,6 +469,8 @@ mod tests {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            false,
+            Vec::default(),
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
@@ -388,6 +488,8 @@ mod tests {
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            false,
+            Vec::default(),
         );
 
         let empty = Default::default();

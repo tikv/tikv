@@ -802,6 +802,8 @@ pub mod test_util {
                 self.for_update_ts,
                 0,
                 0.into(),
+                false,
+                Vec::default(),
             );
             TxnEntry::Prewrite {
                 default: (key, value),

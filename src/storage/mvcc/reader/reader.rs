@@ -1379,6 +1379,8 @@ mod tests {
                     for_update_ts,
                     0,
                     TimeStamp::zero(),
+                    false,
+                    Vec::default(),
                 ),
             )
         })
