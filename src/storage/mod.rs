@@ -17,6 +17,7 @@ pub(crate) mod metrics;
 pub mod mvcc;
 pub mod txn;
 
+mod async_txn;
 mod read_pool;
 mod types;
 
