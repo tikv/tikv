@@ -603,12 +603,42 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if ready_cnt != 0 {
             let mut batch_pos = 0;
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
-            for (ready, invoke_ctx) in ready_res.drain(..) {
+            for (mut ready, invoke_ctx) in ready_res.drain(..) {
                 let region_id = invoke_ctx.region_id;
                 if peers[batch_pos].region_id() == region_id {
                 } else {
                     while peers[batch_pos].region_id() != region_id {
                         batch_pos += 1;
+                    }
+                }
+                if self.poll_ctx.cfg.delay_follower_apply {
+                    let peer = &mut peers[batch_pos].peer;
+                    if peer.is_leader() {
+                        if peer.stash_committed_entries.len() != 0 {
+                            let mut e = peer.stash_committed_entries.drain(..).collect::<Vec<_>>();
+                            if let Some(mut o) = ready.committed_entries.take() {
+                                if !e.is_empty() && !o.is_empty() {
+                                    assert_eq!(e.last().unwrap().get_index(), o.first().unwrap().get_index());
+                                }
+                                e.append(&mut o);
+                            }
+                            ready.committed_entries = Some(e);
+                        }
+                    } else {
+                        if ready.committed_entries.is_some() {
+                            let mut o = ready.committed_entries.take().unwrap();
+                            if peer.stash_committed_entries.len() + ready.committed_entries.as_ref().map(|s| s.len()).unwrap() > 100 {
+                                let mut e = peer.stash_committed_entries.drain(..).collect::<Vec<_>>();
+                                if !e.is_empty() && !o.is_empty() {
+                                    assert_eq!(e.last().unwrap().get_index(), o.first().unwrap().get_index());
+                                }
+                                e.append(&mut o);
+                                ready.committed_entries = Some(e);
+                            } else {
+                                peer.stash_committed_entries.append(&mut o);
+                                ready.committed_entries = Some(vec![]);
+                            }
+                        }
                     }
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)

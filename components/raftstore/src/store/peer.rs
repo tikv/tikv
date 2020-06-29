@@ -277,6 +277,7 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+    pub stash_committed_entries: Vec<eraftpb::Entry>,
 }
 
 impl Peer {
@@ -360,6 +361,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            stash_committed_entries: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
