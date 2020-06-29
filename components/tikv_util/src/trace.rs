@@ -127,34 +127,97 @@ pub fn decode_spans(span_sets: Vec<spanpb::SpanSet>) -> impl Iterator<Item = Spa
 #[cfg(test)]
 mod tests {
     use minitrace::{Link, Span, SpanSet};
+    use std::{u32, u64};
 
     #[test]
     fn test_encode_spans() {
-        let spans = vec![
-            Span {
-                id: 0,
-                link: Link::Root,
-                begin_cycles: 0,
-                end_cycles: 10,
-                event: 0,
-            },
-            Span {
-                id: 1,
-                link: Link::Parent { id: 0 },
-                begin_cycles: 0,
-                end_cycles: 9,
-                event: 1,
-            },
+        let raw_span_sets = vec![
+            vec![
+                SpanSet {
+                    create_time_ns: 0,
+                    start_time_ns: 1,
+                    cycles_per_sec: 100,
+                    spans: vec![
+                        Span {
+                            id: 0,
+                            link: Link::Root,
+                            begin_cycles: 0,
+                            end_cycles: 10,
+                            event: 0,
+                        },
+                        Span {
+                            id: 1,
+                            link: Link::Parent { id: 0 },
+                            begin_cycles: 0,
+                            end_cycles: 9,
+                            event: 1,
+                        },
+                    ],
+                },
+                SpanSet {
+                    create_time_ns: 3,
+                    start_time_ns: 2,
+                    cycles_per_sec: 100,
+                    spans: vec![
+                        Span {
+                            id: 2,
+                            link: Link::Continue { id: 0 },
+                            begin_cycles: 10,
+                            end_cycles: 20,
+                            event: 2,
+                        },
+                        Span {
+                            id: 3,
+                            link: Link::Parent { id: 2 },
+                            begin_cycles: 20,
+                            end_cycles: 30,
+                            event: 3,
+                        },
+                    ],
+                },
+            ],
+            vec![],
+            vec![
+                SpanSet {
+                    create_time_ns: u64::MAX,
+                    start_time_ns: u64::MAX,
+                    cycles_per_sec: u64::MAX,
+                    spans: vec![
+                        Span {
+                            id: u64::MAX,
+                            link: Link::Root,
+                            begin_cycles: u64::MAX,
+                            end_cycles: u64::MAX,
+                            event: u32::MAX,
+                        },
+                        Span {
+                            id: u64::MAX,
+                            link: Link::Parent { id: u64::MAX },
+                            begin_cycles: u64::MAX,
+                            end_cycles: u64::MAX,
+                            event: u32::MAX,
+                        },
+                    ],
+                },
+                SpanSet {
+                    create_time_ns: u64::MAX,
+                    start_time_ns: u64::MAX,
+                    cycles_per_sec: u64::MAX,
+                    spans: vec![Span {
+                        id: u64::MAX,
+                        link: Link::Continue { id: u64::MAX },
+                        begin_cycles: u64::MAX,
+                        end_cycles: u64::MAX,
+                        event: u32::MAX,
+                    }],
+                },
+            ],
         ];
-        let raw_span_set = vec![SpanSet {
-            create_time_ns: 0,
-            start_time_ns: 1,
-            cycles_per_sec: 2,
-            spans,
-        }];
-
-        let spanpb_set_vec = crate::trace::encode_spans(raw_span_set.clone()).collect::<Vec<_>>();
-        let encode_and_decode: Vec<_> = crate::trace::decode_spans(spanpb_set_vec).collect();
-        assert_eq!(raw_span_set, encode_and_decode)
+        for raw_span_set in raw_span_sets {
+            let spanpb_set_vec =
+                crate::trace::encode_spans(raw_span_set.clone()).collect::<Vec<_>>();
+            let encode_and_decode: Vec<_> = crate::trace::decode_spans(spanpb_set_vec).collect();
+            assert_eq!(raw_span_set, encode_and_decode)
+        }
     }
 }
