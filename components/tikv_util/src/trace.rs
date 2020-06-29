@@ -126,65 +126,34 @@ pub fn decode_spans(span_sets: Vec<spanpb::SpanSet>) -> impl Iterator<Item = Spa
 
 #[cfg(test)]
 mod tests {
-    use kvproto::span as spanpb;
+    use minitrace::{Link, Span, SpanSet};
 
     #[test]
     fn test_encode_spans() {
-        let (guard, collector) = minitrace::trace_enable(0u32);
-        let guard2 = minitrace::new_span(1u32);
-        std::mem::drop(guard2);
-        std::mem::drop(guard);
+        let spans = vec![
+            Span {
+                id: 0,
+                link: Link::Root,
+                begin_cycles: 0,
+                end_cycles: 10,
+                event: 0,
+            },
+            Span {
+                id: 1,
+                link: Link::Parent { id: 0 },
+                begin_cycles: 0,
+                end_cycles: 9,
+                event: 1,
+            },
+        ];
+        let raw_span_set = vec![SpanSet {
+            create_time_ns: 0,
+            start_time_ns: 1,
+            cycles_per_sec: 2,
+            spans,
+        }];
 
-        let raw_span_set = collector.collect();
         let spanpb_set_vec = crate::trace::encode_spans(raw_span_set.clone()).collect::<Vec<_>>();
-        let spanpb_span_set: spanpb::SpanSet = spanpb_set_vec.get(0).unwrap().clone();
-
-        #[cfg(feature = "prost-codec")]
-        {
-            assert_eq!(
-                spanpb_span_set
-                    .spans
-                    .get(0)
-                    .clone()
-                    .unwrap()
-                    .link
-                    .clone()
-                    .unwrap(),
-                spanpb::Link {
-                    link: Some(spanpb::link::Link::Root(spanpb::Root {}))
-                },
-                "Here should be Root"
-            );
-            assert_eq!(
-                spanpb_span_set
-                    .spans
-                    .get(1)
-                    .clone()
-                    .unwrap()
-                    .link
-                    .clone()
-                    .unwrap(),
-                spanpb::Link {
-                    link: Some(spanpb::link::Link::Parent(spanpb::Parent { id: 1 }))
-                },
-                "Here should be Parent"
-            )
-        }
-
-        #[cfg(feature = "protobuf-codec")]
-        {
-            assert!(
-                spanpb_span_set.get_spans()[0].get_link().clone().has_root(),
-                "Here should be Root"
-            );
-            assert!(
-                spanpb_span_set.get_spans()[1]
-                    .get_link()
-                    .clone()
-                    .has_parent(),
-                "Here should be Parent"
-            )
-        }
         let encode_and_decode: Vec<_> = crate::trace::decode_spans(spanpb_set_vec).collect();
         assert_eq!(raw_span_set, encode_and_decode)
     }
