@@ -43,6 +43,7 @@ impl InnerExecutor for IndexInnerExecutor {
         use tidb_query_datatype::FieldTypeFlag;
 
         check_index_key(key.as_slice())?;
+        println!("col ids size: {}", &self.col_ids.len());
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
             None => box_try!(value.as_slice().read_i64::<BigEndian>()),

@@ -49,3 +49,4 @@ pub use self::slow_hash_aggr_executor::BatchSlowHashAggregationExecutor;
 pub use self::stream_aggr_executor::BatchStreamAggregationExecutor;
 pub use self::table_scan_executor::BatchTableScanExecutor;
 pub use self::top_n_executor::BatchTopNExecutor;
+pub use self::index_scan_executor::IndexAnalyseScanExecutorImpl;

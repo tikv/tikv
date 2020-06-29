@@ -14,15 +14,16 @@ use codec::prelude::NumberDecoder;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query_datatype::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
-pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
+pub struct BatchIndexScanExecutor<S: Storage,E : ScanExecutorImpl>(ScanExecutor<S, E>);
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
 // when calling `check_supported`.
-impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
+impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>,IndexScanExecutorImpl> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -30,7 +31,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl<S: Storage> BatchIndexScanExecutor<S> {
+impl<S: Storage> BatchIndexScanExecutor<S,IndexScanExecutorImpl> {
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -80,9 +81,33 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         })?;
         Ok(Self(wrapper))
     }
+
+    pub fn new_analyse(
+        storage: S,
+        config: Arc<EvalConfig>,
+        col_len: usize,
+        key_ranges: Vec<KeyRange>,
+        is_backward: bool,
+        unique: bool,
+    ) -> Result<BatchIndexScanExecutor<S,IndexAnalyseScanExecutorImpl>> {
+        let imp = IndexAnalyseScanExecutorImpl {
+            context: EvalContext::new(config),
+            columns_id_without_handle_len: col_len,
+            decode_handle: false,
+        };
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            imp,
+            storage,
+            key_ranges,
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+        })?;
+        Ok(BatchIndexScanExecutor(wrapper))
+    }
 }
 
-impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<S: Storage,E : ScanExecutorImpl> BatchExecutor for BatchIndexScanExecutor<S,E> {
     type StorageStats = S::Statistics;
 
     #[inline]
@@ -116,7 +141,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 }
 
-struct IndexScanExecutorImpl {
+pub struct IndexScanExecutorImpl {
     /// See `TableScanExecutorImpl`'s `context`.
     context: EvalContext,
 
@@ -283,6 +308,184 @@ impl IndexScanExecutorImpl {
             };
 
             columns[self.columns_id_without_handle.len()]
+                .mut_decoded()
+                .push_int(Some(handle_val));
+        }
+
+        Ok(())
+    }
+}
+
+pub struct IndexAnalyseScanExecutorImpl {
+    /// See `TableScanExecutorImpl`'s `context`.
+    context: EvalContext,
+
+    /// ID of interested columns (exclude PK handle column).
+    columns_id_without_handle_len: usize,
+
+    /// Whether PK handle column is interested. Handle will be always placed in the last column.
+    decode_handle: bool,
+}
+
+impl ScanExecutorImpl for IndexAnalyseScanExecutorImpl {
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        &[]
+    }
+
+    #[inline]
+    fn mut_context(&mut self) -> &mut EvalContext {
+        &mut self.context
+    }
+
+    /// Constructs empty columns, with PK in decoded format and the rest in raw format.
+    ///
+    /// Note: the structure of the constructed column is the same as table scan executor but due
+    /// to different reasons.
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
+        let columns_len = if self.decode_handle {
+            self.columns_id_without_handle_len + 1
+        } else {
+            self.columns_id_without_handle_len
+        };
+        let mut columns = Vec::with_capacity(columns_len);
+        for _ in 0..self.columns_id_without_handle_len {
+            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+        }
+        if self.decode_handle {
+            // For primary key, we construct a decoded `VectorValue` because it is directly
+            // stored as i64, without a datum flag, in the value (for unique index).
+            // Note that for normal index, primary key is appended at the end of key with a
+            // datum flag.
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                scan_rows,
+                EvalType::Int,
+            ));
+        }
+
+        assert_eq!(columns.len(), columns_len);
+        LazyBatchColumnVec::from(columns)
+    }
+
+    fn process_kv_pair(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
+            self.process_kv_pair_new(key, value, columns)
+        } else {
+            self.process_kv_pair_old(key, value, columns)
+        }
+    }
+}
+
+impl IndexAnalyseScanExecutorImpl {
+    #[inline]
+    fn decode_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
+        // NOTE: it is not `number::decode_i64`.
+        value
+            .read_u64()
+            .map_err(|_| other_err!("Failed to decode handle in value as i64"))
+            .map(|x| x as i64)
+    }
+
+    #[inline]
+    fn decode_handle_from_key(&self, key: &[u8]) -> Result<i64> {
+        let flag = key[0];
+        let mut val = &key[1..];
+
+        // TODO: Better to use `push_datum`. This requires us to allow `push_datum`
+        // receiving optional time zone first.
+
+        match flag {
+            datum::INT_FLAG => val
+                .read_i64()
+                .map_err(|_| other_err!("Failed to decode handle in key as i64")),
+            datum::UINT_FLAG => val
+                .read_u64()
+                .map_err(|_| other_err!("Failed to decode handle in key as u64"))
+                .map(|x| x as i64),
+            _ => Err(other_err!("Unexpected handle flag {}", flag)),
+        }
+    }
+
+    fn process_kv_pair_new(
+        &mut self,
+        key: &[u8],
+        mut value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        use tidb_query_datatype::codec::row::v2::RowSlice;
+        let tail_len = value[0];
+        value = &value[1..];
+
+        let row = RowSlice::from_bytes(value)?;
+        for (idx, col_id) in (0..self.columns_id_without_handle_len)
+            .into_iter()
+            .enumerate()
+        {
+            if let Some((start, offset)) = row.search_in_non_null_ids(col_id as i64)? {
+                let mut buffer_to_write = columns[idx].mut_raw().begin_concat_extend();
+                buffer_to_write.write_datum_compact_bytes(&row.values()[start..offset])?;
+            } else if row.search_in_null_ids(col_id as i64) {
+                columns[idx].mut_raw().push(datum::DATUM_DATA_NULL);
+            } else {
+                return Err(other_err!("Unexpected missing column {}", col_id));
+            }
+        }
+
+        if self.decode_handle {
+            // For normal index, it is placed at the end and any columns prior to it are
+            // ensured to be interested. For unique index, it is placed in the value.
+
+            let handle_val = if tail_len >= 8 {
+                // This is a unique index, and we should look up PK handle in value.
+                self.decode_handle_from_value(&value[value.len() - 8..])?
+            } else {
+                // This is a normal index. The remaining payload part is the PK handle.
+                // Let's decode it and put in the column.
+                self.decode_handle_from_key(&key[key.len() - 9..])?
+            };
+            columns[self.columns_id_without_handle_len]
+                .mut_decoded()
+                .push_int(Some(handle_val));
+        }
+        Ok(())
+    }
+
+    fn process_kv_pair_old(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        check_index_key(key)?;
+        // The payload part of the key
+        let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
+
+        for i in 0..self.columns_id_without_handle_len {
+            let (val, remaining) = datum::split_datum(key_payload, false)?;
+            columns[i].mut_raw().push(val);
+            key_payload = remaining;
+        }
+
+        if self.decode_handle {
+            // For normal index, it is placed at the end and any columns prior to it are
+            // ensured to be interested. For unique index, it is placed in the value.
+            let handle_val = if key_payload.is_empty() {
+                // This is a unique index, and we should look up PK handle in value.
+
+                self.decode_handle_from_value(value)?
+            } else {
+                // This is a normal index. The remaining payload part is the PK handle.
+                // Let's decode it and put in the column.
+
+                self.decode_handle_from_key(key_payload)?
+            };
+
+            columns[self.columns_id_without_handle_len]
                 .mut_decoded()
                 .push_int(Some(handle_val));
         }

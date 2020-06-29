@@ -90,6 +90,8 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     fn next(&mut self) -> Result<Option<Row>> {
         let some_row = self.scanner.next()?;
         if let Some((key, value)) = some_row {
+            println!("col info len: {}", self.columns.len());
+
             self.inner
                 .decode_row(&mut self.context, key, value, self.columns.clone())
         } else {
