@@ -57,7 +57,7 @@ pub fn bit_length(arg: Option<BytesRef>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
-pub fn ord(arg: &Option<BytesRef>) -> Result<Option<i64>> {
+pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     let mut result = 0;
     if let Some(content) = arg {
         let size = bstr::decode_utf8(content).1;
