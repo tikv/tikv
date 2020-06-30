@@ -146,9 +146,9 @@ mod tests {
     use tempfile::Builder;
 
     use crate::engine::RocksEngine;
+    use crate::raw::DB;
     use crate::raw::{ColumnFamilyOptions, DBOptions};
     use crate::raw_util::{new_engine_opt, CFOptions};
-    use engine::DB;
     use std::sync::Arc;
 
     use super::*;

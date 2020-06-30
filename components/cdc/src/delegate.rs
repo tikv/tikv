@@ -467,7 +467,7 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite { default, lock }) => {
+                Some(TxnEntry::Prewrite { default, lock, .. }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, &lock.1, &mut row);
                     if skip {
@@ -483,7 +483,7 @@ impl Delegate {
                     current_rows_size += row_size;
                     rows.last_mut().unwrap().1.push(row);
                 }
-                Some(TxnEntry::Commit { default, write }) => {
+                Some(TxnEntry::Commit { default, write, .. }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row);
                     if skip {
@@ -930,37 +930,34 @@ mod tests {
         // Stashed in pending before region ready.
         let entries = vec![
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_prewrite(LockType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_prewrite(LockType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 2.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_commit(WriteType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(2.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_commit(WriteType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 3.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_rollback(),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(3.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_rollback(),
             ),
             None,
         ];
