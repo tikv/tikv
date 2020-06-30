@@ -1019,6 +1019,8 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
+    // Check and execute the extra operation.
+    // Currently we use it only for reading the old value for CDC.
     fn check_extra_op(
         &mut self,
         key: &Key,
