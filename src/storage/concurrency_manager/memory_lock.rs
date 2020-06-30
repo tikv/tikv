@@ -119,6 +119,10 @@ impl<'m, M: OrderedLockMap> Drop for MemoryLockRef<'m, M> {
 pub struct TxnMutexGuard<'m, M: OrderedLockMap>(MemoryLockRef<'m, M>);
 
 impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
+    pub fn key(&self) -> &[u8] {
+        &self.0.key()
+    }
+
     pub fn with_lock_info<T>(&self, f: impl FnOnce(&mut Option<LockInfo>) -> T) -> T {
         let mut lock_info = self.0.lock_info.lock();
         let before = lock_info.is_some() as i32;

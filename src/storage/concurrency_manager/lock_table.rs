@@ -37,7 +37,7 @@ impl<M: OrderedLockMap> LockTable<M> {
     pub fn check_key(
         &self,
         key: &[u8],
-        mut check_fn: impl FnMut(&LockInfo) -> bool,
+        check_fn: impl FnOnce(&LockInfo) -> bool,
     ) -> Result<(), LockInfo> {
         if let Some(lock_ref) = self.0.get(key) {
             return lock_ref.with_lock_info(|lock_info| {
@@ -160,7 +160,7 @@ mod test {
         let lock_table = LockTable::<Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>>>::default();
 
         // no lock found
-        assert!(lock_table.check_key(b"k", |_| true).is_ok());
+        assert!(lock_table.check_key(b"k", |_| false).is_ok());
 
         let mut lock_info = LockInfo::default();
         lock_info.set_lock_version(10);
@@ -191,7 +191,7 @@ mod test {
         });
 
         // no lock found
-        assert!(lock_table.check_range(b"m", b"n", |_| true).is_ok());
+        assert!(lock_table.check_range(b"m", b"n", |_| false).is_ok());
 
         // lock passes check_fn
         assert!(lock_table

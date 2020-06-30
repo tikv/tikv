@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
 use std::{
     collections::BTreeMap,
+    mem::{self, MaybeUninit},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -33,28 +34,111 @@ impl ConcurrencyManager {
         }
     }
 
+    pub fn max_read_ts(&self) -> TimeStamp {
+        TimeStamp::new(self.max_read_ts.load(Ordering::SeqCst))
+    }
+
+    /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
+    /// out of scope, the mutex will be unlocked.
+    ///
+    /// The guard can be used to store LockInfo in the lock table. The stored lock
+    /// is visible to `read_key_check` and `read_range_check`.
     pub async fn lock_key(&self, key: &[u8]) -> TxnMutexGuard<'_, OrderedLockMap> {
         self.lock_table.lock_key(key).await
     }
 
-    pub fn read_check_key(&self, key: &[u8], ts: TimeStamp) -> Result<(), LockInfo> {
-        self.max_read_ts
-            .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.lock_table
-            .check_key(key, |_lock_info| todo!("check SI constraints"))
+    /// Acquires mutexes of the keys and returns the RAII guards. The order of the
+    /// guards is the same with the given keys.
+    ///
+    /// The guards can be used to store LockInfo in the lock table. The stored lock
+    /// is visible to `read_key_check` and `read_range_check`.
+    pub async fn lock_keys(
+        &self,
+        keys: &[impl AsRef<[u8]>],
+    ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
+        let mut keys_with_index = Vec::with_capacity(keys.len());
+        for (i, key) in keys.iter().enumerate() {
+            keys_with_index.push((key.as_ref(), i));
+        }
+        keys_with_index.sort_by_key(|(key, _)| *key);
+        let mut result: Vec<MaybeUninit<TxnMutexGuard<'_, OrderedLockMap>>> = Vec::new();
+        result.resize_with(keys.len(), || MaybeUninit::uninit());
+        for (key, index) in keys_with_index {
+            result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
+        }
+        unsafe { mem::transmute(result) }
     }
 
-    pub fn read_check_range(
+    /// Checks if there is a memory lock of the key which blocks the read.
+    /// The given `check_fn` should return false iff the lock passed in
+    /// blocks the read.
+    ///
+    /// It will also updates the max_read_ts.
+    pub fn read_key_check(
+        &self,
+        key: &[u8],
+        ts: TimeStamp,
+        check_fn: impl FnOnce(&LockInfo) -> bool,
+    ) -> Result<(), LockInfo> {
+        self.max_read_ts
+            .fetch_max(ts.into_inner(), Ordering::SeqCst);
+        self.lock_table.check_key(key, check_fn)
+    }
+
+    /// Checks if there is a memory lock in the range which blocks the read.
+    /// The given `check_fn` should return false iff the lock passed in
+    /// blocks the read.
+    ///
+    /// It will also updates the max_read_ts.
+    pub fn read_range_check(
         &self,
         start_key: &[u8],
         end_key: &[u8],
         ts: TimeStamp,
+        check_fn: impl FnMut(&LockInfo) -> bool,
     ) -> Result<(), LockInfo> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.lock_table
-            .check_range(start_key, end_key, |_lock_info| {
-                todo!("check SI constraints")
-            })
+        self.lock_table.check_range(start_key, end_key, check_fn)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_lock_keys_order() {
+        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let keys = &[b"c", b"a", b"b"];
+        let guards = concurrency_manager.lock_keys(keys).await;
+        for (key, guard) in keys.iter().zip(&guards) {
+            assert_eq!(*key, guard.key());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_max_read_ts() {
+        let concurrency_manager = ConcurrencyManager::new(10.into());
+
+        assert!(concurrency_manager
+            .read_key_check(b"k", 15.into(), |_| false)
+            .is_ok());
+        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
+
+        assert!(concurrency_manager
+            .read_key_check(b"k", 5.into(), |_| false)
+            .is_ok());
+        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
+
+        assert!(concurrency_manager
+            .read_range_check(b"a", b"b", 10.into(), |_| false)
+            .is_ok());
+        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
+
+        assert!(concurrency_manager
+            .read_range_check(b"a", b"b", 20.into(), |_| false)
+            .is_ok());
+        assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }
 }
