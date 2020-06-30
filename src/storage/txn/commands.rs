@@ -327,7 +327,7 @@ macro_rules! write_bytes {
             self.$field.as_encoded().len()
         }
     };
-    ($field: ident, multiple) => {
+    ($field: ident: multiple) => {
         fn write_bytes(&self) -> usize {
             self.$field.iter().map(|x| x.as_encoded().len()).sum()
         }
@@ -514,7 +514,7 @@ impl CommandExt for PrewritePessimistic {
         bytes
     }
 
-    gen_lock!(mutations:multiple(|(x, _)| x.key()));
+    gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
 command! {
@@ -577,7 +577,7 @@ command! {
 impl CommandExt for Commit {
     tag!(commit);
     ts!(commit_ts);
-    write_bytes!(keys, multiple);
+    write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
@@ -620,7 +620,7 @@ command! {
 impl CommandExt for Rollback {
     tag!(rollback);
     ts!(start_ts);
-    write_bytes!(keys, multiple);
+    write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
@@ -643,7 +643,7 @@ impl CommandExt for PessimisticRollback {
     tag!(pessimistic_rollback);
     ts!(start_ts);
     command_method!(requires_pessimistic_txn, bool, true);
-    write_bytes!(keys, multiple);
+    write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
@@ -800,7 +800,7 @@ impl CommandExt for ResolveLockLite {
     tag!(resolve_lock_lite);
     ts!(start_ts);
     command_method!(is_sys_cmd, bool, true);
-    write_bytes!(resolve_keys, multiple);
+    write_bytes!(resolve_keys: multiple);
     gen_lock!(resolve_keys: multiple);
 }
 
@@ -820,7 +820,7 @@ command! {
 
 impl CommandExt for Pause {
     tag!(pause);
-    write_bytes!(keys, multiple);
+    write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
