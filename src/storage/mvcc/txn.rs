@@ -45,7 +45,7 @@ pub struct MvccTxn<S: Snapshot> {
     writes: WriteData,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
-    extra_op: ExtraOp,
+    pub extra_op: ExtraOp,
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -100,10 +100,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn into_modifies(self) -> Vec<Modify> {
         self.writes.modifies
-    }
-
-    pub fn set_extra_op(&mut self, extra_op: ExtraOp) {
-        self.extra_op = extra_op;
     }
 
     pub fn take_extra(&mut self) -> TxnExtra {
@@ -3056,7 +3052,7 @@ mod tests {
             let (mutation, start_ts, commit_ts, old_value, check_old_value) = case;
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = new_txn!(snapshot, start_ts.into(), true);
-            txn.set_extra_op(ExtraOp::ReadOldValue);
+            txn.extra_op = ExtraOp::ReadOldValue;
             txn.prewrite(mutation, b"key", false, 0, 0, TimeStamp::default())
                 .unwrap();
             if check_old_value {

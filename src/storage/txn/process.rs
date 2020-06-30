@@ -586,7 +586,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             };
 
             // Only set extra op here for getting the write record when check write conflict in prewrite.
-            txn.set_extra_op(extra_op);
+            txn.extra_op = extra_op;
 
             let mut locks = vec![];
             for m in mutations {
