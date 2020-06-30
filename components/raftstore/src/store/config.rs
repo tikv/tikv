@@ -193,7 +193,7 @@ impl Default for Config {
         Config {
             sync_log: true,
             delay_follower_apply: true,
-            delay_count: 100,
+            delay_count: 50,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
