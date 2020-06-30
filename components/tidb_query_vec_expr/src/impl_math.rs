@@ -100,7 +100,7 @@ pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Op
 }
 
 pub trait Ceil {
-    type Input: Evaluable;
+    type Input: Evaluable + EvaluableRet;
     type Output: EvaluableRet;
 
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
@@ -180,7 +180,7 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<
 }
 
 pub trait Floor {
-    type Input: Evaluable;
+    type Input: Evaluable + EvaluableRet;
     type Output: EvaluableRet;
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }

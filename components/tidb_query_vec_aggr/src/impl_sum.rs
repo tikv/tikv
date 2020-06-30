@@ -5,6 +5,7 @@ use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
+use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -118,10 +119,14 @@ where
     T: Summable,
     VectorValue: VectorValueExt<T>,
 {
-    type ParameterType = T;
+    type ParameterType = &'static T;
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    unsafe fn update_concrete_unsafe(
+        &mut self,
+        ctx: &mut EvalContext,
+        value: Option<&'static T>,
+    ) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -192,9 +197,8 @@ mod tests {
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
         let slice: &[Option<Real>] = exp_result.as_ref().as_ref();
-        state
-            .update_vector(&mut ctx, slice, exp_result.logical_rows())
-            .unwrap();
+        let chunked_vec = NotChunkedVec::from_slice(slice);
+        update_vector!(state, &mut ctx, &chunked_vec, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();

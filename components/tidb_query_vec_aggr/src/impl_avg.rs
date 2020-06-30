@@ -6,6 +6,7 @@ use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
+use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -122,10 +123,14 @@ where
     T: Summable,
     VectorValue: VectorValueExt<T>,
 {
-    type ParameterType = T;
+    type ParameterType = &'static T;
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    unsafe fn update_concrete_unsafe(
+        &mut self,
+        ctx: &mut EvalContext,
+        value: Option<&'static T>,
+    ) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -175,15 +180,15 @@ mod tests {
         assert_eq!(result[0].as_int_slice(), &[Some(0)]);
         assert_eq!(result[1].as_real_slice(), &[None]);
 
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0)]);
         assert_eq!(result[1].as_real_slice(), &[None, None]);
 
-        state.update(&mut ctx, &Real::new(5.0).ok()).unwrap();
-        state.update(&mut ctx, &Option::<Real>::None).unwrap();
-        state.update(&mut ctx, &Real::new(10.0).ok()).unwrap();
+        update!(state, &mut ctx, Real::new(5.0).ok().as_ref()).unwrap();
+        update!(state, &mut ctx, Option::<&Real>::None).unwrap();
+        update!(state, &mut ctx, Real::new(10.0).ok().as_ref()).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0), Some(2)]);
@@ -192,13 +197,9 @@ mod tests {
             &[None, None, Real::new(15.0).ok()]
         );
 
-        state
-            .update_vector(
-                &mut ctx,
-                &[Real::new(0.0).ok(), Real::new(-4.5).ok(), None],
-                &[0, 1, 2],
-            )
-            .unwrap();
+        let x: NotChunkedVec<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
+
+        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
@@ -251,9 +252,8 @@ mod tests {
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
         let slice: &[Option<Decimal>] = exp_result.as_ref().as_ref();
-        state
-            .update_vector(&mut ctx, slice, exp_result.logical_rows())
-            .unwrap();
+        let slice: NotChunkedVec<Decimal> = slice.to_vec().into();
+        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),
