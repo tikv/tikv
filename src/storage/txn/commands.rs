@@ -265,13 +265,9 @@ pub trait CommandExt {
         false
     }
 
-    fn write_bytes(&self) -> usize {
-        0
-    }
+    fn write_bytes(&self) -> usize;
 
-    fn gen_lock(&self, _latches: &Latches) -> latch::Lock {
-        latch::Lock::new(vec![])
-    }
+    fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
 }
 
 macro_rules! command {
@@ -339,6 +335,11 @@ macro_rules! write_bytes {
 }
 
 macro_rules! gen_lock {
+    (empty) => {
+        fn gen_lock(&self, _latches: &Latches) -> latch::Lock {
+            latch::Lock::new(vec![])
+        }
+    };
     ($field: ident) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
             latches.gen_lock(&[&self.$field])
@@ -724,6 +725,12 @@ impl CommandExt for ScanLock {
     ts!(max_ts);
     command_method!(readonly, bool, true);
     command_method!(is_sys_cmd, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 command! {
@@ -829,6 +836,12 @@ command! {
 impl CommandExt for MvccByKey {
     tag!(key_mvcc);
     command_method!(readonly, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 command! {
@@ -844,6 +857,12 @@ impl CommandExt for MvccByStartTs {
     tag!(start_ts_mvcc);
     ts!(start_ts);
     command_method!(readonly, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 pub enum CommandKind {
