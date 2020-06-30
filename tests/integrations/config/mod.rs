@@ -8,10 +8,10 @@ use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine::rocks::{
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_rocks::config::{BlobRunMode, CompressionType, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -192,6 +192,7 @@ fn test_serde_custom_tikv_config() {
         store_batch_system,
         future_poll_size: 2,
         hibernate_regions: false,
+        hibernate_timeout: ReadableDuration::minutes(10),
         early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
@@ -237,6 +238,7 @@ fn test_serde_custom_tikv_config() {
         info_log_roll_time: ReadableDuration::secs(12),
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
+        info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
         auto_tuned: true,
@@ -513,6 +515,7 @@ fn test_serde_custom_tikv_config() {
         titan: titan_db_config.clone(),
     };
     value.raftdb = RaftDbConfig {
+        info_log_level: LogLevel::Info,
         wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,
         wal_dir: "/var".to_owned(),
         wal_ttl_seconds: 1,
@@ -637,6 +640,7 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
+        enable_compaction_filter: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         enabled: false,

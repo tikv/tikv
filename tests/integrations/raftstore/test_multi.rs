@@ -90,9 +90,12 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key2);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key2,
+    );
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key1,
         value1,
     );
@@ -101,11 +104,14 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv,
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
         key2,
         value2,
     );
-    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
+    must_get_none(
+        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        key1,
+    );
 }
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {

@@ -30,11 +30,13 @@ pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
+use std::sync::{Arc, RwLock};
 
 use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use semver::{SemVerError, Version};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -202,7 +204,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<Option<ReplicationStatus>> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 
@@ -253,5 +255,27 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ClusterVersion {
+    version: Arc<RwLock<Option<Version>>>,
+}
+
+impl ClusterVersion {
+    pub fn get(&self) -> Option<Version> {
+        self.version.read().unwrap().clone()
+    }
+
+    fn set(&self, version: &str) -> std::result::Result<(), SemVerError> {
+        let new = Version::parse(version)?;
+        let mut holder = self.version.write().unwrap();
+        match &mut *holder {
+            Some(ref mut old) if *old < new => *old = new,
+            Some(_) => {}
+            None => *holder = Some(new),
+        }
+        Ok(())
     }
 }

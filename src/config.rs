@@ -17,26 +17,27 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
-use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+use engine_rocks::raw::{
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
+    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    LRUCacheOptions, TitanDBOptions,
 };
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
+use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType};
+use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::{
-    RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener, RocksdbLogger,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
@@ -563,6 +564,12 @@ impl WriteCfConfig {
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
+            .set_compaction_filter_factory(
+                "write_compaction_filter_factory",
+                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+            )
+            .unwrap();
+        cf_opts
     }
 }
 
@@ -798,6 +805,8 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[config(skip)]
+    pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -827,7 +836,6 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     #[config(skip)]
     pub info_log_dir: String,
-    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
@@ -884,6 +892,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
@@ -925,16 +934,6 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
-
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
@@ -957,7 +956,8 @@ impl DbConfig {
         opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
-
+        opts.set_info_log(RocksdbLogger::default());
+        opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1113,6 +1113,8 @@ pub struct RaftDbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     #[config(skip)]
+    pub info_log_level: LogLevel,
+    #[config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[config(skip)]
@@ -1154,6 +1156,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
+            info_log_level: LogLevel::Info,
             max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -1188,15 +1191,8 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        if !self.info_log_dir.is_empty() {
-            opts.create_info_log(&self.info_log_dir)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "create RocksDB info log {} error: {:?}",
-                        self.info_log_dir, e
-                    );
-                })
-        }
+        opts.set_info_log(RaftDBLogger::default());
+        opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
         opts.set_use_direct_io_for_flush_and_compaction(
@@ -1291,6 +1287,12 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
+        let mut opt = self.db.as_inner().get_db_options();
+        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1329,6 +1331,15 @@ impl ConfigManager for DBConfigManger {
                 }
             }
         }
+
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .next()
+        {
+            let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
+            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
         if !change.is_empty() {
             let change = config_value_to_string(change);
             let change_slice = config_to_slice(&change);
@@ -1342,7 +1353,6 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
-
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
@@ -2892,7 +2902,7 @@ mod tests {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-                DBOptions::new(),
+                cfg.rocksdb.build_opt(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
@@ -2918,6 +2928,7 @@ mod tests {
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
@@ -2929,6 +2940,21 @@ mod tests {
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update rate_bytes_per_sec
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(64).0 as i64
+        );
+
+        cfg_controller
+            .update_config("rocksdb.rate-bytes-per-sec", "128MB")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(128).0 as i64
+        );
 
         // update some configs on default cf
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();

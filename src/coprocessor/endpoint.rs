@@ -29,6 +29,7 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use minitrace::prelude::*;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -324,6 +325,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
+        .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
         .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -340,7 +342,12 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let handle_request_future = track(
+            handler
+                .handle_request()
+                .trace_async(tipb::Event::TiKvCoprHandleRequest as u32),
+            &mut tracker,
+        );
         let result = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
@@ -352,9 +359,9 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let exec_details = tracker.get_item_exec_details();
-
+        let exec_details = tracker.get_exec_details();
         tracker.on_finish_all_items();
+
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
@@ -382,7 +389,8 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .trace_task(tipb::Event::TiKvCoprScheduleTask as u32),
                 priority,
                 task_id,
             )
@@ -399,13 +407,24 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
+        let (_guard, collector) = minitrace::trace_may_enable(
+            req.is_trace_enabled,
+            tipb::Event::TiKvCoprGetRequest as u32,
+        );
+
         let result_of_future = self
             .parse_request(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
-
         future::result(result_of_future)
             .flatten()
             .or_else(|e| Ok(make_error_response(e)))
+            .map(move |mut resp| {
+                if let Some(collector) = collector {
+                    let span_sets = collector.collect();
+                    resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
+                }
+                resp
+            })
     }
 
     /// The real implementation of handling a stream request.
@@ -588,6 +607,7 @@ mod tests {
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
         handle_duration_millis: u64,
+        yieldable: bool,
         result: Option<Result<coppb::Response>>,
     }
 
@@ -595,6 +615,7 @@ mod tests {
         pub fn new(result: Result<coppb::Response>) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis: 0,
+                yieldable: false,
                 result: Some(result),
             }
         }
@@ -605,6 +626,18 @@ mod tests {
         ) -> UnaryFixture {
             UnaryFixture {
                 handle_duration_millis,
+                yieldable: false,
+                result: Some(result),
+            }
+        }
+
+        pub fn new_with_duration_yieldable(
+            result: Result<coppb::Response>,
+            handle_duration_millis: u64,
+        ) -> UnaryFixture {
+            UnaryFixture {
+                handle_duration_millis,
+                yieldable: true,
                 result: Some(result),
             }
         }
@@ -613,7 +646,17 @@ mod tests {
     #[async_trait]
     impl RequestHandler for UnaryFixture {
         async fn handle_request(&mut self) -> Result<coppb::Response> {
-            thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            if self.yieldable {
+                // We split the task into small executions of 1 second.
+                for _ in 0..self.handle_duration_millis / 1_000 {
+                    thread::sleep(Duration::from_millis(1_000));
+                    yatp::task::future::reschedule().await;
+                }
+                thread::sleep(Duration::from_millis(self.handle_duration_millis % 1_000));
+            } else {
+                thread::sleep(Duration::from_millis(self.handle_duration_millis));
+            }
+
             self.result.take().unwrap()
         }
     }
@@ -1202,6 +1245,62 @@ mod tests {
             assert_lt!(
                 resp.get_exec_details().get_handle_time().get_wait_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+        }
+
+        {
+            // Test multi-stage tasks
+            // Request 1: Unary, success response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Ok(coppb::Response::default()),
+                    PAYLOAD_SMALL as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
+            // Sleep a while to make sure that thread is spawn and snapshot is taken.
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Request 2: Unary, error response.
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration_yieldable(
+                    Err(box_err!("foo")),
+                    PAYLOAD_LARGE as u64,
+                )
+                .into_boxed())
+            });
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            let sender = tx.clone();
+            thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+
+            // Response 1
+            let resp = &rx.recv().unwrap()[0];
+            assert!(resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+
+            // Response 2
+            let resp = &rx.recv().unwrap()[0];
+            assert!(!resp.get_other_error().is_empty());
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 

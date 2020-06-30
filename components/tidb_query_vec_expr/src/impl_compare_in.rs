@@ -15,16 +15,16 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{Decimal, MAX_FSP};
 
 pub trait InByHash {
-    type Key: Evaluable + Extract + Eq;
+    type Key: EvaluableRet + Extract + Eq;
     type StoreKey: 'static + Hash + Eq + Sized + Send;
 
     fn map(key: Self::Key) -> Result<Self::StoreKey>;
     fn map_ref(key: &Self::Key) -> Result<&Self::StoreKey>;
 }
 
-pub struct NormalInByHash<K: Evaluable + Extract + Hash + Eq + Sized + Send>(PhantomData<K>);
+pub struct NormalInByHash<K: EvaluableRet + Extract + Hash + Eq + Sized + Send>(PhantomData<K>);
 
-impl<K: Evaluable + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
+impl<K: EvaluableRet + Extract + Hash + Eq + Sized> InByHash for NormalInByHash<K> {
     type Key = K;
     type StoreKey = K;
 
@@ -83,7 +83,7 @@ impl Extract for Int {
                 .map_err(|_| other_err!("Unable to decode uint64 from the request"))?;
             Ok(value as i64)
         } else {
-            Err(type_error(Int::EVAL_TYPE, expr_tp))
+            Err(type_error(<Int as Evaluable>::EVAL_TYPE, expr_tp))
         }
     }
 }
@@ -92,7 +92,7 @@ impl Extract for Real {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::Float32 && expr_tp != ExprType::Float64 {
-            return Err(type_error(Real::EVAL_TYPE, expr_tp));
+            return Err(type_error(<Real as Evaluable>::EVAL_TYPE, expr_tp));
         }
         let value = val
             .as_slice()
@@ -116,7 +116,7 @@ impl Extract for Decimal {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::MysqlDecimal {
-            return Err(type_error(Decimal::EVAL_TYPE, expr_tp));
+            return Err(type_error(<Decimal as Evaluable>::EVAL_TYPE, expr_tp));
         }
         use tidb_query_datatype::codec::mysql::DecimalDecoder;
         let value = val
@@ -131,7 +131,7 @@ impl Extract for Duration {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::MysqlDuration {
-            return Err(type_error(Duration::EVAL_TYPE, expr_tp));
+            return Err(type_error(<Duration as Evaluable>::EVAL_TYPE, expr_tp));
         }
         let n = val
             .as_slice()
@@ -147,14 +147,11 @@ pub trait InByCompare: Evaluable + Eq {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}
-impl InByCompare for Bytes {}
 impl InByCompare for Decimal {}
 impl InByCompare for Duration {}
 // DateTime requires TZInfo in context, and we cannot acquire it during metadata_mapper.
 // TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
-// Implement Hash for Json is impossible, due to equality of Json depends on an epsilon.
-impl InByCompare for Json {}
 
 #[derive(Debug)]
 pub struct CompareInMeta<T: Eq + Hash> {
@@ -167,7 +164,10 @@ pub struct CompareInMeta<T: Eq + Hash> {
 pub fn compare_in_by_hash<T: InByHash>(
     metadata: &CompareInMeta<T::StoreKey>,
     args: &[Option<&T::Key>],
-) -> Result<Option<Int>> {
+) -> Result<Option<Int>>
+where
+    T::Key: Evaluable,
+{
     assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {
@@ -185,6 +185,40 @@ pub fn compare_in_by_hash<T: InByHash>(
                     }
                     Some(v) => {
                         let v = T::map_ref(v)?;
+                        if base_val == v {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
+#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<CollationAwareBytesInByHash::<C>>)]
+#[inline]
+pub fn compare_in_by_hash_bytes<C: Collator>(
+    metadata: &CompareInMeta<SortKey<Bytes, C>>,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Int>> {
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let base_val = CollationAwareBytesInByHash::<C>::map(base_val.to_vec())?;
+            if metadata.lookup_set.contains(&base_val) {
+                return Ok(Some(1));
+            }
+            let mut default_ret = if metadata.has_null { None } else { Some(0) };
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        let v = CollationAwareBytesInByHash::<C>::map(v.to_vec())?;
                         if base_val == v {
                             return Ok(Some(1));
                         }
@@ -250,6 +284,32 @@ pub fn compare_in_by_compare<T: InByCompare>(args: &[Option<&T>]) -> Result<Opti
                     }
                     Some(v) => {
                         if *v == base_val {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn compare_in_by_compare_json(args: &[Option<JsonRef>]) -> Result<Option<Int>> {
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let mut default_ret = Some(0);
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        if v == &base_val {
                             return Ok(Some(1));
                         }
                     }
