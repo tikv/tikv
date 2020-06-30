@@ -110,7 +110,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn batch_handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>,IndexAnalyseScanExecutorImpl>,
+        scanner: &mut BatchIndexScanExecutor<
+            TiKVStorage<SnapshotStore<S>>,
+            IndexAnalyseScanExecutorImpl,
+        >,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CmSketch::new(
@@ -155,7 +158,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
-                let mut batch_scanner: BatchIndexScanExecutor<_,_> =
+                let mut batch_scanner: BatchIndexScanExecutor<_, _> =
                     BatchIndexScanExecutor::new_analyse(
                         self.storage.take().unwrap(),
                         Arc::new(EvalConfig::default()),
