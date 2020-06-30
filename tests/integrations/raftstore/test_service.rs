@@ -13,10 +13,10 @@ use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
-use engine::rocks::Writable;
+use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{MiscExt, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{AutoSplitController, SnapManager};

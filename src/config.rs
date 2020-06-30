@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
-use engine::rocks::{
+use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
     DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     LRUCacheOptions, TitanDBOptions,
@@ -836,7 +836,6 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     #[config(skip)]
     pub info_log_dir: String,
-    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
@@ -1288,6 +1287,12 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
+        let mut opt = self.db.as_inner().get_db_options();
+        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1326,6 +1331,15 @@ impl ConfigManager for DBConfigManger {
                 }
             }
         }
+
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .next()
+        {
+            let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
+            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
         if !change.is_empty() {
             let change = config_value_to_string(change);
             let change_slice = config_to_slice(&change);
@@ -1339,7 +1353,6 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
-
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
@@ -2889,7 +2902,7 @@ mod tests {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-                DBOptions::new(),
+                cfg.rocksdb.build_opt(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
@@ -2915,6 +2928,7 @@ mod tests {
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
@@ -2926,6 +2940,21 @@ mod tests {
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update rate_bytes_per_sec
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(64).0 as i64
+        );
+
+        cfg_controller
+            .update_config("rocksdb.rate-bytes-per-sec", "128MB")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(128).0 as i64
+        );
 
         // update some configs on default cf
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
