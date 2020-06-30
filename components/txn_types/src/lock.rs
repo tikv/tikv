@@ -25,7 +25,7 @@ const FLAG_PESSIMISTIC: u8 = b'S';
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
-const PARALLEL_COMMIT_PREFIX: u8 = b'p';
+const ASYNC_COMMIT_PREFIX: u8 = b'a';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -68,8 +68,8 @@ pub struct Lock {
     pub for_update_ts: TimeStamp,
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
-    pub is_parallel_commit: bool,
-    // Only valid when `is_parallel_commit` is true, and the lock is primary. Do not set
+    pub use_async_commit: bool,
+    // Only valid when `use_async_commit` is true, and the lock is primary. Do not set
     // `secondaries` for secondaries.
     pub secondaries: Vec<Vec<u8>>,
 }
@@ -98,8 +98,8 @@ impl Lock {
             b.push(MIN_COMMIT_TS_PREFIX);
             b.encode_u64(self.min_commit_ts.into_inner()).unwrap();
         }
-        if self.is_parallel_commit {
-            b.push(PARALLEL_COMMIT_PREFIX);
+        if self.use_async_commit {
+            b.push(ASYNC_COMMIT_PREFIX);
             b.encode_var_u64(self.secondaries.len() as _).unwrap();
             for k in &self.secondaries {
                 b.encode_compact_bytes(k).unwrap();
@@ -111,7 +111,7 @@ impl Lock {
     fn pre_allocate_size(&self) -> usize {
         let mut size =
             1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2;
-        if self.is_parallel_commit {
+        if self.use_async_commit {
             size += 1
                 + MAX_VAR_U64_LEN
                 + self
@@ -154,7 +154,7 @@ impl Lock {
         let mut for_update_ts = TimeStamp::zero();
         let mut txn_size: u64 = 0;
         let mut min_commit_ts = TimeStamp::zero();
-        let mut is_parallel_commit = false;
+        let mut use_async_commit = false;
         let mut secondaries = Vec::new();
         while !b.is_empty() {
             match b.read_u8()? {
@@ -173,8 +173,8 @@ impl Lock {
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
                 MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
-                PARALLEL_COMMIT_PREFIX => {
-                    is_parallel_commit = true;
+                ASYNC_COMMIT_PREFIX => {
+                    use_async_commit = true;
                     let len = number::decode_var_u64(&mut b)? as _;
                     secondaries.reserve(len);
                     for _i in 0..len {
@@ -193,7 +193,7 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
-            is_parallel_commit,
+            use_async_commit,
             secondaries,
         ))
     }
@@ -213,7 +213,7 @@ impl Lock {
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
-        info.set_use_parallel_commit(self.is_parallel_commit);
+        info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
         info
