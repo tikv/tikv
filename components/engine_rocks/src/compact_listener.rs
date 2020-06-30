@@ -4,7 +4,7 @@ use std::cmp;
 use std::path::Path;
 
 use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
-use engine::rocks::EventListener;
+use crate::raw::EventListener;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
