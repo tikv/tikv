@@ -21,8 +21,8 @@ impl<M: OrderedLockMap> LockTable<M> {
             if let Some(lock) = self.0.get(key) {
                 return lock.mutex_lock().await;
             } else {
-                let lock = Arc::new(MemoryLock::default());
-                let lock_ref = MemoryLockRef::new(&*self.0, key.to_vec(), lock.clone()).unwrap();
+                let lock = Arc::new(MemoryLock::new(key.to_vec()));
+                let lock_ref = lock.clone().get_ref(&*self.0).unwrap();
                 let guard = lock_ref.mutex_lock().await;
                 if self.0.insert_if_not_exist(key.to_vec(), lock) {
                     return guard;
@@ -106,14 +106,14 @@ impl OrderedLockMap for Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>> {
     fn get<'m>(&'m self, key: &[u8]) -> Option<MemoryLockRef<'m, Self>> {
         self.lock()
             .get(key)
-            .and_then(|lock| MemoryLockRef::new(self, key.to_vec(), lock.clone()))
+            .and_then(|lock| lock.clone().get_ref(self))
     }
 
     fn lower_bound<'m>(&'m self, key: &[u8]) -> Option<MemoryLockRef<'m, Self>> {
         self.lock()
             .range::<[u8], _>((Bound::Included(key), Bound::Unbounded))
             .next()
-            .and_then(|(key, lock)| MemoryLockRef::new(self, key.to_vec(), lock.clone()))
+            .and_then(|(_, lock)| lock.clone().get_ref(self))
     }
 
     fn remove(&self, key: &[u8]) {

@@ -17,6 +17,7 @@ use std::{
 const INIT_REF_COUNT: usize = usize::MAX;
 
 pub struct MemoryLock {
+    key: Vec<u8>,
     mutex_locked: AtomicBool,
     mutex_event: Event,
     lock_info: Mutex<Option<LockInfo>>,
@@ -24,9 +25,10 @@ pub struct MemoryLock {
     ref_count: AtomicUsize,
 }
 
-impl Default for MemoryLock {
-    fn default() -> Self {
+impl MemoryLock {
+    pub fn new(key: Vec<u8>) -> Self {
         MemoryLock {
+            key,
             mutex_locked: AtomicBool::new(false),
             mutex_event: Event::new(),
             lock_info: Mutex::new(None),
@@ -34,31 +36,45 @@ impl Default for MemoryLock {
             ref_count: AtomicUsize::new(INIT_REF_COUNT),
         }
     }
-}
 
-pub struct MemoryLockRef<'m, M: OrderedLockMap> {
-    map: &'m M,
-    key: Vec<u8>,
-    lock: Arc<MemoryLock>,
-}
-
-impl<'m, M: OrderedLockMap> MemoryLockRef<'m, M> {
-    pub fn new(map: &'m M, key: Vec<u8>, lock: Arc<MemoryLock>) -> Option<Self> {
-        if lock
-            .ref_count
-            .compare_and_swap(INIT_REF_COUNT, 1, Ordering::SeqCst)
-            == INIT_REF_COUNT
-        {
-            Some(MemoryLockRef { map, key, lock })
-        } else {
-            if lock.ref_count.fetch_add(1, Ordering::SeqCst) == 0 {
-                None
+    pub fn get_ref<'m, M: OrderedLockMap>(
+        self: Arc<Self>,
+        map: &'m M,
+    ) -> Option<MemoryLockRef<'m, M>> {
+        let mut ref_count = self.ref_count.load(Ordering::SeqCst);
+        loop {
+            // It is possible that the reference count has just decreased to zero and not
+            // been removed from the map. In this case, we should not create a new reference
+            // because the lock will be removed from the map immediately.
+            if ref_count == 0 {
+                return None;
+            }
+            let new_value = if ref_count == INIT_REF_COUNT {
+                1
             } else {
-                Some(MemoryLockRef { map, key, lock })
+                ref_count + 1
+            };
+            match self.ref_count.compare_exchange(
+                ref_count,
+                new_value,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Some(MemoryLockRef { lock: self, map });
+                }
+                Err(n) => ref_count = n,
             }
         }
     }
+}
 
+pub struct MemoryLockRef<'m, M: OrderedLockMap> {
+    lock: Arc<MemoryLock>,
+    map: &'m M,
+}
+
+impl<'m, M: OrderedLockMap> MemoryLockRef<'m, M> {
     pub fn key(&self) -> &[u8] {
         &self.key
     }
@@ -121,6 +137,8 @@ impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
         ret
     }
 
+    // Question: should we accept a key here and redirect the key
+    // to the deadlock detector in this method?
     pub fn lock_released(&self) -> impl Future<Output = ()> {
         self.0.pessimistic_event.listen()
     }
@@ -137,12 +155,12 @@ impl<'m, M: OrderedLockMap> Drop for TxnMutexGuard<'m, M> {
 mod tests {
     use super::*;
     use std::{collections::BTreeMap, time::Duration};
-    use tokio::{sync::mpsc, time::delay_for};
+    use tokio::time::delay_for;
 
     #[tokio::test]
     async fn test_txn_mutex() {
         let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let lock = Arc::new(MemoryLock::default());
+        let lock = Arc::new(MemoryLock::new(b"k".to_vec()));
         map.insert_if_not_exist(b"k".to_vec(), lock.clone());
 
         let counter = Arc::new(AtomicUsize::new(0));
@@ -152,7 +170,7 @@ mod tests {
             let lock = lock.clone();
             let counter = counter.clone();
             let handle = tokio::spawn(async move {
-                let lock_ref = MemoryLockRef::new(&*map, b"k".to_vec(), lock).unwrap();
+                let lock_ref = lock.get_ref(&*map).unwrap();
                 let _guard = lock_ref.mutex_lock().await;
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
@@ -171,49 +189,54 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_lock_released() {
         let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let lock = Arc::new(MemoryLock::default());
+        let lock = Arc::new(MemoryLock::new(b"k".to_vec()));
         map.insert_if_not_exist(b"k".to_vec(), lock.clone());
 
         let mut lock_info = LockInfo::default();
         lock_info.set_key(b"k".to_vec());
-        *lock.lock_info.lock() = Some(lock_info.clone());
+        lock.clone()
+            .get_ref(&*map.clone())
+            .unwrap()
+            .mutex_lock()
+            .await
+            .with_lock_info(|l| *l = Some(lock_info.clone()));
 
-        let (tx, mut rx) = mpsc::unbounded_channel();
-
-        let map2 = map.clone();
-        let lock2 = lock.clone();
-        let handle = tokio::spawn(async move {
-            rx.recv().await;
-
-            let lock_ref = MemoryLockRef::new(&*map2, b"k".to_vec(), lock2).unwrap();
-            let guard = lock_ref.mutex_lock().await;
-            // Clear lock_info
-            guard.with_lock_info(|lock_info| *lock_info = None);
-
-            // After lock is cleared, we should be able to receive the messages
-            // sent by other tasks blocked by the lock.
-            for _ in 0..5 {
-                rx.recv().await;
-            }
-        });
-
+        let mut handles = Vec::new();
+        let counter = Arc::new(AtomicUsize::new(0));
         for _ in 0..5 {
             let map = map.clone();
             let lock = lock.clone();
-            let lock_ref = MemoryLockRef::new(&*map, b"k".to_vec(), lock).unwrap();
+            let lock_ref = lock.get_ref(&*map).unwrap();
             let guard = lock_ref.mutex_lock().await;
             guard.with_lock_info(|lock_info| assert!(lock_info.is_some()));
 
             let wait_future = guard.lock_released();
-            let tx = tx.clone();
-            tokio::spawn(async move {
+            let counter = counter.clone();
+            handles.push(tokio::spawn(async move {
                 wait_future.await;
-                tx.send(()).unwrap();
-            });
+                counter.fetch_add(1, Ordering::SeqCst);
+            }));
         }
 
-        tx.send(()).unwrap();
-        handle.await.unwrap();
+        delay_for(Duration::from_millis(100)).await;
+        // still waiting for the lock to be released
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+        let map2 = map.clone();
+        let lock2 = lock.clone();
+        tokio::spawn(async move {
+            let lock_ref = lock2.get_ref(&*map2).unwrap();
+            let guard = lock_ref.mutex_lock().await;
+            // Clear lock_info
+            guard.with_lock_info(|lock_info| *lock_info = None);
+        })
+        .await
+        .unwrap();
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
     }
 
     #[tokio::test]
@@ -221,7 +244,7 @@ mod tests {
         let map = Mutex::new(BTreeMap::new());
 
         // simple case
-        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::default()));
+        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::new(b"k".to_vec())));
         let lock_ref1 = map.get(b"k").unwrap();
         let lock_ref2 = map.get(b"k").unwrap();
         drop(lock_ref1);
@@ -230,7 +253,7 @@ mod tests {
         assert!(map.get(b"k").is_none());
 
         // should not removed it from the lock table if a lock is stored in it
-        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::default()));
+        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::new(b"k".to_vec())));
         let guard = map.get(b"k").unwrap().mutex_lock().await;
         guard.with_lock_info(|lock_info| *lock_info = Some(LockInfo::default()));
         drop(guard);
