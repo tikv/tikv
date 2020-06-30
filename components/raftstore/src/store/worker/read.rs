@@ -430,8 +430,13 @@ where
                     let snapshot_ts = match read_id.as_mut() {
                         // If this peer became Leader not long ago and just after the cached
                         // snapshot was created, this snapshot can not see all data of the peer.
-                        Some(id) if id.create_time <= delegate.last_valid_ts => id.create_time,
-                        _ => monotonic_raw_now(),
+                        Some(id) => {
+                            if id.create_time <= delegate.last_valid_ts {
+                                id.create_time = monotonic_raw_now();
+                            }
+                            id.create_time
+                        },
+                        None => monotonic_raw_now(),
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
