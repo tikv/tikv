@@ -2588,8 +2588,10 @@ impl Peer {
         if check_epoch {
             if let Err(e) = check_region_epoch(&req, &region, true) {
                 debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
                 return ReadResponse {
-                    response: cmd_resp::new_error(e),
+                    response,
                     snapshot: None,
                 };
             }
@@ -3004,7 +3006,7 @@ impl RequestInspector for Peer {
 }
 
 impl<T, C> ReadExecutor<RocksEngine> for PollContext<T, C> {
-    fn engine(&self) -> &RocksEngine {
+    fn get_engine(&self) -> &RocksEngine {
         &self.engines.kv
     }
 

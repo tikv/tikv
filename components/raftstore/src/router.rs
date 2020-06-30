@@ -182,9 +182,8 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb);
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, cmd);
+        local_reader.read(read_id, req, cb);
         Ok(())
     }
 

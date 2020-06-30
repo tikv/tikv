@@ -17,8 +17,8 @@ use time::Timespec;
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
-    cmd_resp, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot, RequestInspector,
-    RequestPolicy,
+    cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
+    RequestInspector, RequestPolicy,
 };
 use crate::Result;
 use engine_traits::KvEngine;
@@ -30,14 +30,14 @@ use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
 
 pub trait ReadExecutor<E: KvEngine> {
-    fn engine(&self) -> &E;
+    fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
-    fn get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let engine = self.engine();
+        let engine = self.get_engine();
         let mut resp = Response::default();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -85,7 +85,7 @@ pub trait ReadExecutor<E: KvEngine> {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => match self.get(req, region.as_ref()) {
+                CmdType::Get => match self.get_value(req, region.as_ref()) {
                     Ok(resp) => resp,
                     Err(e) => {
                         error!(
@@ -272,7 +272,7 @@ where
     C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
-    fn engine(&self) -> &E {
+    fn get_engine(&self) -> &E {
         &self.kv_engine
     }
 
@@ -281,7 +281,7 @@ where
         if let Some(ts) = create_time {
             if ts == self.cache_read_id {
                 if let Some(snap) = self.snap_cache.as_ref() {
-                    self.metrics.local_executed_cache_requests += 1;
+                    self.metrics.local_executed_snapshot_cache_hit += 1;
                     return snap.clone();
                 }
             }
@@ -420,11 +420,12 @@ where
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
-        cmd: RaftCommand<E::Snapshot>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
     ) {
-        let region_id = cmd.request.get_header().get_region_id();
+        let region_id = req.get_header().get_region_id();
         loop {
-            match self.pre_propose_raft_command(&cmd.request) {
+            match self.pre_propose_raft_command(&req) {
                 Ok(Some(delegate)) => {
                     let snapshot_ts = match read_id.as_mut() {
                         // If this peer became Leader not long ago and just after the cached
@@ -434,11 +435,10 @@ where
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
                         // Cache snapshot_time for remaining requests in the same batch.
-                        let mut response =
-                            self.execute(&cmd.request, &delegate.region, None, read_id);
+                        let mut response = self.execute(&req, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut response.response, delegate.term);
-                        cmd.callback.invoke_read(response);
+                        cb.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
                         return;
                     }
@@ -466,7 +466,7 @@ where
                     if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
                         cmd_resp::bind_term(&mut response, delegate.term);
                     }
-                    cmd.callback.invoke_read(ReadResponse {
+                    cb.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
                     });
@@ -478,6 +478,7 @@ where
         // Remove delegate for updating it by next cmd execution.
         self.delegates.remove(&region_id);
         // Forward to raftstore.
+        let cmd = RaftCommand::new(req, cb);
         self.redirect(cmd);
     }
 
@@ -487,8 +488,13 @@ where
     /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
     /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(&mut self, read_id: Option<ThreadReadId>, cmd: RaftCommand<E::Snapshot>) {
-        self.propose_raft_command(read_id, cmd);
+    pub fn read(
+        &mut self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) {
+        self.propose_raft_command(read_id, req, cb);
         self.metrics.maybe_flush();
     }
 
@@ -557,7 +563,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: i64,
-    local_executed_cache_requests: i64,
+    local_executed_snapshot_cache_hit: i64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
     rejected_by_peer_id_mismatch: i64,
@@ -577,7 +583,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
-            local_executed_cache_requests: 0,
+            local_executed_snapshot_cache_hit: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -652,9 +658,9 @@ impl ReadMetrics {
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }
-        if self.local_executed_cache_requests > 0 {
-            LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_cache_requests);
-            self.local_executed_cache_requests = 0;
+        if self.local_executed_snapshot_cache_hit > 0 {
+            LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);
+            self.local_executed_snapshot_cache_hit = 0;
         }
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
@@ -717,13 +723,13 @@ mod tests {
         rx: &Receiver<RaftCommand<RocksSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
-        let task = RaftCommand::new(
+        reader.propose_raft_command(
+            None,
             cmd.clone(),
             Callback::Read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         );
-        reader.propose_raft_command(None, task);
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()
@@ -737,7 +743,7 @@ mod tests {
         rx: &Receiver<RaftCommand<RocksSnapshot>>,
         task: RaftCommand<RocksSnapshot>,
     ) {
-        reader.propose_raft_command(None, task);
+        reader.propose_raft_command(None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -845,7 +851,8 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_store_id(store_id + 1);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_store_id,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
@@ -853,7 +860,6 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(None, task);
         assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
@@ -863,7 +869,8 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_id(leader2.get_id() + 1);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_peer_id,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 assert!(
@@ -874,7 +881,6 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(None, task);
         assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
@@ -887,7 +893,8 @@ mod tests {
         // Term mismatch.
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
-        let task = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(
+            None,
             cmd_term,
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
@@ -895,7 +902,6 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(None, task);
         assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 6);
 
@@ -920,8 +926,9 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_cache_miss, 8);
 
         // Channel full.
-        let task1 = RaftCommand::<RocksSnapshot>::new(cmd.clone(), Callback::None);
-        let task_full = RaftCommand::<RocksSnapshot>::new(
+        reader.propose_raft_command(None, cmd.clone(), Callback::None);
+        reader.propose_raft_command(
+            None,
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let err = resp.response.get_header().get_error();
@@ -929,8 +936,6 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(None, task1);
-        reader.propose_raft_command(None, task_full);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(reader.metrics.rejected_by_channel_full, 1);
@@ -939,12 +944,6 @@ mod tests {
         let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
         let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
-        let task = RaftCommand::<RocksSnapshot>::new(
-            cmd9.clone(),
-            Callback::Read(Box::new(|resp| {
-                panic!("unexpected invoke, {:?}", resp);
-            })),
-        );
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers
@@ -956,7 +955,13 @@ mod tests {
                 .unwrap()
                 .update(Progress::applied_index_term(term6 + 3));
         }
-        reader.propose_raft_command(None, task);
+        reader.propose_raft_command(
+            None,
+            cmd9.clone(),
+            Callback::Read(Box::new(|resp| {
+                panic!("unexpected invoke, {:?}", resp);
+            })),
+        );
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()
