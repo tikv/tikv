@@ -435,7 +435,7 @@ where
                                 id.create_time = monotonic_raw_now();
                             }
                             id.create_time
-                        },
+                        }
                         None => monotonic_raw_now(),
                     };
                     if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
