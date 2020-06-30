@@ -278,7 +278,7 @@ pub mod tests {
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
             engine
-                .write(ctx, WriteData::with_modifies(modifies))
+                .write(ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
     }
@@ -665,7 +665,7 @@ pub mod tests {
             .unwrap();
         }
         engine
-            .write(&ctx, WriteData::with_modifies(txn.into_modifies()))
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
     }
 
@@ -719,7 +719,7 @@ pub mod tests {
             .unwrap();
         }
         engine
-            .write(&ctx, WriteData::with_modifies(txn.into_modifies()))
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
     }
 
@@ -791,7 +791,7 @@ pub mod tests {
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             engine
-                .write(&ctx, WriteData::with_modifies(modifies))
+                .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
         res

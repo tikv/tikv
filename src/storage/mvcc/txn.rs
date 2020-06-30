@@ -1023,26 +1023,26 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         key: &Key,
         mutation_type: MutationType,
-        write: Option<Write>,
+        prev_write: Option<Write>,
     ) -> Result<()> {
         use crate::storage::mvcc::reader::seek_for_valid_write;
 
         if self.extra_op == ExtraOp::ReadOldValue
             && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
         {
-            let old_value = if let Some(w) = write {
+            let old_value = if let Some(w) = prev_write {
                 // If write is Rollback or Lock, seek for valid write record.
                 if w.write_type == WriteType::Rollback || w.write_type == WriteType::Lock {
                     let write_cursor = self.reader.write_cursor.as_mut().unwrap();
                     // Skip the current write record.
                     write_cursor.next(&mut self.reader.statistics.write);
-                    let valid_write = seek_for_valid_write(
+                    let write = seek_for_valid_write(
                         write_cursor,
                         key,
                         self.start_ts,
                         &mut self.reader.statistics,
                     )?;
-                    valid_write.map(|w| (w.short_value, w.start_ts))
+                    write.map(|w| (w.short_value, w.start_ts))
                 } else {
                     Some((w.short_value, w.start_ts))
                 }
@@ -1136,6 +1136,9 @@ fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInn
 macro_rules! new_txn {
     ($ss: expr, $ts: literal, $fill_cache: expr) => {
         $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache)
+    };
+    ($ss: expr, $ts: expr, $fill_cache: expr) => {
+        $crate::storage::mvcc::MvccTxn::new($ss, $ts, $fill_cache)
     };
 }
 
@@ -1796,13 +1799,17 @@ mod tests {
         )
         .unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
         txn.commit(key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
     }
 
     #[test]
@@ -2996,5 +3003,74 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 80, 80);
         must_cleanup(&engine, k, 80, TimeStamp::max());
         must_pipelined_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, true);
+    }
+
+    #[test]
+    fn test_extra_op_old_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let key = Key::from_raw(b"key");
+        let ctx = Context::default();
+
+        let cases = vec![
+            (
+                Mutation::Put((key.clone(), b"v0".to_vec())),
+                5,
+                5,
+                None,
+                true,
+            ),
+            (
+                Mutation::Put((key.clone(), b"v1".to_vec())),
+                6,
+                6,
+                Some((Some(b"v0".to_vec()), 5.into())),
+                true,
+            ),
+            (Mutation::Lock(key.clone()), 7, 7, None, false),
+            (
+                Mutation::Lock(key.clone()),
+                8,
+                8,
+                Some((Some(b"v1".to_vec()), 6.into())),
+                false,
+            ),
+            (
+                Mutation::Put((key.clone(), vec![b'0'; 5120])),
+                9,
+                9,
+                Some((Some(b"v1".to_vec()), 6.into())),
+                true,
+            ),
+            (
+                Mutation::Put((key.clone(), b"v3".to_vec())),
+                10,
+                10,
+                Some((None, 9.into())),
+                true,
+            ),
+        ];
+
+        for case in cases {
+            let (mutation, start_ts, commit_ts, old_value, check_old_value) = case;
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = new_txn!(snapshot, start_ts.into(), true);
+            txn.set_extra_op(ExtraOp::ReadOldValue);
+            txn.prewrite(mutation, b"key", false, 0, 0, TimeStamp::default())
+                .unwrap();
+            if check_old_value {
+                let extra = txn.take_extra();
+                let ts_key = key.clone().append_ts(start_ts.into());
+                assert_eq!(extra.get_old_values()[&ts_key], old_value);
+            }
+            engine
+                .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+                .unwrap();
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = new_txn!(snapshot, start_ts.into(), true);
+            txn.commit(key.clone(), commit_ts.into()).unwrap();
+            engine
+                .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+                .unwrap();
+        }
     }
 }

@@ -336,6 +336,10 @@ impl TxnExtra {
         self.old_values
             .extend(std::mem::take(&mut other.old_values))
     }
+
+    pub fn get_old_values(&self) -> &OldValues {
+        &self.old_values
+    }
 }
 
 #[cfg(test)]

@@ -653,7 +653,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let write_data = WriteData::with_modifies(txn.into_modifies());
+                let write_data = WriteData::from_modifies(txn.into_modifies());
                 (pr, write_data, rows, cmd.ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
@@ -707,7 +707,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // no conflict
             if res.is_ok() {
                 let pr = ProcessResult::PessimisticLockRes { res };
-                let write_data = WriteData::with_modifies(txn.into_modifies());
+                let write_data = WriteData::from_modifies(txn.into_modifies());
                 (pr, write_data, rows, cmd.ctx, None)
             } else {
                 let lock = extract_lock_from_result(&res);
@@ -743,7 +743,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let pr = ProcessResult::TxnStatus {
                 txn_status: TxnStatus::committed(commit_ts),
             };
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, cmd.ctx, None)
         }
         CommandKind::Cleanup(Cleanup {
@@ -761,7 +761,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, 1, cmd.ctx, None)
         }
         CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
@@ -775,7 +775,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, cmd.ctx, None)
         }
         CommandKind::PessimisticRollback(PessimisticRollback {
@@ -795,7 +795,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (
                 ProcessResult::MultiRes { results: vec![] },
                 write_data,
@@ -854,7 +854,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         .into(),
                 }
             };
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, cmd.ctx, None)
         }
         CommandKind::ResolveLockLite(ResolveLockLite {
@@ -878,7 +878,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, cmd.ctx, None)
         }
         CommandKind::TxnHeartBeat(TxnHeartBeat {
@@ -894,7 +894,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let pr = ProcessResult::TxnStatus {
                 txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero()),
             };
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, cmd.ctx, None)
         }
         CommandKind::CheckTxnStatus(CheckTxnStatus {
@@ -921,7 +921,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus { txn_status };
-            let write_data = WriteData::with_modifies(txn.into_modifies());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, cmd.ctx, None)
         }
         CommandKind::Pause(Pause { duration, .. }) => {
@@ -1121,7 +1121,7 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), None, statistics, false)?;
+        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1151,7 +1151,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), None, statistics, false)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

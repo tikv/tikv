@@ -356,7 +356,7 @@ impl<E: Engine> GcRunner<E> {
         if !modifies.is_empty() {
             self.refresh_cfg();
             self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, WriteData::with_modifies(modifies))?;
+            self.engine.write(ctx, WriteData::from_modifies(modifies))?;
         }
         Ok(next_scan_key)
     }
@@ -961,7 +961,7 @@ mod tests {
             mut batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            batch.iter_mut().for_each(|modify| match modify {
+            batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }

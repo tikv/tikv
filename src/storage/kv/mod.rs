@@ -85,7 +85,7 @@ impl WriteData {
         Self { modifies, extra }
     }
 
-    pub fn with_modifies(modifies: Vec<Modify>) -> Self {
+    pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
     }
 }
@@ -119,7 +119,7 @@ pub trait Engine: Send + Clone + 'static {
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
         self.write(
             ctx,
-            WriteData::with_modifies(vec![Modify::Put(cf, key, value)]),
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
         )
     }
 
@@ -128,7 +128,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, WriteData::with_modifies(vec![Modify::Delete(cf, key)]))
+        self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
     }
 
     fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
@@ -491,10 +491,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-                ],
+                ]),
             )
             .unwrap();
         assert_has(engine, b"x", b"1");
@@ -503,10 +503,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-                ],
+                ]),
             )
             .unwrap();
         assert_none(engine, b"y");
@@ -754,7 +754,9 @@ pub mod tests {
     }
 
     fn test_empty_write<E: Engine>(engine: &E) {
-        engine.write(&Context::default(), vec![]).unwrap_err();
+        engine
+            .write(&Context::default(), WriteData::default())
+            .unwrap_err();
     }
 
     pub fn test_cfs_statistics<E: Engine>(engine: &E) {
