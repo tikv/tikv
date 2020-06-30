@@ -19,11 +19,11 @@ use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_L
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
-pub struct BatchIndexScanExecutor<S: Storage,E : ScanExecutorImpl>(ScanExecutor<S, E>);
+pub struct BatchIndexScanExecutor<S: Storage, E: ScanExecutorImpl>(ScanExecutor<S, E>);
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
 // when calling `check_supported`.
-impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>,IndexScanExecutorImpl> {
+impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>, IndexScanExecutorImpl> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -31,7 +31,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>,IndexScanExecutorI
     }
 }
 
-impl<S: Storage> BatchIndexScanExecutor<S,IndexScanExecutorImpl> {
+impl<S: Storage> BatchIndexScanExecutor<S, IndexScanExecutorImpl> {
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -89,7 +89,7 @@ impl<S: Storage> BatchIndexScanExecutor<S,IndexScanExecutorImpl> {
         key_ranges: Vec<KeyRange>,
         is_backward: bool,
         unique: bool,
-    ) -> Result<BatchIndexScanExecutor<S,IndexAnalyseScanExecutorImpl>> {
+    ) -> Result<BatchIndexScanExecutor<S, IndexAnalyseScanExecutorImpl>> {
         let imp = IndexAnalyseScanExecutorImpl {
             context: EvalContext::new(config),
             columns_id_without_handle_len: col_len,
@@ -107,7 +107,7 @@ impl<S: Storage> BatchIndexScanExecutor<S,IndexScanExecutorImpl> {
     }
 }
 
-impl<S: Storage,E : ScanExecutorImpl> BatchExecutor for BatchIndexScanExecutor<S,E> {
+impl<S: Storage, E: ScanExecutorImpl> BatchExecutor for BatchIndexScanExecutor<S, E> {
     type StorageStats = S::Statistics;
 
     #[inline]
