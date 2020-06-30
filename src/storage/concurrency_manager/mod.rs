@@ -11,12 +11,13 @@ use std::{
     collections::BTreeMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Weak,
+        Arc,
     },
 };
 use txn_types::TimeStamp;
 
-pub type LockTable = self::lock_table::LockTable<Mutex<BTreeMap<Vec<u8>, Weak<MemoryLock>>>>;
+type OrderedLockMap = Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>>;
+pub type LockTable = self::lock_table::LockTable<OrderedLockMap>;
 
 #[derive(Clone)]
 pub struct ConcurrencyManager {
@@ -30,6 +31,10 @@ impl ConcurrencyManager {
             max_read_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             lock_table: LockTable::default(),
         }
+    }
+
+    pub async fn lock_key(&self, key: &[u8]) -> TxnMutexGuard<'_, OrderedLockMap> {
+        self.lock_table.lock_key(key).await
     }
 
     pub fn read_check_key(&self, key: &[u8], ts: TimeStamp) -> Result<(), LockInfo> {
