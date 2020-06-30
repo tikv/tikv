@@ -27,7 +27,6 @@ prost-codec = [
 ]
 
 [dependencies]
-engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"

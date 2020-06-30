@@ -26,8 +26,9 @@ use protobuf::Message;
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
-use engine::Engines;
 use engine_rocks::encryption::get_env;
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngines;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -97,7 +98,11 @@ fn new_debug_executor(
                     .unwrap();
 
             Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
+                KvEngines::new(
+                    RocksEngine::from_db(Arc::new(kv_db)),
+                    RocksEngine::from_db(Arc::new(raft_db)),
+                    cache.is_some(),
+                ),
                 ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
