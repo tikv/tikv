@@ -22,7 +22,6 @@ prost-codec = [
 
 [dependencies]
 crc32fast = "1.2"
-engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 keys = { path = "../keys" }

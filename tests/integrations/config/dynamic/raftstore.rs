@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{CloneCompat, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -14,8 +14,7 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
-use engine::Engines;
-use engine_traits::ALL_CFS;
+use engine_traits::{KvEngines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
@@ -32,7 +31,7 @@ impl Transport for MockTransport {
     }
 }
 
-fn create_tmp_engine(dir: &TempDir) -> Engines {
+fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
     let db = Arc::new(
         engine_rocks::raw_util::new_engine(
             dir.path().join("db").to_str().unwrap(),
@@ -52,7 +51,11 @@ fn create_tmp_engine(dir: &TempDir) -> Engines {
         .unwrap(),
     );
     let shared_block_cache = false;
-    Engines::new(db, raft_db, shared_block_cache)
+    KvEngines::new(
+        RocksEngine::from_db(db),
+        RocksEngine::from_db(raft_db),
+        shared_block_cache,
+    )
 }
 
 fn start_raftstore(
@@ -98,7 +101,7 @@ fn start_raftstore(
         .spawn(
             Default::default(),
             cfg_track,
-            engines.c(),
+            engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),
             snap_mgr,
