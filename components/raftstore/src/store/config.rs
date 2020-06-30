@@ -192,7 +192,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
-            delay_follower_apply: false,
+            delay_follower_apply: true,
             delay_count: 100,
             prevote: true,
             raftdb_path: String::new(),
