@@ -9,6 +9,7 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
+pub mod concurrency_manager;
 pub mod config;
 pub mod errors;
 pub mod kv;
@@ -17,7 +18,6 @@ pub(crate) mod metrics;
 pub mod mvcc;
 pub mod txn;
 
-mod async_txn;
 mod read_pool;
 mod types;
 
@@ -35,6 +35,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
+    concurrency_manager::ConcurrencyManager,
     config::Config,
     kv::{with_tls_engine, Modify},
     lock_manager::{DummyLockManager, LockManager},
@@ -88,6 +89,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     /// The thread pool used to run most read operations.
     read_pool: ReadPoolHandle,
 
+    concurrency_manager: ConcurrencyManager,
+
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -115,6 +118,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
+            concurrency_manager: self.concurrency_manager.clone(),
         }
     }
 }
@@ -158,6 +162,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
+        concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -176,6 +181,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             engine,
             sched,
             read_pool,
+            concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
@@ -1364,6 +1370,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
+            ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
         )
     }

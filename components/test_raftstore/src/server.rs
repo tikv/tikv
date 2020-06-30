@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use futures::Future;
 use grpcio::{EnvBuilder, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
@@ -17,6 +18,7 @@ use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
+use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -41,6 +43,7 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
@@ -182,12 +185,19 @@ impl Simulator for ServerCluster {
         );
         gc_worker.start().unwrap();
 
+        let latest_ts = self
+            .pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new();
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             Some(lock_mgr.clone()),
+            concurrency_manager,
             false,
         )?;
         self.storages.insert(node_id, raft_engine);

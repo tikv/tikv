@@ -27,6 +27,8 @@
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(str_strip)]
+// TODO: upgrade rust toolchain and remove it
+#![feature(atomic_min_max)]
 
 #[macro_use(fail_point)]
 extern crate fail;

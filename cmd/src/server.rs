@@ -13,6 +13,7 @@ use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
+use futures::Future;
 use futures_cpupool::Builder;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -55,7 +56,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
     },
-    storage,
+    storage::{self, concurrency_manager::ConcurrencyManager},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -459,11 +460,19 @@ impl TiKVServer {
             storage_read_pools.handle()
         };
 
+        let latest_ts = self
+            .pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
+
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
+            concurrency_manager,
             self.config.pessimistic_txn.pipelined,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
