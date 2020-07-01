@@ -579,7 +579,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::{
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        TestEngineBuilder,
+        TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use engine_traits::CfName;
@@ -636,7 +636,8 @@ mod tests {
                     )
                     .unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
             // do commit
@@ -646,7 +647,8 @@ mod tests {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
         }
