@@ -134,7 +134,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     let data = buffer_vec.index(logical_row);
                     bytes.extend_from_slice(data);
                     if let Some(c) = cms.as_mut() {
-                        c.insert(data);
+                        c.insert(&bytes);
                     }
                 }
                 hist.append(&bytes);
