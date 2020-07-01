@@ -100,13 +100,13 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> {
-    physical_col: &'a C,
+pub struct VectorArg<'a, T: 'a + EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> {
+    physical_col: C,
     logical_rows: &'a [usize],
     _phantom: PhantomData<T>,
 }
 
-impl<'a, T: EvaluableRef<'a>, C: ChunkRef<'a, T>> RpnFnArg for VectorArg<'a, T, C> {
+impl<'a, T: EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> RpnFnArg for VectorArg<'a, T, C> {
     type Type = Option<T>;
 
     #[inline]

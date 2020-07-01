@@ -2,9 +2,8 @@
 
 use std::sync::Arc;
 
-use engine::Engines;
-use engine_rocks::{Compat, RocksSnapshot};
-use engine_traits::MiscExt;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt};
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -53,9 +52,9 @@ pub struct Service<T: RaftStoreRouter<RocksSnapshot>> {
 }
 
 impl<T: RaftStoreRouter<RocksSnapshot>> Service<T> {
-    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+    /// Constructs a new `Service` with `KvEngines`, a `RaftStoreRouter` and a `GcWorker`.
     pub fn new(
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         pool: CpuPool,
         raft_router: T,
         cfg_controller: ConfigController,
@@ -367,8 +366,8 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static> debugpb::Debug for Service<T> 
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(engines.kv.c().dump_stats()));
-                resp.set_rocksdb_raft(box_try!(engines.raft.c().dump_stats()));
+                resp.set_rocksdb_kv(box_try!(engines.kv.dump_stats()));
+                resp.set_rocksdb_raft(box_try!(engines.raft.dump_stats()));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)

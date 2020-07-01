@@ -167,8 +167,8 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
-    use engine::rocks::Writable;
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::raw::Writable;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
