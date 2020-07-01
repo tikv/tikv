@@ -641,6 +641,7 @@ fn test_serde_custom_tikv_config() {
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: true,
+        compaction_filter_minimal_version: "6.6.6".to_owned(),
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         enabled: false,

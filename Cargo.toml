@@ -129,6 +129,7 @@ parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.14"
+semver = "0.10"
 tempfile = "3.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }

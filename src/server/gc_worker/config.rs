@@ -10,6 +10,11 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
+// The default version that can enable compaction filter for GC. This is necessary because after
+// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
+// of GC are distributed to other replicas b Raft.
+const DEFAULT_COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -18,6 +23,7 @@ pub struct GcConfig {
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
     pub enable_compaction_filter: bool,
+    pub compaction_filter_minimal_version: String,
 }
 
 impl Default for GcConfig {
@@ -27,6 +33,7 @@ impl Default for GcConfig {
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: false,
+            compaction_filter_minimal_version: DEFAULT_COMPACTION_FILTER_MINIMAL_VERSION.to_owned(),
         }
     }
 }
@@ -34,7 +41,10 @@ impl Default for GcConfig {
 impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
-            return Err(("gc.batch_keys should not be 0.").into());
+            return Err("gc.batch_keys should not be 0".into());
+        }
+        if semver::Version::parse(&self.compaction_filter_minimal_version).is_err() {
+            return Err("gc.compaction_filter_minimal_version is invalid".into());
         }
         Ok(())
     }

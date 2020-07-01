@@ -561,6 +561,7 @@ ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = true
+compaction-filter-minimal-version = "6.6.6"
 
 [pessimistic-txn]
 enabled = false
