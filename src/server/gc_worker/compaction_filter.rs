@@ -19,6 +19,11 @@ use txn_types::{Key, WriteRef, WriteType};
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
+// The default version that can enable compaction filter for GC. This is necessary because after
+// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
+// of GC are distributed to other replicas b Raft.
+const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
+
 struct GcContext {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
@@ -272,12 +277,13 @@ impl CompactionFilter for WriteCompactionFilter {
 }
 
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
-    cfg_value.enable_compaction_filter && {
-        cluster_version.get().map_or(false, |cluster_version| {
-            let minimal = &cfg_value.compaction_filter_minimal_version;
-            cluster_version >= semver::Version::parse(minimal).unwrap()
+    cfg_value.enable_compaction_filter
+        && (cfg_value.compaction_filter_skip_version_check || {
+            cluster_version.get().map_or(false, |cluster_version| {
+                let minimal = semver::Version::parse(COMPACTION_FILTER_MINIMAL_VERSION).unwrap();
+                cluster_version >= minimal
+            })
         })
-    }
 }
 
 #[cfg(test)]
@@ -370,10 +376,11 @@ pub mod tests {
         cfg_value.enable_compaction_filter = true;
         assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
 
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        cfg_value.compaction_filter_skip_version_check = true;
         assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
 
-        cfg_value.compaction_filter_minimal_version = "6.6.6".to_owned();
-        assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
+        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        cfg_value.compaction_filter_skip_version_check = false;
+        assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
     }
 }
