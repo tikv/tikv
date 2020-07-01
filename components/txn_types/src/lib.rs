@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 
 #[macro_use]
 extern crate quick_error;

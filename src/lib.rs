@@ -21,14 +21,11 @@
 #![recursion_limit = "400"]
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 #![feature(const_fn)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(str_strip)]
-// TODO: upgrade rust toolchain and remove it
-#![feature(atomic_min_max)]
 
 #[macro_use(fail_point)]
 extern crate fail;

@@ -514,9 +514,9 @@ mod tests {
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         let tps = vec!["cpu", "memory", "net", "io"];
-        #[cfg(not(linux))]
+        #[cfg(not(target_os = "linux"))]
         let tps = vec!["cpu", "memory"];
         for tp in tps.into_iter() {
             assert!(
@@ -573,7 +573,7 @@ mod tests {
                 vec!["total", "used", "free", "used-percent", "free-percent",]
             );
         }
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         {
             // io
             let item = collector.iter().find(|x| x.get_tp() == "io");
@@ -610,11 +610,11 @@ mod tests {
             collector.iter().any(|x| x.get_tp() == "system"),
             "expect collect system, but collect nothing",
         );
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         {
             let item = collector
-                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl")
-                .unwrap();
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl");
             assert_ne!(item.count(), 0);
         }
     }
