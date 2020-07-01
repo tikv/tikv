@@ -347,7 +347,7 @@ macro_rules! gen_lock {
     };
     ($field: ident: multiple) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-            latches.gen_lock(self.$field.iter())
+            latches.gen_lock(&self.$field)
         }
     };
     ($field: ident: multiple$transform: tt) => {

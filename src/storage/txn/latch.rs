@@ -142,10 +142,10 @@ impl Latches {
     pub fn gen_lock<'a, H: 'a, I>(&'a self, keys: I) -> Lock
     where
         H: Hash,
-        I: Iterator<Item = &'a H>,
+        I: IntoIterator<Item = &'a H>,
     {
         // prevent from deadlock, so we sort and deduplicate the index
-        let mut hashes: Vec<u64> = keys.map(|x| self.calc_slot(x)).collect();
+        let mut hashes: Vec<u64> = keys.into_iter().map(|x| self.calc_slot(x)).collect();
         hashes.sort();
         hashes.dedup();
         Lock::new(hashes)
