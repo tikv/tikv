@@ -34,7 +34,6 @@ use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::store::StoreMeta;
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
 use crate::store::metrics::*;
@@ -373,7 +372,10 @@ where
     yield_duration: Duration,
 
     store_id: u64,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -391,7 +393,7 @@ where
         notifier: Notifier<E::Snapshot>,
         cfg: &Config,
         store_id: u64,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
             tag,
@@ -416,7 +418,7 @@ where
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             yield_duration: cfg.apply_yield_duration.0,
             store_id,
-            store_meta,
+            pending_create_peers,
         }
     }
 
@@ -1856,7 +1858,22 @@ where
             regions.push(derived.clone());
         }
 
-        for (region_id, (_, reason)) in new_regions_map.iter_mut() {
+        {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
+                match pending_create_peers.get_mut(region_id) {
+                    Some(status) if *status != (*peer_id, false) => {
+                        *reason = Some(format!("status {:?} is not expected", status));
+                    }
+                    _ => {
+                        pending_create_peers.insert(*region_id, (*peer_id, true));
+                    }
+                }
+            }
+        }
+
+        let mut already_exist_regions = Vec::new();
+        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
             let region_state_key = keys::region_state_key(*region_id);
             match ctx
                 .engine
@@ -1864,6 +1881,7 @@ where
             {
                 Ok(None) => (),
                 Ok(Some(state)) => {
+                    already_exist_regions.push((*region_id, *peer_id));
                     *reason = Some(format!("state {:?} exist in kv engine", state));
                 }
                 e => panic!(
@@ -1873,43 +1891,15 @@ where
             }
         }
 
-        // Note that the following execution sequence is possible.
-        // Apply thread:    check `RegionLocalState`(None)
-        // Store thread:    create peer
-        // Peer thread:     apply snapshot and then be destroyed
-        // Apply thread:    check `StoreMeta` and find it's ok to create this new region.
-        // It's **very unlikely** to happen because the step 2 and step 3 should take far more time than the time interval
-        // between step 1 and step 4. (A similiar case can happen in create-peer process, see details in `maybe_create_peer`)
-        // Even it happens, this new region will be destroyed in future when it communicates to other TiKVs or PD.
-        // Now it seems there is no other side effects.
-        let mut meta = ctx.store_meta.lock().unwrap();
-        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
-            if reason.is_some() {
-                continue;
-            }
-            if let Some(r) = meta.regions.get(region_id) {
-                if util::is_region_initialized(r) {
-                    *reason = Some(format!("region {:?} has already initialized", r));
-                } else {
-                    // If the region in `meta.regions` is not initialized, it must exist in `meta.pending_create_peers`.
-                    let status = meta.pending_create_peers.get_mut(region_id).unwrap();
-                    // If they are the same peer, the new one from splitting can replace it.
-                    // Because it must be uninitialized. See detailes in `check_snapshot`.
-                    if *status == (*peer_id, false) {
-                        *status = (*peer_id, true);
-                    } else {
-                        *reason = Some(format!("status {:?} is not expected", status));
-                    }
-                }
-            } else {
+        if !already_exist_regions.is_empty() {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
                 assert_eq!(
-                    meta.pending_create_peers
-                        .insert(*region_id, (*peer_id, true)),
-                    None
+                    pending_create_peers.remove(region_id),
+                    Some((*peer_id, true))
                 );
             }
         }
-        drop(meta);
 
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for new_region in &regions {
@@ -3279,7 +3269,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     router: ApplyRouter,
     _phantom: PhantomData<W>,
     store_id: u64,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
@@ -3299,7 +3289,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             sender,
             router,
             store_id: builder.store.get_id(),
-            store_meta: builder.store_meta.clone(),
+            pending_create_peers: builder.pending_create_peers.clone(),
         }
     }
 }
@@ -3323,7 +3313,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
                 self.sender.clone(),
                 &cfg,
                 self.store_id,
-                self.store_meta.clone(),
+                self.pending_create_peers.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -3470,7 +3460,6 @@ mod tests {
     use std::time::*;
 
     use crate::coprocessor::*;
-    use crate::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
@@ -3663,7 +3652,7 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3675,7 +3664,7 @@ mod tests {
             engine,
             router: router.clone(),
             store_id: 1,
-            store_meta,
+            pending_create_peers,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -4028,7 +4017,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -4040,7 +4029,7 @@ mod tests {
             engine: engine.clone(),
             router: router.clone(),
             store_id: 1,
-            store_meta,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4385,7 +4374,7 @@ mod tests {
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let _phantom = engine.write_batch();
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
@@ -4397,7 +4386,7 @@ mod tests {
             _phantom: PhantomData,
             router: router.clone(),
             store_id: 1,
-            store_meta,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4684,7 +4673,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -4696,7 +4685,7 @@ mod tests {
             engine: engine.clone(),
             router: router.clone(),
             store_id: 2,
-            store_meta,
+            pending_create_peers,
         };
         system.spawn("test-split".to_owned(), builder);
 

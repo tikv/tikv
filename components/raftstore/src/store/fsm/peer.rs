@@ -1534,19 +1534,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
-        meta.pending_snapshot_regions.push(snap_region);
-        if !util::is_region_initialized(self.region()) {
+        if self.ctx.cfg.dev_assert {
             // If the region is not initialized and snapshot checking has passed, the split flag must be false.
             // The split process only change this flag to true if it's exactly the same peer,
             // if so, this peer can't pass the previous range check.
             // The condition of passing the range check is this region must merge the other regions and then split.
             // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e.
             // all target peer must exist during merging.
+            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             assert_eq!(
-                *meta.pending_create_peers.get(&region_id).unwrap(),
-                (self.fsm.peer_id(), false)
+                pending_create_peers.get(&region_id),
+                Some(&(self.fsm.peer_id(), false))
             );
         }
+        meta.pending_snapshot_regions.push(snap_region);
 
         assert!(!meta.atomic_snap_regions.contains_key(&region_id));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
@@ -1687,13 +1688,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
-        if !is_initialized {
-            let v = meta.pending_create_peers.get(&region_id);
-            // If the data in `meta.pending_create_peers` is not equal to `(peer_id, false)`,
+
+        {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            // If the data in `pending_create_peers` is not equal to `(peer_id, false)`,
             // it means this peer will be replaced from the new one from splitting.
-            if let Some(status) = v {
+            if let Some(status) = pending_create_peers.get(&region_id) {
                 if *status == (self.fsm.peer_id(), false) {
-                    meta.pending_create_peers.remove(&region_id);
+                    pending_create_peers.remove(&region_id);
                 }
             }
         }
@@ -1907,7 +1909,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             if new_region.get_id() != region_id {
-                let (peer_id, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
+                let (_, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
                 if reason.is_some() {
                     if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
                         enc_start_key(&new_region),
@@ -1920,11 +1922,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         );
                     }
                     continue;
-                } else {
-                    assert_eq!(
-                        meta.pending_create_peers.remove(&new_region.get_id()),
-                        Some((*peer_id, true))
-                    );
                 }
             }
             let new_region_id = new_region.get_id();
@@ -2654,15 +2651,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.tag, prev_region, prev,
                 );
             }
-            // The initialized peer must not exist in `meta.pending_create_peers`.
-            assert!(meta.pending_create_peers.get(&region.get_id()).is_none());
-        } else {
-            // The uninitialized peer must exist in `meta.pending_create_peers`
-            // which is added in `maybe_create_peer`
-            assert_eq!(
-                meta.pending_create_peers.remove(&region.get_id()),
-                Some((self.fsm.peer_id(), false))
-            );
         }
 
         if let Some(r) = meta

@@ -115,10 +115,6 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
-    /// region_id -> (peer_id, is_splitting)
-    /// Used for handling race between splitting and creating new peer.
-    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
-    pub pending_create_peers: HashMap<u64, (u64, bool)>,
 }
 
 impl StoreMeta {
@@ -134,7 +130,6 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
-            pending_create_peers: HashMap::default(),
         }
     }
 
@@ -253,6 +248,10 @@ pub struct PollContext<T, C: 'static> {
     pub router: RaftRouter<RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager<RocksEngine>,
@@ -782,6 +781,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub router: RaftRouter<RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     future_poller: ThreadPoolSender,
     snap_mgr: SnapManager<RocksEngine>,
     pub coprocessor_host: CoprocessorHost<RocksEngine>,
@@ -982,6 +982,7 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
+            pending_create_peers: self.pending_create_peers.clone(),
             future_poller: self.future_poller.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
@@ -1106,6 +1107,7 @@ impl RaftBatchSystem {
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
+            pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
         };
@@ -1481,8 +1483,44 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             CheckMsgStatus::DropMsg => return Ok(()),
             CheckMsgStatus::PeerExist => (),
             CheckMsgStatus::NewPeer => {
-                if !self.maybe_create_peer(region_id, &msg)? {
+                if !is_initial_msg(msg.get_message()) {
+                    let msg_type = msg.get_message().get_msg_type();
+                    debug!(
+                        "target peer doesn't exist, stale message";
+                        "target_peer" => ?msg.get_to_peer(),
+                        "region_id" => region_id,
+                        "msg_type" => ?msg_type,
+                    );
+                    self.ctx.raft_metrics.message_dropped.stale_msg += 1;
                     return Ok(());
+                }
+
+                {
+                    let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                    if pending_create_peers.contains_key(&region_id) {
+                        return Ok(());
+                    }
+                    pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
+                }
+
+                let res = self.maybe_create_peer(region_id, &msg);
+                match res {
+                    Ok(true) => (),
+                    _ => {
+                        {
+                            let mut pending_create_peers =
+                                self.ctx.pending_create_peers.lock().unwrap();
+                            if let Some(status) = pending_create_peers.get(&region_id) {
+                                if *status == (msg.get_to_peer().get_id(), false) {
+                                    pending_create_peers.remove(&region_id);
+                                }
+                            }
+                        }
+                        if let Err(e) = res {
+                            return Err(e.into());
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -1495,32 +1533,20 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
     fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
-        let target = msg.get_to_peer();
-        if !is_initial_msg(msg.get_message()) {
-            let msg_type = msg.get_message().get_msg_type();
-            debug!(
-                "target peer doesn't exist, stale message";
-                "target_peer" => ?target,
-                "region_id" => region_id,
-                "msg_type" => ?msg_type,
-            );
-            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+        if self
+            .ctx
+            .engines
+            .kv
+            .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
+            .is_some()
+        {
             return Ok(false);
         }
 
-        // Note that the following execution sequence is possible if it's the first peer of this region in local TiKV.
-        // Store thread:    check `RegionLocalState`(None)
-        // Apply thread:    create region from splitting
-        // Peer thread:     apply snapshot and then be destroyed
-        // Store thread:    check `StoreMeta` and find it's ok to create this new region.
-        // It's **very unlikely** to happen because the step 2 and step 3 should take far more time than the time interval
-        // between step 1 and step 4.(A similiar case can happen in split process, see details in `exec_batch_split`)
-        // Even it happens, this new region will be destroyed in future when it communicates to other TiKVs or PD.
-        // Now it seems there is no other side effects.
+        let target = msg.get_to_peer();
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if meta.regions.contains_key(&region_id)
-            || meta.pending_create_peers.contains_key(&region_id)
-        {
+        if meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
 
@@ -1624,8 +1650,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
-        meta.pending_create_peers
-            .insert(region_id, (target.get_id(), false));
 
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);
