@@ -48,6 +48,7 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
+use crate::store::peer::CreatePeerKind;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
@@ -251,8 +252,10 @@ pub struct PollContext<T, C: 'static> {
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    ///
     /// WARNING:
-    /// If you want to use `store_meta` and `pending_create_peers` together, their lock sequence MUST BE:
+    /// To avoid deadlock, if you want to use `store_meta` and `pending_create_peers` together,
+    /// the lock sequence MUST BE:
     /// 1. lock the store_meta.
     /// 2. lock the pending_create_peers.
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
@@ -1296,9 +1299,9 @@ enum CheckMsgStatus {
     PeerExist,
     // The message can be dropped silently
     DropMsg,
-    // Try to create peer
+    // Try to create the peer
     NewPeer,
-    // Try to create the peer which is the first one of this region in local.
+    // Try to create the peer which is the first one of this region on local store.
     NewPeerFirst,
 }
 
@@ -1671,6 +1674,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
+
+        peer.peer.create_peer_kind = CreatePeerKind::FromCreating;
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.

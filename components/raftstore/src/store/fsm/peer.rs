@@ -44,7 +44,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
+use crate::store::peer::{ConsistencyState, CreatePeerKind, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::KeysInfoFormatter;
@@ -1689,12 +1689,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        {
+        if self.fsm.peer.create_peer_kind != CreatePeerKind::FromLocal {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             // If the data in `pending_create_peers` is not equal to `(peer_id, false)`,
             // it means this peer will be replaced from the new one from splitting.
             if let Some(status) = pending_create_peers.get(&region_id) {
-                if *status == (self.fsm.peer_id(), self.fsm.peer.create_from_splitting) {
+                let create_from_splitting = match self.fsm.peer.create_peer_kind {
+                    CreatePeerKind::FromLocal => unreachable!(),
+                    CreatePeerKind::FromSplitting => true,
+                    CreatePeerKind::FromCreating => false,
+                };
+                if *status == (self.fsm.peer_id(), create_from_splitting) {
                     pending_create_peers.remove(&region_id);
                 }
             }
@@ -1976,7 +1981,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
 
-            new_peer.peer.create_from_splitting = true;
+            new_peer.peer.create_peer_kind = CreatePeerKind::FromSplitting;
 
             let meta_peer = new_peer.peer.peer.clone();
 

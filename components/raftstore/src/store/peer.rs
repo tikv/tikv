@@ -176,6 +176,13 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum CreatePeerKind {
+    FromLocal,
+    FromSplitting,
+    FromCreating,
+}
+
 pub struct Peer {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -277,8 +284,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
-    /// Whether this peer is created from splitting.
-    pub create_from_splitting: bool,
+    /// The kind of creating peer.
+    pub create_peer_kind: CreatePeerKind,
 }
 
 impl Peer {
@@ -362,7 +369,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
-            create_from_splitting: false,
+            create_peer_kind: CreatePeerKind::FromLocal,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
