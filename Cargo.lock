@@ -4524,6 +4524,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "minitrace",
  "more-asserts",
