@@ -16,7 +16,7 @@ extern crate failure;
 extern crate tikv_alloc;
 
 pub mod builder;
-mod def;
+pub mod def;
 mod error;
 
 pub mod prelude {
