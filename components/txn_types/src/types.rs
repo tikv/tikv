@@ -315,7 +315,8 @@ impl From<kvrpcpb::Mutation> for Mutation {
 // Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`, and will be Some((None, ts)) when the short value is empty.
-pub type OldValues = HashMap<Key, Option<(Option<Value>, TimeStamp)>>;
+// MutationType is the type of mutation of the current write.
+pub type OldValues = HashMap<Key, (Option<(Option<Value>, TimeStamp)>, MutationType)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -324,8 +325,13 @@ pub struct TxnExtra {
 }
 
 impl TxnExtra {
-    pub fn add_old_value(&mut self, key: Key, value: Option<(Option<Value>, TimeStamp)>) {
-        self.old_values.insert(key, value);
+    pub fn add_old_value(
+        &mut self,
+        key: Key,
+        value: Option<(Option<Value>, TimeStamp)>,
+        mutation_type: MutationType,
+    ) {
+        self.old_values.insert(key, (value, mutation_type));
     }
 
     pub fn is_empty(&mut self) -> bool {
