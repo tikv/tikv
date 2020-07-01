@@ -81,16 +81,14 @@ impl<'m, M: OrderedLockMap> MemoryLockRef<'m, M> {
 
     pub async fn mutex_lock(self) -> TxnMutexGuard<'m, M> {
         loop {
-            match self
+            if self
                 .mutex_locked
                 .compare_and_swap(false, true, Ordering::SeqCst)
             {
-                false => {
-                    return TxnMutexGuard(self);
-                }
-                _ => {
-                    self.mutex_event.listen().await;
-                }
+                // current value of locked is true, listen to the release event
+                self.mutex_event.listen().await;
+            } else {
+                return TxnMutexGuard(self);
             }
         }
     }
@@ -124,19 +122,24 @@ impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
     }
 
     pub fn with_lock_info<T>(&self, f: impl FnOnce(&mut Option<LockInfo>) -> T) -> T {
+        use std::cmp::Ordering::*;
+
         let mut lock_info = self.0.lock_info.lock();
         let before = lock_info.is_some() as i32;
         let ret = f(&mut *lock_info);
         let after = lock_info.is_some() as i32;
-        let diff = after - before;
-        if diff > 0 {
-            // A new lock is stored, increase the reference count by one to prevent
-            // it from being removed from the lock table.
-            self.0.ref_count.fetch_add(1, Ordering::SeqCst);
-        } else if diff < 0 {
-            // The lock stored inside is released, notify all other tasks that are
-            // blocked by this lock.
-            self.0.pessimistic_event.notify(usize::MAX);
+        match after.cmp(&before) {
+            Greater => {
+                // A new lock is stored, increase the reference count by one to prevent
+                // it from being removed from the lock table.
+                self.0.ref_count.fetch_add(1, Ordering::SeqCst);
+            }
+            Less => {
+                // The lock stored inside is released, notify all other tasks that are
+                // blocked by this lock.
+                self.0.pessimistic_event.notify(usize::MAX);
+            }
+            Equal => {}
         }
         ret
     }
