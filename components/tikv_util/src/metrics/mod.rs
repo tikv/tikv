@@ -11,9 +11,9 @@ mod threads_linux;
 pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads, ThreadInfoStatistics};
 
 #[cfg(target_os = "linux")]
-mod memory_linux;
+mod process_linux;
 #[cfg(target_os = "linux")]
-pub use self::memory_linux::monitor_memory;
+pub use self::process_linux::monitor_process;
 
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
@@ -21,9 +21,9 @@ mod threads_dummy;
 pub use self::threads_dummy::{monitor_threads, ThreadInfoStatistics};
 
 #[cfg(not(target_os = "linux"))]
-mod memory_dummy;
+mod process_dummy;
 #[cfg(not(target_os = "linux"))]
-pub use self::memory_dummy::monitor_memory;
+pub use self::process_dummy::monitor_process;
 
 pub use self::allocator_metrics::monitor_allocator_stats;
 

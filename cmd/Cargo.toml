@@ -54,7 +54,6 @@ cdc = { path = "../components/cdc" }
 chrono = "0.4"
 clap = "2.32"
 encryption = { path = "../components/encryption" }
-engine = { path = "../components/engine" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 fs2 = "0.4"
@@ -69,6 +68,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
 prometheus = { version = "0.8", features = ["nightly", "push"] }
+promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore" }

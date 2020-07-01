@@ -15,7 +15,7 @@ use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use engine::rocks::{
+use engine_rocks::raw::{
     ColumnFamilyOptions, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
 };
 use engine_rocks::raw_util::{new_engine, CFOptions};
@@ -26,10 +26,18 @@ pub use engine_rocks::RocksEngine as TestEngine;
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
 pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
+    new_test_engine_with_options(path, cfs, |_, _| {})
+}
+
+pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], mut apply: F) -> RocksEngine
+where
+    F: FnMut(&str, &mut ColumnFamilyOptions),
+{
     let cf_opts = cfs
         .iter()
         .map(|cf| {
             let mut opt = ColumnFamilyOptions::new();
+            apply(*cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 Box::new(TestPropertiesCollectorFactory::new(*cf)),

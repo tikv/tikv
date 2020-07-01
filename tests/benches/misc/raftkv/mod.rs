@@ -10,7 +10,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use engine::rocks::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use raftstore::router::RaftStoreRouter;
