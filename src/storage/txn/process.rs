@@ -585,7 +585,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
-            // Only set extra op here for getting the write record when check write conflict in prewrite.
+            // Set extra op here for getting the write record when check write conflict in prewrite.
             txn.extra_op = extra_op;
 
             let mut locks = vec![];
@@ -629,6 +629,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let rows = mutations.len();
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
+            // for getting the written keys.
+            txn.extra_op = extra_op;
 
             let mut locks = vec![];
             for (m, is_pessimistic_lock) in mutations.into_iter() {
@@ -653,7 +656,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let write_data = WriteData::from_modifies(txn.into_modifies());
+                let txn_extra = txn.take_extra();
+                let write_data = WriteData::new(txn.into_modifies(), txn_extra);
                 (pr, write_data, rows, cmd.ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
