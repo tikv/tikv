@@ -16,12 +16,21 @@ use std::{
 
 const INIT_REF_COUNT: usize = usize::MAX;
 
+/// An entry in the in-memory lock table. You should always use it with
+/// `MemoryLockRef`.
+///
+/// `MemoryLock` can be used as a key mutex. Acquiring a mutex with `mutex_lock`
+/// can block concurrent writing operations on the same key. With the mutex,
+/// a `LockInfo` can be also stored in it. The event of cleaning the stored lock
+/// can be subscribed using `lock_released`.
+// TODO: extract the mutex function and the lock store function to separate
+// structs.
 pub struct MemoryLock {
     key: Vec<u8>,
     mutex_locked: AtomicBool,
-    mutex_event: Event,
+    mutex_released_event: Event,
     lock_info: Mutex<Option<LockInfo>>,
-    pessimistic_event: Event,
+    lock_cleaned_event: Event,
     ref_count: AtomicUsize,
 }
 
@@ -30,9 +39,9 @@ impl MemoryLock {
         MemoryLock {
             key,
             mutex_locked: AtomicBool::new(false),
-            mutex_event: Event::new(),
+            mutex_released_event: Event::new(),
             lock_info: Mutex::new(None),
-            pessimistic_event: Event::new(),
+            lock_cleaned_event: Event::new(),
             ref_count: AtomicUsize::new(INIT_REF_COUNT),
         }
     }
@@ -86,7 +95,7 @@ impl<'m, M: OrderedLockMap> MemoryLockRef<'m, M> {
                 .compare_and_swap(false, true, Ordering::SeqCst)
             {
                 // current value of locked is true, listen to the release event
-                self.mutex_event.listen().await;
+                self.mutex_released_event.listen().await;
             } else {
                 return TxnMutexGuard(self);
             }
@@ -137,7 +146,7 @@ impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
             Less => {
                 // The lock stored inside is released, notify all other tasks that are
                 // blocked by this lock.
-                self.0.pessimistic_event.notify(usize::MAX);
+                self.0.lock_cleaned_event.notify(usize::MAX);
             }
             Equal => {}
         }
@@ -147,14 +156,14 @@ impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
     // Question: should we accept a key here and redirect the key
     // to the deadlock detector in this method?
     pub fn lock_released(&self) -> impl Future<Output = ()> {
-        self.0.pessimistic_event.listen()
+        self.0.lock_cleaned_event.listen()
     }
 }
 
 impl<'m, M: OrderedLockMap> Drop for TxnMutexGuard<'m, M> {
     fn drop(&mut self) {
         self.0.mutex_locked.store(false, Ordering::SeqCst);
-        self.0.mutex_event.notify(1);
+        self.0.mutex_released_event.notify(1);
     }
 }
 

@@ -1,5 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! The concurrency manager is responsible for concurrency control of
+//! transactions.
+//!
+//! The concurrency manager can be considered as a lock table in memory.
+//! Transactional commands can acquire key mutexes from the concurrency manager
+//! to ensure serializability. Lock information can be also stored in the
+//! manager and reading requests can check if these locks block the read.
+
 mod lock_table;
 mod memory_lock;
 
@@ -56,17 +64,18 @@ impl ConcurrencyManager {
         &self,
         keys: &[impl AsRef<[u8]>],
     ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
-        let mut keys_with_index = Vec::with_capacity(keys.len());
-        for (i, key) in keys.iter().enumerate() {
-            keys_with_index.push((key.as_ref(), i));
-        }
-        keys_with_index.sort_by_key(|(key, _)| *key);
+        let mut keys_with_index: Vec<_> = keys.iter().map(AsRef::as_ref).enumerate().collect();
+        // To prevent deadlock, we sort the keys and lock them one by one.
+        keys_with_index.sort_by_key(|(_, key)| *key);
         let mut result: Vec<MaybeUninit<TxnMutexGuard<'_, OrderedLockMap>>> = Vec::new();
         result.resize_with(keys.len(), || MaybeUninit::uninit());
-        for (key, index) in keys_with_index {
+        for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        unsafe { mem::transmute(result) }
+        #[allow(clippy::unsound_collection_transmute)]
+        unsafe {
+            mem::transmute(result)
+        }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.
