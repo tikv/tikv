@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -127,7 +127,7 @@ struct TiKVServer {
 }
 
 struct Engines {
-    engines: engine::Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
     raft_router: ServerRaftStoreRouter<RocksEngine>,
@@ -359,33 +359,27 @@ impl TiKVServer {
         )
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let engines = engine::Engines::new(
-            Arc::new(kv_engine),
-            Arc::new(raft_engine),
+        let engines = KvEngines::new(
+            RocksEngine::from_db(Arc::new(kv_engine)),
+            RocksEngine::from_db(Arc::new(raft_engine)),
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(
-            engines.kv.c().clone(),
-            store_meta.clone(),
-            self.router.clone(),
-        );
+        let local_reader =
+            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.c().clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(
-            raft_router.clone(),
-            RocksEngine::from_db(engines.kv.clone()),
-        );
+        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
         self.engines = Some(Engines {
             engines,
@@ -399,7 +393,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.engines.kv.c().clone()),
+            Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
             Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
@@ -531,7 +525,7 @@ impl TiKVServer {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.engines.kv.c().clone(),
+            engines.engines.kv.clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
@@ -627,7 +621,7 @@ impl TiKVServer {
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
             engines.raft_router.clone(),
-            engines.engines.kv.c().clone(),
+            engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
         );
@@ -715,7 +709,7 @@ impl TiKVServer {
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.clone(),
+            engines.engines.kv.as_inner().clone(),
         );
         let backup_timer = backup_endpoint.new_timer();
         backup_worker
@@ -737,8 +731,8 @@ impl TiKVServer {
 
     fn init_metrics_flusher(&mut self) {
         let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
-            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
-            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            self.engines.as_ref().unwrap().engines.raft.clone(),
             self.engines.as_ref().unwrap().engines.shared_block_cache,
         )));
 

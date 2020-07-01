@@ -17,9 +17,11 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use encryption::DataKeyManager;
-use engine::{Engines, DB};
-use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{CompactExt, Iterable, Mutable, Peekable, WriteBatchExt, CF_RAFT};
+use engine_rocks::raw::DB;
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{
+    CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+};
 use pd_client::PdClient;
 use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -47,7 +49,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
@@ -99,9 +101,9 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines>,
+    pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub engines: HashMap<u64, Engines>,
+    pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
 
@@ -202,7 +204,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let db = engine.kv.c();
+            let db = &engine.kv;
             db.compact_range("default", None, None, false, 1).unwrap();
         }
     }
@@ -261,14 +263,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].kv)
+        Arc::clone(&self.engines[&node_id].kv.as_inner())
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].raft)
+        Arc::clone(&self.engines[&node_id].raft.as_inner())
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> Engines {
+    pub fn get_all_engines(&self, node_id: u64) -> KvEngines<RocksEngine, RocksEngine> {
         self.engines[&node_id].clone()
     }
 
@@ -481,11 +483,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engines.c(), self.id(), id).unwrap();
+            bootstrap_store(&engines, self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(&engines.c(), &region)?;
+            prepare_bootstrap_cluster(&engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -503,7 +505,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engines) in &self.engines {
-            bootstrap_store(&engines.c(), self.id(), id).unwrap();
+            bootstrap_store(&engines, self.id(), id).unwrap();
         }
 
         let node_id = 1;
@@ -511,7 +513,7 @@ impl<T: Simulator> Cluster<T> {
         let peer_id = 1;
 
         let region = initial_region(node_id, region_id, peer_id);
-        prepare_bootstrap_cluster(&self.engines[&node_id].c(), &region).unwrap();
+        prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
         self.bootstrap_cluster(region);
         region_id
     }
@@ -548,7 +550,7 @@ impl<T: Simulator> Cluster<T> {
         let node_id = self.count as u64;
 
         let engines = self.dbs.last().unwrap().clone();
-        bootstrap_store(&engines.c(), self.id(), node_id).unwrap();
+        bootstrap_store(&engines, self.id(), node_id).unwrap();
         self.engines.insert(node_id, engines);
 
         let key_mgr = self.key_managers.last().unwrap().clone();
@@ -569,7 +571,7 @@ impl<T: Simulator> Cluster<T> {
         let half = self.engines.len() / 2;
         let mut qualified_cnt = 0;
         for (id, engines) in &self.engines {
-            if !condition(&engines.kv) {
+            if !condition(engines.kv.as_inner()) {
                 debug!("store {} is not qualified yet.", id);
                 continue;
             }
@@ -883,8 +885,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
         for engines in &self.dbs {
-            let handle = engines.kv.cf_handle(cf).unwrap();
-            engines.kv.flush_cf(handle, sync).unwrap();
+            engines.kv.flush_cf(cf, sync).unwrap();
         }
     }
 
@@ -974,8 +975,9 @@ impl<T: Simulator> Cluster<T> {
             keys::region_meta_prefix(region_id),
             keys::region_meta_prefix(region_id + 1),
         );
-        let mut kv_wb = self.engines[&store_id].kv.c().write_batch();
-        RocksEngine::from_ref(&self.engines[&store_id].kv)
+        let mut kv_wb = self.engines[&store_id].kv.write_batch();
+        self.engines[&store_id]
+            .kv
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
@@ -991,7 +993,8 @@ impl<T: Simulator> Cluster<T> {
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
-        RocksEngine::from_ref(&self.engines[&store_id].kv)
+        self.engines[&store_id]
+            .kv
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
@@ -1002,7 +1005,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].kv.write(kv_wb.as_inner()).unwrap();
+        self.engines[&store_id].kv.write(&kv_wb).unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
@@ -1010,8 +1013,9 @@ impl<T: Simulator> Cluster<T> {
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
-        let mut raft_wb = self.engines[&store_id].raft.c().write_batch();
-        RocksEngine::from_ref(&self.engines[&store_id].raft)
+        let mut raft_wb = self.engines[&store_id].raft.write_batch();
+        self.engines[&store_id]
+            .raft
             .scan(&raft_start, &raft_end, false, |k, _| {
                 raft_wb.delete(k).unwrap();
                 Ok(true)
@@ -1022,10 +1026,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id]
-            .raft
-            .write(raft_wb.as_inner())
-            .unwrap();
+        self.engines[&store_id].raft.write(&raft_wb).unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

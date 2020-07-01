@@ -8,7 +8,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::DB;
+use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
