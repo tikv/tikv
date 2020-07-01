@@ -21,7 +21,7 @@ const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
-// of GC are distributed to other replicas b Raft.
+// of GC are distributed to other replicas by Raft.
 const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
 
 struct GcContext {
