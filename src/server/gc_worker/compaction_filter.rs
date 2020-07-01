@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::GcWorkerConfigManager;
+use super::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
@@ -12,16 +12,23 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{util::get_cf_handle, RocksEngine, RocksWriteBatch};
 use engine_traits::{Mutable, WriteBatch, CF_WRITE};
+use pd_client::ClusterVersion;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
+// The default version that can enable compaction filter for GC. This is necessary because after
+// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
+// of GC are distributed to other replicas by Raft.
+const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
+
 struct GcContext {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
+    cluster_version: ClusterVersion,
 }
 
 lazy_static! {
@@ -32,6 +39,7 @@ pub fn init_compaction_filter(
     db: RocksEngine,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
+    cluster_version: ClusterVersion,
 ) {
     info!("initialize GC context for compaction filter");
     let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -39,6 +47,7 @@ pub fn init_compaction_filter(
         db: db.as_inner().clone(),
         safe_point,
         cfg_tracker,
+        cluster_version,
     });
 }
 
@@ -54,11 +63,15 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             Some(ref ctx) => ctx,
             None => return std::ptr::null_mut(),
         };
-        if !gc_context.cfg_tracker.value().enable_compaction_filter {
-            return std::ptr::null_mut();
-        }
         if gc_context.safe_point.load(Ordering::Relaxed) == 0 {
             // Safe point has not been initialized yet.
+            return std::ptr::null_mut();
+        }
+
+        if !is_compaction_filter_allowd(
+            &*gc_context.cfg_tracker.value(),
+            &gc_context.cluster_version,
+        ) {
             return std::ptr::null_mut();
         }
 
@@ -263,6 +276,16 @@ impl CompactionFilter for WriteCompactionFilter {
     }
 }
 
+pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
+    cfg_value.enable_compaction_filter
+        && (cfg_value.compaction_filter_skip_version_check || {
+            cluster_version.get().map_or(false, |cluster_version| {
+                let minimal = semver::Version::parse(COMPACTION_FILTER_MINIMAL_VERSION).unwrap();
+                cluster_version >= minimal
+            })
+        })
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -288,7 +311,8 @@ pub mod tests {
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
-        init_compaction_filter(engine.clone(), safe_point, cfg);
+        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        init_compaction_filter(engine.clone(), safe_point, cfg, cluster_version);
         engine.compact_range("write", start, end, false, 1).unwrap();
     }
 
@@ -341,5 +365,22 @@ pub mod tests {
             .into_encoded();
         let x = raw_engine.get_value_cf(CF_WRITE, &key).unwrap();
         assert!(x.is_none());
+    }
+
+    #[test]
+    fn test_is_compaction_filter_allowed() {
+        let cluster_version = ClusterVersion::new(semver::Version::new(4, 1, 0));
+        let mut cfg_value = GcConfig::default();
+        assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
+
+        cfg_value.enable_compaction_filter = true;
+        assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
+
+        cfg_value.compaction_filter_skip_version_check = true;
+        assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
+
+        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        cfg_value.compaction_filter_skip_version_check = false;
+        assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
     }
 }
