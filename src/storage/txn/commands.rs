@@ -342,19 +342,19 @@ macro_rules! gen_lock {
     };
     ($field: ident) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-            latches.gen_lock(&[&self.$field])
+            latches.gen_lock(iter::once(&self.$field))
         }
     };
     ($field: ident: multiple) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-            latches.gen_lock(&self.$field)
+            latches.gen_lock(self.$field.iter())
         }
     };
     ($field: ident: multiple$transform: tt) => {
         fn gen_lock(&self, latches: &Latches) -> latch::Lock {
             #![allow(unused_parens)]
-            let keys: Vec<&Key> = self.$field.iter().map($transform).collect();
-            latches.gen_lock(&keys)
+            let keys = self.$field.iter().map($transform);
+            latches.gen_lock(keys)
         }
     };
 }
