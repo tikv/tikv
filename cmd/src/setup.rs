@@ -136,7 +136,7 @@ pub fn initial_logger(config: &TiKvConfig) {
                 make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
             }
         };
-        let rocksdb_log_drainer = logger::file_drainer(
+        let rocksdb_log_drainer = logger::rocks_file_drainer(
             &rocksdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
@@ -150,7 +150,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             );
         });
 
-        let raftdb_log_drainer = logger::file_drainer(
+        let raftdb_log_drainer = logger::rocks_file_drainer(
             &raftdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
