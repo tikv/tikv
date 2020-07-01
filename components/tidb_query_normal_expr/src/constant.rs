@@ -96,29 +96,29 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(&mut ctx, case).unwrap();
+            let expr = Expression::build(&mut ctx, case).unwrap();
 
-            let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
-            let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);
-            let dec = e
+            let int = expr.eval_int(&mut ctx, &[]).unwrap_or(None);
+            let real = expr.eval_real(&mut ctx, &[]).unwrap_or(None);
+            let dec = expr
                 .eval_decimal(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e
+            let string = expr
                 .eval_string(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e
+            let time = expr
                 .eval_time(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&mut ctx, &[]).unwrap_or(None);
-            let j = e
+            let dur = expr.eval_duration(&mut ctx, &[]).unwrap_or(None);
+            let json = expr
                 .eval_json(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 
-            let result = EvalResults(i, r, dec, s, t, dur, j);
+            let result = EvalResults(int, real, dec, string, time, dur, json);
             assert_eq!(expected, result);
         }
     }
