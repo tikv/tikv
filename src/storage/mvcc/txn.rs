@@ -7,8 +7,8 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
 use txn_types::{
-    is_short_value, Key, Lock, LockType, Mutation, MutationType, TimeStamp, TxnExtra, Value, Write,
-    WriteType,
+    is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
+    Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -1042,9 +1042,15 @@ impl<S: Snapshot> MvccTxn<S> {
                         self.start_ts,
                         &mut self.reader.statistics,
                     )?;
-                    write.map(|w| (w.short_value, w.start_ts))
+                    write.map(|w| OldValue {
+                        short_value: w.short_value,
+                        start_ts: w.start_ts,
+                    })
                 } else {
-                    Some((w.short_value, w.start_ts))
+                    Some(OldValue {
+                        short_value: w.short_value,
+                        start_ts: w.start_ts,
+                    })
                 }
             } else {
                 None
@@ -3010,6 +3016,11 @@ mod tests {
         let key = Key::from_raw(b"key");
         let ctx = Context::default();
 
+        let new_old_value = |short_value, start_ts| OldValue {
+            short_value,
+            start_ts,
+        };
+
         let cases = vec![
             (
                 Mutation::Put((key.clone(), b"v0".to_vec())),
@@ -3024,7 +3035,7 @@ mod tests {
                 false,
                 6,
                 6,
-                Some((Some(b"v0".to_vec()), 5.into())),
+                Some(new_old_value(Some(b"v0".to_vec()), 5.into())),
                 true,
             ),
             (Mutation::Lock(key.clone()), false, 7, 7, None, false),
@@ -3033,7 +3044,7 @@ mod tests {
                 false,
                 8,
                 8,
-                Some((Some(b"v1".to_vec()), 6.into())),
+                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
                 false,
             ),
             (
@@ -3041,7 +3052,7 @@ mod tests {
                 false,
                 9,
                 9,
-                Some((Some(b"v1".to_vec()), 6.into())),
+                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
                 true,
             ),
             (
@@ -3049,7 +3060,7 @@ mod tests {
                 false,
                 10,
                 10,
-                Some((None, 9.into())),
+                Some(new_old_value(None, 9.into())),
                 true,
             ),
             (
