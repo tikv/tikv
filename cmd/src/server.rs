@@ -397,6 +397,7 @@ impl TiKVServer {
             Some(engines.raft_router.clone()),
             Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
+            self.pd_client.cluster_version(),
         );
         gc_worker
             .start()
