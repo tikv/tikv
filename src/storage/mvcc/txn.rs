@@ -171,8 +171,6 @@ impl<S: Snapshot> MvccTxn<S> {
             for_update_ts,
             txn_size,
             min_commit_ts,
-            false,
-            Vec::default(),
         );
 
         if let Some(value) = value {
@@ -282,8 +280,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 for_update_ts,
                 0,
                 min_commit_ts,
-                false,
-                Vec::default(),
             )
         }
 

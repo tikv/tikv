@@ -453,8 +453,6 @@ mod tests {
             0.into(),
             lock_info.get_txn_size(),
             0.into(),
-            false,
-            Vec::default(),
         );
         let value = lock.to_bytes();
         (key, value)

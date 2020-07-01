@@ -4,8 +4,8 @@ use crate::timestamp::{TimeStamp, TsSet};
 use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
-use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
+use std::mem::size_of;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
 
@@ -57,7 +57,7 @@ impl LockType {
     }
 }
 
-#[derive(new, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,
@@ -75,6 +75,36 @@ pub struct Lock {
 }
 
 impl Lock {
+    pub fn new(
+        lock_type: LockType,
+        primary: Vec<u8>,
+        ts: TimeStamp,
+        ttl: u64,
+        short_value: Option<Value>,
+        for_update_ts: TimeStamp,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
+    ) -> Self {
+        Self {
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
+            for_update_ts,
+            txn_size,
+            min_commit_ts,
+            use_async_commit: false,
+            secondaries: Vec::default(),
+        }
+    }
+
+    pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
+        self.use_async_commit = true;
+        self.secondaries = secondaries;
+        self
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.lock_type.to_u8());
@@ -109,15 +139,21 @@ impl Lock {
     }
 
     fn pre_allocate_size(&self) -> usize {
-        let mut size =
-            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2;
+        let mut size = 1
+            + MAX_VAR_I64_LEN
+            + self.primary.len()
+            + MAX_VAR_U64_LEN * 2
+            + SHORT_VALUE_MAX_LEN
+            + 2
+            + (1 + size_of::<u64>()) * 3;
         if self.use_async_commit {
             size += 1
                 + MAX_VAR_U64_LEN
                 + self
                     .secondaries
                     .iter()
-                    .fold(0, |acc, k| acc + MAX_VAR_I64_LEN + k.len());
+                    .map(|k| MAX_VAR_I64_LEN + k.len())
+                    .sum::<usize>();
         }
         size
     }
@@ -145,8 +181,6 @@ impl Lock {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ));
         }
 
@@ -176,15 +210,14 @@ impl Lock {
                 ASYNC_COMMIT_PREFIX => {
                     use_async_commit = true;
                     let len = number::decode_var_u64(&mut b)? as _;
-                    secondaries.reserve(len);
-                    for _i in 0..len {
-                        secondaries.push(bytes::decode_compact_bytes(&mut b)?)
-                    }
+                    secondaries = (0..len)
+                        .map(|_| bytes::decode_compact_bytes(&mut b).map_err(Into::into))
+                        .collect::<Result<_>>()?;
                 }
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
-        Ok(Lock::new(
+        let mut lock = Lock::new(
             lock_type,
             primary,
             ts,
@@ -193,9 +226,11 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
-            use_async_commit,
-            secondaries,
-        ))
+        );
+        if use_async_commit {
+            lock = lock.use_async_commit(secondaries);
+        }
+        Ok(lock)
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
@@ -312,8 +347,6 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -324,8 +357,6 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -336,8 +367,6 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -348,8 +377,6 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -360,8 +387,6 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -372,8 +397,6 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -384,8 +407,6 @@ mod tests {
                 10.into(),
                 16,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -396,8 +417,6 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -408,8 +427,6 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
-                false,
-                Vec::default(),
             ),
             Lock::new(
                 LockType::Put,
@@ -420,9 +437,8 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
-                true,
-                vec![],
-            ),
+            )
+            .use_async_commit(vec![]),
             Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
@@ -432,9 +448,8 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
-                true,
-                vec![b"k".to_vec()],
-            ),
+            )
+            .use_async_commit(vec![b"k".to_vec()]),
             Lock::new(
                 LockType::Put,
                 b"pk".to_vec(),
@@ -444,14 +459,13 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
-                true,
-                vec![
-                    b"k1".to_vec(),
-                    b"kkkkk2".to_vec(),
-                    b"k3k3k3k3k3k3".to_vec(),
-                    b"k".to_vec(),
-                ],
-            ),
+            )
+            .use_async_commit(vec![
+                b"k1".to_vec(),
+                b"kkkkk2".to_vec(),
+                b"k3k3k3k3k3k3".to_vec(),
+                b"k".to_vec(),
+            ]),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
@@ -472,8 +486,6 @@ mod tests {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
-            false,
-            Vec::default(),
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
@@ -491,8 +503,6 @@ mod tests {
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
-            false,
-            Vec::default(),
         );
 
         let empty = Default::default();

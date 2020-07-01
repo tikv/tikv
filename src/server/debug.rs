@@ -1776,8 +1776,6 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             );
             let value = lock.to_bytes();
             engine
@@ -2178,8 +2176,6 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
-                false,
-                Vec::default(),
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }

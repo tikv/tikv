@@ -881,8 +881,6 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
-            false,
-            Vec::default(),
         )
         .to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
