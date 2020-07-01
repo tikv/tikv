@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::timestamp::{TimeStamp, TsSet};
-use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{LockInfo, Op};
@@ -139,13 +139,19 @@ impl Lock {
     }
 
     fn pre_allocate_size(&self) -> usize {
-        let mut size = 1
-            + MAX_VAR_I64_LEN
-            + self.primary.len()
-            + MAX_VAR_U64_LEN * 2
-            + SHORT_VALUE_MAX_LEN
-            + 2
-            + (1 + size_of::<u64>()) * 3;
+        let mut size = 1 + MAX_VAR_I64_LEN + self.primary.len() + MAX_VAR_U64_LEN * 2;
+        if let Some(v) = &self.short_value {
+            size += 2 + v.len();
+        }
+        if !self.for_update_ts.is_zero() {
+            size += 1 + size_of::<u64>();
+        }
+        if self.txn_size > 0 {
+            size += 1 + size_of::<u64>();
+        }
+        if !self.min_commit_ts.is_zero() {
+            size += 1 + size_of::<u64>();
+        }
         if self.use_async_commit {
             size += 1
                 + MAX_VAR_U64_LEN
