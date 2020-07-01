@@ -20,7 +20,9 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use tikv::server::raftkv::{CmdRes, RaftKv};
-use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
+use tikv::storage::kv::{
+    Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
+};
 use tikv::storage::Engine;
 use txn_types::Key;
 
@@ -177,10 +179,10 @@ fn bench_async_write(b: &mut test::Bencher) {
         });
         kv.async_write(
             &ctx,
-            vec![Modify::Delete(
+            WriteData::from_modifies(vec![Modify::Delete(
                 CF_DEFAULT,
                 Key::from_encoded(b"fooo".to_vec()),
-            )],
+            )]),
             on_finished,
         )
         .unwrap();

@@ -3,6 +3,7 @@
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
+use pd_client::ClusterVersion;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
@@ -17,7 +18,7 @@ use raftstore::store::util::find_peer;
 
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::Result;
+use super::{is_compaction_filter_allowd, Result};
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
@@ -243,6 +244,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     gc_manager_ctx: GcManagerContext,
 
     cfg_tracker: GcWorkerConfigManager,
+    cluster_version: ClusterVersion,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
@@ -251,6 +253,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         safe_point: Arc<AtomicU64>,
         worker_scheduler: FutureScheduler<GcTask>,
         cfg_tracker: GcWorkerConfigManager,
+        cluster_version: ClusterVersion,
     ) -> GcManager<S, R> {
         GcManager {
             cfg,
@@ -259,6 +262,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
             cfg_tracker,
+            cluster_version,
         }
     }
 
@@ -314,7 +318,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.
-            if !self.cfg_tracker.value().enable_compaction_filter {
+            if !is_compaction_filter_allowd(&*self.cfg_tracker.value(), &self.cluster_version) {
                 set_status_metrics(GcManagerState::Working);
                 self.gc_a_round()?;
                 if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -719,6 +723,7 @@ mod tests {
                 Arc::new(AtomicU64::new(0)),
                 worker.scheduler(),
                 GcWorkerConfigManager::default(),
+                Default::default(),
             );
             Self {
                 gc_manager: Some(gc_manager),

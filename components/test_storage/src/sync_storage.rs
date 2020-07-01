@@ -63,6 +63,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             None,
             None,
             self.gc_config.unwrap_or_default(),
+            Default::default(),
         );
         gc_worker.start()?;
 
