@@ -277,6 +277,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+    /// Whether this peer is created from splitting.
+    pub create_from_splitting: bool,
 }
 
 impl Peer {
@@ -360,6 +362,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            create_from_splitting: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.

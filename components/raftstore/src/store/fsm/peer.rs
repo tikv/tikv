@@ -1694,7 +1694,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // If the data in `pending_create_peers` is not equal to `(peer_id, false)`,
             // it means this peer will be replaced from the new one from splitting.
             if let Some(status) = pending_create_peers.get(&region_id) {
-                if *status == (self.fsm.peer_id(), false) {
+                if *status == (self.fsm.peer_id(), self.fsm.peer.create_from_splitting) {
                     pending_create_peers.remove(&region_id);
                 }
             }
@@ -1975,6 +1975,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
+
+            new_peer.peer.create_from_splitting = true;
+
             let meta_peer = new_peer.peer.peer.clone();
 
             for p in new_region.get_peers() {

@@ -51,7 +51,7 @@ use crate::report_perf_context;
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -1858,14 +1858,20 @@ where
             regions.push(derived.clone());
         }
 
+        let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
             for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
                 match pending_create_peers.get_mut(region_id) {
-                    Some(status) if *status != (*peer_id, false) => {
-                        *reason = Some(format!("status {:?} is not expected", status));
+                    Some(status) => {
+                        if *status != (*peer_id, false) {
+                            *reason = Some(format!("status {:?} is not expected", status));
+                        } else {
+                            replace_regions.insert(*region_id);
+                            pending_create_peers.insert(*region_id, (*peer_id, true));
+                        }
                     }
-                    _ => {
+                    None => {
                         pending_create_peers.insert(*region_id, (*peer_id, true));
                     }
                 }
@@ -1881,6 +1887,12 @@ where
             {
                 Ok(None) => (),
                 Ok(Some(state)) => {
+                    if replace_regions.get(region_id).is_some() {
+                        // This peer must be the first one on local store. So if this peer is created on the other side,
+                        // it means no `RegionLocalState` in kv engine.
+                        panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, peer_id, state);
+                    }
                     already_exist_regions.push((*region_id, *peer_id));
                     *reason = Some(format!("state {:?} exist in kv engine", state));
                 }
