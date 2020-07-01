@@ -251,6 +251,10 @@ pub struct PollContext<T, C: 'static> {
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// WARNING:
+    /// If you want to use `store_meta` and `pending_create_peers` together, their lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the pending_create_peers.
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
@@ -1294,6 +1298,8 @@ enum CheckMsgStatus {
     DropMsg,
     // Try to create peer
     NewPeer,
+    // Try to create the peer which is the first one of this region in local.
+    NewPeerFirst,
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -1312,7 +1318,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
-                None => return Ok(CheckMsgStatus::NewPeer),
+                None => return Ok(CheckMsgStatus::NewPeerFirst),
             };
 
         if local_state.get_state() != PeerState::Tombstone {
@@ -1478,10 +1484,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             // Target tombstone peer doesn't exist, so ignore it.
             return Ok(());
         }
-        match self.check_msg(&msg)? {
+        let check_msg_status = self.check_msg(&msg)?;
+        match check_msg_status {
             CheckMsgStatus::DropMsg => return Ok(()),
             CheckMsgStatus::PeerExist => (),
-            CheckMsgStatus::NewPeer => {
+            CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
                 if !is_initial_msg(msg.get_message()) {
                     let msg_type = msg.get_message().get_msg_type();
                     debug!(
@@ -1502,7 +1509,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
                 }
 
-                let res = self.maybe_create_peer(region_id, &msg);
+                let res = self.maybe_create_peer(
+                    region_id,
+                    &msg,
+                    check_msg_status == CheckMsgStatus::NewPeerFirst,
+                );
                 match res {
                     Ok(true) => (),
                     _ => {
@@ -1531,15 +1542,22 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     ///
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
-    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
-        if self
-            .ctx
-            .engines
-            .kv
-            .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
-            .is_some()
-        {
-            return Ok(false);
+    fn maybe_create_peer(
+        &mut self,
+        region_id: u64,
+        msg: &RaftMessage,
+        is_first_one: bool,
+    ) -> Result<bool> {
+        if is_first_one {
+            if self
+                .ctx
+                .engines
+                .kv
+                .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
+                .is_some()
+            {
+                return Ok(false);
+            }
         }
 
         let target = msg.get_to_peer();
@@ -1547,6 +1565,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
         if meta.regions.contains_key(&region_id) {
             return Ok(true);
+        }
+
+        if is_first_one {
+            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            match pending_create_peers.get(&region_id) {
+                Some(status) if *status == (msg.get_to_peer().get_id(), false) => (),
+                // If changed, it means this peer has been/will be replaced from the new one from splitting.
+                _ => return Ok(false),
+            }
         }
 
         let mut is_overlapped = false;
