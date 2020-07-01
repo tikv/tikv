@@ -10,6 +10,7 @@ use tidb_query_common::storage::{IntervalRange, Range, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::FieldTypeTp;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -134,6 +135,12 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type.set_decimal(ci.get_decimal());
     field_type.set_collate(ci.get_collation());
     // Note: Charset is not provided in column info.
+    field_type
+}
+
+pub fn field_type_with_unspecified_tp() -> FieldType {
+    let mut field_type = FieldType::default();
+    field_type.set_tp(FieldTypeTp::Unspecified as i32);
     field_type
 }
 

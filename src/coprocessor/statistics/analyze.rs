@@ -7,6 +7,8 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
+use tidb_query_datatype::codec::datum;
+use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::codec::datum::{encode_value, Datum, NIL_FLAG};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
@@ -21,6 +23,9 @@ use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use std::sync::Arc;
+use tidb_query_vec_executors::interface::BatchExecutor;
+use tidb_query_vec_executors::BatchIndexScanExecutor;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -73,8 +78,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
+    //TODO remove fn before merge
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
+    #[allow(unused)]
     fn handle_index(
         req: AnalyzeIndexReq,
         scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
@@ -102,6 +109,48 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
+
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram and count-min sketch of index values.
+    fn batch_handle_index(
+        req: AnalyzeIndexReq,
+        scanner: &mut BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    ) -> Result<Vec<u8>> {
+        let mut hist = Histogram::new(req.get_bucket_size() as usize);
+        let mut cms = CmSketch::new(
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
+
+        let mut is_drained = false;
+        while !is_drained {
+            use std::ops::Index;
+
+            let batch = scanner.next_batch(100); //TODO use a more proper value
+            is_drained = batch.is_drained?;
+
+            for logical_row in batch.logical_rows {
+                let mut bytes = vec![];
+                for col in batch.physical_columns.as_slice() {
+                    let buffer_vec = col.raw();
+                    let data = buffer_vec.index(logical_row);
+                    bytes.extend_from_slice(data);
+                    if let Some(c) = cms.as_mut() {
+                        c.insert(data);
+                    }
+                }
+                hist.append(&bytes);
+            }
+        }
+
+        let mut res = tipb::AnalyzeIndexResp::default();
+        res.set_hist(hist.into_proto());
+        if let Some(c) = cms {
+            res.set_cms(c.into_proto());
+        }
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
 }
 
 #[async_trait]
@@ -110,17 +159,18 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
-                let mut scanner = ScanExecutor::index_scan_with_cols_len(
-                    EvalContext::default(),
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
+                let mut scanner = BatchIndexScanExecutor::new_for_analyze(
                     self.storage.take().unwrap(),
+                    Arc::new(EvalConfig::default()),
+                    req.get_num_columns() as usize,
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    false,
+                    false,
                 )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                let res = AnalyzeContext::batch_handle_index(req, &mut scanner);
                 scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
-
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();

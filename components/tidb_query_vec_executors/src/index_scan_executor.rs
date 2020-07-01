@@ -80,6 +80,53 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         })?;
         Ok(Self(wrapper))
     }
+
+    pub fn new_for_analyze(
+        storage: S,
+        config: Arc<EvalConfig>,
+        cols_len: usize,
+        key_ranges: Vec<KeyRange>,
+        is_backward: bool,
+        unique: bool,
+    ) -> Result<Self> {
+        // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
+        // it just means that we can use point-get for this index. In the following scenarios
+        // `unique` will be `false`:
+        // - scan from a non-unique index
+        // - scan from a unique index with like: where unique-index like xxx
+        //
+        // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan executor is
+        // strictly stipulated. The order of columns in the schema must be the same as index data
+        // stored and if PK handle is needed it must be placed as the last one.
+        //
+        // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
+        // real). We accept this kind of request for compatibility considerations, but will be
+        // forbidden soon.
+        let decode_handle = false;
+        let schema: Vec<_> = (0..cols_len)
+            .into_iter()
+            .map(|_| field_type_with_unspecified_tp())
+            .collect();
+
+        let columns_id_without_handle: Vec<_> =
+            (0..cols_len).into_iter().map(|x| x as i64).collect();
+
+        let imp = IndexScanExecutorImpl {
+            context: EvalContext::new(config),
+            schema,
+            columns_id_without_handle,
+            decode_handle,
+        };
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            imp,
+            storage,
+            key_ranges,
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+        })?;
+        Ok(Self(wrapper))
+    }
 }
 
 impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
