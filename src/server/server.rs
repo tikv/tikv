@@ -369,8 +369,14 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker =
-            GcWorker::new(storage.get_engine(), None, None, None, Default::default());
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            None,
+            None,
+            None,
+            Default::default(),
+            Default::default(),
+        );
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();

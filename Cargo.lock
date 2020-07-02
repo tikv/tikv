@@ -1912,7 +1912,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3274,7 +3274,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4524,6 +4524,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "minitrace",
  "more-asserts",
@@ -4549,6 +4550,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "serde_json",
