@@ -57,7 +57,6 @@ prometheus = { version = "0.8", default-features = false, features = ["nightly",
 rand = "0.7"
 
 [dev-dependencies]
-engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }

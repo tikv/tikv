@@ -385,8 +385,8 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::properties::RangePropertiesCollectorFactory;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};

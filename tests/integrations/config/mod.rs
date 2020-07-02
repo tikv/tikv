@@ -8,10 +8,10 @@ use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine::rocks::{
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::Config as CopConfig;
@@ -641,6 +641,7 @@ fn test_serde_custom_tikv_config() {
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: true,
+        compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         enabled: false,

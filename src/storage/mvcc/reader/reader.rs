@@ -13,11 +13,11 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
-    statistics: Statistics,
+    pub statistics: Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,
     lock_cursor: Option<Cursor<S::Iter>>,
-    write_cursor: Option<Cursor<S::Iter>>,
+    pub write_cursor: Option<Cursor<S::Iter>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -457,9 +457,9 @@ mod tests {
 
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use engine::rocks::DB;
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
+    use engine_rocks::raw::DB;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};

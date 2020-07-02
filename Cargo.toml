@@ -14,10 +14,10 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
-portable = ["engine/portable"]
-sse = ["engine/sse"]
+portable = ["engine_rocks/portable"]
+sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = ["fail/failpoints", "raftstore/failpoints"]
 prost-codec = [
@@ -33,6 +33,7 @@ prost-codec = [
   "tipb/prost-codec",
   "txn_types/prost-codec",
   "encryption/prost-codec",
+  "tikv_util/prost-codec",
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -46,7 +47,8 @@ protobuf-codec = [
   "tidb_query_datatype/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
-  "encryption/protobuf-codec"
+  "encryption/protobuf-codec",
+  "tikv_util/protobuf-codec",
 ]
 testexport = ["raftstore/testexport"]
 
@@ -73,7 +75,6 @@ crc64fast = "0.1"
 crossbeam = "0.7.2"
 derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
-engine = { path = "components/engine" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
@@ -128,7 +129,9 @@ parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.14"
+semver = "0.10"
 tempfile = "3.0"
+match_template = { path = "components/match_template" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
 tidb_query_common = { path = "components/tidb_query_common" }
 tidb_query_shared_expr = { path = "components/tidb_query_shared_expr" }
@@ -156,7 +159,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
-minitrace = { git = "https://github.com/pingcap-incubator/minitrace.git", branch = "master" }
+minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 
 
 [dependencies.prometheus-static-metric]

@@ -10,7 +10,7 @@ use protobuf::Message;
 use raft::eraftpb::MessageType;
 use tikv_util::config::*;
 
-use engine::rocks::Writable;
+use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable};
 use engine_traits::{SyncMutable, CF_RAFT};
