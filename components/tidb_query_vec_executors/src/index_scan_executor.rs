@@ -36,6 +36,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
+        primary_column_ids: Vec<i64>,
         is_backward: bool,
         unique: bool,
     ) -> Result<Self> {
@@ -52,23 +53,30 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
         // real). We accept this kind of request for compatibility considerations, but will be
         // forbidden soon.
-        let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
+        let is_int_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
+        let (decode_handle, handle_count) = if is_int_handle {
+            (true, 1)
+        } else if !primary_column_ids.is_empty() {
+            (true, primary_column_ids.len())
+        } else {
+            (false, 0)
+        };
         let schema: Vec<_> = columns_info
             .iter()
             .map(|ci| field_type_from_column_info(&ci))
             .collect();
 
-        let mut columns_id_without_handle: Vec<_> =
-            columns_info.iter().map(|ci| ci.get_column_id()).collect();
-        if decode_handle {
-            columns_id_without_handle.pop();
-        }
+        let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len() - handle_count]
+            .iter()
+            .map(|ci| ci.get_column_id())
+            .collect();
 
         let imp = IndexScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
             columns_id_without_handle,
             decode_handle,
+            is_int_handle,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -128,6 +136,9 @@ struct IndexScanExecutorImpl {
 
     /// Whether PK handle column is interested. Handle will be always placed in the last column.
     decode_handle: bool,
+
+    /// Whether PK handle column is a int column.
+    is_int_handle: bool,
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -151,15 +162,16 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         for _ in 0..self.columns_id_without_handle.len() {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
-        if self.decode_handle {
-            // For primary key, we construct a decoded `VectorValue` because it is directly
-            // stored as i64, without a datum flag, in the value (for unique index).
-            // Note that for normal index, primary key is appended at the end of key with a
-            // datum flag.
+
+        if self.is_int_handle {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
             ));
+        } else {
+            for _ in self.columns_id_without_handle.len()..columns_len {
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            }
         }
 
         assert_eq!(columns.len(), columns_len);
@@ -173,9 +185,13 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
-            self.process_kv_pair_new(key, value, columns)
+            if value[0] <= 1 && value[1] == table::COMMON_HANDLE_FLAG {
+                self.process_unique_common_handle_value(key, value, columns)
+            } else {
+                self.process_normal_new_collation_value(key, value, columns)
+            }
         } else {
-            self.process_kv_pair_old(key, value, columns)
+            self.process_normal_old_collation_value(key, value, columns)
         }
     }
 }
@@ -210,15 +226,12 @@ impl IndexScanExecutorImpl {
         }
     }
 
-    fn process_kv_pair_new(
+    fn extract_columns_from_row(
         &mut self,
-        key: &[u8],
-        mut value: &[u8],
+        value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
-        let tail_len = value[0];
-        value = &value[1..];
 
         let row = RowSlice::from_bytes(value)?;
         for (idx, col_id) in self.columns_id_without_handle.iter().enumerate() {
@@ -232,27 +245,110 @@ impl IndexScanExecutorImpl {
                 return Err(other_err!("Unexpected missing column {}", col_id));
             }
         }
+        Ok(())
+    }
 
-        if self.decode_handle {
-            // For normal index, it is placed at the end and any columns prior to it are
-            // ensured to be interested. For unique index, it is placed in the value.
-
-            let handle_val = if tail_len >= 8 {
-                // This is a unique index, and we should look up PK handle in value.
-                self.decode_handle_from_value(&value[value.len() - 8..])?
-            } else {
-                // This is a normal index. The remaining payload part is the PK handle.
-                // Let's decode it and put in the column.
-                self.decode_handle_from_key(&key[key.len() - 9..])?
-            };
-            columns[self.columns_id_without_handle.len()]
-                .mut_decoded()
-                .push_int(Some(handle_val));
+    fn extract_pk_columns_from_datum_payload(
+        &mut self,
+        payload: &mut &[u8],
+        columns: &mut LazyBatchColumnVec,
+        start: usize,
+        end: usize,
+        ignore_value: bool,
+    ) -> Result<()> {
+        for i in start..end {
+            if payload.is_empty() {
+                break;
+            }
+            let (value, remain) = datum::split_datum(payload, false)?;
+            if !ignore_value {
+                columns[i].mut_raw().push(value);
+            }
+            *payload = remain;
         }
         Ok(())
     }
 
-    fn process_kv_pair_old(
+    fn process_unique_common_handle_value(
+        &mut self,
+        key: &[u8],
+        mut value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        let tail_len = value[0] as usize;
+        let handle_len = ((value[2] as usize) << 8) + value[3] as usize;
+        let handle_end_offset = 4 + handle_len;
+
+        // Strip the tail.
+        value = &value[..value.len() - tail_len];
+        // If there are some restore data.
+        if handle_end_offset < value.len() {
+            let restore_values = &value[handle_end_offset..];
+            self.extract_columns_from_row(restore_values, columns)?;
+        } else {
+            // The payload part of the key.
+            let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
+            self.extract_pk_columns_from_datum_payload(
+                &mut key_payload,
+                columns,
+                0,
+                self.columns_id_without_handle.len(),
+                false,
+            )?;
+        }
+
+        if self.decode_handle {
+            let mut common_handle = &value[4..handle_end_offset];
+            self.extract_pk_columns_from_datum_payload(
+                &mut common_handle,
+                columns,
+                self.columns_id_without_handle.len(),
+                self.schema.len(),
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn process_normal_new_collation_value(
+        &mut self,
+        mut key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        let tail_len = value[0] as usize;
+        let restore_values = &value[1..value.len() - tail_len];
+        self.extract_columns_from_row(restore_values, columns)?;
+
+        if self.decode_handle {
+            if tail_len < 8 {
+                key = &key[table::PREFIX_LEN + table::ID_LEN..];
+                self.extract_pk_columns_from_datum_payload(
+                    &mut key,
+                    columns,
+                    0,
+                    self.columns_id_without_handle.len(),
+                    true,
+                )?;
+                self.extract_pk_columns_from_datum_payload(
+                    &mut key,
+                    columns,
+                    self.columns_id_without_handle.len(),
+                    columns.columns_len(),
+                    false,
+                )?;
+            } else {
+                assert!(self.is_int_handle);
+                let handle = self.decode_handle_from_value(value)?;
+                columns[self.columns_id_without_handle.len()]
+                    .mut_decoded()
+                    .push_int(Some(handle));
+            }
+        }
+        Ok(())
+    }
+
+    fn process_normal_old_collation_value(
         &mut self,
         key: &[u8],
         value: &[u8],
@@ -262,13 +358,16 @@ impl IndexScanExecutorImpl {
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
-        for i in 0..self.columns_id_without_handle.len() {
-            let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].mut_raw().push(val);
-            key_payload = remaining;
-        }
+        self.extract_pk_columns_from_datum_payload(
+            &mut key_payload,
+            columns,
+            0,
+            self.columns_id_without_handle.len(),
+            false,
+        )?;
 
         if self.decode_handle {
+            assert!(self.is_int_handle);
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
             let handle_val = if key_payload.is_empty() {
@@ -387,6 +486,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
                 key_ranges,
+                vec![],
                 true,
                 false,
             )
@@ -441,6 +541,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                vec![],
                 false,
                 false,
             )
@@ -516,6 +617,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                vec![],
                 false,
                 false,
             )
@@ -571,6 +673,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                vec![],
                 false,
                 true,
             )
