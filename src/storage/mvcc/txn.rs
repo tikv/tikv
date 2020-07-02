@@ -19,6 +19,11 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
+pub enum CheckMissingLockConfig {
+    Rollback { protect_rollback: bool },
+    ReturnError,
+}
+
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
 /// It's used by `LockManager` to wake up transactions waiting for locks.
 #[derive(Debug)]
@@ -712,8 +717,7 @@ impl<S: Snapshot> MvccTxn<S> {
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
-        rollback_if_not_exist: bool,
-        protect_rollback: bool,
+        config: CheckMissingLockConfig,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
@@ -728,27 +732,28 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             None => {
-                if rollback_if_not_exist {
-                    let ts = self.start_ts;
+                match config {
+                    CheckMissingLockConfig::Rollback { protect_rollback } => {
+                        let ts = self.start_ts;
 
-                    // collapse previous rollback if exist.
-                    if self.collapse_rollback {
-                        self.collapse_prev_rollback(primary_key.clone())?;
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(primary_key.clone())?;
+                        }
+
+                        // Insert a Rollback to Write CF in case that a stale prewrite
+                        // command is received after a cleanup command.
+                        let write = Write::new_rollback(ts, protect_rollback);
+                        self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
+                        Ok(TxnStatus::LockNotExist)
                     }
-
-                    // Insert a Rollback to Write CF in case that a stale prewrite
-                    // command is received after a cleanup command.
-                    let write = Write::new_rollback(ts, protect_rollback);
-                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
-                    Ok(TxnStatus::LockNotExist)
-                } else {
-                    Err(ErrorInner::TxnNotFound {
+                    CheckMissingLockConfig::ReturnError => Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
                         key: primary_key.into_raw()?,
                     }
-                    .into())
+                    .into()),
                 }
             }
         }
@@ -787,7 +792,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.rollback_lock(key, lock, is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(key, true, protect_rollback)? {
+            _ => match self.check_txn_status_missing_lock(
+                key,
+                CheckMissingLockConfig::Rollback { protect_rollback },
+            )? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(ErrorInner::Committed { commit_ts }.into())
@@ -945,7 +953,16 @@ impl<S: Snapshot> MvccTxn<S> {
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             _ => self
-                .check_txn_status_missing_lock(primary_key, rollback_if_not_exist, true)
+                .check_txn_status_missing_lock(
+                    primary_key,
+                    if rollback_if_not_exist {
+                        CheckMissingLockConfig::Rollback {
+                            protect_rollback: true,
+                        }
+                    } else {
+                        CheckMissingLockConfig::ReturnError
+                    },
+                )
                 .map(|s| (s, None)),
         }
     }
@@ -1843,7 +1860,7 @@ mod tests {
                 false,
                 0,
                 0,
-                TimeStamp::default()
+                TimeStamp::default(),
             )
             .is_err());
 
@@ -1857,7 +1874,7 @@ mod tests {
                 true,
                 0,
                 0,
-                TimeStamp::default()
+                TimeStamp::default(),
             )
             .is_ok());
     }
