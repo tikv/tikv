@@ -4,7 +4,7 @@ use super::memory_lock::{MemoryLock, MemoryLockRef, TxnMutexGuard};
 
 use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 
 #[derive(Default)]
 pub struct LockTable<M>(Arc<M>);
@@ -54,12 +54,26 @@ impl<M: OrderedLockMap> LockTable<M> {
 
     pub fn check_range(
         &self,
-        _start_key: &[u8],
-        _end_key: &[u8],
-        _check_fn: impl FnMut(&LockInfo) -> bool,
+        start_key: &[u8],
+        end_key: &[u8],
+        mut check_fn: impl FnMut(&LockInfo) -> bool,
     ) -> Result<(), LockInfo> {
-        // FIXME: check locks in the range
-        Ok(())
+        let blocking_lock = self.0.find_first(start_key, end_key, |lock_ref| {
+            lock_ref.with_lock_info(|lock_info| {
+                lock_info.as_ref().and_then(|lock_info| {
+                    if check_fn(lock_info) {
+                        None
+                    } else {
+                        Some(lock_info.clone())
+                    }
+                })
+            })
+        });
+        if let Some(lock) = blocking_lock {
+            Err(lock)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -71,6 +85,15 @@ pub trait OrderedLockMap: Default + Send + Sync + 'static {
 
     /// Gets the lock of the key.
     fn get<'m>(&'m self, key: &[u8]) -> Option<MemoryLockRef<'m, Self>>;
+
+    /// Finds the first lock in the given range that `pred` returns `Some`.
+    /// The `Some` return value of `pred` will be returned by `find_first`.
+    fn find_first<'m, T>(
+        &'m self,
+        start_key: &[u8],
+        end_key: &[u8],
+        pred: impl FnMut(MemoryLockRef<'m, Self>) -> Option<T>,
+    ) -> Option<T>;
 
     /// Removes the key and its lock from the map.
     fn remove(&self, key: &[u8]);
@@ -93,6 +116,23 @@ impl OrderedLockMap for Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>> {
         self.lock()
             .get(key)
             .and_then(|lock| lock.clone().get_ref(self))
+    }
+
+    fn find_first<'m, T>(
+        &'m self,
+        start_key: &[u8],
+        end_key: &[u8],
+        mut pred: impl FnMut(MemoryLockRef<'m, Self>) -> Option<T>,
+    ) -> Option<T> {
+        for (_, memory_lock) in self
+            .lock()
+            .range::<[u8], _>((Bound::Included(start_key), Bound::Excluded(end_key)))
+        {
+            if let Some(v) = memory_lock.clone().get_ref(self).and_then(&mut pred) {
+                return Some(v);
+            }
+        }
+        None
     }
 
     fn remove(&self, key: &[u8]) {
@@ -159,16 +199,20 @@ mod test {
         );
     }
 
-    // FIXME: implement check_range and remove #[should_panic]
     #[tokio::test]
-    #[should_panic]
     async fn test_check_range() {
         let lock_table = LockTable::<Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>>>::default();
 
-        let mut lock_info = LockInfo::default();
-        lock_info.set_lock_version(10);
+        let mut lock_k = LockInfo::default();
+        lock_k.set_lock_version(10);
         lock_table.lock_key(b"k").await.with_lock_info(|l| {
-            *l = Some(lock_info.clone());
+            *l = Some(lock_k.clone());
+        });
+
+        let mut lock_l = LockInfo::default();
+        lock_l.set_lock_version(20);
+        lock_table.lock_key(b"l").await.with_lock_info(|l| {
+            *l = Some(lock_l.clone());
         });
 
         // no lock found
@@ -176,13 +220,19 @@ mod test {
 
         // lock passes check_fn
         assert!(lock_table
-            .check_range(b"h", b"l", |l| l.get_lock_version() < 20)
+            .check_range(b"a", b"z", |l| l.get_lock_version() < 50)
             .is_ok());
 
-        // lock does not pass check_fn
+        // first lock does not pass check_fn
         assert_eq!(
-            lock_table.check_range(b"h", b"l", |l| l.get_lock_version() < 5),
-            Err(lock_info)
+            lock_table.check_range(b"a", b"z", |l| l.get_lock_version() < 5),
+            Err(lock_k)
+        );
+
+        // first lock passes check_fn but the second does not
+        assert_eq!(
+            lock_table.check_range(b"a", b"z", |l| l.get_lock_version() < 15),
+            Err(lock_l)
         );
     }
 }
