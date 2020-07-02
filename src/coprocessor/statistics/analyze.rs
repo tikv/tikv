@@ -77,7 +77,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    // handle_index is used to handle `AnalyzeIndexReq`,
+    // batch_handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
     fn batch_handle_index(
         req: AnalyzeIndexReq,
