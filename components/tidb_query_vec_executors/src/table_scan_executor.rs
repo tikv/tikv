@@ -885,7 +885,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_vec(),
                 &[Some(0), Some(1)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -893,7 +893,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().as_int_vec(),
                 &[Some(5), None]
             );
             assert!(result.physical_columns[2].is_raw());
@@ -901,7 +901,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[2])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().as_int_vec(),
                 &[Some(7), None]
             );
         }
@@ -990,7 +990,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -998,7 +998,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().as_int_vec(),
                 &[Some(7)]
             );
         }
@@ -1025,7 +1025,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1033,7 +1033,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().as_int_vec(),
                 &[Some(7)]
             );
 
@@ -1081,7 +1081,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_vec(),
                 &[Some(2), Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1089,7 +1089,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().as_int_vec(),
                 &[Some(5), Some(7)]
             );
         }
@@ -1165,12 +1165,12 @@ mod tests {
                 .unwrap();
             if columns_is_pk[i] {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().as_int_vec(),
                     &[Some(1)]
                 );
             } else {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().as_int_vec(),
                     &[Some(i as i64 + 10)]
                 );
             }
@@ -1272,11 +1272,11 @@ mod tests {
             let column_id = columns_info[i].get_column_id();
             if primary_column_ids.contains(&column_id) {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().as_int_vec(),
                     &[Some(column_id)]
                 );
             } else {
-                assert_eq!(result.physical_columns[i].decoded().as_int_slice(), &[None]);
+                assert_eq!(result.physical_columns[i].decoded().as_int_vec(), &[None]);
             }
         }
     }

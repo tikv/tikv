@@ -177,25 +177,22 @@ mod tests {
             VectorValue::with_capacity(0, EvalType::Real),
         ];
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0)]);
-        assert_eq!(result[1].as_real_slice(), &[None]);
+        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].as_real_vec(), &[None]);
 
         update!(state, &mut ctx, Option::<&Real>::None).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0)]);
-        assert_eq!(result[1].as_real_slice(), &[None, None]);
+        assert_eq!(result[0].as_int_vec(), &[Some(0), Some(0)]);
+        assert_eq!(result[1].as_real_vec(), &[None, None]);
 
         update!(state, &mut ctx, Real::new(5.0).ok().as_ref()).unwrap();
         update!(state, &mut ctx, Option::<&Real>::None).unwrap();
         update!(state, &mut ctx, Real::new(10.0).ok().as_ref()).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0), Some(2)]);
-        assert_eq!(
-            result[1].as_real_slice(),
-            &[None, None, Real::new(15.0).ok()]
-        );
+        assert_eq!(result[0].as_int_vec(), &[Some(0), Some(0), Some(2)]);
+        assert_eq!(result[1].as_real_vec(), &[None, None, Real::new(15.0).ok()]);
 
         let x: NotChunkedVec<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
@@ -203,11 +200,11 @@ mod tests {
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
-            result[0].as_int_slice(),
+            result[0].as_int_vec(),
             &[Some(0), Some(0), Some(2), Some(4)]
         );
         assert_eq!(
-            result[1].as_real_slice(),
+            result[1].as_real_vec(),
             &[None, None, Real::new(15.0).ok(), Real::new(10.5).ok()]
         );
     }
@@ -251,8 +248,8 @@ mod tests {
             .eval(&mut ctx, &src_schema, &mut columns, &[4, 1, 2, 3], 4)
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
-        let slice: &[Option<Decimal>] = exp_result.as_ref().as_ref();
-        let slice: NotChunkedVec<Decimal> = slice.to_vec().into();
+        let slice = exp_result.as_ref().as_decimal_vec();
+        let slice: NotChunkedVec<Decimal> = slice.into();
         update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
@@ -261,9 +258,9 @@ mod tests {
         ];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();
 
-        assert_eq!(aggr_result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(aggr_result[0].as_int_vec(), &[Some(2)]);
         assert_eq!(
-            aggr_result[1].as_decimal_slice(),
+            aggr_result[1].as_decimal_vec(),
             &[Some(Decimal::from(43u64))]
         );
     }

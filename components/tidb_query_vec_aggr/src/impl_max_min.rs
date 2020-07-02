@@ -290,29 +290,29 @@ mod tests {
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].as_int_vec(), &[None]);
 
         update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].as_int_vec(), &[None]);
 
         update!(state, &mut ctx, Some(&7i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(7)]);
 
         update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(7)]);
 
         update_repeat!(state, &mut ctx, Some(&20), 10).unwrap();
         update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(20)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(20)]);
 
         // update vector
         update!(state, &mut ctx, Some(&7i64)).unwrap();
@@ -325,12 +325,12 @@ mod tests {
         .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(22)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(22)]);
 
         update!(state, &mut ctx, Some(&40i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(40)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(40)]);
     }
 
     #[test]
@@ -342,29 +342,29 @@ mod tests {
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].as_int_vec(), &[None]);
 
         update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].as_int_vec(), &[None]);
 
         update!(state, &mut ctx, Some(&100i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(100)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(100)]);
 
         update!(state, &mut ctx, Some(&90i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(90)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(90)]);
 
         update_repeat!(state, &mut ctx, Some(&80), 10).unwrap();
         update_repeat!(state, &mut ctx, Option::<&Int>::None, 10).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(80)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(80)]);
 
         // update vector
         update!(state, &mut ctx, Some(&70i64)).unwrap();
@@ -377,17 +377,17 @@ mod tests {
         .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(68)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(68)]);
 
         update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(2)]);
 
         update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(-1i64)]);
+        assert_eq!(result[0].as_int_vec(), &[Some(-1i64)]);
     }
 
     #[test]
@@ -418,7 +418,7 @@ mod tests {
             let mut state = function.create_state();
             let mut result = [VectorValue::with_capacity(0, EvalType::Bytes)];
             state.push_result(&mut ctx, &mut result).unwrap();
-            assert_eq!(result[0].as_bytes_slice(), &[None]);
+            assert_eq!(result[0].as_bytes_vec(), &[None]);
 
             for arg in args {
                 update!(
@@ -431,7 +431,7 @@ mod tests {
             result[0].clear();
             state.push_result(&mut ctx, &mut result).unwrap();
             assert_eq!(
-                result[0].as_bytes_slice(),
+                result[0].as_bytes_vec(),
                 [Some(String::from(expected).into_bytes())]
             );
         }
@@ -497,14 +497,8 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
-            let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
-            update_vector!(
-                max_state,
-                &mut ctx,
-                &NotChunkedVec::from_slice(max_slice),
-                max_result.logical_rows()
-            )
-            .unwrap();
+            let max_slice: NotChunkedVec<Int> = max_result.as_ref().as_int_vec().into();
+            update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -514,18 +508,12 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
-            let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
-            update_vector!(
-                min_state,
-                &mut ctx,
-                &NotChunkedVec::from_slice(min_slice),
-                min_result.logical_rows()
-            )
-            .unwrap();
+            let min_slice: NotChunkedVec<Int> = min_result.as_ref().as_int_vec().into();
+            update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].as_int_slice(), &[Some(99), Some(-1i64),]);
+        assert_eq!(aggr_result[0].as_int_vec(), &[Some(99), Some(-1i64),]);
     }
 
     #[test]

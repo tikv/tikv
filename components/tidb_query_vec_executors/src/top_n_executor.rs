@@ -678,15 +678,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_vec(),
             &[Some(-1), Some(-10), None, Some(-10), None, Some(-10), None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_vec(),
             &[None, None, Some(-1), Some(-10), None, Some(10), Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_vec(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -748,15 +748,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_vec(),
             &[Some(-1), Some(-10), Some(-10), Some(-10), None, None, None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_vec(),
             &[None, None, Some(-10), Some(10), None, Some(-1), Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_vec(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -829,15 +829,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_vec(),
             &[Some(-10), Some(-10), Some(-10), Some(-1), None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_vec(),
             &[Some(10), Some(-10), None, None, Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_vec(),
             &[
                 Real::new(3.0).ok(),
                 Real::new(0.0).ok(),
@@ -991,7 +991,7 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().as_bytes_vec(),
             &[
                 Some(b"aaa".to_vec()),
                 Some("áaA".as_bytes().to_vec()),
@@ -1001,7 +1001,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_bytes_slice(),
+            r.physical_columns[1].decoded().as_bytes_vec(),
             &[
                 Some(b"Aa".to_vec()),
                 Some("áa".as_bytes().to_vec()),
@@ -1011,7 +1011,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_bytes_slice(),
+            r.physical_columns[2].decoded().as_bytes_vec(),
             &[
                 Some("áa".as_bytes().to_vec()),
                 None,
@@ -1072,7 +1072,7 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().as_bytes_vec(),
             &[
                 None,
                 Some(b"Aa".to_vec()),
@@ -1082,7 +1082,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_bytes_slice(),
+            r.physical_columns[1].decoded().as_bytes_vec(),
             &[
                 None,
                 None,
@@ -1092,7 +1092,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_bytes_slice(),
+            r.physical_columns[2].decoded().as_bytes_vec(),
             &[
                 Some(b"Aa".to_vec()),
                 Some(b"aaa".to_vec()),
@@ -1229,7 +1229,7 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 5);
             assert_eq!(r.physical_columns.columns_len(), 3);
             assert_eq!(
-                r.physical_columns[col_index].decoded().as_int_slice(),
+                r.physical_columns[col_index].decoded().as_int_vec(),
                 expected
             );
             assert!(r.is_drained.unwrap());

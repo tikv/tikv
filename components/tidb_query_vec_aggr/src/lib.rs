@@ -355,7 +355,7 @@ mod tests {
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target[0].as_real_slice(), &[Real::new(4.0).ok()]);
+        assert_eq!(target[0].as_real_vec(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
         assert!(update!(
@@ -368,7 +368,7 @@ mod tests {
             .push_result(&mut ctx, &mut target)
             .is_ok());
         assert_eq!(
-            target[0].as_real_slice(),
+            target[0].as_real_vec(),
             &[Real::new(4.0).ok(), Real::new(5.0).ok()]
         );
 
