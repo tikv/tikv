@@ -182,6 +182,7 @@ impl Simulator for ServerCluster {
             Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
+            Default::default(),
         );
         gc_worker.start().unwrap();
 
