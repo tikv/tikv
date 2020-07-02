@@ -89,6 +89,5 @@ rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
 git = "https://github.com/tikv/yatp.git"
 
 [dev-dependencies]
-engine = { path = "../engine" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
