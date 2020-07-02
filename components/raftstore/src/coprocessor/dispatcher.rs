@@ -473,6 +473,7 @@ where
         if self.registry.cmd_observers.is_empty() {
             return;
         }
+
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
