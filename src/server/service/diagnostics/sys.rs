@@ -505,6 +505,7 @@ mod tests {
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
         let mut system = sysinfo::System::new();
+        system.refresh_networks_list();
         system.refresh_all();
         let prev_nic = system
             .get_networks()
