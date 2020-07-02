@@ -453,10 +453,7 @@ impl ScalarFunc {
         let date = try_opt!(self.children[0].eval_duration(ctx, row));
         let duration = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("DURATION", &format!("({} - {})", &date, &duration));
-        let res = match date.checked_add(duration) {
-            Some(res) => res,
-            None => return Err(overflow),
-        };
+        let res = date.checked_add(duration).ok_or(overflow)?;
         Ok(Some(Cow::Owned(res.to_string().into_bytes())))
     }
 
@@ -474,10 +471,7 @@ impl ScalarFunc {
             Err(_) => return Ok(None),
         };
         let overflow = Error::overflow("DURATION", &format!("({} - {})", &date, &string));
-        let res = match date.checked_add(string) {
-            Some(res) => res,
-            None => return Err(overflow),
-        };
+        let res = date.checked_add(string).ok_or(overflow)?;
         Ok(Some(Cow::Owned(res.to_string().into_bytes())))
     }
 
@@ -584,10 +578,7 @@ impl ScalarFunc {
         let date = try_opt!(self.children[0].eval_duration(ctx, row));
         let duration = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("DURATION", &format!("({} - {})", &date, &duration));
-        let res = match date.checked_sub(duration) {
-            Some(res) => res,
-            None => return Err(overflow),
-        };
+        let res = date.checked_sub(duration).ok_or(overflow)?;
         Ok(Some(Cow::Owned(res.to_string().into_bytes())))
     }
 
@@ -605,10 +596,7 @@ impl ScalarFunc {
             Err(_) => return Ok(None),
         };
         let overflow = Error::overflow("DURATION", &format!("({} - {})", &date, &string));
-        let res = match date.checked_sub(string) {
-            Some(res) => res,
-            None => return Err(overflow),
-        };
+        let res = date.checked_sub(string).ok_or(overflow)?;
         Ok(Some(Cow::Owned(res.to_string().into_bytes())))
     }
 
