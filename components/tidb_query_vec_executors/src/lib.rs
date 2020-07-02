@@ -43,6 +43,7 @@ mod util;
 pub use self::fast_hash_aggr_executor::BatchFastHashAggregationExecutor;
 pub use self::index_scan_executor::BatchIndexScanExecutor;
 pub use self::limit_executor::BatchLimitExecutor;
+pub use self::runner::{BATCH_GROW_FACTOR, BATCH_INITIAL_SIZE, BATCH_MAX_SIZE};
 pub use self::selection_executor::BatchSelectionExecutor;
 pub use self::simple_aggr_executor::BatchSimpleAggregationExecutor;
 pub use self::slow_hash_aggr_executor::BatchSlowHashAggregationExecutor;

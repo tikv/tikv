@@ -12,7 +12,8 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tidb_query_normal_executors::{Executor, ScanExecutor, TableScanExecutor};
+use tidb_query_vec_executors::{BATCH_GROW_FACTOR, BATCH_INITIAL_SIZE, BATCH_MAX_SIZE};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use super::cmsketch::CmSketch;
@@ -76,38 +77,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    //TODO remove fn before merge
-    // handle_index is used to handle `AnalyzeIndexReq`,
-    // it would build a histogram and count-min sketch of index values.
-    #[allow(unused)]
-    fn handle_index(
-        req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
-    ) -> Result<Vec<u8>> {
-        let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        let mut cms = CmSketch::new(
-            req.get_cmsketch_depth() as usize,
-            req.get_cmsketch_width() as usize,
-        );
-        while let Some(row) = scanner.next()? {
-            let row = row.take_origin()?;
-            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
-            hist.append(bytes);
-            if let Some(c) = cms.as_mut() {
-                for end_offset in end_offsets {
-                    c.insert(&bytes[..end_offset])
-                }
-            }
-        }
-        let mut res = tipb::AnalyzeIndexResp::default();
-        res.set_hist(hist.into_proto());
-        if let Some(c) = cms {
-            res.set_cms(c.into_proto());
-        }
-        let dt = box_try!(res.write_to_bytes());
-        Ok(dt)
-    }
-
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
     fn batch_handle_index(
@@ -121,10 +90,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
 
         let mut is_drained = false;
+        let mut batch_size = BATCH_INITIAL_SIZE;
         while !is_drained {
             use std::ops::Index;
 
-            let batch = scanner.next_batch(100); //TODO use a more proper value
+            let batch = scanner.next_batch(batch_size);
             is_drained = batch.is_drained?;
 
             for logical_row in batch.logical_rows {
@@ -138,6 +108,14 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     }
                 }
                 hist.append(&bytes);
+            }
+
+            // Grow batch size
+            if batch_size < BATCH_MAX_SIZE {
+                batch_size *= BATCH_GROW_FACTOR;
+                if batch_size > BATCH_MAX_SIZE {
+                    batch_size = BATCH_MAX_SIZE
+                }
             }
         }
 

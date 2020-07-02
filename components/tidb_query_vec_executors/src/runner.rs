@@ -21,13 +21,13 @@ use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
 // from TiDB side.
-const BATCH_INITIAL_SIZE: usize = 32;
+pub const BATCH_INITIAL_SIZE: usize = 32;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
 pub use tidb_query_vec_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
-const BATCH_GROW_FACTOR: usize = 2;
+pub const BATCH_GROW_FACTOR: usize = 2;
 
 /// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
 /// can run without being yielded.
