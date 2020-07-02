@@ -204,7 +204,7 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
             Some(p) => p,
             None => continue,
         };
-        let infos = vec![
+        let mut infos = vec![
             ("read_io/s", rate(cur.read_io, prev.read_io)),
             ("read_merges/s", rate(cur.read_merges, prev.read_merges)),
             (
@@ -226,6 +226,26 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
                 rate(cur.time_in_queue, prev.time_in_queue),
             ),
         ];
+        infos.extend(
+            [
+                ("discard_io/s", cur.discard_io, prev.discard_io),
+                ("discard_merged/s", cur.discard_merged, prev.discard_merged),
+                (
+                    "discard_sectors/s",
+                    cur.discard_sectors,
+                    prev.discard_sectors,
+                ),
+                ("discard_ticks/s", cur.discard_ticks, prev.discard_ticks),
+            ]
+            .iter()
+            .filter_map(|(name, cur_stat, prev_stat)| {
+                if let (Some(cur_stat), Some(prev_stat)) = (cur_stat, prev_stat) {
+                    Some((*name, rate(*cur_stat, *prev_stat)))
+                } else {
+                    None
+                }
+            }),
+        );
         let mut pairs = vec![];
         for info in infos.into_iter() {
             let mut pair = ServerInfoPair::default();
@@ -505,6 +525,7 @@ mod tests {
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
         let mut system = sysinfo::System::new();
+        system.refresh_networks_list();
         system.refresh_all();
         let prev_nic = system
             .get_networks()
