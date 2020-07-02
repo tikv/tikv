@@ -470,10 +470,9 @@ where
     }
 
     pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
-        assert!(
-            !self.registry.cmd_observers.is_empty(),
-            "CmdObserver is not registered"
-        );
+        if self.registry.cmd_observers.is_empty() {
+            return
+        }
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
