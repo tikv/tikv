@@ -6,6 +6,7 @@ use std::time::Instant;
 use engine_rocks::RocksSnapshot;
 use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -13,6 +14,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -29,6 +31,7 @@ use super::RegionSnapshot;
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 #[derive(Debug)]
@@ -47,6 +50,7 @@ where
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
+            txn_extra_op: self.txn_extra_op,
         }
     }
 }
@@ -79,6 +83,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
             }
@@ -319,16 +324,26 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+    pub fn with_txn_extra(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        txn_extra: TxnExtra,
+    ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
+            txn_extra,
             send_time: Instant::now(),
         }
+    }
+
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 

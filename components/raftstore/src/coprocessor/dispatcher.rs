@@ -5,6 +5,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::marker::PhantomData;
+use txn_types::TxnExtra;
 
 use std::mem;
 use std::ops::Deref;
@@ -468,10 +469,27 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_flush_apply()
+    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
+        assert!(
+            !self.registry.cmd_observers.is_empty(),
+            "CmdObserver is not registered"
+        );
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
+                .observer
+                .inner()
+                .on_flush_apply(txn_extras.clone())
         }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_flush_apply(txn_extras)
     }
 
     pub fn shutdown(&self) {
@@ -604,7 +622,7 @@ mod tests {
         fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
-        fn on_flush_apply(&self) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -683,7 +701,7 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), query_resp),
         );
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply();
+        host.on_flush_apply(Vec::default());
         assert_all!(&[&ob.called], &[91]);
     }
 
