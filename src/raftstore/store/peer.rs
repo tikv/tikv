@@ -1204,7 +1204,7 @@ impl Peer {
         }
 
         if self.is_leader() {
-            if let Some(hs) = ready.hs() {
+            if let Some(hs) = ready.hs.as_ref() {
                 // Correctness depends on the fact that the leader lease must be suspected before
                 // other followers know the `PrepareMerge` log is committed, i.e. sends msg to others.
                 // Because other followers may complete the merge process, if so, the source region's
