@@ -4455,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.1"
+version = "4.0.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4506,6 +4506,7 @@ dependencies = [
  "parking_lot 0.10.0",
  "pd_client",
  "pin-project",
+ "pnet_datalink",
  "pprof",
  "procinfo",
  "prometheus",

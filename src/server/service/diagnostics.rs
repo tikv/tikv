@@ -498,11 +498,18 @@ mod sys {
         }
     }
 
+    fn mac_address(mac: Option<pnet_datalink::MacAddr>) -> String {
+        match mac {
+            Some(mac) => mac.to_string(),
+            None => "none".to_string(),
+        }
+    }
+
     fn nic_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-        let nics = sysinfo::datalink::interfaces();
+        let nics = pnet_datalink::interfaces();
         for nic in nics.into_iter() {
             let mut infos = vec![
-                ("mac", nic.mac_address().to_string()),
+                ("mac", mac_address(nic.mac)),
                 ("flag", nic.flags.to_string()),
                 ("index", nic.index.to_string()),
                 ("is-up", nic.is_up().to_string()),

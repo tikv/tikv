@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.1"
+version = "4.0.2"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -103,6 +103,7 @@ murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
+pnet_datalink = "0.23"
 prost = "0.6"
 pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
