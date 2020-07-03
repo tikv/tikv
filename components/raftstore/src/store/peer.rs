@@ -1390,7 +1390,6 @@ impl Peer {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
-<<<<<<< HEAD
             let mut split_to_be_updated = self.is_leader();
             let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
@@ -1399,8 +1398,6 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
-=======
->>>>>>> 4ec9476... raftstore: prevent unsafe local read during merging (#8056)
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
