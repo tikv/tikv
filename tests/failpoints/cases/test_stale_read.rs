@@ -422,8 +422,6 @@ fn test_read_index_when_transfer_leader_2() {
     drop(cluster);
     fail::remove("pause_on_peer_collect_message");
 }
-<<<<<<< HEAD
-=======
 
 #[test]
 fn test_read_after_peer_destroyed() {
@@ -527,4 +525,3 @@ fn test_stale_read_during_merging_2() {
 
     fail::remove(leader_commit_prepare_merge_fp);
 }
->>>>>>> 4ec9476... raftstore: prevent unsafe local read during merging (#8056)
