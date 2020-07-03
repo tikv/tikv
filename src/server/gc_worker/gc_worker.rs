@@ -293,14 +293,14 @@ impl<E: Engine> GcRunner<E> {
             reader
                 .scan_keys(from, self.cfg.batch_keys)
                 .map_err(Error::from)
-                .and_then(|(keys, next)| {
+                .map(|(keys, next)| {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
                             GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
-                    Ok((keys, next))
+                    (keys, next)
                 })
         };
         self.stats.add(reader.get_statistics());

@@ -515,7 +515,7 @@ mod tests {
     /// }).unwrap();
     /// assert_eq!(got, exp);
     /// ```
-    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
+    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr])>(
         sig: ScalarFuncSig,
         args: &[Datum],
         f: F,
