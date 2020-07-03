@@ -3,7 +3,7 @@
 //! This crate stores data types which used by other tidb query related crates.
 
 #![feature(proc_macro_hygiene)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 #![feature(test)]
 #![feature(decl_macro)]
 #![feature(str_internals)]
