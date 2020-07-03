@@ -8,6 +8,7 @@ use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::thread;
 
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
@@ -135,6 +136,27 @@ where
     Ok(drain)
 }
 
+/// Same as file_drainer, but is adjusted to be closer to vanilla RocksDB logger format.
+pub fn rocks_file_drainer<N>(
+    path: impl AsRef<Path>,
+    rotation_timespan: ReadableDuration,
+    rotation_size: ReadableSize,
+    rename: N,
+) -> io::Result<RocksFormat<RotatingFileDecorator>>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
+    let logger = BufWriter::new(
+        RotatingFileLoggerBuilder::new(path, rename)
+            .add_rotator(RotateByTime::new(rotation_timespan))
+            .add_rotator(RotateBySize::new(rotation_size))
+            .build()?,
+    );
+    let decorator = PlainDecorator::new(logger);
+    let drain = RocksFormat::new(decorator);
+    Ok(drain)
+}
+
 /// Constructs a new terminal drainer which outputs logs to stderr.
 pub fn term_drainer() -> TikvFormat<TermDecorator> {
     let decorator = TermDecorator::new().stderr().build();
@@ -231,6 +253,57 @@ where
             decorator.start_whitespace()?;
             writeln!(decorator)?;
 
+            decorator.flush()?;
+
+            Ok(())
+        })
+    }
+}
+
+pub struct RocksFormat<D>
+where
+    D: Decorator,
+{
+    decorator: D,
+}
+
+impl<D> RocksFormat<D>
+where
+    D: Decorator,
+{
+    pub fn new(decorator: D) -> Self {
+        Self { decorator }
+    }
+}
+
+impl<D> Drain for RocksFormat<D>
+where
+    D: Decorator,
+{
+    type Ok = ();
+    type Err = io::Error;
+
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        self.decorator.with_record(record, values, |decorator| {
+            if !record.tag().ends_with("_header") {
+                decorator.start_timestamp()?;
+                write!(
+                    decorator,
+                    "[{}][{}]",
+                    chrono::Local::now().format(TIMESTAMP_FORMAT),
+                    thread::current().id().as_u64(),
+                )?;
+                decorator.start_level()?;
+                write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
+                decorator.start_whitespace()?;
+                write!(decorator, " ")?;
+            }
+            decorator.start_msg()?;
+            let msg = format!("{}", record.msg());
+            write!(decorator, "{}", msg)?;
+            if !msg.ends_with('\n') {
+                writeln!(decorator)?;
+            }
             decorator.flush()?;
 
             Ok(())
@@ -337,8 +410,8 @@ impl<N: Drain, R: Drain, S: Drain, T: Drain> LogDispatcher<N, R, S, T> {
         Self {
             normal,
             rocksdb,
-            slow,
             raftdb,
+            slow,
         }
     }
 }
