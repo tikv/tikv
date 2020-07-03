@@ -2,6 +2,7 @@
 
 //! This crate provides aggregate functions for batch executors.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 

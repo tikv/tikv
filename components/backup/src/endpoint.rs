@@ -926,7 +926,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::block_in_if_condition_stmt)]
+        #[allow(clippy::blocks_in_if_conditions)]
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
