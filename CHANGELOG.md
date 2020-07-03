@@ -2,6 +2,15 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.16]
+### Bugfixes
+- Fix the potential wrong result read from ingested files [#8039](https://github.com/tikv/tikv/pull/8039)
+- Fix the issue that a peer can not be removed when its store is isolated during multiple merge processes [#8005](https://github.com/tikv/tikv/pull/8005)
+
+### Improvements
+- Avoid sending store heartbeats to PD after snapshots are received [#8145](https://github.com/tikv/tikv/pull/8145)
+- Improve the PD client log [#8091](https://github.com/tikv/tikv/pull/8091)
+
 ## [3.0.15]
 ### Bugfixes
 - Fix a panic issue that Titan GC may delete an already deleted blob file [#7970](https://github.com/tikv/tikv/pull/7970)
