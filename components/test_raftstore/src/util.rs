@@ -387,7 +387,7 @@ pub fn async_read_on_peer<T: Simulator>(
     read_quorum: bool,
     replica_read: bool,
 ) -> mpsc::Receiver<RaftCmdResponse> {
-    let node_id = peer.get_id();
+    let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -670,6 +670,14 @@ pub fn put_cf_till_size<T: Simulator>(
     // we flush it to SST so we can use the size properties instead.
     cluster.must_flush_cf(cf, true);
     key
+}
+
+pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
+    let mut mutation = Mutation::default();
+    mutation.set_op(op);
+    mutation.set_key(k.to_vec());
+    mutation.set_value(v.to_vec());
+    mutation
 }
 
 pub fn must_kv_prewrite(

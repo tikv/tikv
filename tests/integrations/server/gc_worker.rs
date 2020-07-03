@@ -68,14 +68,6 @@ fn test_physical_scan_lock() {
 
 #[test]
 fn test_applied_lock_collector() {
-    fn new_mutation(k: &[u8]) -> Mutation {
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.to_vec());
-        mutation.set_value(b"v".to_vec());
-        mutation
-    }
-
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
 
@@ -103,7 +95,7 @@ fn test_applied_lock_collector() {
     let mut safe_point = 10000;
     // Write 100 locks whose timestamp is less than the safe point.
     let mutations = (0..100)
-        .map(|i| new_mutation(format!("key{}", i).as_bytes()))
+        .map(|i| new_mutation(Op::Put, format!("key{}", i).as_bytes(), b"v"))
         .collect();
     must_kv_prewrite(&leader_client, ctx.clone(), mutations, b"key0".to_vec(), 10);
     // Make sure all stores applies all logs.
@@ -129,7 +121,7 @@ fn test_applied_lock_collector() {
     must_kv_prewrite(
         &leader_client,
         ctx.clone(),
-        vec![new_mutation(key)],
+        vec![new_mutation(Op::Put, key, b"v")],
         key.to_vec(),
         safe_point + 1,
     );
@@ -144,7 +136,7 @@ fn test_applied_lock_collector() {
     must_kv_prewrite(
         &leader_client,
         ctx.clone(),
-        vec![new_mutation(key)],
+        vec![new_mutation(Op::Put, key, b"v")],
         key.to_vec(),
         safe_point - 1,
     );
@@ -165,7 +157,7 @@ fn test_applied_lock_collector() {
     must_kv_prewrite(
         &leader_client,
         ctx.clone(),
-        vec![new_mutation(key)],
+        vec![new_mutation(Op::Put, key, b"v")],
         key.to_vec(),
         safe_point,
     );
@@ -194,7 +186,7 @@ fn test_applied_lock_collector() {
 
     // Should be dirty when collects too many locks.
     let mutations = (1024..2048)
-        .map(|i| new_mutation(format!("key{}", i).as_bytes()))
+        .map(|i| new_mutation(Op::Put, format!("key{}", i).as_bytes(), b"v"))
         .collect();
     must_kv_prewrite(
         &leader_client,
@@ -223,7 +215,7 @@ fn test_applied_lock_collector() {
     must_kv_prewrite(
         &leader_client,
         ctx.clone(),
-        vec![new_mutation(b"key103")],
+        vec![new_mutation(Op::Put, b"key103", b"v")],
         b"key103".to_vec(),
         safe_point,
     );
