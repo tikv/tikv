@@ -1594,9 +1594,9 @@ mod tests {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
                 .map_err(|e| box_err!(e))
-                .and_then(|ident| match ident {
-                    Some(ident) => Ok(ident),
-                    None => Ok(StoreIdent::default()),
+                .map(|ident| match ident {
+                    Some(ident) => ident,
+                    None => StoreIdent::default(),
                 })
         }
 
