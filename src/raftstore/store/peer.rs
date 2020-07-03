@@ -1306,8 +1306,6 @@ impl Peer {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let lease_to_be_updated = self.is_leader();
-            let mut split_to_be_updated = self.is_leader();
-            let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
                 // It's not leader anymore, we are safe to clear proposals. If it becomes leader
                 // again, the lease should be updated when election is finished, old proposals
