@@ -13,6 +13,7 @@ use std::{
         Arc,
     },
 };
+use txn_types::Key;
 
 const INIT_REF_COUNT: usize = usize::MAX;
 
@@ -26,7 +27,7 @@ const INIT_REF_COUNT: usize = usize::MAX;
 // TODO: extract the mutex function and the lock store function to separate
 // structs.
 pub struct MemoryLock {
-    key: Vec<u8>,
+    key: Key,
     mutex_locked: AtomicBool,
     mutex_released_event: Event,
     lock_info: Mutex<Option<LockInfo>>,
@@ -35,7 +36,7 @@ pub struct MemoryLock {
 }
 
 impl MemoryLock {
-    pub fn new(key: Vec<u8>) -> Self {
+    pub fn new(key: Key) -> Self {
         MemoryLock {
             key,
             mutex_locked: AtomicBool::new(false),
@@ -84,7 +85,7 @@ pub struct MemoryLockRef<'m, M: OrderedLockMap> {
 }
 
 impl<'m, M: OrderedLockMap> MemoryLockRef<'m, M> {
-    pub fn key(&self) -> &[u8] {
+    pub fn key(&self) -> &Key {
         &self.key
     }
 
@@ -126,7 +127,7 @@ impl<'m, M: OrderedLockMap> Drop for MemoryLockRef<'m, M> {
 pub struct TxnMutexGuard<'m, M: OrderedLockMap>(MemoryLockRef<'m, M>);
 
 impl<'m, M: OrderedLockMap> TxnMutexGuard<'m, M> {
-    pub fn key(&self) -> &[u8] {
+    pub fn key(&self) -> &Key {
         &self.0.key()
     }
 
@@ -176,8 +177,8 @@ mod tests {
     #[tokio::test]
     async fn test_txn_mutex() {
         let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let lock = Arc::new(MemoryLock::new(b"k".to_vec()));
-        map.insert_if_not_exist(b"k".to_vec(), lock.clone());
+        let lock = Arc::new(MemoryLock::new(Key::from_raw(b"k")));
+        map.insert_if_not_exist(Key::from_raw(b"k"), lock.clone());
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -205,8 +206,8 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_lock_released() {
         let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let lock = Arc::new(MemoryLock::new(b"k".to_vec()));
-        map.insert_if_not_exist(b"k".to_vec(), lock.clone());
+        let lock = Arc::new(MemoryLock::new(Key::from_raw(b"k")));
+        map.insert_if_not_exist(Key::from_raw(b"k"), lock.clone());
 
         let mut lock_info = LockInfo::default();
         lock_info.set_key(b"k".to_vec());
@@ -259,26 +260,28 @@ mod tests {
     async fn test_ref_count() {
         let map = Mutex::new(BTreeMap::new());
 
+        let k = Key::from_raw(b"k");
+
         // simple case
-        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::new(b"k".to_vec())));
-        let lock_ref1 = map.get(b"k").unwrap();
-        let lock_ref2 = map.get(b"k").unwrap();
+        map.insert_if_not_exist(k.clone(), Arc::new(MemoryLock::new(k.clone())));
+        let lock_ref1 = map.get(&k).unwrap();
+        let lock_ref2 = map.get(&k).unwrap();
         drop(lock_ref1);
-        assert!(map.get(b"k").is_some());
+        assert!(map.get(&k).is_some());
         drop(lock_ref2);
-        assert!(map.get(b"k").is_none());
+        assert!(map.get(&k).is_none());
 
         // should not removed it from the lock table if a lock is stored in it
-        map.insert_if_not_exist(b"k".to_vec(), Arc::new(MemoryLock::new(b"k".to_vec())));
-        let guard = map.get(b"k").unwrap().mutex_lock().await;
+        map.insert_if_not_exist(k.clone(), Arc::new(MemoryLock::new(k.clone())));
+        let guard = map.get(&k).unwrap().mutex_lock().await;
         guard.with_lock_info(|lock_info| *lock_info = Some(LockInfo::default()));
         drop(guard);
-        assert!(map.get(b"k").is_some());
+        assert!(map.get(&k).is_some());
 
         // remove the lock stored in the table and
-        let guard = map.get(b"k").unwrap().mutex_lock().await;
+        let guard = map.get(&k).unwrap().mutex_lock().await;
         guard.with_lock_info(|lock_info| *lock_info = None);
         drop(guard);
-        assert!(map.get(b"k").is_some());
+        assert!(map.get(&k).is_some());
     }
 }

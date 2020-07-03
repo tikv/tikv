@@ -23,9 +23,9 @@ use std::{
         Arc,
     },
 };
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
-type OrderedLockMap = Mutex<BTreeMap<Vec<u8>, Arc<MemoryLock>>>;
+type OrderedLockMap = Mutex<BTreeMap<Key, Arc<MemoryLock>>>;
 pub type LockTable = self::lock_table::LockTable<OrderedLockMap>;
 
 #[derive(Clone)]
@@ -51,7 +51,7 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store LockInfo in the lock table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &[u8]) -> TxnMutexGuard<'_, OrderedLockMap> {
+    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, OrderedLockMap> {
         self.lock_table.lock_key(key).await
     }
 
@@ -62,13 +62,13 @@ impl ConcurrencyManager {
     /// is visible to `read_key_check` and `read_range_check`.
     pub async fn lock_keys(
         &self,
-        keys: &[impl AsRef<[u8]>],
+        keys: impl Iterator<Item = &Key>,
     ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
-        let mut keys_with_index: Vec<_> = keys.iter().map(AsRef::as_ref).enumerate().collect();
+        let mut keys_with_index: Vec<_> = keys.enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
         let mut result: Vec<MaybeUninit<TxnMutexGuard<'_, OrderedLockMap>>> = Vec::new();
-        result.resize_with(keys.len(), || MaybeUninit::uninit());
+        result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
@@ -85,7 +85,7 @@ impl ConcurrencyManager {
     /// It will also updates the max_read_ts.
     pub fn read_key_check(
         &self,
-        key: &[u8],
+        key: &Key,
         ts: TimeStamp,
         check_fn: impl FnOnce(&LockInfo) -> bool,
     ) -> Result<(), LockInfo> {
@@ -101,8 +101,8 @@ impl ConcurrencyManager {
     /// It will also updates the max_read_ts.
     pub fn read_range_check(
         &self,
-        start_key: &[u8],
-        end_key: &[u8],
+        start_key: &Key,
+        end_key: &Key,
         ts: TimeStamp,
         check_fn: impl FnMut(&LockInfo) -> bool,
     ) -> Result<(), LockInfo> {
@@ -119,34 +119,40 @@ mod tests {
     #[tokio::test]
     async fn test_lock_keys_order() {
         let concurrency_manager = ConcurrencyManager::new(1.into());
-        let keys = &[b"c", b"a", b"b"];
-        let guards = concurrency_manager.lock_keys(keys).await;
+        let keys: Vec<_> = [b"c", b"a", b"b"]
+            .iter()
+            .map(|k| Key::from_raw(*k))
+            .collect();
+        let guards = concurrency_manager.lock_keys(keys.iter()).await;
         for (key, guard) in keys.iter().zip(&guards) {
-            assert_eq!(*key, guard.key());
+            assert_eq!(key, guard.key());
         }
     }
 
     #[tokio::test]
     async fn test_update_max_read_ts() {
         let concurrency_manager = ConcurrencyManager::new(10.into());
+        let key_k = Key::from_raw(b"k");
+        let key_a = Key::from_raw(b"a");
+        let key_b = Key::from_raw(b"b");
 
         assert!(concurrency_manager
-            .read_key_check(b"k", 15.into(), |_| false)
+            .read_key_check(&key_k, 15.into(), |_| false)
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_key_check(b"k", 5.into(), |_| false)
+            .read_key_check(&key_k, 5.into(), |_| false)
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(b"a", b"b", 10.into(), |_| false)
+            .read_range_check(&key_a, &key_b, 10.into(), |_| false)
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(b"a", b"b", 20.into(), |_| false)
+            .read_range_check(&key_a, &key_b, 20.into(), |_| false)
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }
