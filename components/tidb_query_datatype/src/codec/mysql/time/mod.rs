@@ -1064,6 +1064,16 @@ impl Time {
     }
 
     #[inline]
+    pub fn maximize_fsp(&mut self) {
+        self.set_fsp(super::MAX_FSP as u8);
+    }
+
+    #[inline]
+    pub fn minimize_fsp(&mut self) {
+        self.set_fsp(super::MIN_FSP as u8);
+    }
+
+    #[inline]
     pub fn get_time_type(self) -> TimeType {
         let ft = self.get_fsp_tt();
 

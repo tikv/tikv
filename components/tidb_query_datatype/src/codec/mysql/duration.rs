@@ -10,7 +10,7 @@ use tipb::FieldType;
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
+use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -299,6 +299,12 @@ impl Duration {
     #[inline]
     pub fn fsp(self) -> u8 {
         self.fsp
+    }
+
+    #[inline]
+    pub fn minimize_fsp(mut self) -> Self {
+        self.fsp = MIN_FSP as u8;
+        self
     }
 
     #[inline]
