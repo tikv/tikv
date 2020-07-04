@@ -52,9 +52,13 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
+<<<<<<< HEAD
 use tikv_util::config::{
     self, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
+=======
+use tikv_util::config::{self, LogFormat, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
+>>>>>>> b45e052... UCP: Support JSON log format (#7861)
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -1940,6 +1944,9 @@ pub struct TiKvConfig {
     pub log_file: String,
 
     #[config(skip)]
+    pub log_format: LogFormat,
+
+    #[config(skip)]
     pub slow_log_file: String,
 
     #[config(skip)]
@@ -2007,6 +2014,7 @@ impl Default for TiKvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_format: LogFormat::Text,
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
