@@ -1,21 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
+use std::{cmp, io};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_traits::KvEngine;
-use fs2;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -28,7 +28,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
 use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg};
+use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -80,7 +80,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -88,7 +88,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
@@ -103,6 +103,7 @@ where
         written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
+        replication_status: Option<RegionReplicationStatus>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -114,7 +115,6 @@ where
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     },
     ReadStats {
         read_stats: ReadStats,
@@ -214,12 +214,14 @@ where
             Task::Heartbeat {
                 ref region,
                 ref peer,
+                ref replication_status,
                 ..
             } => write!(
                 f,
-                "heartbeat for region {:?}, leader {}",
+                "heartbeat for region {:?}, leader {}, replication status {:?}",
                 region,
-                peer.get_id()
+                peer.get_id(),
+                replication_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -228,11 +230,10 @@ where
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-                ref merge_source,
             } => write!(
                 f,
-                "validate peer {:?} with region {:?}, merge_source {:?}",
-                peer, region, merge_source
+                "validate peer {:?} with region {:?}",
+                peer, region
             ),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
@@ -292,8 +293,8 @@ where
             timer: None,
             sender: None,
             thread_info_interval: interval,
-            qps_info_interval: DEFAULT_QPS_INFO_INTERVAL,
-            collect_interval: DEFAULT_COLLECT_INTERVAL,
+            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
+            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
         }
     }
 
@@ -303,8 +304,16 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
+        if self.collect_interval < DEFAULT_COLLECT_INTERVAL {
+            info!("it seems we are running tests, skip stats monitoring.");
+            return Ok(());
+        }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
         let collect_interval = self.collect_interval;
+        if self.thread_info_interval < self.collect_interval {
+            info!("running in test mode, skip starting monitor.");
+            return Ok(());
+        }
         let thread_info_interval = self
             .thread_info_interval
             .div_duration_f64(self.collect_interval) as i32;
@@ -368,7 +377,8 @@ where
                             }
                         }
                     }
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval); // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    // modules timer_cnt with the least common multiple of intervals to avoid overflow
+                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                     auto_split_controller.refresh_cfg();
                 }
             })?;
@@ -378,15 +388,12 @@ where
     }
 
     pub fn stop(&mut self) {
-        let h = self.handle.take();
-        if h.is_none() {
-            return;
-        }
-        drop(self.timer.take().unwrap());
-        drop(self.sender.take().unwrap());
-        if let Err(e) = h.unwrap().join() {
-            error!("join stats collector failed"; "err" => ?e);
-            return;
+        if let Some(h) = self.handle.take() {
+            drop(self.timer.take());
+            drop(self.sender.take());
+            if let Err(e) = h.join() {
+                error!("join stats collector failed"; "err" => ?e);
+            }
         }
     }
 
@@ -402,7 +409,7 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
+    router: RaftRouter<E::Snapshot>,
     db: E,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -427,13 +434,13 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<E>,
+        router: RaftRouter<E::Snapshot>,
         db: E,
         scheduler: Scheduler<Task<E>>,
-        store_heartbeat_interval: u64,
+        store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
     ) -> Runner<E, T> {
-        let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
+        let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
@@ -461,7 +468,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -505,9 +512,14 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E>,
+        callback: Callback<E::Snapshot>,
         task: String,
     ) {
+        if split_keys.is_empty() {
+            info!("empty split key, skip ask batch split";
+                "region_id" => region.get_id());
+            return;
+        }
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let f = self
@@ -585,6 +597,7 @@ where
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
+        replication_status: Option<RegionReplicationStatus>,
     ) {
         self.store_stat
             .region_bytes_written
@@ -601,7 +614,7 @@ where
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -685,9 +698,18 @@ where
             .with_label_values(&["available"])
             .set(available as i64);
 
-        let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed"; "err" => ?e);
-        });
+        let router = self.router.clone();
+        let f = self
+            .pd_client
+            .store_heartbeat(stats)
+            .map_err(|e| {
+                error!("store heartbeat failed"; "err" => ?e);
+            })
+            .map(move |mut resp| {
+                if let Some(status) = resp.replication_status.take() {
+                    let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
+                }
+            });
         handle.spawn(f);
     }
 
@@ -703,7 +725,6 @@ where
         handle: &Handle,
         local_region: metapb::Region,
         peer: metapb::Peer,
-        merge_source: Option<u64>,
     ) {
         let router = self.router.clone();
         let f = self
@@ -751,11 +772,7 @@ where
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
                                 .inc();
-                            if let Some(source) = merge_source {
-                                send_merge_fail(&router, source, peer);
-                            } else {
-                                send_destroy_peer_message(&router, local_region, peer, pd_region);
-                            }
+                            send_destroy_peer_message(&router, local_region, peer, pd_region);
                             return Ok(());
                         }
                         info!(
@@ -879,7 +896,9 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
-                sender.send(read_stats).unwrap();
+                if sender.send(read_stats).is_err() {
+                    warn!("send read_stats failed, are we shutting down?")
+                }
             }
         }
     }
@@ -975,6 +994,7 @@ where
                 written_keys,
                 approximate_size,
                 approximate_keys,
+                replication_status,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
                     get_region_approximate_size(&self.db, &region, 0).unwrap_or_default()
@@ -1030,17 +1050,14 @@ where
                         approximate_keys,
                         last_report_ts,
                     },
+                    replication_status,
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {
                 self.handle_store_heartbeat(handle, stats, store_info)
             }
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(handle, regions),
-            Task::ValidatePeer {
-                region,
-                peer,
-                merge_source,
-            } => self.handle_validate_peer(handle, region, peer, merge_source),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
             Task::StoreInfos {
@@ -1114,15 +1131,15 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<E>(
-    router: &RaftRouter<E>,
+fn send_admin_request<S>(
+    router: &RaftRouter<S>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<E>,
+    callback: Callback<S>,
 ) where
-    E: KvEngine,
+    S: Snapshot,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1141,30 +1158,9 @@ fn send_admin_request<E>(
     }
 }
 
-/// Sends merge fail message to gc merge source.
-fn send_merge_fail(
-    router: &RaftRouter<impl KvEngine>,
-    source_region_id: u64,
-    target: metapb::Peer,
-) {
-    let target_id = target.get_id();
-    if let Err(e) = router.force_send(
-        source_region_id,
-        PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-            target,
-            stale: true,
-        }),
-    ) {
-        error!(
-            "source region report merge failed";
-            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
-        );
-    }
-}
-
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    router: &RaftRouter<impl KvEngine>,
+    router: &RaftRouter<impl Snapshot>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

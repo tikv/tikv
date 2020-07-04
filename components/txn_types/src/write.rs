@@ -116,7 +116,7 @@ impl Write {
         WriteRef {
             write_type: self.write_type,
             start_ts: self.start_ts,
-            short_value: self.short_value.as_ref().map(|v| v.as_slice()),
+            short_value: self.short_value.as_deref(),
         }
     }
 }

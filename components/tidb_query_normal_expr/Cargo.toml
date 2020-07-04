@@ -6,7 +6,7 @@ publish = false
 description = "A scalar expression of query engine to run TiDB pushed down executors"
 
 [dependencies]
-base64 = "0.10"
+base64 = "0.12"
 bstr = "0.2.8"
 byteorder = "1.2"
 
@@ -19,7 +19,6 @@ num = { version = "0.2", default-features = false }
 openssl = { version = "0.10" }
 protobuf = "2"
 regex = "1.1"
-safemem = { version = "0.3", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }

@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io;
 use std::num::ParseFloatError;
@@ -31,30 +30,25 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidDataType(reason: String) {
-            description("invalid data type")
-            display("{}", reason)
+            display("invalid data type: {}", reason)
         }
         Encoding(err: Utf8Error) {
             from()
             cause(err)
-            description("encoding failed")
+            display("encoding failed")
         }
         ColumnOffset(offset: usize) {
-            description("column offset not found")
             display("illegal column offset: {}", offset)
         }
         UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
         Eval(s: String, code:i32) {
-            description("evaluation failed")
-            display("{}", s)
+            display("evaluation failed: {}", s)
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{}", err)
         }
     }
@@ -197,7 +191,7 @@ impl From<io::Error> for Error {
 
 impl From<RegexpError> for Error {
     fn from(err: RegexpError) -> Error {
-        let msg = format!("Got error '{:.64}' from regexp", err.description());
+        let msg = format!("Got error '{:.64}' from regexp", err);
         Error::Eval(msg, ERR_REGEXP)
     }
 }

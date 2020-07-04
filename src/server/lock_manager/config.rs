@@ -2,7 +2,7 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
@@ -56,17 +56,8 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<Config>>,
-    ) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout.as_millis() == 0 {
-            rollback_or!(rb_collector, wait_for_lock_timeout, {
-                Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into())
-            })
+            return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
         }
         Ok(())
     }
@@ -109,7 +100,6 @@ impl ConfigManager for LockManagerConfigManager {
 #[cfg(test)]
 mod tests {
     use super::Config;
-    use toml;
 
     #[test]
     fn test_config_deserialize() {

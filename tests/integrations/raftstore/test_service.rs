@@ -13,10 +13,10 @@ use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
-use engine::rocks::Writable;
+use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{MiscExt, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{AutoSplitController, SnapManager};
@@ -522,6 +522,7 @@ fn test_physical_scan_lock() {
             lock_info.set_key(k);
             lock_info.set_lock_ttl(3000);
             lock_info.set_lock_type(Op::Put);
+            lock_info.set_min_commit_ts(ts + 1);
             lock_info
         })
         .collect();
@@ -844,11 +845,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 1);
-    for e in entries {
-        assert_eq!(e.get_name(), fp);
-        assert_eq!(e.get_actions(), act);
-    }
+    assert!(entries
+        .iter()
+        .any(|e| e.get_name() == fp && e.get_actions() == act));
 
     let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
@@ -858,7 +857,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 0);
+    assert!(entries
+        .iter()
+        .all(|e| !(e.get_name() == fp && e.get_actions() == act)));
 }
 
 #[test]

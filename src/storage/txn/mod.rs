@@ -73,36 +73,34 @@ quick_error! {
         Engine(err: crate::storage::kv::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Codec(err: tikv_util::codec::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         ProtoBuf(err: protobuf::error::ProtobufError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Mvcc(err: crate::storage::mvcc::Error) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("{:?}", err)
         }
         Io(err: IoError) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         InvalidTxnTso {start_ts: TimeStamp, commit_ts: TimeStamp} {
-            description("Invalid transaction tso")
             display("Invalid transaction tso with start_ts:{},commit_ts:{}",
                         start_ts,
                         commit_ts)
@@ -111,7 +109,6 @@ quick_error! {
                         end: Option<Vec<u8>>,
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
-            description("Invalid request range")
             display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
                         start.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
                         end.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
@@ -171,10 +168,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        std::error::Error::description(&self.0)
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         std::error::Error::source(&self.0)
     }

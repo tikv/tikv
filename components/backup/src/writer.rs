@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::DB;
+use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
@@ -148,7 +148,7 @@ impl BackupWriter {
         for e in entries {
             let mut value_in_default = false;
             match &e {
-                TxnEntry::Commit { default, write } => {
+                TxnEntry::Commit { default, write, .. } => {
                     // Default may be empty if value is small.
                     if !default.0.is_empty() {
                         self.default.write(&default.0, &default.1)?;
@@ -289,7 +289,7 @@ mod tests {
             .unwrap();
         let db = rocks.get_rocksdb();
 
-        let opt = engine::rocks::IngestExternalFileOptions::new();
+        let opt = engine_rocks::raw::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
             let handle = db.cf_handle(cf).unwrap();
             db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
@@ -344,6 +344,7 @@ mod tests {
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
+                    old_value: None,
                 }]
                 .into_iter(),
                 false,
@@ -370,10 +371,12 @@ mod tests {
                     TxnEntry::Commit {
                         default: (vec![b'a'], vec![b'a']),
                         write: (vec![b'a'], vec![b'a']),
+                        old_value: None,
                     },
                     TxnEntry::Commit {
                         default: (vec![], vec![]),
                         write: (vec![b'b'], vec![]),
+                        old_value: None,
                     },
                 ]
                 .into_iter(),

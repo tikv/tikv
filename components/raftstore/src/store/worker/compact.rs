@@ -76,7 +76,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("compact failed {:?}", err)
         }
     }
@@ -132,11 +131,8 @@ where
                 end_key,
             } => {
                 let cf = &cf_name;
-                if let Err(e) = self.compact_range_cf(
-                    cf,
-                    start_key.as_ref().map(Vec::as_slice),
-                    end_key.as_ref().map(Vec::as_slice),
-                ) {
+                if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
+                {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -250,10 +246,11 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
-    use engine::rocks::Writable;
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::DB;
+    use engine_rocks::raw::Writable;
+    use engine_rocks::raw::DB;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
+    use engine_rocks::util::get_cf_handle;
     use engine_rocks::Compat;
     use engine_traits::{CFHandleExt, Mutable, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -353,8 +350,8 @@ mod tests {
 
     #[test]
     fn test_check_space_redundancy() {
-        let p = Builder::new().prefix("test").tempdir().unwrap();
-        let engine = open_db(p.path().to_str().unwrap());
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
         let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
         let cf2 = engine.c().cf_handle(CF_WRITE).unwrap();
 
@@ -372,8 +369,9 @@ mod tests {
         }
         engine.flush_cf(cf, true).unwrap();
 
-        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let (entries, version) =
+            get_range_entries_and_versions(engine.c(), cf2, &start, &end).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 

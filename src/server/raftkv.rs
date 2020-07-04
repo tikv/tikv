@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
@@ -20,7 +20,7 @@ use txn_types::{Key, Value};
 use super::metrics::*;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -34,27 +34,26 @@ quick_error! {
     pub enum Error {
         RequestFailed(e: errorpb::Error) {
             from()
-            description(e.get_message())
+            display("{}", e.get_message())
         }
         Io(e: IoError) {
             from()
             cause(e)
-            description(e.description())
+            display("{}", e)
         }
 
         Server(e: RaftServerError) {
             from()
             cause(e)
-            description(e.description())
+            display("{}", e)
         }
         InvalidResponse(reason: String) {
-            description(reason)
+            display("{}", reason)
         }
         InvalidRequest(reason: String) {
-            description(reason)
+            display("{}", reason)
         }
         Timeout(d: Duration) {
-            description("request timeout")
             display("timeout after {:?}", d)
         }
     }
@@ -105,14 +104,14 @@ impl From<RaftServerError> for KvError {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct RaftKv<S: RaftStoreRouter<RocksSnapshot> + 'static> {
     router: S,
     engine: RocksEngine,
 }
 
 pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksEngine>),
+    Snap(RegionSnapshot<RocksSnapshot>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -146,9 +145,10 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
 }
 
 fn on_read_result(
-    mut read_resp: ReadResponse<RocksEngine>,
+    mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
+    // TODO(5kbpers): set ExtraOp for cb_ctx here.
     let cb_ctx = new_ctx(&read_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -161,7 +161,7 @@ fn on_read_result(
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
+impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
         RaftKv { router, engine }
@@ -256,34 +256,29 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Display for RaftKv<S> {
+impl<S: RaftStoreRouter<RocksSnapshot>> Display for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
+impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
-    type Snap = RegionSnapshot<RocksEngine>;
+impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
+    type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(
-        &self,
-        ctx: &Context,
-        modifies: Vec<Modify>,
-        cb: Callback<()>,
-    ) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(modifies.len());
-        for m in modifies {
+        let mut reqs = Vec::with_capacity(batch.modifies.len());
+        for m in batch.modifies {
             let mut req = Request::default();
             match m {
                 Modify::Delete(cf, k) => {
@@ -321,6 +316,7 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
+        // TODO(5kbpers): send WriteData::TxnExtra to raftstore here.
         self.exec_write_requests(
             ctx,
             reqs,
@@ -402,8 +398,8 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot<RocksEngine> {
-    type Iter = RegionIterator<RocksEngine>;
+impl Snapshot for RegionSnapshot<RocksSnapshot> {
+    type Iter = RegionIterator<RocksSnapshot>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -459,7 +455,7 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
     }
 }
 
-impl EngineIterator for RegionIterator<RocksEngine> {
+impl EngineIterator for RegionIterator<RocksSnapshot> {
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }

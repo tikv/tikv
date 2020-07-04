@@ -241,18 +241,6 @@ groups:
       value: '{{ $value }}'
       summary: TiKV scheduler command duration seconds more than 1s
 
-  - alert: tikv_coprocessor_request_wait_seconds
-    expr: delta( tikv_coprocessor_request_wait_seconds_count[10m] )  > 0
-    for: 1m
-    labels:
-      env: ENV_LABELS_ENV
-      level: warning
-      expr:  delta( tikv_coprocessor_request_wait_seconds_count[10m] )  > 0
-    annotations:
-      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
-      value: '{{ $value }}'
-      summary: TiKV coprocessor request wait seconds
-
   - alert: TiKV_coprocessor_request_error
     expr: increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
     for: 1m

@@ -224,11 +224,7 @@ fn test_transfer_leader_delay() {
         if !header.has_error() {
             return;
         }
-        if !header
-            .get_error()
-            .get_message()
-            .contains("proposal dropped")
-        {
+        if !header.get_error().get_message().contains("ProposalDropped") {
             panic!("response {:?} has error", resp);
         }
         thread::sleep(Duration::from_millis(10));

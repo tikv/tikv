@@ -285,15 +285,15 @@ quick_error! {
         FuturePoolFull(err: future_pool::Full) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
         UnifiedReadPoolFull {
-            description("Unified read pool is full")
+            display("Unified read pool is full")
         }
         Canceled(err: oneshot::Canceled) {
             from()
             cause(err)
-            description(err.description())
+            display("{}", err)
         }
     }
 }

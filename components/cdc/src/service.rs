@@ -7,9 +7,9 @@ use std::sync::Arc;
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
+use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
@@ -27,7 +27,7 @@ pub struct ConnID(usize);
 
 impl ConnID {
     pub fn new() -> ConnID {
-        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::Relaxed))
+        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
@@ -138,7 +138,7 @@ impl ChangeData for Service {
         let recv_req = stream.for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id);
+            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
             scheduler
                 .schedule(Task::Register {
                     request,

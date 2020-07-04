@@ -222,7 +222,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.wbs.len() > WRITE_BATCH_MAX_BATCH
+        self.index >= WRITE_BATCH_MAX_BATCH
     }
 
     fn clear(&mut self) {
@@ -315,9 +315,11 @@ impl WriteBatchVecExt<RocksEngine> for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use super::super::util::new_default_engine;
+    use super::super::util::new_engine_opt;
+    use super::super::RocksDBOptions;
     use super::*;
     use engine_traits::WriteBatch;
+    use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
     #[test]
@@ -326,7 +328,17 @@ mod tests {
             .prefix("test-should-write-to-engine")
             .tempdir()
             .unwrap();
-        let engine = new_default_engine(path.path().join("db").to_str().unwrap()).unwrap();
+        let opt = RawDBOptions::default();
+        opt.enable_multi_batch_write(true);
+        opt.enable_unordered_write(false);
+        opt.enable_pipelined_write(true);
+        let engine = new_engine_opt(
+            path.path().join("db").to_str().unwrap(),
+            RocksDBOptions::from_raw(opt),
+            vec![],
+        )
+        .unwrap();
+        assert!(engine.support_write_batch_vec());
         let mut wb = engine.write_batch();
         for _i in 0..WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
@@ -341,5 +353,7 @@ mod tests {
         assert!(!wb.should_write_to_engine());
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
+        wb.clear();
+        assert!(!wb.should_write_to_engine());
     }
 }

@@ -284,8 +284,6 @@ impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand;
-
     use super::*;
 
     #[test]

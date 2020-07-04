@@ -498,7 +498,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{IterOptions, KvEngines, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
@@ -537,7 +537,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (region, test_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv.clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
@@ -588,7 +588,7 @@ mod tests {
         // test last region
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(engines.kv, region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

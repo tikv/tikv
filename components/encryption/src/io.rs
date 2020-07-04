@@ -105,7 +105,7 @@ impl<R> CrypterReader<R> {
         iv: Option<Iv>,
     ) -> Result<(CrypterReader<R>, Iv)> {
         crate::verify_encryption_config(method, &key)?;
-        let iv = iv.unwrap_or_else(|| Iv::new_ctr());
+        let iv = iv.unwrap_or_else(Iv::new_ctr);
         let (cipher, crypter) = create_aes_ctr_crypter(method, key, mode, iv)?;
         let block_size = cipher.block_size();
         Ok((

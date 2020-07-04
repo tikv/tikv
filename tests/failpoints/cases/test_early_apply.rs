@@ -12,7 +12,7 @@ use test_raftstore::*;
 fn test_singleton_early_apply() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.early_apply = true;
-    cluster.cfg.raft_store.store_pool_size = 1;
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);

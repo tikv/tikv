@@ -964,12 +964,6 @@ mod tests {
                 Datum::I64(0),
             ),
             (
-                ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(-27),
-                Datum::I64(-2),
-                Datum::I64(0),
-            ),
-            (
                 ScalarFuncSig::RoundWithFracDec,
                 str2dec("150.000"),
                 Datum::I64(2),

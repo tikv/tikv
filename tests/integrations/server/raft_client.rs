@@ -12,8 +12,8 @@ use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::router::RaftStoreBlackHole;
+use security::{SecurityConfig, SecurityManager};
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
-use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 

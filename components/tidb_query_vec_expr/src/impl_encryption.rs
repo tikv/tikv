@@ -17,7 +17,7 @@ const SHA512: i64 = 512;
 
 #[rpn_fn]
 #[inline]
-pub fn md5(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn md5(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => hex_digest(MessageDigest::md5(), arg).map(Some),
         None => Ok(None),
@@ -26,7 +26,7 @@ pub fn md5(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn sha1(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => hex_digest(MessageDigest::sha1(), arg).map(Some),
         None => Ok(None),
@@ -37,8 +37,8 @@ pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[inline]
 pub fn sha2(
     ctx: &mut EvalContext,
-    input: &Option<Bytes>,
-    hash_length: &Option<Int>,
+    input: Option<BytesRef>,
+    hash_length: Option<&Int>,
 ) -> Result<Option<Bytes>> {
     match (input, hash_length) {
         (Some(input), Some(hash_length)) => {
@@ -59,6 +59,28 @@ pub fn sha2(
     }
 }
 
+// https://dev.mysql.com/doc/refman/5.7/en/password-hashing.html
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn password(ctx: &mut EvalContext, input: Option<BytesRef>) -> Result<Option<Bytes>> {
+    ctx.warnings.append_warning(Error::Other(box_err!(
+        "Warning: Deprecated syntax PASSWORD"
+    )));
+    match input {
+        Some(bytes) => {
+            if bytes.is_empty() {
+                Ok(Some(Vec::new()))
+            } else {
+                let hash1 = hex_digest(MessageDigest::sha1(), bytes)?;
+                let mut hash2 = hex_digest(MessageDigest::sha1(), hash1.as_slice())?;
+                hash2.insert(0, b'*');
+                Ok(Some(hash2))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 #[inline]
 fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
     hash::hash(hashtype, input)
@@ -68,7 +90,7 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result<Option<Int>> {
+pub fn uncompressed_length(ctx: &mut EvalContext, arg: Option<BytesRef>) -> Result<Option<Int>> {
     use byteorder::{ByteOrder, LittleEndian};
     Ok(arg.as_ref().map(|s| {
         if s.is_empty() {
@@ -84,7 +106,7 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn random_bytes(_ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => {
             if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
@@ -103,7 +125,7 @@ mod tests {
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<'a, I: EvaluableRef<'a>, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
@@ -117,8 +139,6 @@ mod tests {
                 .unwrap()
         );
     }
-
-    use hex;
 
     #[test]
     fn test_md5() {
@@ -148,7 +168,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Md5);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Md5);
     }
 
     #[test]
@@ -182,7 +202,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
-        test_unary_func_ok_none::<Bytes, Bytes>(ScalarFuncSig::Sha1);
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Sha1);
     }
 
     #[test]
@@ -302,5 +322,31 @@ mod tests {
             .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
             .unwrap()
             .is_none())
+    }
+
+    #[test]
+    fn test_password() {
+        let cases = vec![
+            ("TiKV", "*cca644408381f962dba8dfb9889db1371ee74208"),
+            ("Pingcap", "*f33bc75eac70ac317621fbbfa560d6251c43cf8a"),
+            ("rust", "*090c2b08e0c1776910e777b917c2185be6554c2e"),
+            ("database", "*02e86b4af5219d0ba6c974908aea62d42eb7da24"),
+            ("raft", "*b23a77787ed44e62ef2570f03ce8982d119fb699"),
+        ];
+
+        for (input, output) in cases {
+            let res = RpnFnScalarEvaluator::new()
+                .push_param(Some(Bytes::from(input)))
+                .evaluate::<Bytes>(ScalarFuncSig::Password)
+                .unwrap();
+            assert_eq!(res, Some(Bytes::from(output)))
+        }
+
+        // test for null
+        let res = RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Bytes(None))
+            .evaluate::<Bytes>(ScalarFuncSig::Password)
+            .unwrap();
+        assert_eq!(None, res)
     }
 }

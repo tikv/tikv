@@ -7,13 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine::rocks;
-use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngineIterator};
+use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
+use engine_rocks::raw_util::CFOptions;
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_traits::{IterOptions, Iterable, Iterator, Mutable, Peekable, SeekKey, WriteBatchExt};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, SeekKey, WriteBatchExt,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -24,16 +24,16 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot,
+    Result, ScanMode, Snapshot, WriteData,
 };
 
-pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<RocksSnapshot>),
+    Snapshot(Callback<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -47,16 +47,13 @@ impl Display for Task {
     }
 }
 
-struct Runner(Engines);
+struct Runner(KvEngines<BaseRocksEngine, BaseRocksEngine>);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
-            Task::Snapshot(cb) => cb((
-                CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
-            )),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -85,7 +82,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: Engines,
+    engines: KvEngines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
 }
 
@@ -105,10 +102,16 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
+        let db = Arc::new(engine_rocks::raw_util::new_engine(
+            &path, None, cfs, cfs_opts,
+        )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db, shared_block_cache);
+        let engines = KvEngines::new(
+            BaseRocksEngine::from_db(db.clone()),
+            BaseRocksEngine::from_db(db),
+            shared_block_cache,
+        );
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -127,7 +130,7 @@ impl RocksEngine {
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(&self.engines.kv)
+        Arc::clone(self.engines.kv.as_inner())
     }
 
     pub fn stop(&self) {
@@ -210,8 +213,13 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let mut wb = engine.kv.c().write_batch();
+fn write_modifies(
+    engine: &KvEngines<BaseRocksEngine, BaseRocksEngine>,
+    modifies: Vec<Modify>,
+) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = engine.kv.write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -252,18 +260,20 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
             return Err(box_err!("{}", msg));
         }
     }
-    engine.kv.c().write(&wb)?;
+    engine.kv.write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
-    type Snap = RocksSnapshot;
+    type Snap = Arc<RocksSnapshot>;
 
-    fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        if modifies.is_empty() {
+    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+
+        if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
+        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
         Ok(())
     }
 
@@ -287,7 +297,7 @@ impl Engine for RocksEngine {
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot for Arc<RocksSnapshot> {
     type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {

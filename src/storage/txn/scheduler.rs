@@ -27,10 +27,10 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
-use tikv_util::{collections::HashMap, time::Instant};
+use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
-use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
+use crate::storage::kv::{drop_snapshot_callback, with_tls_engine, Engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
@@ -254,7 +254,7 @@ impl<L: LockManager> SchedulerInner<L> {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .map(|tctx| tctx.cb.take().unwrap())
+            .and_then(|tctx| tctx.cb.take())
     }
 
     fn too_busy(&self) -> bool {
@@ -403,9 +403,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
-        let cb = Box::new(move |(cb_ctx, snapshot)| {
-            executor.execute(cb_ctx, snapshot, task);
-        });
+        let cb = must_call(
+            move |(cb_ctx, snapshot)| {
+                executor.execute(cb_ctx, snapshot, task);
+            },
+            drop_snapshot_callback::<E>,
+        );
 
         let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {

@@ -2,7 +2,6 @@
 
 use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
-use tipb;
 
 /// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.

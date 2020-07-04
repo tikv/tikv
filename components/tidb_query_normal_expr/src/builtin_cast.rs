@@ -67,7 +67,7 @@ impl ScalarFunc {
             return self.children[0].eval_int(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
+        let is_negative = match val.iter().find(|x| !x.is_ascii_whitespace()) {
             Some(&b'-') => true,
             _ => false,
         };

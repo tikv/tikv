@@ -3,11 +3,13 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::mpsc;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{
+    atomic::{self, AtomicU64},
+    mpsc, Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -17,12 +19,12 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
 };
 use crate::storage::mvcc::{
     check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
 };
-use pd_client::PdClient;
+use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -38,7 +40,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::AutoGcConfig;
 use super::gc_manager::{GcManager, GcManagerHandle};
-use super::{Callback, Error, ErrorInner, Result};
+use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -291,14 +293,14 @@ impl<E: Engine> GcRunner<E> {
             reader
                 .scan_keys(from, self.cfg.batch_keys)
                 .map_err(Error::from)
-                .and_then(|(keys, next)| {
+                .map(|(keys, next)| {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
                             GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
-                    Ok((keys, next))
+                    (keys, next)
                 })
         };
         self.stats.add(reader.get_statistics());
@@ -354,7 +356,7 @@ impl<E: Engine> GcRunner<E> {
         if !modifies.is_empty() {
             self.refresh_cfg();
             self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, modifies)?;
+            self.engine.write(ctx, WriteData::from_modifies(modifies))?;
         }
         Ok(next_scan_key)
     }
@@ -501,7 +503,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
 
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
@@ -515,7 +517,7 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn update_statistics_metrics(&mut self) {
-        let stats = mem::replace(&mut self.stats, Statistics::default());
+        let stats = mem::take(&mut self.stats);
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
@@ -678,6 +680,7 @@ pub struct GcWorker<E: Engine> {
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
+    cluster_version: ClusterVersion,
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -697,6 +700,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
+            cluster_version: self.cluster_version.clone(),
         }
     }
 }
@@ -724,6 +728,7 @@ impl<E: Engine> GcWorker<E> {
         raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
+        cluster_version: ClusterVersion,
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
@@ -739,6 +744,7 @@ impl<E: Engine> GcWorker<E> {
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
+            cluster_version,
         }
     }
 
@@ -746,9 +752,24 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
+        let safe_point = Arc::new(AtomicU64::new(0));
+        if let Some(db) = self.local_storage.clone() {
+            let safe_point = Arc::clone(&safe_point);
+            let cfg_mgr = self.config_manager.clone();
+            let cluster_version = self.cluster_version.clone();
+            init_compaction_filter(db, safe_point, cfg_mgr, cluster_version);
+        }
+
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GcManager::new(cfg, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(
+            cfg,
+            safe_point,
+            self.worker_scheduler.clone(),
+            self.config_manager.clone(),
+            self.cluster_version.clone(),
+        )
+        .start()?;
         *handle = Some(new_handle);
         Ok(())
     }
@@ -756,12 +777,9 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.local_storage.take(),
+            self.local_storage.clone(),
             self.raft_store_router.take(),
-            self.config_manager
-                .0
-                .clone()
-                .tracker("gc-worker".to_owned()),
+            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
@@ -942,15 +960,15 @@ mod tests {
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksEngine>;
+        type Snap = RegionSnapshot<RocksSnapshot>;
 
         fn async_write(
             &self,
             ctx: &Context,
-            mut batch: Vec<Modify>,
+            mut batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            batch.iter_mut().for_each(|modify| match modify {
+            batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
@@ -1033,6 +1051,7 @@ mod tests {
             None,
             None,
             GcConfig::default(),
+            ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
@@ -1188,15 +1207,17 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),
             None,
             None,
             GcConfig::default(),
+            ClusterVersion::default(),
         );
         gc_worker.start().unwrap();
 

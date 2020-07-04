@@ -7,13 +7,12 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(const_loop)]
-#![feature(const_if_match)]
 #![feature(ptr_offset_from)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -69,7 +68,7 @@ use self::impl_time::*;
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
-            Collation::TT => compare_fn_meta::<StringComparer<TT, Cmp>>()
+            Collation::TT => compare_bytes_fn_meta::<TT, Cmp>()
         }
     })
 }
@@ -77,7 +76,7 @@ fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnF
 fn map_compare_in_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
-            Collation::TT => compare_in_by_hash_fn_meta::<CollationAwareBytesInByHash::<TT>>()
+            Collation::TT => compare_in_by_hash_bytes_fn_meta::<TT>()
         }
     })
 }
@@ -187,6 +186,14 @@ where
         .flag()
         .contains(FieldTypeFlag::UNSIGNED);
     Ok(mapper(rhs_is_unsigned))
+}
+
+fn truncate_int_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_int_with_uint_fn_meta()
+    } else {
+        truncate_int_with_int_fn_meta()
+    }
 }
 
 fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
@@ -302,56 +309,59 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LtString => map_string_compare_sig::<CmpOpLT>(ft)?,
         ScalarFuncSig::LtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLT>>(),
         ScalarFuncSig::LtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLT>>(),
-        ScalarFuncSig::LtJson => compare_fn_meta::<BasicComparer<Json, CmpOpLT>>(),
+        ScalarFuncSig::LtJson => compare_json_fn_meta::<CmpOpLT>(),
         ScalarFuncSig::LeInt => map_int_sig(value, children, compare_mapper::<CmpOpLE>)?,
         ScalarFuncSig::LeReal => compare_fn_meta::<BasicComparer<Real, CmpOpLE>>(),
         ScalarFuncSig::LeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLE>>(),
         ScalarFuncSig::LeString => map_string_compare_sig::<CmpOpLE>(ft)?,
         ScalarFuncSig::LeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLE>>(),
         ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLE>>(),
-        ScalarFuncSig::LeJson => compare_fn_meta::<BasicComparer<Json, CmpOpLE>>(),
+        ScalarFuncSig::LeJson => compare_json_fn_meta::<CmpOpLE>(),
+        ScalarFuncSig::GreatestInt => greatest_int_fn_meta(),
+        ScalarFuncSig::GreatestReal => greatest_real_fn_meta(),
+        ScalarFuncSig::GreatestTime => greatest_time_fn_meta(),
         ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGT>)?,
         ScalarFuncSig::GtReal => compare_fn_meta::<BasicComparer<Real, CmpOpGT>>(),
         ScalarFuncSig::GtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGT>>(),
         ScalarFuncSig::GtString => map_string_compare_sig::<CmpOpGT>(ft)?,
         ScalarFuncSig::GtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGT>>(),
         ScalarFuncSig::GtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGT>>(),
-        ScalarFuncSig::GtJson => compare_fn_meta::<BasicComparer<Json, CmpOpGT>>(),
+        ScalarFuncSig::GtJson => compare_json_fn_meta::<CmpOpGT>(),
         ScalarFuncSig::GeInt => map_int_sig(value, children, compare_mapper::<CmpOpGE>)?,
         ScalarFuncSig::GeReal => compare_fn_meta::<BasicComparer<Real, CmpOpGE>>(),
         ScalarFuncSig::GeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGE>>(),
         ScalarFuncSig::GeString => map_string_compare_sig::<CmpOpGE>(ft)?,
         ScalarFuncSig::GeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGE>>(),
         ScalarFuncSig::GeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGE>>(),
-        ScalarFuncSig::GeJson => compare_fn_meta::<BasicComparer<Json, CmpOpGE>>(),
+        ScalarFuncSig::GeJson => compare_json_fn_meta::<CmpOpGE>(),
         ScalarFuncSig::NeInt => map_int_sig(value, children, compare_mapper::<CmpOpNE>)?,
         ScalarFuncSig::NeReal => compare_fn_meta::<BasicComparer<Real, CmpOpNE>>(),
         ScalarFuncSig::NeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNE>>(),
         ScalarFuncSig::NeString => map_string_compare_sig::<CmpOpNE>(ft)?,
         ScalarFuncSig::NeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNE>>(),
         ScalarFuncSig::NeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNE>>(),
-        ScalarFuncSig::NeJson => compare_fn_meta::<BasicComparer<Json, CmpOpNE>>(),
+        ScalarFuncSig::NeJson => compare_json_fn_meta::<CmpOpNE>(),
         ScalarFuncSig::EqInt => map_int_sig(value, children, compare_mapper::<CmpOpEQ>)?,
         ScalarFuncSig::EqReal => compare_fn_meta::<BasicComparer<Real, CmpOpEQ>>(),
         ScalarFuncSig::EqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpEQ>>(),
         ScalarFuncSig::EqString => map_string_compare_sig::<CmpOpEQ>(ft)?,
         ScalarFuncSig::EqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpEQ>>(),
         ScalarFuncSig::EqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpEQ>>(),
-        ScalarFuncSig::EqJson => compare_fn_meta::<BasicComparer<Json, CmpOpEQ>>(),
+        ScalarFuncSig::EqJson => compare_json_fn_meta::<CmpOpEQ>(),
         ScalarFuncSig::NullEqInt => map_int_sig(value, children, compare_mapper::<CmpOpNullEQ>)?,
         ScalarFuncSig::NullEqReal => compare_fn_meta::<BasicComparer<Real, CmpOpNullEQ>>(),
         ScalarFuncSig::NullEqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNullEQ>>(),
         ScalarFuncSig::NullEqString => map_string_compare_sig::<CmpOpNullEQ>(ft)?,
         ScalarFuncSig::NullEqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNullEQ>>(),
         ScalarFuncSig::NullEqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNullEQ>>(),
-        ScalarFuncSig::NullEqJson => compare_fn_meta::<BasicComparer<Json, CmpOpNullEQ>>(),
+        ScalarFuncSig::NullEqJson => compare_json_fn_meta::<CmpOpNullEQ>(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
-        ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
+        ScalarFuncSig::CoalesceString => coalesce_bytes_fn_meta(),
         ScalarFuncSig::CoalesceDecimal => coalesce_fn_meta::<Decimal>(),
         ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
-        ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
+        ScalarFuncSig::CoalesceJson => coalesce_json_fn_meta(),
         // impl_compare_in
         ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<NormalInByHash::<Int>>(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<NormalInByHash::<Real>>(),
@@ -359,35 +369,36 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<NormalInByHash::<Decimal>>(),
         ScalarFuncSig::InTime => compare_in_by_compare_fn_meta::<DateTime>(),
         ScalarFuncSig::InDuration => compare_in_by_hash_fn_meta::<NormalInByHash::<Duration>>(),
-        ScalarFuncSig::InJson => compare_in_by_compare_fn_meta::<Json>(),
+        ScalarFuncSig::InJson => compare_in_by_compare_json_fn_meta(),
         // impl_control
         ScalarFuncSig::IfNullInt => if_null_fn_meta::<Int>(),
         ScalarFuncSig::IfNullReal => if_null_fn_meta::<Real>(),
-        ScalarFuncSig::IfNullString => if_null_fn_meta::<Bytes>(),
+        ScalarFuncSig::IfNullString => if_null_bytes_fn_meta(),
         ScalarFuncSig::IfNullDecimal => if_null_fn_meta::<Decimal>(),
         ScalarFuncSig::IfNullTime => if_null_fn_meta::<DateTime>(),
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
-        ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
+        ScalarFuncSig::IfNullJson => if_null_json_fn_meta(),
         ScalarFuncSig::IfInt => if_condition_fn_meta::<Int>(),
         ScalarFuncSig::IfReal => if_condition_fn_meta::<Real>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
-        ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
+        ScalarFuncSig::IfString => if_condition_bytes_fn_meta(),
         ScalarFuncSig::IfDuration => if_condition_fn_meta::<Duration>(),
-        ScalarFuncSig::IfJson => if_condition_fn_meta::<Json>(),
+        ScalarFuncSig::IfJson => if_condition_json_fn_meta(),
         ScalarFuncSig::CaseWhenInt => case_when_fn_meta::<Int>(),
         ScalarFuncSig::CaseWhenReal => case_when_fn_meta::<Real>(),
-        ScalarFuncSig::CaseWhenString => case_when_fn_meta::<Bytes>(),
+        ScalarFuncSig::CaseWhenString => case_when_bytes_fn_meta(),
         ScalarFuncSig::CaseWhenDecimal => case_when_fn_meta::<Decimal>(),
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
-        ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::CaseWhenJson => case_when_json_fn_meta(),
         // impl_encryption
         ScalarFuncSig::UncompressedLength => uncompressed_length_fn_meta(),
         ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::Sha2 => sha2_fn_meta(),
         ScalarFuncSig::RandomBytes => random_bytes_fn_meta(),
+        ScalarFuncSig::Password => password_fn_meta(),
         // impl_json
         ScalarFuncSig::JsonDepthSig => json_depth_fn_meta(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
@@ -446,14 +457,18 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundReal => round_real_fn_meta(),
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
+        ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
+        ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
+        ScalarFuncSig::RoundWithFracDec => round_with_frac_dec_fn_meta(),
+        ScalarFuncSig::RoundWithFracReal => round_with_frac_real_fn_meta(),
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
         ScalarFuncSig::IntAnyValue => any_value_fn_meta::<Int>(),
-        ScalarFuncSig::JsonAnyValue => any_value_fn_meta::<Json>(),
+        ScalarFuncSig::JsonAnyValue => any_value_json_fn_meta(),
         ScalarFuncSig::RealAnyValue => any_value_fn_meta::<Real>(),
-        ScalarFuncSig::StringAnyValue => any_value_fn_meta::<Bytes>(),
+        ScalarFuncSig::StringAnyValue => any_value_bytes_fn_meta(),
         ScalarFuncSig::TimeAnyValue => any_value_fn_meta::<DateTime>(),
         ScalarFuncSig::InetAton => inet_aton_fn_meta(),
         ScalarFuncSig::InetNtoa => inet_ntoa_fn_meta(),
@@ -468,10 +483,10 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IntIsNull => is_null_fn_meta::<Int>(),
         ScalarFuncSig::RealIsNull => is_null_fn_meta::<Real>(),
         ScalarFuncSig::DecimalIsNull => is_null_fn_meta::<Decimal>(),
-        ScalarFuncSig::StringIsNull => is_null_fn_meta::<Bytes>(),
+        ScalarFuncSig::StringIsNull => is_null_bytes_fn_meta(),
         ScalarFuncSig::TimeIsNull => is_null_fn_meta::<DateTime>(),
         ScalarFuncSig::DurationIsNull => is_null_fn_meta::<Duration>(),
-        ScalarFuncSig::JsonIsNull => is_null_fn_meta::<Json>(),
+        ScalarFuncSig::JsonIsNull => is_null_json_fn_meta(),
         ScalarFuncSig::IntIsTrue => int_is_true_fn_meta::<KeepNullOff>(),
         ScalarFuncSig::IntIsTrueWithNull => int_is_true_fn_meta::<KeepNullOn>(),
         ScalarFuncSig::RealIsTrue => real_is_true_fn_meta::<KeepNullOff>(),
@@ -504,6 +519,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         // impl_string
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
+        ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
@@ -515,11 +531,16 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Lpad => lpad_fn_meta(),
+        ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
+        ScalarFuncSig::Rpad => rpad_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
+        ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
+        ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
+        ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
@@ -527,15 +548,18 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
-        ScalarFuncSig::FieldString => field_fn_meta::<Bytes>(),
+        ScalarFuncSig::FieldString => field_bytes_fn_meta(),
         ScalarFuncSig::Elt => elt_fn_meta(),
+        ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
+        ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
+        ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
@@ -548,9 +572,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::MakeDate => make_date_fn_meta(),
         ScalarFuncSig::Hour => hour_fn_meta(),
         ScalarFuncSig::Minute => minute_fn_meta(),
         ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::TimeToSec => time_to_sec_fn_meta(),
         ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::DayName => day_name_fn_meta(),
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),

@@ -1,16 +1,20 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[macro_use]
+extern crate serde_derive;
+
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::collections::HashSet;
+use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
     ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
+use tikv_util::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -24,6 +28,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cert_allowed_cn: HashSet<String>,
+    pub encryption: EncryptionConfig,
 }
 
 impl Default for SecurityConfig {
@@ -34,6 +39,7 @@ impl Default for SecurityConfig {
             key_path: String::new(),
             override_ssl_target: String::new(),
             cert_allowed_cn: HashSet::default(),
+            encryption: EncryptionConfig::default(),
         }
     }
 }

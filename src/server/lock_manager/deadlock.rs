@@ -21,13 +21,13 @@ use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
+use security::{check_common_name, SecurityManager};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
@@ -929,7 +929,7 @@ impl Deadlock for Service {
 pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
-    use tikv_util::security::SecurityConfig;
+    use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
     #[test]

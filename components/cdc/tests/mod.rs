@@ -26,9 +26,9 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
+use security::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
-use tikv_util::security::*;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -89,9 +89,11 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> TestSuite {
-        init();
-        let mut cluster = new_server_cluster(1, count);
+        Self::with_cluster(count, new_server_cluster(1, count))
+    }
 
+    pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
+        init();
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut obs = HashMap::default();

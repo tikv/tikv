@@ -362,7 +362,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     // Take the map out, and then use `HashMap::into_iter()`. This should be faster
                     // then using `HashMap::drain()`.
                     // TODO: Verify performance difference.
-                    let groups = std::mem::replace(groups, HashMap::default());
+                    let groups = std::mem::take(groups);
                     for (group_key, states_offset) in groups {
                         iteratee(entities, &self.states[states_offset..states_offset + aggr_fns_len])?;
                         group_by_column.mut_decoded().push(group_key);

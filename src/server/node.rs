@@ -11,9 +11,8 @@ use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use engine::Engines;
-use engine_rocks::{CloneCompat, Compat, RocksEngine};
-use engine_traits::Peekable;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -42,7 +41,7 @@ pub fn create_raft_storage<S>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<RocksSnapshot> + 'static,
 {
     let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
     Ok(store)
@@ -80,8 +79,12 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
             if let Some(path) = path.parent() {
@@ -122,7 +125,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
         snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
@@ -184,7 +187,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<RocksSnapshot> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -194,11 +197,8 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines
-            .kv
-            .c()
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+    fn check_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -226,38 +226,27 @@ where
     }
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
-        let status = match status {
-            Some(s) => s,
-            None => {
-                info!("no status is returned, using majority mode");
-                return;
-            }
-        };
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
-        let label_key = &status.get_dr_auto_sync().label_key;
-        let mut control = self.state.lock().unwrap();
-        for store in stores {
-            for l in store.get_labels() {
-                if l.key == *label_key {
-                    control
-                        .group
-                        .register_store(store.id, l.value.to_lowercase());
-                    break;
-                }
-            }
+        let mut state = self.state.lock().unwrap();
+        if let Some(s) = status {
+            state.set_status(s);
         }
-        control.status = status;
+        for mut store in stores {
+            state
+                .group
+                .register_store(store.id, store.take_labels().into());
+        }
     }
 
-    fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
-        store::bootstrap_store(&engines.c(), self.cluster_id, store_id)?;
+        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
 
         Ok(store_id)
     }
@@ -266,7 +255,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &KvEngines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -284,16 +273,16 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines.c(), &region)?;
+        store::prepare_bootstrap_cluster(&engines, &region)?;
         Ok(region)
     }
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &KvEngines<RocksEngine, RocksEngine>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines.kv.c().get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
+        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
         } else {
             if self.check_cluster_bootstrapped()? {
@@ -304,7 +293,11 @@ where
         }
     }
 
-    fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &mut self,
+        engines: &KvEngines<RocksEngine, RocksEngine>,
+        first_region: metapb::Region,
+    ) -> Result<()> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
@@ -317,17 +310,17 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_prepare_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines.c())?;
+                    store::clear_prepare_bootstrap_key(&engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines.c())?;
+                            store::clear_prepare_bootstrap_key(&engines)?;
                             return Ok(());
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines.c(), region_id)?;
+                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
                             return Ok(());
                         }
                     }
@@ -367,7 +360,7 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         trans: T,
         snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
@@ -392,7 +385,7 @@ where
         self.system.spawn(
             store,
             cfg,
-            engines.c(),
+            engines,
             trans,
             pd_client,
             snap_mgr,
@@ -402,6 +395,7 @@ where
             importer,
             split_check_worker,
             auto_split_controller,
+            self.state.clone(),
         )?;
         Ok(())
     }

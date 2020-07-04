@@ -10,8 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine::rocks;
-use engine_rocks::{encryption::get_env, Compat, RocksEngine};
+use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -31,6 +30,7 @@ use raftstore::{
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
+use security::SecurityManager;
 use std::{
     convert::TryFrom,
     env, fmt,
@@ -61,7 +61,6 @@ use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
-    security::SecurityManager,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{FutureWorker, Worker},
@@ -97,8 +96,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services();
     tikv.init_metrics_flusher();
-
     tikv.run_server(server_config);
+    tikv.run_status_server();
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -113,7 +112,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine>,
+    router: RaftRouter<RocksSnapshot>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -128,7 +127,7 @@ struct TiKVServer {
 }
 
 struct Engines {
-    engines: engine::Engines,
+    engines: KvEngines<RocksEngine, RocksEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
     raft_router: ServerRaftStoreRouter<RocksEngine>,
@@ -147,10 +146,10 @@ impl TiKVServer {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
-        let security_mgr =
-            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
-                fatal!("failed to create security manager: {}", e.description())
-            }));
+        let security_mgr = Arc::new(
+            SecurityManager::new(&config.security)
+                .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
+        );
         let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
 
         // Initialize and check config
@@ -162,8 +161,9 @@ impl TiKVServer {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let (resolve_worker, resolver, state) = resolve::new_resolver(Arc::clone(&pd_client))
-            .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
+        let (resolve_worker, resolver, state) =
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+                .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
@@ -321,10 +321,12 @@ impl TiKVServer {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager =
-            DataKeyManager::from_config(&self.config.encryption, &self.config.storage.data_dir)
-                .unwrap()
-                .map(|key_manager| Arc::new(key_manager));
+        self.encryption_key_manager = DataKeyManager::from_config(
+            &self.config.security.encryption,
+            &self.config.storage.data_dir,
+        )
+        .unwrap()
+        .map(|key_manager| Arc::new(key_manager));
     }
 
     fn init_engines(&mut self) {
@@ -335,7 +337,7 @@ impl TiKVServer {
         let mut raft_db_opts = self.config.raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
-        let raft_engine = rocks::util::new_engine_opt(
+        let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
@@ -350,37 +352,34 @@ impl TiKVServer {
         let db_path = self
             .store_path
             .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine =
-            rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-                .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let engines = engine::Engines::new(
-            Arc::new(kv_engine),
-            Arc::new(raft_engine),
+        let engines = KvEngines::new(
+            RocksEngine::from_db(Arc::new(kv_engine)),
+            RocksEngine::from_db(Arc::new(raft_engine)),
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(
-            engines.kv.c().clone(),
-            store_meta.clone(),
-            self.router.clone(),
-        );
+        let local_reader =
+            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.c().clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.c().clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
         );
 
-        let engine = RaftKv::new(
-            raft_router.clone(),
-            RocksEngine::from_db(engines.kv.clone()),
-        );
+        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
         self.engines = Some(Engines {
             engines,
@@ -394,10 +393,11 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.engines.kv.c().clone()),
+            Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
             Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
+            self.pd_client.cluster_version(),
         );
         gc_worker
             .start()
@@ -526,7 +526,7 @@ impl TiKVServer {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.engines.kv.c().clone(),
+            engines.engines.kv.clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
@@ -622,7 +622,7 @@ impl TiKVServer {
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
             engines.raft_router.clone(),
-            engines.engines.kv.c().clone(),
+            engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
         );
@@ -710,7 +710,7 @@ impl TiKVServer {
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.clone(),
+            engines.engines.kv.as_inner().clone(),
         );
         let backup_timer = backup_endpoint.new_timer();
         backup_worker
@@ -732,8 +732,8 @@ impl TiKVServer {
 
     fn init_metrics_flusher(&mut self) {
         let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
-            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.kv.clone()),
-            RocksEngine::from_db(self.engines.as_ref().unwrap().engines.raft.clone()),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            self.engines.as_ref().unwrap().engines.raft.clone(),
             self.engines.as_ref().unwrap().engines.shared_block_cache,
         )));
 
@@ -758,20 +758,33 @@ impl TiKVServer {
             .server
             .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
+    }
 
+    fn run_status_server(&mut self) {
         // Create a status server.
         let status_enabled =
             self.config.metric.address.is_empty() && !self.config.server.status_addr.is_empty();
         if status_enabled {
-            let mut status_server = Box::new(StatusServer::new(
+            let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
-            ));
+                Arc::new(self.config.security.clone()),
+                self.router.clone(),
+            ) {
+                Ok(status_server) => Box::new(status_server),
+                Err(e) => {
+                    error!(
+                        "failed to start runtime for status service";
+                        "err" => %e
+                    );
+                    return;
+                }
+            };
             // Start the status server.
             if let Err(e) = status_server.start(
                 self.config.server.status_addr.clone(),
-                &self.config.security,
+                self.config.server.advertise_status_addr.clone(),
             ) {
                 error!(
                     "failed to bind addr for status service";
@@ -896,7 +909,11 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl Stop for StatusServer {
+impl<E, R> Stop for StatusServer<E, R>
+where
+    E: 'static,
+    R: 'static + Send,
+{
     fn stop(self: Box<Self>) {
         (*self).stop()
     }

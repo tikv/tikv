@@ -5,7 +5,6 @@ use std::time::*;
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use fail;
 use kvproto::raft_serverpb::RaftLocalState;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;

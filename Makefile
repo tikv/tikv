@@ -224,19 +224,23 @@ docker-tag-with-git-tag:
 run-test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
 	# again here. LOCAL_DIR is defined in .travis.yml.
-	# The special linux case below is testing the mem-profiling
+	# The special Linux case below is testing the mem-profiling
 	# features in tikv_alloc, which are marked #[ignore] since
 	# they require special compile-time and run-time setup
-	# Forturately rebuilding with the mem-profiling feature will only
+	# Fortunately rebuilding with the mem-profiling feature will only
 	# rebuild starting at jemalloc-sys.
-	# TODO: remove cd commands after https://github.com/rust-lang/cargo/issues/5364 is resolved.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --workspace --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
+		cargo test --workspace \
+			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored; \
 	fi
 
 .PHONY: test
@@ -270,14 +274,14 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 	-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 	-A clippy::needless_range_loop -A clippy::redundant_closure \
 	-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-	-A clippy::identity_conversion -A clippy::new_ret_no_self
+	-A clippy::useless_conversion -A clippy::new_ret_no_self -A clippy::unnecessary_sort_by
 
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
-	@cargo clippy --all --exclude cdc --exclude backup --exclude tests --exclude cmd \
+	@cargo clippy --workspace --all-targets --no-default-features \
+		--exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--all-targets --no-default-features \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 	@for pkg in "components/cdc" "components/backup" "cmd" "tests"; do \
 		cd $$pkg && \
@@ -285,14 +289,16 @@ clippy: pre-clippy
 			--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null;\
 	done
-	@for pkg in "fuzz" "fuzz/fuzzer-afl" "fuzz/fuzzer-honggfuzz" "fuzz/fuzzer-libfuzzer"; do \
+	@for pkg in "fuzz"; do \
 		cd $$pkg && \
 		cargo clippy --all-targets -- $(ALLOWED_CLIPPY_LINTS) && \
 		cd - >/dev/null; \
 	done
 else
 clippy: pre-clippy
-	@cargo clippy --workspace --features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
+	@cargo clippy --workspace \
+		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
 endif
 
 pre-audit:
@@ -342,9 +348,8 @@ docker:
 
 # Cargo only has two non-test profiles, dev and release, and we have
 # more than two use cases for which a cargo profile is required. This
-# is a hack to manage more cargo profiles, written in
-# `etc/cargo.config.*`. These make use of the unstable
-# `-Zconfig-profile` cargo option to specify profiles in
+# is a hack to manage more cargo profiles, written in `etc/cargo.config.*`.
+# So we use cargo `config-profile` feature to specify profiles in
 # `.cargo/config`, which `scripts/run-cargo.sh copies into place.
 #
 # Presently the only thing this is used for is the `dist_release`

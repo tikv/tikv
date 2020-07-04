@@ -68,6 +68,12 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn time_to_sec(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let dur = try_opt!(self.children[0].eval_duration(ctx, row));
+        Ok(Some(dur.to_secs()))
+    }
+
+    #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(i64::from(dur.subsec_micros())))
@@ -551,6 +557,36 @@ impl ScalarFunc {
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
     }
+
+    #[inline]
+    pub fn make_date<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut year = try_opt!(self.children[0].eval_int(ctx, row));
+        let mut day = try_opt!(self.children[1].eval_int(ctx, row));
+        if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
+            return Ok(None);
+        }
+        if year < 70 {
+            year += 2000;
+        } else if year < 100 {
+            year += 1900;
+        }
+        year -= 1;
+        let d4 = year / 4;
+        let d100 = year / 100;
+        let d400 = year / 400;
+        let leap = d4 - d100 + d400;
+        day = day + leap + year * 365 + 365;
+        let days = day as u32;
+        let ret = Time::from_days(ctx, days)?;
+        if ret.year() > 9999 || ret.is_zero() {
+            return Ok(None);
+        }
+        Ok(Some(Cow::Owned(ret)))
+    }
 }
 
 #[cfg(test)]
@@ -745,6 +781,27 @@ mod tests {
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(0));
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(0));
+        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(0));
+    }
+
+    #[test]
+    fn test_time_to_sec() {
+        // test time_to_sec
+        let cases: Vec<(&str, i8, i64)> = vec![
+            ("31 11:30:45", 0, 2719845),
+            ("11:30:45.123345", 3, 41445),
+            ("-11:30:45.1233456", 0, -41445),
+            ("272:59:59.14", 0, 982799),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, fsp, s) in cases {
+            let d = Datum::Dur(Duration::parse(&mut ctx, arg.as_bytes(), fsp).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::TimeToSec, d, Datum::I64(s));
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::TimeToSec, Datum::Null);
+        // test zero case
+        let d = Datum::Dur(Duration::parse(&mut ctx, b"0 00:00:00.0", 0).unwrap());
         test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(0));
     }
 
@@ -1796,5 +1853,54 @@ mod tests {
 
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
+    }
+
+    #[test]
+    fn test_make_date() {
+        let null_cases = vec![
+            (Datum::Null, Datum::Null),
+            (Datum::I64(2014), Datum::I64(0)),
+            (Datum::I64(10000), Datum::I64(1)),
+            (Datum::I64(9999), Datum::I64(366)),
+            (Datum::I64(-1), Datum::I64(1)),
+            (Datum::I64(-4294965282), Datum::I64(1)),
+            (Datum::I64(0), Datum::I64(0)),
+            (Datum::I64(0), Datum::I64(-1)),
+            (Datum::I64(10), Datum::I64(-1)),
+            (Datum::I64(0), Datum::I64(9223372036854775807)),
+            (Datum::I64(100), Datum::I64(9999 * 366)),
+            (Datum::I64(9999), Datum::I64(9999 * 366)),
+            (Datum::I64(100), Datum::I64(3615901)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2) in null_cases {
+            test_err_case_two_arg(&mut ctx, ScalarFuncSig::MakeDate, arg1, arg2);
+        }
+        let cases = vec![
+            (0, 1, "2000-01-01"),
+            (70, 1, "1970-01-01"),
+            (71, 1, "1971-01-01"),
+            (99, 1, "1999-01-01"),
+            (100, 1, "0100-01-01"),
+            (101, 1, "0101-01-01"),
+            (2014, 224234, "2627-12-07"),
+            (2014, 1, "2014-01-01"),
+            (7900, 705000, "9830-03-23"),
+            (7901, 705000, "9831-03-23"),
+            (7904, 705000, "9834-03-22"),
+            (8000, 705000, "9930-03-23"),
+            (8001, 705000, "9931-03-24"),
+            (100, 3615900, "9999-12-31"),
+        ];
+        for (arg1, arg2, exp) in cases {
+            let datetime = Time::parse_date(&mut ctx, exp).unwrap();
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::MakeDate,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::Time(datetime),
+            );
+        }
     }
 }

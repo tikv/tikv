@@ -35,7 +35,6 @@ quick_error! {
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
-            description(err.description())
             display("raftlog gc failed {:?}", err)
         }
     }
@@ -127,7 +126,7 @@ impl<E: KvEngine> Runnable<Task<E>> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::rocks::util::new_engine;
+    use engine_rocks::raw_util::new_engine;
     use engine_rocks::RocksEngine;
     use engine_traits::{KvEngine, WriteBatchExt, CF_DEFAULT};
     use std::sync::{mpsc, Arc};

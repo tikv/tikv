@@ -8,7 +8,6 @@ use std::io::prelude::*;
 use std::sync::Mutex;
 
 use slog::{self, Drain, OwnedKVList, Record};
-use time;
 
 struct Serializer<'a>(&'a mut dyn std::io::Write);
 
@@ -50,7 +49,7 @@ impl CaseTraceLogger {
             "{}{} {}:{}: [{}] {}",
             tag,
             &time_str[..time_str.len() - 6],
-            record.file().rsplit('/').nth(0).unwrap(),
+            record.file().rsplit('/').next().unwrap(),
             record.line(),
             record.level(),
             record.msg(),

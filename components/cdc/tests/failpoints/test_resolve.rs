@@ -106,30 +106,27 @@ fn test_stale_resolver() {
 
     event_feed_wrap.as_ref().replace(Some(resp_rx1));
     // Receive events
-    let mut events = receive_event(false);
-    while events.len() < 2 {
-        events.extend(receive_event(false).into_iter());
-    }
-    assert_eq!(events.len(), 2);
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            let e = &es.entries[1];
-            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+    for _ in 0..2 {
+        let mut events = receive_event(false);
+        match events.pop().unwrap().event.unwrap() {
+            Event_oneof_event::Entries(es) => match es.entries.len() {
+                1 => {
+                    let e = &es.entries[0];
+                    assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+                }
+                2 => {
+                    let e = &es.entries[0];
+                    assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+                    let e = &es.entries[1];
+                    assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+                }
+                _ => {
+                    panic!("unexepected event length {:?}", es);
+                }
+            },
+            Event_oneof_event::Error(e) => panic!("{:?}", e),
+            _ => panic!("unknown event"),
         }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
-    }
-    match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
-        }
-        Event_oneof_event::Error(e) => panic!("{:?}", e),
-        _ => panic!("unknown event"),
     }
 
     event_feed_wrap.as_ref().replace(None);

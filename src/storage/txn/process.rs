@@ -5,12 +5,12 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
-use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, Modify, Result as EngineResult, ScanMode, Snapshot,
-    Statistics,
+    with_tls_engine, CbContext, Engine, Result as EngineResult, ScanMode, Snapshot, Statistics,
+    WriteData,
 };
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
@@ -173,6 +173,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         }
         let sched_pool = self.clone_pool();
         let readonly = task.cmd.readonly();
+        let extra_op = cb_ctx.extra_op;
         sched_pool
             .pool
             .spawn(async move {
@@ -188,7 +189,11 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                     self.process_read(snapshot, task)
                 } else {
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe { with_tls_engine(|engine| self.process_write(engine, snapshot, task)) }
+                    unsafe {
+                        with_tls_engine(|engine| {
+                            self.process_write(engine, snapshot, task, extra_op)
+                        })
+                    }
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
@@ -222,7 +227,13 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
+    fn process_write(
+        mut self,
+        engine: &E,
+        snapshot: E::Snap,
+        task: Task,
+        extra_op: ExtraOp,
+    ) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
         let cid = task.cid;
@@ -230,11 +241,12 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
-        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
+        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,
             lock_mgr,
+            extra_op,
             &mut statistics,
             self.pipelined_pessimistic_lock,
         ) {
@@ -259,7 +271,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         is_first_lock,
                         wait_timeout,
                     }
-                } else if to_be_write.is_empty() {
+                } else if to_be_write.modifies.is_empty() {
                     Msg::WriteFinished {
                         cid,
                         pr,
@@ -270,6 +282,13 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 } else {
                     let sched = scheduler.clone();
                     let sched_pool = self.take_pool();
+                    // The normal write process is respond to clients and release latches
+                    // after async write finished. If pipelined pessimistic lock is enabled,
+                    // the process becomes parallel and there are two msgs for one command:
+                    //   1. Msg::PipelinedWrite: respond to clients
+                    //   2. Msg::WriteFinished: deque context and release latches
+                    // The order between these two msgs is uncertain due to thread scheduling
+                    // so we clone the result for each msg.
                     let (write_finished_pr, pipelined_write_pr) = if pipelined {
                         (pr.maybe_clone().unwrap(), pr)
                     } else {
@@ -280,6 +299,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         sched_pool
                             .pool
                             .spawn(async move {
+                                fail_point!("scheduler_async_write_finish");
+
                                 notify_scheduler(
                                     sched,
                                     Msg::WriteFinished {
@@ -305,6 +326,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else if pipelined {
+                        fail_point!("scheduler_pipelined_write_finish");
+
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
                         Msg::PipelinedWrite {
@@ -445,7 +468,7 @@ fn process_read_impl<E: Engine>(
                 };
                 Ok(ProcessResult::NextCommand {
                     cmd: ResolveLock::new(
-                        mem::replace(txn_status, Default::default()),
+                        mem::take(txn_status),
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),
@@ -506,7 +529,7 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 
 struct WriteResult {
     ctx: Context,
-    to_be_write: Vec<Modify>,
+    to_be_write: WriteData,
     rows: usize,
     pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
@@ -517,6 +540,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
     lock_mgr: Option<L>,
+    extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
@@ -561,6 +585,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
+            // Set extra op here for getting the write record when check write conflict in prewrite.
+            txn.extra_op = extra_op;
+
             let mut locks = vec![];
             for m in mutations {
                 match txn.prewrite(
@@ -582,12 +609,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let modifies = txn.into_modifies();
-                (pr, modifies, rows, cmd.ctx, None)
+                let txn_extra = txn.take_extra();
+                let write_data = WriteData::new(txn.into_modifies(), txn_extra);
+                (pr, write_data, rows, cmd.ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0, cmd.ctx, None)
+                (pr, WriteData::default(), 0, cmd.ctx, None)
             }
         }
         CommandKind::PrewritePessimistic(PrewritePessimistic {
@@ -601,6 +629,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         }) => {
             let rows = mutations.len();
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+            // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
+            // for getting the written keys.
+            txn.extra_op = extra_op;
 
             let mut locks = vec![];
             for (m, is_pessimistic_lock) in mutations.into_iter() {
@@ -625,12 +656,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let modifies = txn.into_modifies();
-                (pr, modifies, rows, cmd.ctx, None)
+                let txn_extra = txn.take_extra();
+                let write_data = WriteData::new(txn.into_modifies(), txn_extra);
+                (pr, write_data, rows, cmd.ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0, cmd.ctx, None)
+                (pr, WriteData::default(), 0, cmd.ctx, None)
             }
         }
         CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
@@ -679,14 +711,14 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // no conflict
             if res.is_ok() {
                 let pr = ProcessResult::PessimisticLockRes { res };
-                let modifies = txn.into_modifies();
-                (pr, modifies, rows, cmd.ctx, None)
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                (pr, write_data, rows, cmd.ctx, None)
             } else {
                 let lock = extract_lock_from_result(&res);
                 let pr = ProcessResult::PessimisticLockRes { res };
                 let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
-                (pr, vec![], 0, cmd.ctx, lock_info)
+                (pr, WriteData::default(), 0, cmd.ctx, lock_info)
             }
         }
         CommandKind::Commit(Commit {
@@ -715,7 +747,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let pr = ProcessResult::TxnStatus {
                 txn_status: TxnStatus::committed(commit_ts),
             };
-            (pr, txn.into_modifies(), rows, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, rows, cmd.ctx, None)
         }
         CommandKind::Cleanup(Cleanup {
             key,
@@ -732,7 +765,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), 1, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (ProcessResult::Res, write_data, 1, cmd.ctx, None)
         }
         CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
@@ -745,7 +779,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (ProcessResult::Res, write_data, rows, cmd.ctx, None)
         }
         CommandKind::PessimisticRollback(PessimisticRollback {
             keys,
@@ -764,9 +799,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
+            let write_data = WriteData::from_modifies(txn.into_modifies());
             (
                 ProcessResult::MultiRes { results: vec![] },
-                txn.into_modifies(),
+                write_data,
                 rows,
                 cmd.ctx,
                 None,
@@ -822,7 +858,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         .into(),
                 }
             };
-            (pr, txn.into_modifies(), rows, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, rows, cmd.ctx, None)
         }
         CommandKind::ResolveLockLite(ResolveLockLite {
             start_ts,
@@ -845,7 +882,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.wake_up(lock_mgr.as_ref());
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (ProcessResult::Res, write_data, rows, cmd.ctx, None)
         }
         CommandKind::TxnHeartBeat(TxnHeartBeat {
             primary_key,
@@ -860,7 +898,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let pr = ProcessResult::TxnStatus {
                 txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero()),
             };
-            (pr, txn.into_modifies(), 1, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, 1, cmd.ctx, None)
         }
         CommandKind::CheckTxnStatus(CheckTxnStatus {
             primary_key,
@@ -886,11 +925,12 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus { txn_status };
-            (pr, txn.into_modifies(), 1, cmd.ctx, None)
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, 1, cmd.ctx, None)
         }
         CommandKind::Pause(Pause { duration, .. }) => {
             thread::sleep(Duration::from_millis(duration));
-            (ProcessResult::Res, vec![], 0, cmd.ctx, None)
+            (ProcessResult::Res, WriteData::default(), 0, cmd.ctx, None)
         }
         _ => panic!("unsupported write command"),
     };
@@ -1085,7 +1125,7 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics, false)?;
+        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1115,7 +1155,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics, false)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

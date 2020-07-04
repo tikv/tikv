@@ -132,6 +132,7 @@ fn test_read_index_on_replica() {
 fn test_read_on_replica() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.run();
 
     let k1 = b"k1";
@@ -371,10 +372,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-            ],
+            ]),
         )
         .unwrap();
     assert_has(ctx, engine, b"x", b"1");
@@ -383,10 +384,10 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
     engine
         .write(
             ctx,
-            vec![
+            WriteData::from_modifies(vec![
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-            ],
+            ]),
         )
         .unwrap();
     assert_none(ctx, engine, b"y");
@@ -443,12 +444,12 @@ fn cf<E: Engine>(ctx: &Context, engine: &E) {
 }
 
 fn empty_write<E: Engine>(ctx: &Context, engine: &E) {
-    engine.write(ctx, vec![]).unwrap_err();
+    engine.write(ctx, WriteData::default()).unwrap_err();
 }
 
 fn wrong_context<E: Engine>(ctx: &Context, engine: &E) {
     let region_id = ctx.get_region_id();
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
-    assert!(engine.write(&ctx, vec![]).is_err());
+    assert!(engine.write(&ctx, WriteData::default()).is_err());
 }

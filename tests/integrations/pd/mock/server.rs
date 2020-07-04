@@ -10,7 +10,7 @@ use grpcio::{
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
-use tikv_util::security::*;
+use security::*;
 
 use kvproto::pdpb::*;
 
