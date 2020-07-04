@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
-#![feature(str_strip)]
+#![feature(thread_id_value)]
 
 #[macro_use(fail_point)]
 extern crate fail;

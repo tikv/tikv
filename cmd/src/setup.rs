@@ -178,7 +178,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         match config.log_format {
             config::LogFormat::Text => build_logger_with_slow_log(
                 logger::text_format(writer),
-                logger::text_format(rocksdb_log_writer),
+                logger::rocks_text_format(rocksdb_log_writer),
                 logger::text_format(raftdb_log_writer),
                 slow_log_writer.map(logger::text_format),
                 config,

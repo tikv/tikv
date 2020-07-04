@@ -6,6 +6,8 @@ publish = false
 
 [features]
 failpoints = ["fail/failpoints"]
+protobuf-codec = ["kvproto/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec"]
 
 [dependencies]
 async-speed-limit = "0.3"

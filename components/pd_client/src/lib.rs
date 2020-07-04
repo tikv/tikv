@@ -268,14 +268,26 @@ impl ClusterVersion {
         self.version.read().unwrap().clone()
     }
 
-    fn set(&self, version: &str) -> std::result::Result<(), SemVerError> {
+    fn set(&self, version: &str) -> std::result::Result<bool, SemVerError> {
         let new = Version::parse(version)?;
         let mut holder = self.version.write().unwrap();
         match &mut *holder {
-            Some(ref mut old) if *old < new => *old = new,
-            Some(_) => {}
-            None => *holder = Some(new),
+            Some(ref mut old) if *old < new => {
+                *old = new;
+                Ok(true)
+            }
+            None => {
+                *holder = Some(new);
+                Ok(true)
+            }
+            Some(_) => Ok(false),
         }
-        Ok(())
+    }
+
+    /// Initialize a `ClusterVersion` as given `version`. Only should be used for tests.
+    pub fn new(version: Version) -> Self {
+        ClusterVersion {
+            version: Arc::new(RwLock::new(Some(version))),
+        }
     }
 }
