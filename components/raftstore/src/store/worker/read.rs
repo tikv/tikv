@@ -576,9 +576,8 @@ mod tests {
         Receiver<RaftCommand<RocksSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db =
-            engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-                .unwrap();
+        let db = engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,

@@ -1724,11 +1724,9 @@ mod tests {
         sched: Scheduler<RegionTask<RocksSnapshot>>,
         path: &TempDir,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
-        let kv_db =
-            new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db =
-            new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
         let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
@@ -2555,8 +2553,7 @@ mod tests {
         let sched = worker.scheduler();
         let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db =
-            new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
         let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();

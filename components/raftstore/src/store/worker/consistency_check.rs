@@ -149,9 +149,9 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_rocks::util::new_engine;
     use engine_rocks::RocksSnapshot;
-    use engine_traits::{CF_DEFAULT, CF_RAFT, SyncMutable, KvEngine};
+    use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
-    use std::sync::{mpsc};
+    use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;

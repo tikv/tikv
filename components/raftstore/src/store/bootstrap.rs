@@ -126,28 +126,18 @@ mod tests {
     fn test_bootstrap() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
-        let kv_engine =
-            engine_rocks::util::new_engine(
-                path.path().to_str().unwrap(),
-                None,
-                &[CF_DEFAULT, CF_RAFT],
-                None,
-            )
-            .unwrap();
+        let kv_engine = engine_rocks::util::new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            &[CF_DEFAULT, CF_RAFT],
+            None,
+        )
+        .unwrap();
         let raft_engine =
-            engine_rocks::util::new_engine(
-                raft_path.to_str().unwrap(),
-                None,
-                &[CF_DEFAULT],
-                None,
-            )
-            .unwrap();
+            engine_rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(
-            kv_engine.clone(),
-            raft_engine.clone(),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());

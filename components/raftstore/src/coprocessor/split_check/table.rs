@@ -233,7 +233,7 @@ mod tests {
 
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine_rocks::util::new_engine;
-    use engine_traits::{ALL_CFS, SyncMutable};
+    use engine_traits::{SyncMutable, ALL_CFS};
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
@@ -258,8 +258,7 @@ mod tests {
             .prefix("test_last_key_of_region")
             .tempdir()
             .unwrap();
-        let engine =
-            new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -312,8 +311,7 @@ mod tests {
             .prefix("test_table_check_observer")
             .tempdir()
             .unwrap();
-        let engine =
-            new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
