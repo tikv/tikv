@@ -2284,17 +2284,23 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
         (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(&path)?;
-            let mut cfg: TiKvConfig = toml::from_str(&s)?;
-            cfg.cfg_path = path.as_ref().display().to_string();
+            let s = fs::read_to_string(path)?;
+            let mut deserializer = toml::Deserializer::new(&s);
+            let mut cfg = if let Some(keys) = unrecognized_keys {
+                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+            } else {
+                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+            }?;
+            deserializer.end()?;
+            cfg.cfg_path = path.display().to_string();
             Ok(cfg)
         })()
         .unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
-                path.as_ref().display(),
+                path.display(),
                 e
             );
         })
@@ -2343,7 +2349,7 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path));
+        return Some(TiKvConfig::from_file(&last_cfg_path, None));
     }
     None
 }
@@ -2697,7 +2703,7 @@ mod tests {
     fn test_persist_cfg() {
         let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
-        let file = path_buf.as_path().to_str().unwrap();
+        let file = path_buf.as_path();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
         let mut tikv_cfg = TiKvConfig::default();
@@ -2705,7 +2711,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -2713,7 +2719,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file);
+        let cfg_from_file = TiKvConfig::from_file(file, None);
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
@@ -3045,5 +3051,43 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_unrecognized_config_keys() {
+        let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_config_writer = temp_config_file.as_file_mut();
+        temp_config_writer
+            .write_all(
+                br#"
+                    log-level = "debug"
+                    log-fmt = "json"
+                    [readpool.unified]
+                    min-threads-count = 5
+                    stack-size = "20MB"
+                    [import]
+                    num_threads = 4
+                    [gcc]
+                    batch-keys = 1024
+                    [[security.encryption.master-keys]]
+                    type = "file"
+                "#,
+            )
+            .unwrap();
+        temp_config_writer.sync_data().unwrap();
+
+        let mut unrecognized_keys = Vec::new();
+        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+
+        assert_eq!(
+            unrecognized_keys,
+            vec![
+                "log-fmt".to_owned(),
+                "readpool.unified.min-threads-count".to_owned(),
+                "import.num_threads".to_owned(),
+                "gcc".to_owned(),
+                "security.encryption.master-keys".to_owned(),
+            ],
+        );
     }
 }
