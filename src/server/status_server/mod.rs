@@ -1352,22 +1352,20 @@ mod tests {
         let uri = Uri::builder()
             .scheme("https")
             .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/metrics")
+            .path_and_query("/region")
             .build()
             .unwrap();
 
         if expected {
             let handle = status_server.thread_pool.spawn(async move {
                 let res = client.get(uri).await.unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
+                assert_eq!(res.status(), StatusCode::NOT_FOUND);
             });
             block_on(handle).unwrap();
         } else {
             let handle = status_server.thread_pool.spawn(async move {
-                client
-                    .get(uri)
-                    .await
-                    .expect_err("response status should be err");
+                let res = client.get(uri).await.unwrap();
+                assert_eq!(res.status(), StatusCode::FORBIDDEN);
             });
             let _ = block_on(handle);
         }

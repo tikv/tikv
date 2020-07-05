@@ -123,6 +123,7 @@ fn is_arrow_encodable(schema: &[FieldType]) -> bool {
         .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
+#[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
