@@ -577,14 +577,14 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
-            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                 .unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,
             store_id: Cell::new(Some(store_id)),
             router: ch,
-            kv_engine: RocksEngine::from_db(Arc::new(db)),
+            kv_engine: db,
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
             tag: "foo".to_owned(),
