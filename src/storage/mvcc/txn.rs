@@ -19,8 +19,10 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
-pub enum CheckMissingLockConfig {
-    Rollback { protect_rollback: bool },
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum MissingLockAction {
+    Rollback,
+    ProtectedRollback,
     ReturnError,
 }
 
@@ -717,7 +719,7 @@ impl<S: Snapshot> MvccTxn<S> {
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
-        config: CheckMissingLockConfig,
+        action: MissingLockAction,
     ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
@@ -732,29 +734,32 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             None => {
-                match config {
-                    CheckMissingLockConfig::Rollback { protect_rollback } => {
-                        let ts = self.start_ts;
-
-                        // collapse previous rollback if exist.
-                        if self.collapse_rollback {
-                            self.collapse_prev_rollback(primary_key.clone())?;
-                        }
-
-                        // Insert a Rollback to Write CF in case that a stale prewrite
-                        // command is received after a cleanup command.
-                        let write = Write::new_rollback(ts, protect_rollback);
-                        self.put_write(primary_key, ts, write.as_ref().to_bytes());
-                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
-                        Ok(TxnStatus::LockNotExist)
-                    }
-                    CheckMissingLockConfig::ReturnError => Err(ErrorInner::TxnNotFound {
+                if let MissingLockAction::ReturnError = action {
+                    return Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
                         key: primary_key.into_raw()?,
                     }
-                    .into()),
+                    .into());
                 }
+
+                let ts = self.start_ts;
+
+                // collapse previous rollback if exist.
+                if self.collapse_rollback {
+                    self.collapse_prev_rollback(primary_key.clone())?;
+                }
+
+                // Insert a Rollback to Write CF in case that a stale prewrite
+                // command is received after a cleanup command.
+                let write = match action {
+                    MissingLockAction::Rollback => Write::new_rollback(ts, false),
+                    MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
+                    _ => unreachable!(),
+                };
+                self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
+                Ok(TxnStatus::LockNotExist)
             }
         }
     }
@@ -794,7 +799,11 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             _ => match self.check_txn_status_missing_lock(
                 key,
-                CheckMissingLockConfig::Rollback { protect_rollback },
+                if protect_rollback {
+                    MissingLockAction::ProtectedRollback
+                } else {
+                    MissingLockAction::Rollback
+                },
             )? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
@@ -956,11 +965,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 .check_txn_status_missing_lock(
                     primary_key,
                     if rollback_if_not_exist {
-                        CheckMissingLockConfig::Rollback {
-                            protect_rollback: true,
-                        }
+                        MissingLockAction::ProtectedRollback
                     } else {
-                        CheckMissingLockConfig::ReturnError
+                        MissingLockAction::ReturnError
                     },
                 )
                 .map(|s| (s, None)),
