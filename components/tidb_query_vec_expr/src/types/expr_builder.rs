@@ -232,7 +232,7 @@ impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
 ///
 /// The transform process is very much like a post-order traversal. This function does it
 /// recursively.
-fn append_rpn_nodes_recursively<F>(
+pub(crate) fn append_rpn_nodes_recursively<F>(
     tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     ctx: &mut EvalContext,

@@ -189,15 +189,19 @@ pub fn build_executors<S: Storage + 'static>(
         let new_executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match ed.get_tp() {
             ExecType::TypeSelection => {
                 EXECUTOR_COUNT_METRICS.batch_selection.inc();
-
-                Box::new(
-                    BatchSelectionExecutor::new(
-                        config.clone(),
-                        executor,
-                        ed.take_selection().take_conditions().into(),
-                    )?
-                    .collect_summary(summary_slot_index),
-                )
+                let mut selection = ed.take_selection();
+                let rpn_conditions: Vec<_> = selection
+                    .take_rpn_conditions()
+                    .into_iter()
+                    .map(|m| tidb_query_vec_expr::RpnExpression::from(m))
+                    .collect();
+                let conditions: Vec<_> = selection.take_conditions().into();
+                let executor = if !rpn_conditions.is_empty() {
+                    BatchSelectionExecutor::new_rpn_expr(config.clone(), executor, rpn_conditions)?
+                } else {
+                    BatchSelectionExecutor::new(config.clone(), executor, conditions)?
+                };
+                Box::new(executor.collect_summary(summary_slot_index))
             }
             ExecType::TypeAggregation | ExecType::TypeStreamAgg
                 if ed.get_aggregation().get_group_by().is_empty() =>

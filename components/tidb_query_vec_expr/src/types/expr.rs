@@ -5,7 +5,9 @@ use std::any::Any;
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
+use crate::types::expr_builder::append_rpn_nodes_recursively;
 use tidb_query_datatype::codec::data_type::ScalarValue;
+use tidb_query_datatype::expr::EvalContext;
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug)]
@@ -140,6 +142,27 @@ impl RpnExpression {
             RpnExpressionNode::Constant { .. } => true,
             _ => false,
         }
+    }
+}
+
+impl From<tipb::RpnExpr> for RpnExpression {
+    fn from(mut rpn_expr: tipb::RpnExpr) -> Self {
+        let tipb_exprs: Vec<_> = rpn_expr.take_exprs().into();
+        let mut expr_nodes = Vec::new();
+        let mut context = EvalContext::default();
+        for tipb_expr in tipb_exprs {
+            //Though append_rpn_nodes_recursively is designed for turn Expr tree node to RPN nodes,
+            //here it can be used as a naive converter from `tipb::RpnExpr` to `RpnExpression`
+            append_rpn_nodes_recursively(
+                tipb_expr,
+                &mut expr_nodes,
+                &mut context,
+                super::super::map_expr_node_to_rpn_func,
+                usize::MAX,
+            )
+            .unwrap();
+        }
+        Self(expr_nodes)
     }
 }
 

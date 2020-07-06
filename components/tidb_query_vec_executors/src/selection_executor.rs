@@ -46,7 +46,11 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    pub fn new_rpn_expr(config: Arc<EvalConfig>, src: Src, conditions: Vec<RpnExpression>) -> Result<Self> {
+    pub fn new_rpn_expr(
+        config: Arc<EvalConfig>,
+        src: Src,
+        conditions: Vec<RpnExpression>,
+    ) -> Result<Self> {
         let ctx = EvalContext::new(config);
         Ok(Self {
             context: ctx,
