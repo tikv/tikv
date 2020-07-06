@@ -519,6 +519,7 @@ fn test_serde_custom_tikv_config() {
         cipher_file: "invalid path".to_owned(),
         cert_allowed_cn,
     };
+    value.backup = BackupConfig { num_threads: 456 };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
         num_threads: 123,

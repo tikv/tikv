@@ -23,6 +23,13 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
+<<<<<<< HEAD
+=======
+#![feature(box_patterns)]
+#![feature(shrink_to)]
+#![feature(drain_filter)]
+#![feature(clamp)]
+>>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 
 #[macro_use]
 extern crate bitflags;
