@@ -1980,7 +1980,7 @@ impl Default for BackupConfig {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
-            num_threads: (cpu_num - cpu_num / 4).max(1),
+            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
         }
     }
 }
