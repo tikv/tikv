@@ -42,6 +42,14 @@ impl MissingLockAction {
             MissingLockAction::ReturnError
         }
     }
+
+    fn construct_write(&self, ts: TimeStamp) -> Write {
+        match self {
+            MissingLockAction::Rollback => Write::new_rollback(ts, false),
+            MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
@@ -769,20 +777,12 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                let write = self.get_write(action, ts);
+                let write = action.construct_write(ts);
                 self.put_write(primary_key, ts, write.as_ref().to_bytes());
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
                 Ok(TxnStatus::LockNotExist)
             }
-        }
-    }
-
-    fn get_write(&self, action: MissingLockAction, ts: TimeStamp) -> Write {
-        match action {
-            MissingLockAction::Rollback => Write::new_rollback(ts, false),
-            MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
-            _ => unreachable!(),
         }
     }
 
