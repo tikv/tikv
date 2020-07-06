@@ -1837,7 +1837,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#427b752161cd71e84ca0919b83390dbbb00ce608"
+source = "git+https://github.com/pingcap/kvproto.git#f735bcd8f9f90c778a3964d289c3fe7cc3cea38b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3730,6 +3730,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slog-json"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "slog",
+]
+
+[[package]]
 name = "slog-term"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4644,11 +4656,11 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "serde_derive",
  "serde_json",
  "slog",
  "slog-async",
  "slog-global",
+ "slog-json",
  "slog-term",
  "sysinfo",
  "tempfile",
