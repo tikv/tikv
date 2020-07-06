@@ -48,7 +48,7 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
+use tikv_util::config::{self, LogFormat, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -836,7 +836,6 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     #[config(skip)]
     pub info_log_dir: String,
-    #[config(skip)]
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
@@ -1288,6 +1287,12 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
+        let mut opt = self.db.as_inner().get_db_options();
+        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1326,6 +1331,15 @@ impl ConfigManager for DBConfigManger {
                 }
             }
         }
+
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .next()
+        {
+            let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
+            self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
         if !change.is_empty() {
             let change = config_value_to_string(change);
             let change_slice = config_to_slice(&change);
@@ -1339,7 +1353,6 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
-
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
@@ -1949,6 +1962,32 @@ mod readpool_tests {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupConfig {
+    pub num_threads: usize,
+}
+
+impl BackupConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::new().cpu_cores_quota();
+        Self {
+            // use at most 75% of vCPU by default
+            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1961,6 +2000,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub log_format: LogFormat,
 
     #[config(skip)]
     pub slow_log_file: String,
@@ -2012,6 +2054,9 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
 
     #[config(submodule)]
+    pub backup: BackupConfig,
+
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[config(submodule)]
@@ -2027,6 +2072,7 @@ impl Default for TiKvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_format: LogFormat::Text,
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -2043,6 +2089,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            backup: BackupConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
@@ -2125,6 +2172,7 @@ impl TiKvConfig {
         self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         Ok(())
@@ -2520,6 +2568,7 @@ pub enum Module {
     Security,
     Encryption,
     Import,
+    Backup,
     PessimisticTxn,
     Gc,
     Split,
@@ -2541,6 +2590,7 @@ impl From<&str> for Module {
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
+            "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             n => Module::Unknown(n.to_owned()),
@@ -2889,7 +2939,7 @@ mod tests {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-                DBOptions::new(),
+                cfg.rocksdb.build_opt(),
                 vec![
                     CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
@@ -2915,6 +2965,7 @@ mod tests {
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
+        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
@@ -2926,6 +2977,21 @@ mod tests {
             .update_config("rocksdb.max-background-jobs", "8")
             .unwrap();
         assert_eq!(db.get_db_options().get_max_background_jobs(), 8);
+
+        // update rate_bytes_per_sec
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(64).0 as i64
+        );
+
+        cfg_controller
+            .update_config("rocksdb.rate-bytes-per-sec", "128MB")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_bytes_per_sec().unwrap(),
+            ReadableSize::mb(128).0 as i64
+        );
 
         // update some configs on default cf
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();

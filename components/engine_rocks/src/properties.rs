@@ -639,6 +639,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::many_single_char_names)]
     #[test]
     fn test_range_properties() {
         let cases = [

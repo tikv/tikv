@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::cmp;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::DB;
+use configuration::Configuration;
+use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
@@ -18,6 +18,7 @@ use kvproto::metapb::*;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
+use tikv::config::BackupConfig;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
@@ -52,7 +53,6 @@ struct Request {
 /// Backup Task.
 pub struct Task {
     request: Request,
-    concurrency: u32,
     pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
@@ -113,7 +113,6 @@ impl Task {
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
             },
-            concurrency: req.get_concurrency(),
             resp,
         };
         Ok((task, cancel))
@@ -319,6 +318,23 @@ impl BackupRange {
 
 type BackupRes = (Vec<File>, Statistics);
 
+#[derive(Clone)]
+pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
+
+impl configuration::ConfigManager for ConfigManager {
+    fn dispatch(&mut self, change: configuration::ConfigChange) -> configuration::Result<()> {
+        self.0.write().unwrap().update(change);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl ConfigManager {
+    fn set_num_threads(&self, num_threads: usize) {
+        self.0.write().unwrap().num_threads = num_threads;
+    }
+}
+
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
@@ -327,6 +343,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
     pool: RefCell<ControlThreadPool>,
     pool_idle_threshold: u64,
     db: Arc<DB>,
+    config_manager: ConfigManager,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -494,8 +511,45 @@ impl ControlThreadPool {
     }
 }
 
+#[test]
+fn test_control_thread_pool_adjust_keep_tasks() {
+    use std::thread::sleep;
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let mut pool = ControlThreadPool::new();
+    pool.adjust_with(3);
+
+    for i in 0..8 {
+        let ctr = counter.clone();
+        pool.spawn(move || {
+            sleep(Duration::from_millis(100));
+            ctr.fetch_or(1 << i, Ordering::SeqCst);
+        });
+    }
+
+    sleep(Duration::from_millis(150));
+    pool.adjust_with(4);
+
+    for i in 8..16 {
+        let ctr = counter.clone();
+        pool.spawn(move || {
+            sleep(Duration::from_millis(100));
+            ctr.fetch_or(1 << i, Ordering::SeqCst);
+        });
+    }
+
+    sleep(Duration::from_millis(250));
+    assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
+}
+
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
-    pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
+    pub fn new(
+        store_id: u64,
+        engine: E,
+        region_info: R,
+        db: Arc<DB>,
+        config: BackupConfig,
+    ) -> Endpoint<E, R> {
         Endpoint {
             store_id,
             engine,
@@ -503,6 +557,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             pool: RefCell::new(ControlThreadPool::new()),
             pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
+            config_manager: ConfigManager(Arc::new(RwLock::new(config))),
         }
     }
 
@@ -510,6 +565,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(self.pool_idle_threshold), ());
         timer
+    }
+
+    pub fn get_config_manager(&self) -> ConfigManager {
+        self.config_manager.clone()
     }
 
     fn spawn_backup_worker(
@@ -586,11 +645,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 
     pub fn handle_backup_task(&self, task: Task) {
-        let Task {
-            request,
-            resp,
-            concurrency,
-        } = task;
+        let Task { request, resp } = task;
         let start = Instant::now();
         let start_key = if request.start_key.is_empty() {
             None
@@ -621,7 +676,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             request.is_raw_kv,
             request.cf,
         )));
-        let concurrency = cmp::max(1, concurrency) as usize;
+        let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
             self.spawn_backup_worker(prs.clone(), request.clone(), res_tx.clone());
@@ -846,7 +901,13 @@ pub mod tests {
         let db = rocks.get_rocksdb();
         (
             temp,
-            Endpoint::new(1, rocks, MockRegionInfoProvider::new(), db),
+            Endpoint::new(
+                1,
+                rocks,
+                MockRegionInfoProvider::new(),
+                db,
+                BackupConfig { num_threads: 4 },
+            ),
         )
     }
 
@@ -926,7 +987,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::block_in_if_condition_stmt)]
+        #[allow(clippy::blocks_in_if_conditions)]
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
@@ -945,7 +1006,6 @@ pub mod tests {
                         cf: engine_traits::CF_DEFAULT,
                     },
                     resp: tx,
-                    concurrency: 4,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = block_on(rx.collect());
@@ -1037,7 +1097,6 @@ pub mod tests {
             req.set_end_key(vec![b'5']);
             req.set_start_version(0);
             req.set_end_version(ts.into_inner());
-            req.set_concurrency(4);
             let (tx, rx) = unbounded();
             // Empty path should return an error.
             Task::new(req.clone(), tx.clone()).unwrap_err();
@@ -1238,25 +1297,19 @@ pub mod tests {
 
         let (tx, _) = unbounded();
 
-        // at lease spwan one thread
-        req.set_concurrency(0);
-        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
-        endpoint.handle_backup_task(task);
-        assert!(endpoint.pool.borrow().size == 1);
-
         // expand thread pool is needed
-        req.set_concurrency(15);
+        endpoint.get_config_manager().set_num_threads(15);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 15);
 
         // shrink thread pool only if there are too many idle threads
-        req.set_concurrency(10);
+        endpoint.get_config_manager().set_num_threads(10);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 15);
 
-        req.set_concurrency(3);
+        endpoint.get_config_manager().set_num_threads(3);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
@@ -1294,8 +1347,13 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
-        req.set_concurrency(10);
         req.set_storage_backend(make_noop_backend());
+
+        endpoint
+            .lock()
+            .unwrap()
+            .get_config_manager()
+            .set_num_threads(10);
 
         let (tx, resp_rx) = unbounded();
         let (task, _) = Task::new(req, tx).unwrap();

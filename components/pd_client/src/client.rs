@@ -514,8 +514,10 @@ impl PdClient for RpcClient {
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                if cluster_version.set(resp.get_cluster_version()).is_err() {
-                    warn!("invalid cluster version: {}", resp.get_cluster_version());
+                match cluster_version.set(resp.get_cluster_version()) {
+                    Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
+                    Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
+                    _ => {}
                 };
                 Ok(resp)
             })) as PdFuture<_>

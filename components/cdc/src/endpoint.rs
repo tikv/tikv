@@ -7,6 +7,7 @@ use std::time::Duration;
 use engine_rocks::RocksSnapshot;
 use futures::future::Future;
 use kvproto::cdcpb::*;
+use kvproto::kvrpcpb::ExtraOp;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
@@ -685,7 +686,7 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
-            .build_delta_scanner(self.checkpoint_ts)
+            .build_delta_scanner(self.checkpoint_ts, ExtraOp::Noop)
             .unwrap();
         let mut done = false;
         while !done {

@@ -246,8 +246,8 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use engine::DB;
     use engine_rocks::raw::Writable;
+    use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::{new_engine, new_engine_opt, CFOptions};
     use engine_rocks::util::get_cf_handle;
@@ -350,8 +350,8 @@ mod tests {
 
     #[test]
     fn test_check_space_redundancy() {
-        let p = Builder::new().prefix("test").tempdir().unwrap();
-        let engine = open_db(p.path().to_str().unwrap());
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
         let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
         let cf2 = engine.c().cf_handle(CF_WRITE).unwrap();
 
@@ -369,8 +369,9 @@ mod tests {
         }
         engine.flush_cf(cf, true).unwrap();
 
-        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = get_range_entries_and_versions(engine.c(), cf2, &s, &e).unwrap();
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let (entries, version) =
+            get_range_entries_and_versions(engine.c(), cf2, &start, &end).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
 

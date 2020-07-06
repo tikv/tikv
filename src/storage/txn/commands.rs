@@ -264,6 +264,10 @@ pub trait CommandExt {
     fn can_be_pipelined(&self) -> bool {
         false
     }
+
+    fn write_bytes(&self) -> usize;
+
+    fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
 }
 
 macro_rules! command {
@@ -317,6 +321,44 @@ macro_rules! tag {
     };
 }
 
+macro_rules! write_bytes {
+    ($field: ident) => {
+        fn write_bytes(&self) -> usize {
+            self.$field.as_encoded().len()
+        }
+    };
+    ($field: ident: multiple) => {
+        fn write_bytes(&self) -> usize {
+            self.$field.iter().map(|x| x.as_encoded().len()).sum()
+        }
+    };
+}
+
+macro_rules! gen_lock {
+    (empty) => {
+        fn gen_lock(&self, _latches: &Latches) -> latch::Lock {
+            latch::Lock::new(vec![])
+        }
+    };
+    ($field: ident) => {
+        fn gen_lock(&self, latches: &Latches) -> latch::Lock {
+            latches.gen_lock(iter::once(&self.$field))
+        }
+    };
+    ($field: ident: multiple) => {
+        fn gen_lock(&self, latches: &Latches) -> latch::Lock {
+            latches.gen_lock(&self.$field)
+        }
+    };
+    ($field: ident: multiple$transform: tt) => {
+        fn gen_lock(&self, latches: &Latches) -> latch::Lock {
+            #![allow(unused_parens)]
+            let keys = self.$field.iter().map($transform);
+            latches.gen_lock(keys)
+        }
+    };
+}
+
 macro_rules! command_method {
     ($name:ident, $return_ty: ty, $value: expr) => {
         fn $name(&self) -> $return_ty {
@@ -350,6 +392,25 @@ command! {
 impl CommandExt for Prewrite {
     tag!(prewrite);
     ts!(start_ts);
+
+    fn write_bytes(&self) -> usize {
+        let mut bytes = 0;
+        for m in &self.mutations {
+            match *m {
+                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                    bytes += key.as_encoded().len();
+                    bytes += value.len();
+                }
+                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                    bytes += key.as_encoded().len();
+                }
+                Mutation::CheckNotExists(_) => (),
+            }
+        }
+        bytes
+    }
+
+    gen_lock!(mutations: multiple(|x| x.key()));
 }
 
 impl Prewrite {
@@ -435,6 +496,25 @@ impl CommandExt for PrewritePessimistic {
     tag!(prewrite);
     ts!(start_ts);
     command_method!(requires_pessimistic_txn, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        let mut bytes = 0;
+        for (m, _) in &self.mutations {
+            match *m {
+                Mutation::Put((ref key, ref value)) | Mutation::Insert((ref key, ref value)) => {
+                    bytes += key.as_encoded().len();
+                    bytes += value.len();
+                }
+                Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                    bytes += key.as_encoded().len();
+                }
+                Mutation::CheckNotExists(_) => (),
+            }
+        }
+        bytes
+    }
+
+    gen_lock!(mutations: multiple(|(x, _)| x.key()));
 }
 
 command! {
@@ -467,6 +547,15 @@ impl CommandExt for AcquirePessimisticLock {
     ts!(start_ts);
     command_method!(requires_pessimistic_txn, bool, true);
     command_method!(can_be_pipelined, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        self.keys
+            .iter()
+            .map(|(key, _)| key.as_encoded().len())
+            .sum()
+    }
+
+    gen_lock!(keys: multiple(|x| &x.0));
 }
 
 command! {
@@ -488,6 +577,8 @@ command! {
 impl CommandExt for Commit {
     tag!(commit);
     ts!(commit_ts);
+    write_bytes!(keys: multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -509,6 +600,8 @@ command! {
 impl CommandExt for Cleanup {
     tag!(cleanup);
     ts!(start_ts);
+    write_bytes!(key);
+    gen_lock!(key);
 }
 
 command! {
@@ -527,6 +620,8 @@ command! {
 impl CommandExt for Rollback {
     tag!(rollback);
     ts!(start_ts);
+    write_bytes!(keys: multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -548,6 +643,8 @@ impl CommandExt for PessimisticRollback {
     tag!(pessimistic_rollback);
     ts!(start_ts);
     command_method!(requires_pessimistic_txn, bool, true);
+    write_bytes!(keys: multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -572,6 +669,8 @@ command! {
 impl CommandExt for TxnHeartBeat {
     tag!(txn_heart_beat);
     ts!(start_ts);
+    write_bytes!(primary_key);
+    gen_lock!(primary_key);
 }
 
 command! {
@@ -603,6 +702,8 @@ command! {
 impl CommandExt for CheckTxnStatus {
     tag!(check_txn_status);
     ts!(lock_ts);
+    write_bytes!(primary_key);
+    gen_lock!(primary_key);
 }
 
 command! {
@@ -624,6 +725,12 @@ impl CommandExt for ScanLock {
     ts!(max_ts);
     command_method!(readonly, bool, true);
     command_method!(is_sys_cmd, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 command! {
@@ -664,6 +771,15 @@ impl CommandExt for ResolveLock {
     }
 
     command_method!(is_sys_cmd, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        self.key_locks
+            .iter()
+            .map(|(key, _)| key.as_encoded().len())
+            .sum()
+    }
+
+    gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 
 command! {
@@ -684,6 +800,8 @@ impl CommandExt for ResolveLockLite {
     tag!(resolve_lock_lite);
     ts!(start_ts);
     command_method!(is_sys_cmd, bool, true);
+    write_bytes!(resolve_keys: multiple);
+    gen_lock!(resolve_keys: multiple);
 }
 
 command! {
@@ -702,6 +820,8 @@ command! {
 
 impl CommandExt for Pause {
     tag!(pause);
+    write_bytes!(keys: multiple);
+    gen_lock!(keys: multiple);
 }
 
 command! {
@@ -716,6 +836,12 @@ command! {
 impl CommandExt for MvccByKey {
     tag!(key_mvcc);
     command_method!(readonly, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 command! {
@@ -731,6 +857,12 @@ impl CommandExt for MvccByStartTs {
     tag!(start_ts_mvcc);
     ts!(start_ts);
     command_method!(readonly, bool, true);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
+    gen_lock!(empty);
 }
 
 pub enum CommandKind {
@@ -773,6 +905,7 @@ impl Command {
             CommandKind::MvccByStartTs(t) => t,
         }
     }
+
     pub fn readonly(&self) -> bool {
         self.command_ext().readonly()
     }
@@ -802,121 +935,11 @@ impl Command {
     }
 
     pub fn write_bytes(&self) -> usize {
-        let mut bytes = 0;
-        match self.kind {
-            CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
-                for m in mutations {
-                    match *m {
-                        Mutation::Put((ref key, ref value))
-                        | Mutation::Insert((ref key, ref value)) => {
-                            bytes += key.as_encoded().len();
-                            bytes += value.len();
-                        }
-                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                            bytes += key.as_encoded().len();
-                        }
-                        Mutation::CheckNotExists(_) => (),
-                    }
-                }
-            }
-            CommandKind::PrewritePessimistic(PrewritePessimistic { ref mutations, .. }) => {
-                for (m, _) in mutations {
-                    match *m {
-                        Mutation::Put((ref key, ref value))
-                        | Mutation::Insert((ref key, ref value)) => {
-                            bytes += key.as_encoded().len();
-                            bytes += value.len();
-                        }
-                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                            bytes += key.as_encoded().len();
-                        }
-                        Mutation::CheckNotExists(_) => (),
-                    }
-                }
-            }
-            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { ref keys, .. }) => {
-                for (key, _) in keys {
-                    bytes += key.as_encoded().len();
-                }
-            }
-            CommandKind::Commit(Commit { ref keys, .. })
-            | CommandKind::Rollback(Rollback { ref keys, .. })
-            | CommandKind::PessimisticRollback(PessimisticRollback { ref keys, .. })
-            | CommandKind::Pause(Pause { ref keys, .. }) => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
-            }
-            CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => {
-                for lock in key_locks {
-                    bytes += lock.0.as_encoded().len();
-                }
-            }
-            CommandKind::ResolveLockLite(ResolveLockLite {
-                ref resolve_keys, ..
-            }) => {
-                for k in resolve_keys {
-                    bytes += k.as_encoded().len();
-                }
-            }
-            CommandKind::Cleanup(Cleanup { ref key, .. }) => {
-                bytes += key.as_encoded().len();
-            }
-            CommandKind::TxnHeartBeat(TxnHeartBeat {
-                ref primary_key, ..
-            }) => {
-                bytes += primary_key.as_encoded().len();
-            }
-            CommandKind::CheckTxnStatus(CheckTxnStatus {
-                ref primary_key, ..
-            }) => {
-                bytes += primary_key.as_encoded().len();
-            }
-            _ => {}
-        }
-        bytes
+        self.command_ext().write_bytes()
     }
 
     pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-        match &self.kind {
-            CommandKind::Prewrite(Prewrite { mutations, .. }) => {
-                let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                latches.gen_lock(&keys)
-            }
-            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                let keys: Vec<&Key> = mutations.iter().map(|(x, _)| x.key()).collect();
-                latches.gen_lock(&keys)
-            }
-            CommandKind::ResolveLock(ResolveLock { key_locks, .. }) => {
-                let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
-                latches.gen_lock(&keys)
-            }
-            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
-                latches.gen_lock(&keys)
-            }
-            CommandKind::ResolveLockLite(ResolveLockLite { resolve_keys, .. }) => {
-                latches.gen_lock(resolve_keys)
-            }
-            CommandKind::Commit(Commit { keys, .. })
-            | CommandKind::Rollback(Rollback { keys, .. })
-            | CommandKind::PessimisticRollback(PessimisticRollback { keys, .. }) => {
-                latches.gen_lock(keys)
-            }
-            CommandKind::Cleanup(Cleanup { key, .. }) => latches.gen_lock(&[key]),
-            CommandKind::Pause(Pause { keys, .. }) => latches.gen_lock(keys),
-            CommandKind::TxnHeartBeat(TxnHeartBeat { primary_key, .. }) => {
-                latches.gen_lock(&[primary_key])
-            }
-            CommandKind::CheckTxnStatus(CheckTxnStatus { primary_key, .. }) => {
-                latches.gen_lock(&[primary_key])
-            }
-
-            // Avoid using wildcard _ here to avoid forgetting add new commands here.
-            CommandKind::ScanLock(_)
-            | CommandKind::MvccByKey(_)
-            | CommandKind::MvccByStartTs(_) => latch::Lock::new(vec![]),
-        }
+        self.command_ext().gen_lock(latches)
     }
 
     pub fn requires_pessimistic_txn(&self) -> bool {
