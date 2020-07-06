@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -561,6 +562,7 @@ ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = true
+compaction-filter-skip-version-check = true
 
 [pessimistic-txn]
 enabled = false

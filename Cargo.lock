@@ -195,7 +195,6 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "crc64fast",
- "engine",
  "engine_rocks",
  "engine_traits",
  "external_storage",
@@ -454,7 +453,6 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
- "engine",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -572,7 +570,6 @@ dependencies = [
  "chrono",
  "clap",
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "fs2",
@@ -1037,28 +1034,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine"
-version = "0.0.1"
-dependencies = [
- "configuration",
- "encryption",
- "engine_traits",
- "hex 0.4.2",
- "lazy_static",
- "prometheus",
- "protobuf",
- "rocksdb",
- "slog",
- "slog-global",
- "sysinfo",
- "tempfile",
- "tikv_alloc",
- "tikv_util",
- "time 0.1.42",
- "toml",
-]
-
-[[package]]
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
@@ -1074,7 +1049,6 @@ dependencies = [
  "coarsetime",
  "configuration",
  "encryption",
- "engine",
  "engine_traits",
  "keys",
  "kvproto",
@@ -1863,7 +1837,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#8037ca08f377c8f041ff4a2bf9a7cdbce5479d9a"
+source = "git+https://github.com/pingcap/kvproto.git#f735bcd8f9f90c778a3964d289c3fe7cc3cea38b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1938,7 +1912,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1957,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2126,7 +2100,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2139,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -3007,7 +2981,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -3301,7 +3274,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3757,6 +3730,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slog-json"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "slog",
+]
+
+[[package]]
 name = "slog-term"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4153,7 +4138,6 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "futures 0.1.29",
@@ -4183,7 +4167,6 @@ name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
- "engine",
  "engine_rocks",
  "engine_traits",
  "keys",
@@ -4237,7 +4220,6 @@ dependencies = [
  "criterion-papi",
  "crossbeam",
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "external_storage",
@@ -4529,7 +4511,6 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "encryption",
- "engine",
  "engine_panic",
  "engine_rocks",
  "engine_traits",
@@ -4555,6 +4536,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "minitrace",
  "more-asserts",
@@ -4580,6 +4562,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4673,11 +4656,11 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "serde_derive",
  "serde_json",
  "slog",
  "slog-async",
  "slog-global",
+ "slog-json",
  "slog-term",
  "sysinfo",
  "tempfile",

@@ -16,7 +16,7 @@ use raft::eraftpb;
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use engine_traits::{SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{MiscExt, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{AutoSplitController, SnapManager};
@@ -522,6 +522,7 @@ fn test_physical_scan_lock() {
             lock_info.set_key(k);
             lock_info.set_lock_ttl(3000);
             lock_info.set_lock_type(Op::Put);
+            lock_info.set_min_commit_ts(ts + 1);
             lock_info
         })
         .collect();

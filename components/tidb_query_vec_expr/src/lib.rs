@@ -7,13 +7,12 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(const_loop)]
-#![feature(const_if_match)]
 #![feature(ptr_offset_from)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -541,6 +540,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
+        ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
