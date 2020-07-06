@@ -14,13 +14,13 @@ use crate::codec::Result;
 /// this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
-    Int(NotChunkedVec<Int>),
-    Real(NotChunkedVec<Real>),
-    Decimal(NotChunkedVec<Decimal>),
+    Int(ChunkedVecSized<Int>),
+    Real(ChunkedVecSized<Real>),
+    Decimal(ChunkedVecSized<Decimal>),
     // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
     Bytes(NotChunkedVec<Bytes>),
-    DateTime(NotChunkedVec<DateTime>),
-    Duration(NotChunkedVec<Duration>),
+    DateTime(ChunkedVecSized<DateTime>),
+    Duration(ChunkedVecSized<Duration>),
     Json(NotChunkedVec<Json>),
 }
 
@@ -29,9 +29,12 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template_evaluable! {
-            TT, match eval_tp {
-                EvalType::TT => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_tp {
+                EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                EvalType::Json => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
+                EvalType::Bytes => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
             }
         }
     }
@@ -39,9 +42,12 @@ impl VectorValue {
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(_) => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match self {
+                VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                VectorValue::Json(_) => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
+                VectorValue::Bytes(_) => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
             }
         }
     }
@@ -466,23 +472,23 @@ impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
-    ($ty:tt) => {
-        impl From<NotChunkedVec<$ty>> for VectorValue {
+    ($ty:tt, $chunk:tt) => {
+        impl From<$chunk<$ty>> for VectorValue {
             #[inline]
-            fn from(s: NotChunkedVec<$ty>) -> VectorValue {
+            fn from(s: $chunk<$ty>) -> VectorValue {
                 VectorValue::$ty(s)
             }
         }
     };
 }
 
-impl_from! { Int }
-impl_from! { Real }
-impl_from! { Decimal }
-impl_from! { Bytes }
-impl_from! { DateTime }
-impl_from! { Duration }
-impl_from! { Json }
+impl_from! { Int, ChunkedVecSized }
+impl_from! { Real, ChunkedVecSized }
+impl_from! { Decimal, ChunkedVecSized }
+impl_from! { Bytes, NotChunkedVec }
+impl_from! { DateTime, ChunkedVecSized }
+impl_from! { Duration, ChunkedVecSized }
+impl_from! { Json, NotChunkedVec }
 
 #[cfg(test)]
 mod tests {
@@ -630,7 +636,7 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Real::new(1.0).ok()];
-        let chunked_vec = NotChunkedVec::from_slice(slice);
+        let chunked_vec = ChunkedVecSized::from_slice(slice);
         let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
         assert_eq!(column.to_real_vec(), slice);
