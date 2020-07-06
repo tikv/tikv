@@ -1085,6 +1085,20 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     Ok(buf.split_at(1 + pos))
 }
 
+/// `walk_n_columns` walks `n` colums within `buf` which is in datum format
+/// and advances the buffer pointer.
+/// If the datum buffer contains less than `n` columns, an error will be returned.
+pub fn walk_n_columns(buf: &mut &[u8], n: usize) -> Result<()> {
+    for _ in 0..n {
+        if buf.is_empty() {
+            return Err(invalid_type!("Some columns are missing in the datum buffer"));
+        }
+        let (_, remaining) = split_datum(buf, false)?;
+        *buf = remaining;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

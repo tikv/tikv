@@ -36,7 +36,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        primary_column_ids: Vec<i64>,
+        primary_column_ids_len: usize,
         is_backward: bool,
         unique: bool,
     ) -> Result<Self> {
@@ -53,20 +53,35 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
         // real). We accept this kind of request for compatibility considerations, but will be
         // forbidden soon.
+        use DecodeHandleStrategy::*;
+
         let is_int_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
-        let (decode_handle, handle_count) = if is_int_handle {
-            (true, 1)
-        } else if !primary_column_ids.is_empty() {
-            (true, primary_column_ids.len())
-        } else {
-            (false, 0)
+        let is_common_handle = primary_column_ids_len > 0;
+        let (decode_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
+            (false, false) => (NoDecode, 0),
+            (false, true) => (DecodeCommonHandle, primary_column_ids_len),
+            (true, false) => (DecodeIntHandle, 1),
+            // TiDB may accidentally push down both int handle or common handle.
+            // However, we still try to decode int handle.
+            _ => {
+                warn!("Both int handle and common handle are push downed");
+                (DecodeIntHandle, 1)
+            }
         };
+
+        if handle_column_cnt > columns_info.len() {
+            return Err(other_err!(
+                "The number of handle columns exceeds the length of `columns_info`"
+            ));
+        }
+
         let schema: Vec<_> = columns_info
             .iter()
             .map(|ci| field_type_from_column_info(&ci))
             .collect();
 
-        let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len() - handle_count]
+        let columns_id_without_handle: Vec<_> = columns_info
+            [..columns_info.len() - handle_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
@@ -75,8 +90,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             context: EvalContext::new(config),
             schema,
             columns_id_without_handle,
-            decode_handle,
-            is_int_handle,
+            decode_strategy,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -124,6 +138,13 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 }
 
+#[derive(PartialEq)]
+enum DecodeHandleStrategy {
+    NoDecode,
+    DecodeIntHandle,
+    DecodeCommonHandle,
+}
+
 struct IndexScanExecutorImpl {
     /// See `TableScanExecutorImpl`'s `context`.
     context: EvalContext,
@@ -134,11 +155,9 @@ struct IndexScanExecutorImpl {
     /// ID of interested columns (exclude PK handle column).
     columns_id_without_handle: Vec<i64>,
 
-    /// Whether PK handle column is interested. Handle will be always placed in the last column.
-    decode_handle: bool,
-
-    /// Whether PK handle column is a int column.
-    is_int_handle: bool,
+    /// The strategy to decode handles.
+    /// Handle will be always placed in the last column.
+    decode_strategy: DecodeHandleStrategy,
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -152,25 +171,32 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         &mut self.context
     }
 
-    /// Constructs empty columns, with PK in decoded format and the rest in raw format.
+    /// Constructs empty columns, with PK containing int handle in decoded format and the rest in raw format.
     ///
     /// Note: the structure of the constructed column is the same as table scan executor but due
     /// to different reasons.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
+        use DecodeHandleStrategy::*;
+
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
+
         for _ in 0..self.columns_id_without_handle.len() {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
 
-        if self.is_int_handle {
-            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                scan_rows,
-                EvalType::Int,
-            ));
-        } else {
-            for _ in self.columns_id_without_handle.len()..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+        match self.decode_strategy {
+            NoDecode => {}
+            DecodeIntHandle => {
+                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                    scan_rows,
+                    EvalType::Int,
+                ));
+            }
+            DecodeCommonHandle => {
+                for _ in self.columns_id_without_handle.len()..columns_len {
+                    columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+                }
             }
         }
 
@@ -178,6 +204,94 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         LazyBatchColumnVec::from(columns)
     }
 
+    // Currently, we have 6 foramts of index value.
+    // Value layout:
+    //		+--With Restore Data(for indices on string columns)
+    //		|  |
+    //		|  +--Non Unique (TailLen = len(PaddingData) + len(Flag), TailLen < 8 always)
+    //		|  |  |
+    //		|  |  +--Without Untouched Flag:
+    //		|  |  |
+    //		|  |  |  Layout: TailLen |      RestoreData  |      PaddingData
+    //		|  |  |  Length: 1       | size(RestoreData) | size(paddingData)
+    //		|  |  |
+    //		|  |  |  The length >= 10 always because of padding.
+    //		|  |  |
+    //		|  |  +--With Untouched Flag:
+    //		|  |
+    //		|  |     Layout: TailLen |    RestoreData    |      PaddingData  | Flag
+    //		|  |     Length: 1       | size(RestoreData) | size(paddingData) |  1
+    //		|  |
+    //		|  |     The length >= 11 always because of padding.
+    //		|  |
+    //		|  +--Unique Common Handle
+    //		|  |  |
+    //		|  |  +--Without Untouched Flag:
+    //		|  |  |
+    //		|  |  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       | RestoreData
+    //		|  |  |  Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData)
+    //		|  |  |
+    //		|  |  |  The length > 10 always because of CHandle size.
+    //		|  |  |
+    //		|  |  +--With Untouched Flag:
+    //		|  |
+    //		|  |     Layout: 0x01 | CHandle Flag | CHandle Len | CHandle       | RestoreData       | Flag
+    //		|  |     Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData) | 1
+    //		|  |
+    //		|  |     The length > 10 always because of CHandle size.
+    //		|  |
+    //		|  +--Unique Integer Handle (TailLen = len(Handle) + len(Flag), TailLen == 8 || TailLen == 9)
+    //		|     |
+    //		|     +--Without Untouched Flag:
+    //		|     |
+    //		|     |  Layout: 0x08 |    RestoreData    |  Handle
+    //		|     |  Length: 1    | size(RestoreData) |   8
+    //		|     |
+    //		|     |  The length >= 10 always since size(RestoreData) > 0.
+    //		|     |
+    //		|     +--With Untouched Flag:
+    //		|
+    //		|        Layout: 0x09 |      RestoreData  |  Handle  | Flag
+    //		|        Length: 1    | size(RestoreData) |   8      | 1
+    //		|
+    //		|   	 The length >= 11 always since size(RestoreData) > 0.
+    //		|
+    //		+--Without Restore Data
+    //		|
+    //		+--Non Unique
+    //		|  |
+    //		|  +--Without Untouched Flag:
+    //		|  |
+    //		|  |  Layout: '0'
+    //		|  |  Length:  1
+    //		|  |
+    //		|  +--With Untouched Flag:
+    //		|
+    //		|     Layout: Flag
+    //		|     Length:  1
+    //		+--Unique Common Handle
+    //		|  |
+    //		|  +--Without Untouched Flag:
+    //		|  |
+    //		|  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle
+    //      |  |  Length: 1    | 1            | 2           | size(CHandle)
+    //		|  |
+    //		|  +--With Untouched Flag:
+    //		|
+    //		|     Layout: 0x01 | CHandle Flag | CHandle Len | CHandle       | Flag
+    //		|     Length: 1    | 1            | 2           | size(CHandle) | 1
+    //		|
+    //		+--Unique Integer Handle
+    //		|
+    //		+--Without Untouched Flag:
+    //		|
+    //		|  Layout: Handle
+    //		|  Length:   8
+    //		|
+    //		+--With Untouched Flag:
+    //
+    //		Layout: Handle | Flag
+    //		Length:   8    |  1
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -226,7 +340,7 @@ impl IndexScanExecutorImpl {
         }
     }
 
-    fn extract_columns_from_row(
+    fn extract_columns_from_row_format(
         &mut self,
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
@@ -248,23 +362,29 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    fn extract_pk_columns_from_datum_payload(
-        &mut self,
+    fn extract_columns_from_common_handle(
         payload: &mut &[u8],
-        columns: &mut LazyBatchColumnVec,
-        start: usize,
-        end: usize,
-        ignore_value: bool,
+        columns: &mut [LazyBatchColumn],
     ) -> Result<()> {
-        for i in start..end {
-            if payload.is_empty() {
-                break;
+        Self::extract_columns_from_datum_format(payload, columns)?;
+        // Skip the zero padding.
+        while !payload.is_empty() && payload[0] == 0 {
+            *payload = &payload[1..];
+        }
+        Ok(())
+    }
+
+    fn extract_columns_from_datum_format(
+        datum: &mut &[u8],
+        columns: &mut [LazyBatchColumn],
+    ) -> Result<()> {
+        for column in columns {
+            if datum.is_empty() {
+                return Err(other_err!("Value is missing some columns"));
             }
-            let (value, remain) = datum::split_datum(payload, false)?;
-            if !ignore_value {
-                columns[i].mut_raw().push(value);
-            }
-            *payload = remain;
+            let (value, remaining) = datum::split_datum(datum, false)?;
+            column.mut_raw().push(value);
+            *datum = remaining;
         }
         Ok(())
     }
@@ -275,6 +395,8 @@ impl IndexScanExecutorImpl {
         mut value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        use DecodeHandleStrategy::*;
+
         let tail_len = value[0] as usize;
         let handle_len = ((value[2] as usize) << 8) + value[3] as usize;
         let handle_end_offset = 4 + handle_len;
@@ -284,29 +406,24 @@ impl IndexScanExecutorImpl {
         // If there are some restore data.
         if handle_end_offset < value.len() {
             let restore_values = &value[handle_end_offset..];
-            self.extract_columns_from_row(restore_values, columns)?;
+            self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
-            // The payload part of the key.
+            // The datum payload part of the key.
             let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
-            self.extract_pk_columns_from_datum_payload(
+            Self::extract_columns_from_datum_format(
                 &mut key_payload,
-                columns,
-                0,
-                self.columns_id_without_handle.len(),
-                false,
+                &mut columns[0..self.columns_id_without_handle.len()],
             )?;
         }
 
-        if self.decode_handle {
+        if let DecodeCommonHandle = self.decode_strategy {
             let mut common_handle = &value[4..handle_end_offset];
-            self.extract_pk_columns_from_datum_payload(
+            Self::extract_columns_from_common_handle(
                 &mut common_handle,
-                columns,
-                self.columns_id_without_handle.len(),
-                self.schema.len(),
-                false,
+                &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
             )?;
         }
+
         Ok(())
     }
 
@@ -316,33 +433,36 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        use DecodeHandleStrategy::*;
         let tail_len = value[0] as usize;
         let restore_values = &value[1..value.len() - tail_len];
-        self.extract_columns_from_row(restore_values, columns)?;
+        self.extract_columns_from_row_format(restore_values, columns)?;
 
-        if self.decode_handle {
-            if tail_len < 8 {
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                self.extract_pk_columns_from_datum_payload(
-                    &mut key,
-                    columns,
-                    0,
-                    self.columns_id_without_handle.len(),
-                    true,
-                )?;
-                self.extract_pk_columns_from_datum_payload(
-                    &mut key,
-                    columns,
-                    self.columns_id_without_handle.len(),
-                    columns.columns_len(),
-                    false,
-                )?;
-            } else {
-                assert!(self.is_int_handle);
-                let handle = self.decode_handle_from_value(value)?;
-                columns[self.columns_id_without_handle.len()]
-                    .mut_decoded()
-                    .push_int(Some(handle));
+        match self.decode_strategy {
+            NoDecode => {}
+            _ => {
+                if tail_len < 8 {
+                    if self.decode_strategy != DecodeCommonHandle {
+                        return Err(other_err!(
+                            "Corrupted value encountered, the tail length of index value with common handles are always less than 8"
+                        ));
+                    }
+
+                    key = &key[table::PREFIX_LEN + table::ID_LEN..];
+                    datum::walk_n_columns(&mut key, self.columns_id_without_handle.len())?;
+                    Self::extract_columns_from_common_handle(
+                        &mut key,
+                        &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
+                    )?;
+                } else {
+                    if self.decode_strategy != DecodeIntHandle {
+                        return Err(other_err!("Corrupted value encountered, the tail length of index values with int handles are always no less than 8"));
+                    }
+                    let handle = self.decode_handle_from_value(value)?;
+                    columns[self.columns_id_without_handle.len()]
+                        .mut_decoded()
+                        .push_int(Some(handle));
+                }
             }
         }
         Ok(())
@@ -354,36 +474,38 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        use DecodeHandleStrategy::*;
         check_index_key(key)?;
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
-        self.extract_pk_columns_from_datum_payload(
+        Self::extract_columns_from_datum_format(
             &mut key_payload,
-            columns,
-            0,
-            self.columns_id_without_handle.len(),
-            false,
+            &mut columns[0..self.columns_id_without_handle.len()],
         )?;
 
-        if self.decode_handle {
-            assert!(self.is_int_handle);
-            // For normal index, it is placed at the end and any columns prior to it are
-            // ensured to be interested. For unique index, it is placed in the value.
-            let handle_val = if key_payload.is_empty() {
-                // This is a unique index, and we should look up PK handle in value.
+        match self.decode_strategy {
+            NoDecode => {}
+            _ => {
+                assert!(self.decode_strategy == DecodeIntHandle);
 
-                self.decode_handle_from_value(value)?
-            } else {
-                // This is a normal index. The remaining payload part is the PK handle.
-                // Let's decode it and put in the column.
+                // For normal index, it is placed at the end and any columns prior to it are
+                // ensured to be interested. For unique index, it is placed in the value.
+                let handle_val = if key_payload.is_empty() {
+                    // This is a unique index, and we should look up PK handle in value.
 
-                self.decode_handle_from_key(key_payload)?
-            };
+                    self.decode_handle_from_value(value)?
+                } else {
+                    // This is a normal index. The remaining payload part is the PK handle.
+                    // Let's decode it and put in the column.
 
-            columns[self.columns_id_without_handle.len()]
-                .mut_decoded()
-                .push_int(Some(handle_val));
+                    self.decode_handle_from_key(key_payload)?
+                };
+
+                columns[self.columns_id_without_handle.len()]
+                    .mut_decoded()
+                    .push_int(Some(handle_val));
+            }
         }
 
         Ok(())
@@ -486,7 +608,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
                 key_ranges,
-                vec![],
+                0,
                 true,
                 false,
             )
@@ -541,7 +663,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
-                vec![],
+                0,
                 false,
                 false,
             )
@@ -617,7 +739,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
-                vec![],
+                0,
                 false,
                 false,
             )
@@ -673,7 +795,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
-                vec![],
+                0,
                 false,
                 true,
             )

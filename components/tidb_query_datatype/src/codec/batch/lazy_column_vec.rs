@@ -7,6 +7,8 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
+use std::ops::{IndexMut, Range,Index};
+
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
@@ -15,6 +17,20 @@ pub struct LazyBatchColumnVec {
     /// For decoded columns, they may be in different types. If the column is in
     /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
     columns: Vec<LazyBatchColumn>,
+}
+
+impl Index<Range<usize>> for LazyBatchColumnVec {
+    type Output = [LazyBatchColumn];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.columns[index]
+    }
+}
+
+impl IndexMut<Range<usize>> for LazyBatchColumnVec {
+    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
+        &mut self.columns[index]
+    }
 }
 
 impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
