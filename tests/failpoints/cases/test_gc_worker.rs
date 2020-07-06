@@ -110,7 +110,7 @@ fn test_collect_lock_from_stale_leader() {
     fail::cfg(new_leader_apply_fp, "pause").unwrap();
     must_kv_prewrite(
         &leader_client,
-        ctx.clone(),
+        ctx,
         vec![new_mutation(Op::Put, b"k1", b"v")],
         b"k1".to_vec(),
         10,
