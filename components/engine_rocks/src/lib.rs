@@ -89,3 +89,5 @@ pub mod encryption;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod raw;
