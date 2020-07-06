@@ -24,8 +24,14 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
+<<<<<<< HEAD
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::{IntervalRange, Range};
+=======
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::{IntervalRange, Range};
+use tikv::config::BackupConfig;
+>>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
@@ -81,7 +87,12 @@ impl TestSuite {
                 *id,
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
+<<<<<<< HEAD
                 engines.kv.clone(),
+=======
+                engines.kv.as_inner().clone(),
+                BackupConfig { num_threads: 4 },
+>>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
             );
             let mut worker = Worker::new(format!("backup-{}", id));
             worker.start(backup_endpoint).unwrap();
