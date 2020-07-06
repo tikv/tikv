@@ -138,7 +138,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum DecodeHandleStrategy {
     NoDecode,
     DecodeIntHandle,
@@ -206,100 +206,59 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
 
     // Currently, we have 6 foramts of index value.
     // Value layout:
-    //		+--With Restore Data(for indices on string columns)
-    //		|  |
-    //		|  +--Non Unique (TailLen = len(PaddingData) + len(Flag), TailLen < 8 always)
-    //		|  |  |
-    //		|  |  +--Without Untouched Flag:
-    //		|  |  |
-    //		|  |  |  Layout: TailLen |      RestoreData  |      PaddingData
-    //		|  |  |  Length: 1       | size(RestoreData) | size(paddingData)
-    //		|  |  |
-    //		|  |  |  The length >= 10 always because of padding.
-    //		|  |  |
-    //		|  |  +--With Untouched Flag:
-    //		|  |
-    //		|  |     Layout: TailLen |    RestoreData    |      PaddingData  | Flag
-    //		|  |     Length: 1       | size(RestoreData) | size(paddingData) |  1
-    //		|  |
-    //		|  |     The length >= 11 always because of padding.
-    //		|  |
-    //		|  +--Unique Common Handle
-    //		|  |  |
-    //		|  |  +--Without Untouched Flag:
-    //		|  |  |
-    //		|  |  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       | RestoreData
-    //		|  |  |  Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData)
-    //		|  |  |
-    //		|  |  |  The length > 10 always because of CHandle size.
-    //		|  |  |
-    //		|  |  +--With Untouched Flag:
-    //		|  |
-    //		|  |     Layout: 0x01 | CHandle Flag | CHandle Len | CHandle       | RestoreData       | Flag
-    //		|  |     Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData) | 1
-    //		|  |
-    //		|  |     The length > 10 always because of CHandle size.
-    //		|  |
-    //		|  +--Unique Integer Handle (TailLen = len(Handle) + len(Flag), TailLen == 8 || TailLen == 9)
-    //		|     |
-    //		|     +--Without Untouched Flag:
-    //		|     |
-    //		|     |  Layout: 0x08 |    RestoreData    |  Handle
-    //		|     |  Length: 1    | size(RestoreData) |   8
-    //		|     |
-    //		|     |  The length >= 10 always since size(RestoreData) > 0.
-    //		|     |
-    //		|     +--With Untouched Flag:
-    //		|
-    //		|        Layout: 0x09 |      RestoreData  |  Handle  | Flag
-    //		|        Length: 1    | size(RestoreData) |   8      | 1
-    //		|
-    //		|   	 The length >= 11 always since size(RestoreData) > 0.
-    //		|
-    //		+--Without Restore Data
-    //		|
-    //		+--Non Unique
-    //		|  |
-    //		|  +--Without Untouched Flag:
-    //		|  |
-    //		|  |  Layout: '0'
-    //		|  |  Length:  1
-    //		|  |
-    //		|  +--With Untouched Flag:
-    //		|
-    //		|     Layout: Flag
-    //		|     Length:  1
-    //		+--Unique Common Handle
-    //		|  |
-    //		|  +--Without Untouched Flag:
-    //		|  |
-    //		|  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle
-    //      |  |  Length: 1    | 1            | 2           | size(CHandle)
-    //		|  |
-    //		|  +--With Untouched Flag:
-    //		|
-    //		|     Layout: 0x01 | CHandle Flag | CHandle Len | CHandle       | Flag
-    //		|     Length: 1    | 1            | 2           | size(CHandle) | 1
-    //		|
-    //		+--Unique Integer Handle
-    //		|
-    //		+--Without Untouched Flag:
-    //		|
-    //		|  Layout: Handle
-    //		|  Length:   8
-    //		|
-    //		+--With Untouched Flag:
-    //
-    //		Layout: Handle | Flag
-    //		Length:   8    |  1
+    // +--With Restore Data(for indices on string columns)
+    // |  |
+    // |  +--Non Unique (TailLen = len(PaddingData) + len(Flag), TailLen < 8 always)
+    // |  |  |
+    // |  |  |  Layout: TailLen |      RestoreData  |      PaddingData
+    // |  |  |  Length: 1       | size(RestoreData) | size(paddingData)
+    // |  |  |
+    // |  |  |  The length >= 10 always because of padding.
+    // |  |
+    // |  |
+    // |  +--Unique Common Handle
+    // |  |  |
+    // |  |  |
+    // |  |  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       | RestoreData
+    // |  |  |  Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData)
+    // |  |  |
+    // |  |  |  The length > 10 always because of CHandle size.
+    // |  |
+    // |  |
+    // |  +--Unique Integer Handle (TailLen = len(Handle) + len(Flag), TailLen == 8 || TailLen == 9)
+    // |     |
+    // |     |  Layout: 0x08 |    RestoreData    |  Handle
+    // |     |  Length: 1    | size(RestoreData) |   8
+    // |     |
+    // |     |  The length >= 10 always since size(RestoreData) > 0.
+    // |
+    // |
+    // +--Without Restore Data
+    // |
+    // +--Non Unique
+    // |  |
+    // |  |  Layout: '0'
+    // |  |  Length:  1
+    // |
+    // +--Unique Common Handle
+    // |  |
+    // |  |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle
+    //    |  Length: 1    | 1            | 2           | size(CHandle)
+    // |
+    // |
+    // +--Unique Integer Handle
+    // |
+    // |  Layout: Handle
+    // |  Length:   8
     fn process_kv_pair(
         &mut self,
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        check_index_key(key)?;
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
-            if value[0] <= 1 && value[1] == table::COMMON_HANDLE_FLAG {
+            if value[0] <= 1 && value[1] == table::INDEX_COMMON_HANDLE_FLAG {
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
                 self.process_normal_new_collation_value(key, value, columns)
@@ -449,7 +408,7 @@ impl IndexScanExecutorImpl {
                     }
 
                     key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                    datum::walk_n_columns(&mut key, self.columns_id_without_handle.len())?;
+                    datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
                     Self::extract_columns_from_common_handle(
                         &mut key,
                         &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
@@ -475,7 +434,7 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use DecodeHandleStrategy::*;
-        check_index_key(key)?;
+
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
@@ -487,24 +446,29 @@ impl IndexScanExecutorImpl {
         match self.decode_strategy {
             NoDecode => {}
             _ => {
-                assert!(self.decode_strategy == DecodeIntHandle);
-
                 // For normal index, it is placed at the end and any columns prior to it are
                 // ensured to be interested. For unique index, it is placed in the value.
-                let handle_val = if key_payload.is_empty() {
+                if key_payload.is_empty() {
                     // This is a unique index, and we should look up PK handle in value.
-
-                    self.decode_handle_from_value(value)?
+                    let handle_val = self.decode_handle_from_value(value)?;
+                    columns[self.columns_id_without_handle.len()]
+                        .mut_decoded()
+                        .push_int(Some(handle_val));
                 } else {
-                    // This is a normal index. The remaining payload part is the PK handle.
+                    // This is a normal index. The remaining key payload part is the PK handle.
                     // Let's decode it and put in the column.
-
-                    self.decode_handle_from_key(key_payload)?
-                };
-
-                columns[self.columns_id_without_handle.len()]
-                    .mut_decoded()
-                    .push_int(Some(handle_val));
+                    if let DecodeIntHandle = self.decode_strategy {
+                        let handle_val = self.decode_handle_from_key(key_payload)?;
+                        columns[self.columns_id_without_handle.len()]
+                            .mut_decoded()
+                            .push_int(Some(handle_val));
+                    } else {
+                        Self::extract_columns_from_common_handle(
+                            &mut key_payload,
+                            &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
+                        )?;
+                    }
+                }
             }
         }
 

@@ -7,7 +7,7 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
-use std::ops::{IndexMut, Range,Index};
+use std::ops::{Index, IndexMut, Range};
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
