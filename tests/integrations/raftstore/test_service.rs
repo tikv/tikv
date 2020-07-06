@@ -522,6 +522,7 @@ fn test_physical_scan_lock() {
             lock_info.set_key(k);
             lock_info.set_lock_ttl(3000);
             lock_info.set_lock_type(Op::Put);
+            lock_info.set_min_commit_ts(ts + 1);
             lock_info
         })
         .collect();

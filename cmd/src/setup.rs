@@ -66,8 +66,11 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    if config.log_file.is_empty() {
-        let drainer = logger::term_drainer();
+    fn build_logger<D>(drainer: D, config: &TiKvConfig)
+    where
+        D: slog::Drain + Send + 'static,
+        <D as slog::Drain>::Err: std::fmt::Display,
+    {
         // use async drainer and init std log.
         logger::init_log(
             drainer,
@@ -80,8 +83,16 @@ pub fn initial_logger(config: &TiKvConfig) {
         .unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
+    }
+
+    if config.log_file.is_empty() {
+        let writer = logger::term_writer();
+        match config.log_format {
+            config::LogFormat::Text => build_logger(logger::text_format(writer), config),
+            config::LogFormat::Json => build_logger(logger::json_format(writer), config),
+        };
     } else {
-        let drainer = logger::file_drainer(
+        let writer = logger::file_writer(
             &config.log_file,
             config.log_rotation_timespan,
             config.log_rotation_size,
@@ -95,10 +106,10 @@ pub fn initial_logger(config: &TiKvConfig) {
             );
         });
 
-        let slow_log_drainer = if config.slow_log_file.is_empty() {
+        let slow_log_writer = if config.slow_log_file.is_empty() {
             None
         } else {
-            let slow_log_drainer = logger::file_drainer(
+            let slow_log_writer = logger::file_writer(
                 &config.slow_log_file,
                 config.log_rotation_timespan,
                 config.log_rotation_size,
@@ -111,7 +122,7 @@ pub fn initial_logger(config: &TiKvConfig) {
                     e
                 );
             });
-            Some(slow_log_drainer)
+            Some(slow_log_writer)
         };
 
         let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
@@ -136,7 +147,7 @@ pub fn initial_logger(config: &TiKvConfig) {
                 make_engine_log_path(&config.storage.data_dir, "raft", DEFAULT_RAFTDB_LOG_FILE)
             }
         };
-        let rocksdb_log_drainer = logger::file_drainer(
+        let rocksdb_log_writer = logger::file_writer(
             &rocksdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
@@ -150,7 +161,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             );
         });
 
-        let raftdb_log_drainer = logger::file_drainer(
+        let raftdb_log_writer = logger::file_writer(
             &raftdb_info_log_path,
             config.log_rotation_timespan,
             config.log_rotation_size,
@@ -163,23 +174,51 @@ pub fn initial_logger(config: &TiKvConfig) {
                 e
             );
         });
-        let drainer = logger::LogDispatcher::new(
-            drainer,
-            rocksdb_log_drainer,
-            raftdb_log_drainer,
-            slow_log_drainer,
-        );
-        logger::init_log(
-            drainer,
-            config.log_level,
-            true,
-            true,
-            vec![],
-            config.slow_log_threshold.as_millis(),
-        )
-        .unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {}", e);
-        });
+
+        match config.log_format {
+            config::LogFormat::Text => build_logger_with_slow_log(
+                logger::text_format(writer),
+                logger::rocks_text_format(rocksdb_log_writer),
+                logger::text_format(raftdb_log_writer),
+                slow_log_writer.map(logger::text_format),
+                config,
+            ),
+            config::LogFormat::Json => build_logger_with_slow_log(
+                logger::json_format(writer),
+                logger::json_format(rocksdb_log_writer),
+                logger::json_format(raftdb_log_writer),
+                slow_log_writer.map(logger::json_format),
+                config,
+            ),
+        };
+
+        fn build_logger_with_slow_log<N, R, S, T>(
+            normal: N,
+            rocksdb: R,
+            raftdb: T,
+            slow: Option<S>,
+            config: &TiKvConfig,
+        ) where
+            N: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
+            R: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
+            S: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
+            T: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
+        {
+            let drainer = logger::LogDispatcher::new(normal, rocksdb, raftdb, slow);
+
+            // use async drainer and init std log.
+            logger::init_log(
+                drainer,
+                config.log_level,
+                true,
+                true,
+                vec![],
+                config.slow_log_threshold.as_millis(),
+            )
+            .unwrap_or_else(|e| {
+                fatal!("failed to initialize log: {}", e);
+            });
+        }
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }

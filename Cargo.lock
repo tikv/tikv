@@ -1837,7 +1837,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#427b752161cd71e84ca0919b83390dbbb00ce608"
+source = "git+https://github.com/pingcap/kvproto.git#f735bcd8f9f90c778a3964d289c3fe7cc3cea38b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1912,7 +1912,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3274,7 +3274,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#52ebaba9ad64adac5dda05a1585363b1e89bee88"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3726,6 +3726,18 @@ dependencies = [
  "arc-swap 0.3.11",
  "lazy_static",
  "log",
+ "slog",
+]
+
+[[package]]
+name = "slog-json"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
  "slog",
 ]
 
@@ -4524,6 +4536,7 @@ dependencies = [
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "minitrace",
  "more-asserts",
@@ -4549,6 +4562,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4642,11 +4656,11 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "serde_derive",
  "serde_json",
  "slog",
  "slog-async",
  "slog-global",
+ "slog-json",
  "slog-term",
  "sysinfo",
  "tempfile",
