@@ -2,7 +2,7 @@
 
 //! Storage configuration.
 
-use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
+use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, ReadableSize};

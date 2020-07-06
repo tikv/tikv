@@ -18,8 +18,8 @@ use tempfile::{Builder, TempDir};
 
 use super::*;
 use encryption::DataKeyManager;
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -130,7 +130,7 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
@@ -150,12 +150,11 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
@@ -176,14 +175,15 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
+        let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(engines.kv.c().clone()),
+            Some(engines.kv.clone()),
             Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
+            Default::default(),
         );
         gc_worker.start().unwrap();
         gc_worker
@@ -209,7 +209,7 @@ impl Simulator for ServerCluster {
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             Arc::clone(&importer),
             security_mgr.clone(),
         );
@@ -304,7 +304,7 @@ impl Simulator for ServerCluster {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor,
