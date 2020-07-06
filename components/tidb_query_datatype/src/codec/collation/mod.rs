@@ -158,7 +158,7 @@ where
     pub fn map_option_owned(inner: Option<T>) -> Result<Option<Self>> {
         if let Some(inner) = inner {
             C::validate(inner.as_ref())?;
-            return Self::new(inner).and_then(|x| Ok(Some(x)));
+            return Self::new(inner).map(|x| Some(x));
         }
         Ok(None)
     }
