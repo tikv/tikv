@@ -26,6 +26,24 @@ pub enum MissingLockAction {
     ReturnError,
 }
 
+impl MissingLockAction {
+    fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
+        if protect_rollback {
+            MissingLockAction::ProtectedRollback
+        } else {
+            MissingLockAction::Rollback
+        }
+    }
+
+    fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
+        if rollback_if_not_exist {
+            MissingLockAction::ProtectedRollback
+        } else {
+            MissingLockAction::ReturnError
+        }
+    }
+}
+
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
 /// It's used by `LockManager` to wake up transactions waiting for locks.
 #[derive(Debug)]
@@ -734,7 +752,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             None => {
-                if let MissingLockAction::ReturnError = action {
+                if MissingLockAction::ReturnError == action {
                     return Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
                         key: primary_key.into_raw()?,
@@ -751,16 +769,20 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                let write = match action {
-                    MissingLockAction::Rollback => Write::new_rollback(ts, false),
-                    MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
-                    _ => unreachable!(),
-                };
+                let write = self.get_write(action, ts);
                 self.put_write(primary_key, ts, write.as_ref().to_bytes());
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
                 Ok(TxnStatus::LockNotExist)
             }
+        }
+    }
+
+    fn get_write(&self, action: MissingLockAction, ts: TimeStamp) -> Write {
+        match action {
+            MissingLockAction::Rollback => Write::new_rollback(ts, false),
+            MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
+            _ => unreachable!(),
         }
     }
 
@@ -799,11 +821,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             _ => match self.check_txn_status_missing_lock(
                 key,
-                if protect_rollback {
-                    MissingLockAction::ProtectedRollback
-                } else {
-                    MissingLockAction::Rollback
-                },
+                MissingLockAction::rollback_protect(protect_rollback),
             )? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
@@ -964,11 +982,7 @@ impl<S: Snapshot> MvccTxn<S> {
             _ => self
                 .check_txn_status_missing_lock(
                     primary_key,
-                    if rollback_if_not_exist {
-                        MissingLockAction::ProtectedRollback
-                    } else {
-                        MissingLockAction::ReturnError
-                    },
+                    MissingLockAction::rollback(rollback_if_not_exist),
                 )
                 .map(|s| (s, None)),
         }
