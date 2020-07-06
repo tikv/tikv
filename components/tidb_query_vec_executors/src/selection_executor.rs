@@ -45,9 +45,19 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         }
     }
 
+    #[inline]
+    pub fn new_rpn_expr(config: Arc<EvalConfig>, src: Src, conditions: Vec<RpnExpression>) -> Result<Self> {
+        let ctx = EvalContext::new(config);
+        Ok(Self {
+            context: ctx,
+            src,
+            conditions,
+        })
+    }
+
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
-        let mut ctx = EvalContext::new(config);
+        let mut ctx = EvalContext::new(config.clone());
         for def in conditions_def {
             conditions.push(RpnExpressionBuilder::build_from_expr_tree(
                 def,
@@ -55,12 +65,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                 src.schema().len(),
             )?);
         }
-
-        Ok(Self {
-            context: ctx,
-            src,
-            conditions,
-        })
+        Self::new_rpn_expr(config, src, conditions)
     }
 
     /// Accepts source result and mutates its `logical_rows` according to predicates.
