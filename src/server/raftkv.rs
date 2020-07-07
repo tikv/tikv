@@ -2,8 +2,8 @@
 
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
-use engine_traits::{IterOptions, ReadOptions};
 use engine_traits::CF_DEFAULT;
+use engine_traits::{IterOptions, ReadOptions};
 use engine_traits::{Peekable, TablePropertiesExt};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
