@@ -162,42 +162,7 @@ where
 
 // In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we default impl all
 // `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
-impl<T1, T2> super::AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
-where
-    T1: EvaluableRef<'static> + 'static,
-    T2: EvaluableRef<'static> + 'static,
-    VectorValue: VectorValueExt<T2::EvaluableType>,
-{
-    #[inline]
-    default unsafe fn update_unsafe(
-        &mut self,
-        _ctx: &mut EvalContext,
-        _value: Option<T1>,
-    ) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-
-    #[inline]
-    default unsafe fn update_repeat_unsafe(
-        &mut self,
-        _ctx: &mut EvalContext,
-        _value: Option<T1>,
-        _repeat_times: usize,
-    ) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-
-    #[inline]
-    default unsafe fn update_vector_unsafe(
-        &mut self,
-        _ctx: &mut EvalContext,
-        _phantom_data: Option<T1>,
-        _physical_values: T1::ChunkedType,
-        _logical_rows: &[usize],
-    ) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-}
+impl_unmatched_function_state!{ AggrFnStateFirst<T> }
 
 impl<T> super::AggrFunctionState for AggrFnStateFirst<T>
 where

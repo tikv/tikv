@@ -62,19 +62,19 @@ pub struct AggrFnStateCount {
     count: usize,
 }
 
-impl AggrFnStateCount {
+impl AggrFnStateCount
+{
     pub fn new() -> Self {
-        Self { count: 0 }
+        Self {
+            count: 0,
+        }
     }
-}
 
-// Here we manually implement `AggrFunctionStateUpdatePartial` so that `update_repeat` and
-// `update_vector` can be faster. Also note that we support all kind of
-// `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
-
-impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
     #[inline]
-    unsafe fn update_unsafe(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+    fn update<'a, TT>(&mut self, _ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a>,
+    {
         if value.is_some() {
             self.count += 1;
         }
@@ -82,12 +82,15 @@ impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for Aggr
     }
 
     #[inline]
-    unsafe fn update_repeat_unsafe(
+    fn update_repeat<'a, TT>(
         &mut self,
         _ctx: &mut EvalContext,
-        value: Option<T>,
+        value: Option<TT>,
         repeat_times: usize,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        TT: EvaluableRef<'a>,
+    {
         // Will be used for expressions like `COUNT(1)`.
         if value.is_some() {
             self.count += repeat_times;
@@ -96,13 +99,17 @@ impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for Aggr
     }
 
     #[inline]
-    unsafe fn update_vector_unsafe(
+    fn update_vector<'a, TT, CC>(
         &mut self,
         _ctx: &mut EvalContext,
-        _phantom_data: Option<T>,
-        physical_values: T::ChunkedType,
+        _phantom_data: Option<TT>,
+        physical_values: CC,
         logical_rows: &[usize],
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        TT: EvaluableRef<'a>,
+        CC: ChunkRef<'a, TT>,
+    {
         // Will be used for expressions like `COUNT(col)`.
         for physical_index in logical_rows {
             if physical_values.get_option_ref(*physical_index).is_some() {
@@ -113,7 +120,20 @@ impl<T: EvaluableRef<'static>> super::AggrFunctionStateUpdatePartial<T> for Aggr
     }
 }
 
-impl super::AggrFunctionState for AggrFnStateCount {
+// Here we manually implement `AggrFunctionStateUpdatePartial` so that `update_repeat` and
+// `update_vector` can be faster. Also note that we support all kind of
+// `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
+
+impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
+where
+    T: EvaluableRef<'static> + 'static,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    impl_state_update_partial! { T }
+}
+
+impl super::AggrFunctionState for AggrFnStateCount
+{
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         assert_eq!(target.len(), 1);

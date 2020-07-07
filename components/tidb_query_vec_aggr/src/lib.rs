@@ -178,6 +178,48 @@ macro_rules! impl_concrete_state {
     }
 }
 
+#[macro_export]
+macro_rules! impl_unmatched_function_state {
+    ( $ty:ty ) => {
+        impl<T1, T> super::AggrFunctionStateUpdatePartial<T1> for $ty
+        where
+            T1: EvaluableRef<'static> + 'static,
+            T: EvaluableRef<'static> + 'static,
+            VectorValue: VectorValueExt<T::EvaluableType>,
+        {
+            #[inline]
+            default unsafe fn update_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: Option<T1>,
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+
+            #[inline]
+            default unsafe fn update_repeat_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: Option<T1>,
+                _repeat_times: usize,
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+
+            #[inline]
+            default unsafe fn update_vector_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _phantom_data: Option<T1>,
+                _physical_values: T1::ChunkedType,
+                _logical_rows: &[usize],
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+        }
+    }
+}
+
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
 pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
