@@ -8,7 +8,7 @@ use std::sync::*;
 use std::time::*;
 
 use configuration::Configuration;
-use engine_rocks::raw::DB;
+use engine_rocks::raw::{DB, DBCompressionType};
 use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
@@ -48,6 +48,7 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
+    compress_type: CompressionType,
 }
 
 /// Backup Task.
@@ -112,6 +113,7 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
+                compress_type: req.get_compression_type(),
             },
             resp,
         };
@@ -264,8 +266,9 @@ impl BackupRange {
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
+        ct: Option<DBCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone()) {
+        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone(), ct) {
             Ok(w) => w,
             Err(e) => {
                 error!("backup writer failed"; "error" => ?e);
@@ -293,8 +296,9 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
+        ct: Option<DBCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone()) {
+        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
             Ok(w) => w,
             Err(e) => {
                 error!("backup writer failed"; "error" => ?e);
@@ -621,11 +625,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
+                let ct = to_db_compression_type(request.compress_type);
 
                 let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct)
                 } else {
-                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
+                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts, ct)
                 };
                 match res {
                     Err(e) => {
@@ -821,6 +826,16 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
             region.get_id(),
             region.get_region_epoch().get_version()
         ),
+    }
+}
+
+// convert BackupCompresionType to rocks db DBCompressionType
+fn to_db_compression_type(ct: CompressionType) -> Option<DBCompressionType> {
+    match ct {
+        CompressionType::Lz4 => Some(DBCompressionType::Lz4),
+        CompressionType::Snappy => Some(DBCompressionType::Snappy),
+        CompressionType::Zstd => Some(DBCompressionType::Zstd),
+        _ => None
     }
 }
 

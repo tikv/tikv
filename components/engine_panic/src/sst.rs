@@ -10,6 +10,7 @@ use std::path::PathBuf;
 impl SstExt for PanicEngine {
     type SstReader = PanicSstReader;
     type SstWriter = PanicSstWriter;
+    type SstWriterConfExt = ();
     type SstWriterBuilder = PanicSstWriterBuilder;
 }
 
@@ -105,6 +106,10 @@ impl SstWriterBuilder<PanicEngine> for PanicSstWriterBuilder {
     fn set_in_memory(self, in_memory: bool) -> Self {
         panic!()
     }
+    fn set_conf_ext(self, conf: ()) -> Self {
+        panic!()
+    }
+
     fn build(self, path: &str) -> Result<PanicSstWriter> {
         panic!()
     }

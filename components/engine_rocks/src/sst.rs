@@ -25,6 +25,7 @@ use std::path::PathBuf;
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
     type SstWriter = RocksSstWriter;
+    type SstWriteConfExt = RocksSstWriterConfExt;
     type SstWriterBuilder = RocksSstWriterBuilder;
 }
 
@@ -117,6 +118,7 @@ pub struct RocksSstWriterBuilder {
     cf: Option<CfName>,
     db: Option<Arc<DB>>,
     in_memory: bool,
+    compression_type: Option<DBCompressionType>,
 }
 
 impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
@@ -125,6 +127,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             cf: None,
             in_memory: false,
             db: None,
+            compression_type: None,
         }
     }
 
@@ -143,7 +146,12 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn build(self, path: &str) -> Result<RocksSstWriter> {
+    fn set_conf_ext(mut self, conf: RocksSstWriterConfExt) -> Self {
+        self.compression_type = conf.compression_type;
+        self
+    }
+
+    fn build(mut self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
@@ -162,7 +170,8 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         } else if let Some(env) = env.as_ref() {
             io_options.set_env(env.clone());
         }
-        io_options.compression(get_fastest_supported_compression_type());
+        let compress_type = self.compression_type.take().unwrap_or_else(get_fastest_supported_compression_type);
+        io_options.compression(compress_type);
         // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
         // compression_per_level first, so to make sure our specified compression type
         // being used, we must set them empty or disabled.
@@ -171,6 +180,18 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
+    }
+}
+
+pub struct RocksSstWriterConfExt {
+    compression_type: Option<DBCompressionType>,
+}
+
+impl RocksSstWriterConfExt {
+    pub fn new(compression_type: Option<DBCompressionType>) -> Self {
+        Self {
+            compression_type
+        }
     }
 }
 

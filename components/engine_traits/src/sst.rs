@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 pub trait SstExt: Sized {
     type SstReader: SstReader;
+    type SstWriteConfExt;
     type SstWriter: SstWriter;
     type SstWriterBuilder: SstWriterBuilder<Self>;
 }
@@ -58,6 +59,9 @@ where
 
     /// Set it to true, the builder builds a in-memory SST builder.
     fn set_in_memory(self, in_memory: bool) -> Self;
+
+    /// set other config specified by writer
+    fn set_conf_ext(self, conf: E::SstWriteConfExt) -> Self;
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;
