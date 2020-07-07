@@ -1091,9 +1091,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
     for _ in 0..n {
         if buf.is_empty() {
-            return Err(invalid_type!(
-                "Some slices are missing in the datum buffer"
-            ));
+            return Err(invalid_type!("Some slices are missing in the datum buffer"));
         }
         let (_, remaining) = split_datum(buf, false)?;
         *buf = remaining;
