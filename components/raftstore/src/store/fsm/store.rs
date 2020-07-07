@@ -48,7 +48,7 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer::PeerReplicateKind;
+use crate::store::peer::CreatePeerKind;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
@@ -1679,7 +1679,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
 
-        peer.peer.peer_replicate_kind = PeerReplicateKind::Create;
+        peer.peer.create_peer_kind = CreatePeerKind::Replicate;
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.

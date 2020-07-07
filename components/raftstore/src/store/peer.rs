@@ -177,13 +177,13 @@ pub struct CheckTickResult {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum PeerReplicateKind {
+pub enum CreatePeerKind {
     // Peer has already existed in local.
     Local,
     // Peer is created from splitting.
     Split,
     // Peer is created from certain msg.
-    Create,
+    Replicate,
 }
 
 pub struct Peer {
@@ -288,7 +288,7 @@ pub struct Peer {
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
     /// The kind of creating peer.
-    pub peer_replicate_kind: PeerReplicateKind,
+    pub create_peer_kind: CreatePeerKind,
 }
 
 impl Peer {
@@ -372,7 +372,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
-            peer_replicate_kind: PeerReplicateKind::Local,
+            create_peer_kind: CreatePeerKind::Local,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
