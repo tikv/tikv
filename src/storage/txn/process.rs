@@ -234,6 +234,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             txn_size,
             min_commit_ts,
             ctx,
+            ..
         }) => {
             let mut scan_mode = None;
             let rows = mutations.len();

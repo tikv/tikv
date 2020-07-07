@@ -24,6 +24,9 @@ command! {
             /// How many keys this transaction involved.
             txn_size: u64,
             min_commit_ts: TimeStamp,
+            /// All secondary keys in the whole transaction (i.e., as sent to all nodes, not only
+            /// this node). Only present if using async commit.
+            secondary_keys: Option<Vec<Vec<u8>>>,
         }
 }
 
@@ -67,6 +70,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            None,
             Context::default(),
         )
     }
@@ -86,6 +90,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            None,
             Context::default(),
         )
     }
@@ -104,6 +109,7 @@ impl Prewrite {
             false,
             0,
             TimeStamp::default(),
+            None,
             ctx,
         )
     }

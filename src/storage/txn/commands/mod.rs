@@ -110,6 +110,11 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                if req.get_use_async_commit() {
+                    Some(req.get_secondaries().into())
+                } else {
+                    None
+                },
                 req.take_context(),
             )
         } else {
