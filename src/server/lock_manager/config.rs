@@ -12,6 +12,7 @@ use tikv_util::config::ReadableDuration;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    // Deprecated. The enable flag was only for compatible issue from v3.0 or older version.
     #[config(skip)]
     pub enabled: bool,
     #[serde(deserialize_with = "readable_duration_or_u64")]
@@ -111,7 +112,6 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
-        assert_eq!(config.enabled, false);
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
         assert_eq!(config.pipelined, true);
