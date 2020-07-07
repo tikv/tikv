@@ -296,6 +296,11 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 }
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                        reader
+                            .txn_extra_op
+                            .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
+                    }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
                     assert!(
@@ -321,6 +326,9 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 if need_remove {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
+                    }
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                        reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     self.connections
                         .iter_mut()
@@ -450,7 +458,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 region_id,
             }
         };
-        {
+        if txn_extra_op != TxnExtraOp::Noop {
             if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                 reader.txn_extra_op.store(txn_extra_op);
             }
