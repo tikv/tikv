@@ -110,6 +110,10 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         }
         x
     }
+
+    pub fn phantom_owned_data(&self) -> Option<T> {
+        None
+    }
 }
 
 impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSized<T> {

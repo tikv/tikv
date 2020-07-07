@@ -77,6 +77,10 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
     pub fn as_vec(&self) -> Vec<Option<T>> {
         self.data.clone()
     }
+
+    pub fn phantom_owned_data(&self) -> Option<T> {
+        None
+    }
 }
 
 impl<T> Into<NotChunkedVec<T>> for Vec<Option<T>> {

@@ -837,6 +837,15 @@ impl VargsRpnFn {
         } else {
             quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
         };
+
+        let vec_type = if is_json(arg_type) {
+            quote! { NotChunkedVec }
+        } else if is_bytes(arg_type) {
+            quote! { NotChunkedVec }
+        } else {
+            quote! { ChunkedVecSized }
+        };
+
         let varg_buf = get_vargs_buf(arg_type);
         let vectorized_type = get_vectoried_type(arg_type);
 
@@ -860,7 +869,7 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, Default::default());
-                        let mut result = NotChunkedVec::with_capacity(output_rows);
+                        let mut result = #vec_type::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
@@ -871,7 +880,7 @@ impl VargsRpnFn {
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
                                 unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
-                        Ok(EvaluableRet::into_vector_value(result))
+                        Ok(EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                     })
                 }
 
@@ -980,6 +989,14 @@ impl RawVargsRpnFn {
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
+        let vec_type = if is_json(&self.ret_type) {
+            quote! { NotChunkedVec }
+        } else if is_bytes(&self.ret_type) {
+            quote! { NotChunkedVec }
+        } else {
+            quote! { ChunkedVecSized }
+        };
+
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> crate::RpnFnMeta
@@ -997,7 +1014,7 @@ impl RawVargsRpnFn {
                     crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        let mut result = NotChunkedVec::with_capacity(output_rows);
+                        let mut result = #vec_type::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             vargs_buf.clear();
                             for arg_index in 0..args_len {
@@ -1011,7 +1028,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(EvaluableRet::into_vector_value(result))
+                        Ok(EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                     })
                 }
 
@@ -1186,6 +1203,14 @@ impl NormalRpnFn {
             },
         );
 
+        let vec_type = if is_json(&self.ret_type) {
+            quote! { NotChunkedVec }
+        } else if is_bytes(&self.ret_type) {
+            quote! { NotChunkedVec }
+        } else {
+            quote! { ChunkedVecSized }
+        };
+
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
                 default fn eval(
@@ -1198,12 +1223,12 @@ impl NormalRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = #vec_type::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                 }
             }
 
@@ -1388,7 +1413,7 @@ mod tests_normal {
                         let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                 }
             }
         };
@@ -1558,7 +1583,7 @@ mod tests_normal {
                         let (arg0, arg) = arg.extract(row_index);
                         result.push(foo :: <A, B> (arg0)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                 }
             }
         };
@@ -1712,7 +1737,7 @@ mod tests_normal {
                         let (arg2, arg) = arg.extract(row_index);
                         result.push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
                 }
             }
         };
