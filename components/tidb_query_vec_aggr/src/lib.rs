@@ -164,6 +164,20 @@ macro_rules! impl_state_update_partial {
     }
 }
 
+#[macro_export]
+macro_rules! impl_concrete_state {
+    ( $ty:ty ) => {
+        #[inline]
+        unsafe fn update_concrete_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+        ) -> Result<()> {
+            self.update_concrete(ctx, value)
+        }
+    }
+}
+
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
 pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
