@@ -133,6 +133,37 @@ macro_rules! update {
     };
 }
 
+#[macro_export]
+macro_rules! impl_state_update_partial {
+    ( $ty:tt ) => {
+        #[inline]
+        unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<$ty>) -> Result<()> {
+            self.update(ctx, value)
+        }
+
+        #[inline]
+        unsafe fn update_repeat_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+            repeat_times: usize,
+        ) -> Result<()> {
+            self.update_repeat(ctx, value, repeat_times)
+        }
+
+        #[inline]
+        unsafe fn update_vector_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            phantom_data: Option<$ty>,
+            physical_values: $ty::ChunkedType,
+            logical_rows: &[usize],
+        ) -> Result<()> {
+            self.update_vector(ctx, phantom_data, physical_values, logical_rows)
+        }
+    }
+}
+
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
 pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {

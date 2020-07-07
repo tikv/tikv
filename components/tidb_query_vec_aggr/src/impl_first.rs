@@ -157,31 +157,7 @@ where
 {
     // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
 
-    #[inline]
-    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
-        self.update(ctx, value)
-    }
-
-    #[inline]
-    unsafe fn update_repeat_unsafe(
-        &mut self,
-        ctx: &mut EvalContext,
-        value: Option<T>,
-        repeat_times: usize,
-    ) -> Result<()> {
-        self.update_repeat(ctx, value, repeat_times)
-    }
-
-    #[inline]
-    unsafe fn update_vector_unsafe(
-        &mut self,
-        ctx: &mut EvalContext,
-        phantom_data: Option<T>,
-        physical_values: T::ChunkedType,
-        logical_rows: &[usize],
-    ) -> Result<()> {
-        self.update_vector(ctx, phantom_data, physical_values, logical_rows)
-    }
+    impl_state_update_partial!{ T }
 }
 
 // In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we default impl all
