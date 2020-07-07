@@ -104,25 +104,26 @@ impl<T: BitOp> AggrFnStateBitOp<T> {
             _phantom: std::marker::PhantomData,
         }
     }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, _ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = Int>,
+    {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                T::op(&mut self.c, value.to_owned_value() as u64);
+                Ok(())
+            }
+        }
+    }
 }
 
 impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
     type ParameterType = &'static Int;
 
-    #[inline]
-    unsafe fn update_concrete_unsafe(
-        &mut self,
-        _ctx: &mut EvalContext,
-        value: Option<Self::ParameterType>,
-    ) -> Result<()> {
-        match value {
-            None => Ok(()),
-            Some(value) => {
-                T::op(&mut self.c, *value as u64);
-                Ok(())
-            }
-        }
-    }
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
