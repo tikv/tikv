@@ -898,7 +898,7 @@ pub mod tests {
             ])
             .build()
             .unwrap();
-        let db = rocks.get_rocksdb();
+        let db = rocks.get_rocksdb().get_sync_db();
         (
             temp,
             Endpoint::new(

@@ -12,7 +12,8 @@ use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, SeekKey, WriteBatchExt,
+    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, ReadOptions, SeekKey,
+    WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -129,8 +130,8 @@ impl RocksEngine {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
-    pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(self.engines.kv.as_inner())
+    pub fn get_rocksdb(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
     }
 
     pub fn stop(&self) {
@@ -309,6 +310,12 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

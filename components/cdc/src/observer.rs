@@ -107,12 +107,14 @@ impl CmdObserver for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    // TODO(5kbpers): handle TxnExtra.
-    fn on_flush_apply(&self, _: Vec<TxnExtra>) {
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
         fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
-            if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
+            if let Err(e) = self.sched.schedule(Task::MultiBatch {
+                multi: batches,
+                txn_extras,
+            }) {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
         }
@@ -186,7 +188,7 @@ mod tests {
         observer.on_flush_apply(Vec::default());
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { multi } => {
+            Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }

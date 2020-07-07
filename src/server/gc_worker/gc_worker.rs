@@ -940,7 +940,6 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Storage, TestStorageBuilder};
-    use engine_rocks::Compat;
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1047,7 +1046,7 @@ mod tests {
         let db = engine.get_rocksdb();
         let mut gc_worker = GcWorker::new(
             engine,
-            Some(db.c().clone()),
+            Some(db),
             None,
             None,
             GcConfig::default(),
@@ -1213,7 +1212,7 @@ mod tests {
                 .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
-            Some(db.c().clone()),
+            Some(db),
             None,
             None,
             GcConfig::default(),
