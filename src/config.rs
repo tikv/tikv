@@ -48,7 +48,7 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
+use tikv_util::config::{self, LogFormat, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -1962,6 +1962,32 @@ mod readpool_tests {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupConfig {
+    pub num_threads: usize,
+}
+
+impl BackupConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::new().cpu_cores_quota();
+        Self {
+            // use at most 75% of vCPU by default
+            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1974,6 +2000,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub log_file: String,
+
+    #[config(skip)]
+    pub log_format: LogFormat,
 
     #[config(skip)]
     pub slow_log_file: String,
@@ -2025,6 +2054,9 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
 
     #[config(submodule)]
+    pub backup: BackupConfig,
+
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[config(submodule)]
@@ -2040,6 +2072,7 @@ impl Default for TiKvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            log_format: LogFormat::Text,
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -2056,6 +2089,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            backup: BackupConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
@@ -2138,6 +2172,7 @@ impl TiKvConfig {
         self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         Ok(())
@@ -2533,6 +2568,7 @@ pub enum Module {
     Security,
     Encryption,
     Import,
+    Backup,
     PessimisticTxn,
     Gc,
     Split,
@@ -2554,6 +2590,7 @@ impl From<&str> for Module {
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
+            "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             n => Module::Unknown(n.to_owned()),
