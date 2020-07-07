@@ -25,7 +25,7 @@ use std::path::PathBuf;
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
     type SstWriter = RocksSstWriter;
-    type SstWriteConfExt = RocksSstWriterConfExt;
+    type SstWriterConfExt = RocksSstWriterConfExt;
     type SstWriterBuilder = RocksSstWriterBuilder;
 }
 
