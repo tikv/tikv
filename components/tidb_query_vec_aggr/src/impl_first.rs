@@ -156,13 +156,12 @@ where
     VectorValue: VectorValueExt<T::EvaluableType>,
 {
     // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
-
-    impl_state_update_partial!{ T }
+    impl_state_update_partial! { T }
 }
 
 // In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we default impl all
 // `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
-impl_unmatched_function_state!{ AggrFnStateFirst<T> }
+impl_unmatched_function_state! { AggrFnStateFirst<T> }
 
 impl<T> super::AggrFunctionState for AggrFnStateFirst<T>
 where

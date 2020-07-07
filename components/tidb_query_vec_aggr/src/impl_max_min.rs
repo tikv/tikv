@@ -236,6 +236,21 @@ where
             _phantom: std::marker::PhantomData,
         }
     }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, _ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T::EvaluableType> + Ord,
+    {
+        let extreme_ref = self
+            .extremum_value
+            .as_ref()
+            .map(|x| TT::from_owned_value(unsafe { std::mem::transmute(x) }));
+        if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
+            self.extremum_value = value.map(|x| x.to_owned_value());
+        }
+        Ok(())
+    }
 }
 
 impl<T, E> super::ConcreteAggrFunctionState for AggFnStateExtremum<T, E>
@@ -246,22 +261,7 @@ where
 {
     type ParameterType = T;
 
-    #[inline]
-    unsafe fn update_concrete_unsafe(
-        &mut self,
-        _ctx: &mut EvalContext,
-        value: Option<Self::ParameterType>,
-    ) -> Result<()> {
-        let extreme_ref: Option<&'static T::EvaluableType> =
-            self.extremum_value.as_ref().map(|x| std::mem::transmute(x));
-        if value.is_some()
-            && (self.extremum_value.is_none()
-                || extreme_ref.map(|x| T::from_owned_value(x)).cmp(&value) == E::ORD)
-        {
-            self.extremum_value = value.map(|x| x.to_owned_value());
-        }
-        Ok(())
-    }
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
