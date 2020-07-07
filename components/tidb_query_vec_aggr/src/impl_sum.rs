@@ -112,6 +112,21 @@ where
             has_value: false,
         }
     }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T>,
+    {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.has_value = true;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl<T> super::ConcreteAggrFunctionState for AggrFnStateSum<T>
@@ -121,21 +136,7 @@ where
 {
     type ParameterType = &'static T;
 
-    #[inline]
-    unsafe fn update_concrete_unsafe(
-        &mut self,
-        ctx: &mut EvalContext,
-        value: Option<&'static T>,
-    ) -> Result<()> {
-        match value {
-            None => Ok(()),
-            Some(value) => {
-                self.sum.add_assign(ctx, value)?;
-                self.has_value = true;
-                Ok(())
-            }
-        }
-    }
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
