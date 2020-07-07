@@ -929,6 +929,10 @@ impl Peer {
             if id == self.peer.get_id() {
                 continue;
             }
+            // If the `matched` is 0, it must be pending peer because `truncated_index` must be 
+            // greater than `RAFT_INIT_LOG_INDEX`.
+            // The correctness of region merge depends on that to ensure all target peers exist.
+            // (PD rely on `pending_peers` to check whether all target peers exist)
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
