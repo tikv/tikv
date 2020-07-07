@@ -102,6 +102,50 @@ where
     pub fn new() -> Self {
         AggrFnStateFirst::Empty
     }
+
+    #[inline]
+    fn update<'a, TT>(&mut self, _ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T::EvaluableType>,
+    {
+        if let AggrFnStateFirst::Empty = self {
+            // TODO: avoid this clone
+            *self = AggrFnStateFirst::Valued(value.map(|x| x.to_owned_value()));
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn update_repeat<'a, TT>(
+        &mut self,
+        ctx: &mut EvalContext,
+        value: Option<TT>,
+        repeat_times: usize,
+    ) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T::EvaluableType>,
+    {
+        assert!(repeat_times > 0);
+        self.update(ctx, value)
+    }
+
+    #[inline]
+    fn update_vector<'a, TT, CC>(
+        &mut self,
+        ctx: &mut EvalContext,
+        _phantom_data: Option<TT>,
+        physical_values: CC,
+        logical_rows: &[usize],
+    ) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T::EvaluableType>,
+        CC: ChunkRef<'a, TT>,
+    {
+        if let Some(physical_index) = logical_rows.first() {
+            self.update(ctx, physical_values.get_option_ref(*physical_index))?;
+        }
+        Ok(())
+    }
 }
 
 // Here we manually implement `AggrFunctionStateUpdatePartial` instead of implementing
@@ -114,12 +158,8 @@ where
     // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
 
     #[inline]
-    unsafe fn update_unsafe(&mut self, _ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
-        if let AggrFnStateFirst::Empty = self {
-            // TODO: avoid this clone
-            *self = AggrFnStateFirst::Valued(value.map(|x| x.to_owned_value()));
-        }
-        Ok(())
+    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+        self.update(ctx, value)
     }
 
     #[inline]
@@ -129,22 +169,18 @@ where
         value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
-        assert!(repeat_times > 0);
-        self.update_unsafe(ctx, value)
+        self.update_repeat(ctx, value, repeat_times)
     }
 
     #[inline]
     unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        _phantom_data: Option<T>,
+        phantom_data: Option<T>,
         physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
-        if let Some(physical_index) = logical_rows.first() {
-            self.update_unsafe(ctx, physical_values.get_option_ref(*physical_index))?;
-        }
-        Ok(())
+        self.update_vector(ctx, phantom_data, physical_values, logical_rows)
     }
 }
 
