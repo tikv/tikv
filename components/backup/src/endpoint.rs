@@ -8,7 +8,7 @@ use std::sync::*;
 use std::time::*;
 
 use configuration::Configuration;
-use engine_rocks::raw::{DB, DBCompressionType};
+use engine_rocks::raw::{DBCompressionType, DB};
 use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
@@ -298,13 +298,14 @@ impl BackupRange {
         cf: CfName,
         ct: Option<DBCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -630,7 +631,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 let res = if is_raw_kv {
                     brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct)
                 } else {
-                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts, ct)
+                    brange.backup_to_file(
+                        &engine,
+                        db.clone(),
+                        &storage,
+                        name,
+                        backup_ts,
+                        start_ts,
+                        ct,
+                    )
                 };
                 match res {
                     Err(e) => {
@@ -835,7 +844,7 @@ fn to_db_compression_type(ct: CompressionType) -> Option<DBCompressionType> {
         CompressionType::Lz4 => Some(DBCompressionType::Lz4),
         CompressionType::Snappy => Some(DBCompressionType::Snappy),
         CompressionType::Zstd => Some(DBCompressionType::Zstd),
-        _ => None
+        _ => None,
     }
 }
 
@@ -1019,6 +1028,7 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
+                        compress_type: CompressionType::Unknown,
                     },
                     resp: tx,
                 };
