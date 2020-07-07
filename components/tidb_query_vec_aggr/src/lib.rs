@@ -137,7 +137,11 @@ macro_rules! update {
 macro_rules! impl_state_update_partial {
     ( $ty:tt ) => {
         #[inline]
-        unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<$ty>) -> Result<()> {
+        unsafe fn update_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+        ) -> Result<()> {
             self.update(ctx, value)
         }
 
@@ -161,7 +165,7 @@ macro_rules! impl_state_update_partial {
         ) -> Result<()> {
             self.update_vector(ctx, phantom_data, physical_values, logical_rows)
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -175,7 +179,7 @@ macro_rules! impl_concrete_state {
         ) -> Result<()> {
             self.update_concrete(ctx, value)
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -217,7 +221,7 @@ macro_rules! impl_unmatched_function_state {
                 panic!("Unmatched parameter type")
             }
         }
-    }
+    };
 }
 
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will

@@ -62,12 +62,9 @@ pub struct AggrFnStateCount {
     count: usize,
 }
 
-impl AggrFnStateCount
-{
+impl AggrFnStateCount {
     pub fn new() -> Self {
-        Self {
-            count: 0,
-        }
+        Self { count: 0 }
     }
 
     #[inline]
@@ -132,8 +129,7 @@ where
     impl_state_update_partial! { T }
 }
 
-impl super::AggrFunctionState for AggrFnStateCount
-{
+impl super::AggrFunctionState for AggrFnStateCount {
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         assert_eq!(target.len(), 1);
