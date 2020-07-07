@@ -844,7 +844,7 @@ mod tests {
 
         // 1. New collation unique common handle.
         let mut value = value_prefix.clone();
-        value.extend(restore_data.clone());
+        value.extend(restore_data);
         let store = FixtureStorage::from(vec![(key.clone(), value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
@@ -886,13 +886,13 @@ mod tests {
             &[Real::new(4.0).ok()]
         );
 
-        let value = value_prefix.clone();
-        let store = FixtureStorage::from(vec![(key.clone(), value)]);
+        let value = value_prefix;
+        let store = FixtureStorage::from(vec![(key, value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             1,
             false,
             true,
@@ -979,12 +979,12 @@ mod tests {
             range
         }];
 
-        let store = FixtureStorage::from(vec![(key.clone(), vec![])]);
+        let store = FixtureStorage::from(vec![(key, vec![])]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             1,
             false,
             false,
@@ -1078,12 +1078,12 @@ mod tests {
             range
         }];
 
-        let store = FixtureStorage::from(vec![(key.clone(), value)]);
+        let store = FixtureStorage::from(vec![(key, value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             0,
             false,
             true,
@@ -1171,12 +1171,12 @@ mod tests {
             range
         }];
 
-        let store = FixtureStorage::from(vec![(key.clone(), value)]);
+        let store = FixtureStorage::from(vec![(key, value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             0,
             false,
             true,
@@ -1263,12 +1263,12 @@ mod tests {
             range
         }];
 
-        let store = FixtureStorage::from(vec![(key.clone(), value)]);
+        let store = FixtureStorage::from(vec![(key, value)]);
         let mut executor = BatchIndexScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            key_ranges.clone(),
+            columns_info,
+            key_ranges,
             1,
             false,
             true,
