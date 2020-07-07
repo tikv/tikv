@@ -44,7 +44,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, CreatePeerKind, Peer, StaleState};
+use crate::store::peer::{ConsistencyState, Peer, PeerReplicateKind, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::KeysInfoFormatter;
@@ -1534,7 +1534,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
-        if self.ctx.cfg.dev_assert && self.fsm.peer.create_peer_kind == CreatePeerKind::FromCreating
+        if self.ctx.cfg.dev_assert && self.fsm.peer.peer_replicate_kind == PeerReplicateKind::Create
         {
             // If the region is not initialized and snapshot checking has passed, the split flag must be false.
             // The split process only change this flag to true if it's exactly the same peer,
@@ -1543,10 +1543,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e.
             // all target peer must exist during merging.
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            assert_eq!(
-                pending_create_peers.get(&region_id),
-                Some(&(self.fsm.peer_id(), false))
-            );
+            let status = pending_create_peers.get(&region_id).cloned();
+            if status != Some((self.fsm.peer_id(), false)) {
+                drop(pending_create_peers);
+                panic!("{} status {:?} is not expected", self.fsm.peer.tag, status);
+            }
         }
         meta.pending_snapshot_regions.push(snap_region);
 
@@ -1690,15 +1691,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        if self.fsm.peer.create_peer_kind != CreatePeerKind::FromLocal {
+        if self.fsm.peer.peer_replicate_kind != PeerReplicateKind::Local {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             // If the data in `pending_create_peers` is not equal to `(peer_id, false)`,
             // it means this peer will be replaced from the new one from splitting.
             if let Some(status) = pending_create_peers.get(&region_id) {
-                let create_from_splitting = match self.fsm.peer.create_peer_kind {
-                    CreatePeerKind::FromLocal => unreachable!(),
-                    CreatePeerKind::FromSplitting => true,
-                    CreatePeerKind::FromCreating => false,
+                let create_from_splitting = match self.fsm.peer.peer_replicate_kind {
+                    PeerReplicateKind::Local => unreachable!(),
+                    PeerReplicateKind::Split => true,
+                    PeerReplicateKind::Create => false,
                 };
                 if *status == (self.fsm.peer_id(), create_from_splitting) {
                     pending_create_peers.remove(&region_id);
@@ -1874,7 +1875,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
-        new_regions_map: HashMap<u64, (u64, Option<String>)>,
+        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -1915,8 +1916,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             if new_region.get_id() != region_id {
-                let (_, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
-                if reason.is_some() {
+                let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+                if new_split_peer.result.is_some() {
                     if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
                         enc_start_key(&new_region),
                         enc_end_key(&new_region),
@@ -1982,7 +1983,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
 
-            new_peer.peer.create_peer_kind = CreatePeerKind::FromSplitting;
+            new_peer.peer.peer_replicate_kind = PeerReplicateKind::Split;
 
             let meta_peer = new_peer.peer.peer.clone();
 
@@ -2704,8 +2705,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::SplitRegion {
                     derived,
                     regions,
-                    new_regions_map,
-                } => self.on_ready_split_region(derived, regions, new_regions_map),
+                    new_split_regions,
+                } => self.on_ready_split_region(derived, regions, new_split_regions),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }

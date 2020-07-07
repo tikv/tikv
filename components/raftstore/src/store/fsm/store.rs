@@ -48,7 +48,7 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer::CreatePeerKind;
+use crate::store::peer::PeerReplicateKind;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
@@ -251,7 +251,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     ///
     /// WARNING:
     /// To avoid deadlock, if you want to use `store_meta` and `pending_create_peers` together,
@@ -1577,6 +1577,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 // If changed, it means this peer has been/will be replaced from the new one from splitting.
                 _ => return Ok(false),
             }
+            // Note that `StoreMeta` lock is held and status is (peer_id, false) in `pending_create_peers` now.
+            // If this peer is created from splitting latter and then status in `pending_create_peers` is changed,
+            // that peer creation in `on_ready_split_region` must be executed **after** current peer creation
+            // because of the `StoreMeta` lock.
         }
 
         let mut is_overlapped = false;
@@ -1675,7 +1679,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
 
-        peer.peer.create_peer_kind = CreatePeerKind::FromCreating;
+        peer.peer.peer_replicate_kind = PeerReplicateKind::Create;
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.

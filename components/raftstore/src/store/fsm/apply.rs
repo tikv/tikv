@@ -51,7 +51,7 @@ use crate::report_perf_context;
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
-use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -209,7 +209,7 @@ pub enum ExecResult<S> {
     SplitRegion {
         regions: Vec<Region>,
         derived: Region,
-        new_regions_map: HashMap<u64, (u64, Option<String>)>,
+        new_split_regions: HashMap<u64, NewSplitPeer>,
     },
     PrepareMerge {
         region: Region,
@@ -374,7 +374,7 @@ where
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// A uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
@@ -729,6 +729,14 @@ impl Debug for WaitSourceMergeState {
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSplitPeer {
+    pub peer_id: u64,
+    // `None` => success,
+    // `Some(s)` => fail due to `s`.
+    pub result: Option<String>,
 }
 
 /// The apply delegate of a Region which is responsible for handling committed
@@ -1827,8 +1835,7 @@ where
             regions.push(derived.clone());
         }
 
-        // region_id -> (peer_id, None or Some(split failed reason))
-        let mut new_regions_map: HashMap<u64, (u64, Option<String>)> = HashMap::default();
+        let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
             new_region.set_id(req.get_new_region_id());
@@ -1843,12 +1850,12 @@ where
             {
                 peer.set_id(*peer_id);
             }
-            new_regions_map.insert(
+            new_split_regions.insert(
                 new_region.get_id(),
-                (
-                    util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
-                    None,
-                ),
+                NewSplitPeer {
+                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    result: None,
+                },
             );
             regions.push(new_region);
         }
@@ -1861,25 +1868,27 @@ where
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
-            for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
-                match pending_create_peers.get_mut(region_id) {
-                    Some(status) => {
-                        if *status != (*peer_id, false) {
-                            *reason = Some(format!("status {:?} is not expected", status));
+            for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+                match pending_create_peers.entry(*region_id) {
+                    HashMapEntry::Occupied(mut v) => {
+                        if *v.get() != (new_split_peer.peer_id, false) {
+                            new_split_peer.result =
+                                Some(format!("status {:?} is not expected", v.get()));
                         } else {
                             replace_regions.insert(*region_id);
-                            pending_create_peers.insert(*region_id, (*peer_id, true));
+                            v.insert((new_split_peer.peer_id, true));
                         }
                     }
-                    None => {
-                        pending_create_peers.insert(*region_id, (*peer_id, true));
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((new_split_peer.peer_id, true));
                     }
                 }
             }
         }
 
+        // region_id -> peer_id
         let mut already_exist_regions = Vec::new();
-        for (region_id, (peer_id, reason)) in new_regions_map.iter_mut() {
+        for (region_id, new_split_peer) in new_split_regions.iter_mut() {
             let region_state_key = keys::region_state_key(*region_id);
             match ctx
                 .engine
@@ -1891,10 +1900,10 @@ where
                         // This peer must be the first one on local store. So if this peer is created on the other side,
                         // it means no `RegionLocalState` in kv engine.
                         panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
-                            self.tag, region_id, peer_id, state);
+                            self.tag, region_id, new_split_peer.peer_id, state);
                     }
-                    already_exist_regions.push((*region_id, *peer_id));
-                    *reason = Some(format!("state {:?} exist in kv engine", state));
+                    already_exist_regions.push((*region_id, new_split_peer.peer_id));
+                    new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
                 }
                 e => panic!(
                     "{} failed to get regions state of {}: {:?}",
@@ -1918,12 +1927,12 @@ where
             if new_region.get_id() == derived.get_id() {
                 continue;
             }
-            let (new_peer_id, reason) = new_regions_map.get(&new_region.get_id()).unwrap();
-            if let Some(r) = reason {
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if let Some(ref r) = new_split_peer.result {
                 warn!(
                     "new region from splitting already exist";
                     "new_region_id" => new_region.get_id(),
-                    "new_peer_id" => new_peer_id,
+                    "new_peer_id" => new_split_peer.peer_id,
                     "reason" => r,
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
@@ -1951,7 +1960,7 @@ where
             ApplyResult::Res(ExecResult::SplitRegion {
                 regions,
                 derived,
-                new_regions_map,
+                new_split_regions,
             }),
         ))
     }
