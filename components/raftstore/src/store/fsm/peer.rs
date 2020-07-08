@@ -1534,10 +1534,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
-        if self.ctx.cfg.dev_assert
-            && self.fsm.peer.local_first_replicate
-            && !self.fsm.peer.is_initialized()
-        {
+        if self.fsm.peer.local_first_replicate && !self.fsm.peer.is_initialized() {
             // If the region is not initialized and snapshot checking has passed, `is_splitting` flag must be false.
             // The split process only change this flag to true if it's exactly the same peer,
             // if so, this peer can't pass the previous range check.

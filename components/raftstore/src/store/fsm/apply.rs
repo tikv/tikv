@@ -1930,7 +1930,7 @@ where
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if let Some(ref r) = new_split_peer.result {
                 warn!(
-                    "new region from splitting already exist";
+                    "new region from splitting already exists";
                     "new_region_id" => new_region.get_id(),
                     "new_peer_id" => new_split_peer.peer_id,
                     "reason" => r,
