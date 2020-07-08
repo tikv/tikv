@@ -197,7 +197,6 @@ where
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        println!("snapshot get {:?}", hex::encode_upper(data_key.as_slice()));
         self.snap
             .get_value_cf_opt(opts, cf, &data_key)
             .map_err(|e| self.handle_get_value_error(e, cf, key))
