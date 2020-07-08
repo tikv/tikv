@@ -8,6 +8,7 @@ use crate::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_vec_expr::RpnExpression;
+use tidb_query_vec_expr::RpnExpressionBuilder;
 
 /// Parse a specific aggregate function definition from protobuf.
 ///
@@ -41,7 +42,7 @@ pub trait AggrDefinitionParser {
     ) -> Result<Box<dyn AggrFunction>> {
         Self::parse_rpn(
             &self,
-            expr_to_rpn(aggr_def),
+            RpnExpressionBuilder::build_from_expr_tree(aggr_def, ctx, src_schema.len())?,
             ctx,
             src_schema,
             out_schema,
@@ -62,11 +63,6 @@ pub trait AggrDefinitionParser {
             "This struct neither implemented parse nor parse_rpn, which is not expected."
         )
     }
-}
-
-#[inline]
-fn expr_to_rpn(_aggr_def: Expr) -> RpnExpression {
-    unimplemented!()
 }
 
 #[inline]

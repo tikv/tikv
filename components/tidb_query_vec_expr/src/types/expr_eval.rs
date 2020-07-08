@@ -271,6 +271,7 @@ impl RpnExpression {
                         field_type: ret_field_type,
                     });
                 }
+                RpnExpressionNode::Operator { .. } => unimplemented!(),
             }
         }
 

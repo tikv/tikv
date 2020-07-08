@@ -8,6 +8,7 @@ use tipb::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
+use crate::types::expr::Operator;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{JsonDecoder, MAX_FSP};
@@ -250,6 +251,9 @@ where
             handle_node_fn_call(tree_node, rpn_nodes, ctx, fn_mapper, max_columns)
         }
         ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
+        ExprType::AggBitAnd | ExprType::AggBitOr | ExprType::AggBitXor => {
+            handle_node_operator(tree_node, rpn_nodes, ctx, fn_mapper, max_columns)
+        }
         _ => handle_node_constant(tree_node, rpn_nodes, ctx),
     }
 }
@@ -273,6 +277,31 @@ fn handle_node_column_ref(
         ));
     }
     rpn_nodes.push(RpnExpressionNode::ColumnRef { offset });
+    Ok(())
+}
+
+#[inline]
+fn handle_node_operator<F>(
+    mut tree_node: Expr,
+    rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ctx: &mut EvalContext,
+    fn_mapper: F,
+    max_columns: usize,
+) -> Result<()>
+where
+    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
+{
+    let args: Vec<_> = tree_node.take_children().into();
+    // Visit children first, then push current node, so that it is a post-order traversal.
+    for arg in args {
+        append_rpn_nodes_recursively(arg, rpn_nodes, ctx, fn_mapper, max_columns)?;
+    }
+    let expr_type = tree_node.get_tp();
+    rpn_nodes.push(RpnExpressionNode::Operator {
+        op: Operator::from(expr_type),
+        field_type: tree_node.take_field_type(),
+    });
+
     Ok(())
 }
 

@@ -2,10 +2,38 @@
 
 use std::any::Any;
 
-use tipb::FieldType;
+use tipb::{ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
 use tidb_query_datatype::codec::data_type::ScalarValue;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Operator {
+    AggBitAnd,
+    AggBitOr,
+    AggBitXor,
+}
+
+impl From<ExprType> for Operator {
+    fn from(expr: ExprType) -> Self {
+        match expr {
+            ExprType::AggBitAnd => Self::AggBitAnd,
+            ExprType::AggBitOr => Self::AggBitOr,
+            ExprType::AggBitXor => Self::AggBitXor,
+            _ => panic!("not expected expr: {:?}", expr),
+        }
+    }
+}
+
+impl Into<ExprType> for Operator {
+    fn into(self) -> ExprType {
+        match self {
+            Self::AggBitAnd => ExprType::AggBitAnd,
+            Self::AggBitOr => ExprType::AggBitOr,
+            Self::AggBitXor => ExprType::AggBitXor,
+        }
+    }
+}
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug)]
@@ -25,24 +53,29 @@ pub enum RpnExpressionNode {
     },
 
     /// Represents a reference to a column in the columns specified in evaluation.
-    ColumnRef { offset: usize },
+    ColumnRef {
+        offset: usize,
+    },
+    // Represents a operator call
+    Operator {
+        op: Operator,
+        field_type: FieldType,
+    },
 }
 
 impl RpnExpressionNode {
     /// Gets the field type.
-    #[cfg(test)]
     pub fn field_type(&self) -> &FieldType {
         match self {
             RpnExpressionNode::FnCall { field_type, .. } => field_type,
             RpnExpressionNode::Constant { field_type, .. } => field_type,
+            RpnExpressionNode::Operator { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { .. } => panic!(),
         }
     }
 
-    #[cfg(test)]
     pub fn expr_tp(&self) -> tipb::ExprType {
         use tidb_query_datatype::EvalType;
-        use tipb::ExprType;
 
         match self {
             RpnExpressionNode::FnCall { .. } => ExprType::ScalarFunc,
@@ -56,6 +89,7 @@ impl RpnExpressionNode {
                 EvalType::Real => ExprType::Float64,
             },
             RpnExpressionNode::ColumnRef { .. } => ExprType::ColumnRef,
+            RpnExpressionNode::Operator { op, .. } => (*op).into(),
         }
     }
 
@@ -124,6 +158,7 @@ impl RpnExpression {
         match last_node {
             RpnExpressionNode::FnCall { field_type, .. } => field_type,
             RpnExpressionNode::Constant { field_type, .. } => field_type,
+            RpnExpressionNode::Operator { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { offset } => &schema[*offset],
         }
     }
