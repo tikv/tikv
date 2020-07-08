@@ -52,18 +52,20 @@ pub trait AggrDefinitionParser {
     #[inline]
     fn parse_rpn(
         &self,
-        _aggr_def: Vec<RpnExpression>,
+        _aggr_def: RpnExpression,
         _ctx: &mut EvalContext,
         _src_schema: &[FieldType],
         _out_schema: &mut Vec<FieldType>,
         _out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        unimplemented!("This struct neither implemented parse nor parse_rpn, which is not expected.")
+        unimplemented!(
+            "This struct neither implemented parse nor parse_rpn, which is not expected."
+        )
     }
 }
 
 #[inline]
-fn expr_to_rpn(_aggr_def: Expr) -> Vec<RpnExpression> {
+fn expr_to_rpn(_aggr_def: Expr) -> RpnExpression {
     unimplemented!()
 }
 
