@@ -44,7 +44,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, CreatePeerKind, Peer, StaleState};
+use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::KeysInfoFormatter;
@@ -1534,8 +1534,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
-        if self.ctx.cfg.dev_assert && self.fsm.peer.create_peer_kind == CreatePeerKind::Replicate {
-            // If the region is not initialized and snapshot checking has passed, the split flag must be false.
+        if self.ctx.cfg.dev_assert && self.fsm.peer.local_first_replicate {
+            // If the region is not initialized and snapshot checking has passed, `is_splitting` flag must be false.
             // The split process only change this flag to true if it's exactly the same peer,
             // if so, this peer can't pass the previous range check.
             // The condition of passing the range check is this region must merge the other regions and then split.
@@ -1690,17 +1690,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        if self.fsm.peer.create_peer_kind != CreatePeerKind::Local {
+        if self.fsm.peer.local_first_replicate && !is_initialized {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            // If the data in `pending_create_peers` is not equal to `(peer_id, false)`,
+            // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
             // it means this peer will be replaced from the new one from splitting.
             if let Some(status) = pending_create_peers.get(&region_id) {
-                let create_from_splitting = match self.fsm.peer.create_peer_kind {
-                    CreatePeerKind::Local => unreachable!(),
-                    CreatePeerKind::Split => true,
-                    CreatePeerKind::Replicate => false,
-                };
-                if *status == (self.fsm.peer_id(), create_from_splitting) {
+                if *status == (self.fsm.peer_id(), false) {
                     pending_create_peers.remove(&region_id);
                 }
             }
@@ -1914,22 +1909,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
-            if new_region.get_id() != region_id {
-                let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
-                if new_split_peer.result.is_some() {
-                    if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
-                        enc_start_key(&new_region),
-                        enc_end_key(&new_region),
-                    ) {
-                        error!(
-                            "failed to cleanup extra split data, may leave some dirty data";
-                            "region_id" => new_region.get_id(),
-                            "err" => ?e,
-                        );
-                    }
-                    continue;
-                }
-            }
             let new_region_id = new_region.get_id();
 
             let not_exist = meta
@@ -1940,6 +1919,32 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
             if new_region_id == region_id {
                 continue;
+            }
+
+            // Create new region
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                if let Err(e) = self
+                    .fsm
+                    .peer
+                    .mut_store()
+                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
+                {
+                    error!(
+                        "failed to cleanup extra split data, may leave some dirty data";
+                        "region_id" => new_region.get_id(),
+                        "err" => ?e,
+                    );
+                }
+                continue;
+            }
+
+            {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
             }
 
             // Insert new regions and validation
@@ -1981,8 +1986,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
             new_peer.peer.init_replication_mode(&mut *replication_state);
             drop(replication_state);
-
-            new_peer.peer.create_peer_kind = CreatePeerKind::Split;
 
             let meta_peer = new_peer.peer.peer.clone();
 
@@ -2658,6 +2661,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 panic!(
                     "{} meta corrupted, expect {:?} got {:?}",
                     self.fsm.peer.tag, prev_region, prev,
+                );
+            }
+        } else {
+            // This peer is uninitialized previously.
+            if self.fsm.peer.local_first_replicate {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&self.fsm.region_id()),
+                    Some((self.fsm.peer_id(), false))
                 );
             }
         }

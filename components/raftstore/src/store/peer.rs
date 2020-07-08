@@ -176,16 +176,6 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub enum CreatePeerKind {
-    // Peer has already existed in local.
-    Local,
-    // Peer is created from splitting.
-    Split,
-    // Peer is created from certain msg.
-    Replicate,
-}
-
 pub struct Peer {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -288,7 +278,7 @@ pub struct Peer {
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
     /// The kind of creating peer.
-    pub create_peer_kind: CreatePeerKind,
+    pub local_first_replicate: bool,
 }
 
 impl Peer {
@@ -372,7 +362,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
-            create_peer_kind: CreatePeerKind::Local,
+            local_first_replicate: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -929,10 +919,15 @@ impl Peer {
             if id == self.peer.get_id() {
                 continue;
             }
-            // If the `matched` is 0, it must be pending peer because `truncated_index` must be 
-            // greater than `RAFT_INIT_LOG_INDEX`.
-            // The correctness of region merge depends on that to ensure all target peers exist.
+            // The `matched` is 0 only in these two cases:
+            // 1. Current leader hasn't communicated with this peer.
+            // 2. This peer is not exist yet(maybe it is created but not initialized)
+            //
+            // The correctness of region merge depends on the fact that all target peers must exist during merging.
             // (PD rely on `pending_peers` to check whether all target peers exist)
+            //
+            // So if the `matched` is 0, it must be a pending peer.
+            // It can be ensured because `truncated_index` must be greater than `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);

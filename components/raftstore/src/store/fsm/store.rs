@@ -48,7 +48,6 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer::CreatePeerKind;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
@@ -1504,7 +1503,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     return Ok(());
                 }
 
-                {
+                let is_local_first = check_msg_status == CheckMsgStatus::NewPeerFirst;
+                if is_local_first {
                     let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
                     if pending_create_peers.contains_key(&region_id) {
                         return Ok(());
@@ -1512,15 +1512,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
                 }
 
-                let res = self.maybe_create_peer(
-                    region_id,
-                    &msg,
-                    check_msg_status == CheckMsgStatus::NewPeerFirst,
-                );
+                let res = self.maybe_create_peer(region_id, &msg, is_local_first);
                 match res {
                     Ok(true) => (),
                     _ => {
-                        {
+                        if is_local_first {
                             let mut pending_create_peers =
                                 self.ctx.pending_create_peers.lock().unwrap();
                             if let Some(status) = pending_create_peers.get(&region_id) {
@@ -1549,9 +1545,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         &mut self,
         region_id: u64,
         msg: &RaftMessage,
-        is_first_one: bool,
+        is_local_first: bool,
     ) -> Result<bool> {
-        if is_first_one {
+        if is_local_first {
             if self
                 .ctx
                 .engines
@@ -1570,7 +1566,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(true);
         }
 
-        if is_first_one {
+        if is_local_first {
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             match pending_create_peers.get(&region_id) {
                 Some(status) if *status == (msg.get_to_peer().get_id(), false) => (),
@@ -1679,7 +1675,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
 
-        peer.peer.create_peer_kind = CreatePeerKind::Replicate;
+        if is_local_first {
+            peer.peer.local_first_replicate = true;
+        }
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
