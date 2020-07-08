@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
@@ -27,6 +28,10 @@ use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
+use engine_traits::CF_WRITE;
+use pd_client::PdClient;
+use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -216,10 +221,11 @@ pub(super) struct WriteResult {
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
 }
 
-pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
+pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'static>(
     cmd: Command,
     snapshot: S,
     lock_mgr: &L,
+    pd_client: Arc<P>,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -234,6 +240,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             txn_size,
             min_commit_ts,
             ctx,
+            secondary_keys,
             ..
         }) => {
             let mut scan_mode = None;
@@ -262,19 +269,32 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
                 }
             }
             let mut txn = if scan_mode.is_some() {
-                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !ctx.get_not_fill_cache())
+                MvccTxn::for_scan(
+                    snapshot,
+                    scan_mode,
+                    start_ts,
+                    !cmd.ctx.get_not_fill_cache(),
+                    pd_client,
+                )
             } else {
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client)
             };
 
             // Set extra op here for getting the write record when check write conflict in prewrite.
             txn.extra_op = extra_op;
 
+            let primary_key = Key::from_raw(&primary);
             let mut locks = vec![];
             for m in mutations {
+                let secondaries = if m.key() == &primary_key {
+                    &secondary_keys
+                } else {
+                    &None
+                };
                 match txn.prewrite(
                     m,
                     &primary,
+                    secondaries,
                     skip_constraint_check,
                     lock_ttl,
                     txn_size,
@@ -311,7 +331,8 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             ctx,
         }) => {
             let rows = mutations.len();
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn =
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
             // for getting the written keys.
             txn.extra_op = extra_op;
@@ -361,7 +382,8 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             ctx,
             ..
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn =
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             let rows = keys.len();
             let mut res = if return_values {
                 Ok(PessimisticLockRes::Values(vec![]))
@@ -418,7 +440,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
                     commit_ts,
                 }));
             }
-            let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let rows = keys.len();
             // Pessimistic txn needs key_hashes to wake up waiters
@@ -442,7 +464,8 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             ctx,
             ..
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn =
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             // The rollback must be protected, see more on
@@ -460,7 +483,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             ctx,
             ..
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -479,7 +502,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             ctx,
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let rows = keys.len();
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
@@ -504,7 +527,12 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             key_locks,
             ctx,
         }) => {
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(
+                snapshot,
+                TimeStamp::zero(),
+                !ctx.get_not_fill_cache(),
+                pd_client,
+            );
 
             let mut scan_key = scan_key.take();
             let rows = key_locks.len();
@@ -557,7 +585,8 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             resolve_keys,
             ctx,
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn =
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let rows = resolve_keys.len();
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -583,7 +612,8 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             ctx,
         }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
+            let mut txn =
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -601,7 +631,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
             rollback_if_not_exist,
             ctx,
         }) => {
-            let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache());
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let mut released_locks = ReleasedLocks::new(lock_ts, TimeStamp::zero());
             let (txn_status, released) = txn.check_txn_status(
@@ -672,6 +702,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
     use crate::storage::{mvcc::Mutation, DummyLockManager};
+    use pd_client::DummyPdClient;
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -817,6 +848,7 @@ mod tests {
             cmd,
             snap,
             &DummyLockManager {},
+            Arc::new(DummyPdClient::new()),
             ExtraOp::Noop,
             statistics,
             false,
@@ -854,6 +886,7 @@ mod tests {
             cmd.into(),
             snap,
             &DummyLockManager {},
+            Arc::new(DummyPdClient::new()),
             ExtraOp::Noop,
             statistics,
             false,

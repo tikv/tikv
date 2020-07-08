@@ -698,3 +698,13 @@ impl PdClient for RpcClient {
             .execute()
     }
 }
+
+pub struct DummyPdClient;
+
+impl DummyPdClient {
+    pub fn new() -> DummyPdClient {
+        DummyPdClient
+    }
+}
+
+impl PdClient for DummyPdClient {}
