@@ -699,12 +699,20 @@ impl PdClient for RpcClient {
     }
 }
 
-pub struct DummyPdClient;
+pub struct DummyPdClient {
+    pub next_ts: TimeStamp,
+}
 
 impl DummyPdClient {
     pub fn new() -> DummyPdClient {
-        DummyPdClient
+        DummyPdClient {
+            next_ts: TimeStamp::zero(),
+        }
     }
 }
 
-impl PdClient for DummyPdClient {}
+impl PdClient for DummyPdClient {
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        Box::new(future::ok(self.next_ts))
+    }
+}

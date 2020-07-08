@@ -1215,7 +1215,7 @@ macro_rules! new_txn {
             $ss,
             $ts.into(),
             $fill_cache,
-            Arc::new(::pd_client::DummyPdClient::new()),
+            ::std::sync::Arc::new(::pd_client::DummyPdClient::new()),
         )
     };
 }
@@ -1228,6 +1228,7 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use kvproto::kvrpcpb::Context;
+    use pd_client::DummyPdClient;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -3214,5 +3215,42 @@ mod tests {
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn test_async_prewrite_primary() {
+        // copy must_prewrite_put_impl, check that the key is written with the correct secondaries and the right timestamp
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut pd_client = DummyPdClient::new();
+        pd_client.next_ts = TimeStamp::new(42);
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        txn.prewrite(
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            false,
+            0,
+            4,
+            TimeStamp::zero(),
+        )
+        .unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        assert_eq!(lock.ts, TimeStamp::new(2));
+        assert_eq!(lock.use_async_commit, true);
+        assert_eq!(
+            lock.secondaries,
+            vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+        );
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
     }
 }
