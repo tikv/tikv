@@ -277,7 +277,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
-    /// The kind of creating peer.
+    /// Whether this peer is created by replication and is the first
+    /// one of this region on local store.
     pub local_first_replicate: bool,
 }
 
@@ -921,7 +922,7 @@ impl Peer {
             }
             // The `matched` is 0 only in these two cases:
             // 1. Current leader hasn't communicated with this peer.
-            // 2. This peer is not exist yet(maybe it is created but not initialized)
+            // 2. This peer does not exist yet(maybe it is created but not initialized)
             //
             // The correctness of region merge depends on the fact that all target peers must exist during merging.
             // (PD rely on `pending_peers` to check whether all target peers exist)
