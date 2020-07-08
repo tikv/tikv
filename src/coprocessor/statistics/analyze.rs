@@ -13,7 +13,7 @@ use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_normal_executors::{Executor, ScanExecutor, TableScanExecutor};
-use tidb_query_vec_executors::{BATCH_GROW_FACTOR, BATCH_INITIAL_SIZE, BATCH_MAX_SIZE};
+use tidb_query_vec_executors::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use super::cmsketch::CmSketch;
@@ -90,7 +90,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
 
         let mut is_drained = false;
-        let mut batch_size = BATCH_INITIAL_SIZE;
+        let batch_size = BATCH_MAX_SIZE;
         while !is_drained {
             use std::ops::Index;
 
@@ -108,14 +108,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     }
                 }
                 hist.append(&bytes);
-            }
-
-            // Grow batch size
-            if batch_size < BATCH_MAX_SIZE {
-                batch_size *= BATCH_GROW_FACTOR;
-                if batch_size > BATCH_MAX_SIZE {
-                    batch_size = BATCH_MAX_SIZE
-                }
             }
         }
 
