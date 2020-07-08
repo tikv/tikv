@@ -170,10 +170,21 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         } else if let Some(env) = env.as_ref() {
             io_options.set_env(env.clone());
         }
-        let compress_type = self
-            .compression_type
-            .take()
-            .unwrap_or_else(get_fastest_supported_compression_type);
+        let compress_type = if let Some(ct) = self.compression_type {
+            let all_supported_compression = supported_compression();
+            if !all_supported_compression.contains(&ct) {
+                return Err(Error::Other(
+                    format!(
+                        "compression type '{}' is not supported by rocksdb",
+                        fmt_db_compression_type(ct)
+                    )
+                    .into(),
+                ));
+            }
+            ct
+        } else {
+            get_fastest_supported_compression_type()
+        };
         io_options.compression(compress_type);
         // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
         // compression_per_level first, so to make sure our specified compression type
@@ -283,6 +294,15 @@ fn get_fastest_supported_compression_type() -> DBCompressionType {
         .iter()
         .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::No)
+}
+
+fn fmt_db_compression_type(ct: DBCompressionType) -> &'static str {
+    match ct {
+        DBCompressionType::Lz4 => "lz4",
+        DBCompressionType::Snappy => "snappy",
+        DBCompressionType::Zstd => "zstd",
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(test)]
