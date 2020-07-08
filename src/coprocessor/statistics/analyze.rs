@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -10,10 +11,12 @@ use rand::{thread_rng, Rng};
 use tidb_query_datatype::codec::datum::{encode_value, Datum, NIL_FLAG};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_normal_executors::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
-use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
+use tidb_query_vec_executors::{
+    interface::BatchExecutor, BatchIndexScanExecutor, BatchTableScanExecutor,
+};
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 
 use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
@@ -77,23 +80,31 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CmSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
-        while let Some(row) = scanner.next()? {
-            let row = row.take_origin()?;
-            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
-            hist.append(bytes);
-            if let Some(c) = cms.as_mut() {
-                for end_offset in end_offsets {
-                    c.insert(&bytes[..end_offset])
+        let mut is_drained = false;
+
+        while !is_drained {
+            let result = scanner.next_batch(1024);
+            is_drained = result.is_drained?;
+            for logical_row in result.logical_rows {
+                let mut bytes = vec![];
+                for column in result.physical_columns.as_slice() {
+                    let data = &column.raw()[logical_row];
+                    bytes.extend_from_slice(data);
+                    if let Some(c) = cms.as_mut() {
+                        c.insert(&bytes);
+                    }
                 }
+                hist.append(&bytes);
             }
         }
+
         let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
@@ -110,11 +121,30 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
-                let mut scanner = ScanExecutor::index_scan_with_cols_len(
-                    EvalContext::default(),
-                    i64::from(req.get_num_columns()),
-                    mem::replace(&mut self.ranges, Vec::new()),
+                let mut scanner = BatchIndexScanExecutor::new_for_analyze(
                     self.storage.take().unwrap(),
+                    Arc::new(EvalConfig::default()),
+                    req.get_num_columns() as usize,
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    0,
+                    false,
+                    false,
+                )?;
+                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                scanner.collect_storage_stats(&mut self.storage_stats);
+                res
+            }
+
+            AnalyzeType::TypeCommonHandle => {
+                let req = self.req.take_idx_req();
+                let mut scanner = BatchIndexScanExecutor::new_for_analyze(
+                    self.storage.take().unwrap(),
+                    Arc::new(EvalConfig::default()),
+                    req.get_num_columns() as usize,
+                    mem::replace(&mut self.ranges, Vec::new()),
+                    0,
+                    false,
+                    false,
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
                 scanner.collect_storage_stats(&mut self.storage_stats);
@@ -153,7 +183,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -187,10 +217,14 @@ impl<S: Snapshot> SampleBuilder<S> {
             cols_info.to_vec()
         };
 
-        let mut meta = TableScan::default();
-        meta.set_columns(cols_info);
-        let table_scanner =
-            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false)?;
+        let table_scanner = BatchTableScanExecutor::new(
+            storage,
+            Arc::new(EvalConfig::default()),
+            cols_info.into(),
+            ranges,
+            req.take_primary_column_ids().into(),
+            false,
+        )?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -219,36 +253,44 @@ impl<S: Snapshot> SampleBuilder<S> {
             );
             self.col_len
         ];
-        while let Some(row) = self.data.next()? {
-            let row = row.take_origin()?;
-            let cols = row.get_binary_cols(&mut EvalContext::default())?;
-            let retrieve_len = cols.len();
-            let mut cols_iter = cols.into_iter();
-            if self.col_len != retrieve_len {
-                if let Some(v) = cols_iter.next() {
-                    pk_builder.append(&v);
+        let mut is_drained = false;
+        while !is_drained {
+            let result = self.data.next_batch(1024);
+            is_drained = result.is_drained?;
+
+            for logical_row in result.logical_rows {
+                let mut columns_slice = result.physical_columns.as_slice();
+                if self.col_len != columns_slice.len() {
+                    if let Some(column) = columns_slice.first() {
+                        let data = &column.raw()[logical_row];
+                        pk_builder.append(data);
+                        columns_slice = &columns_slice[1..];
+                    }
                 }
-            }
-            for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
-                if self.cols_info[i].as_accessor().is_string_like() {
-                    let sorted_val = match_template_collator! {
-                        TT, match self.cols_info[i].as_accessor().collation()? {
-                            Collation::TT => {
-                                let mut mut_val = val.as_slice();
-                                let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
-                                if decoded_val == Datum::Null {
-                                    val
-                                } else {
-                                    let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                    encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
+                for (i, (collector, column)) in
+                    collectors.iter_mut().zip(columns_slice.iter()).enumerate()
+                {
+                    let val = &column.raw()[logical_row];
+                    if self.cols_info[i].as_accessor().is_string_like() {
+                        let sorted_val = match_template_collator! {
+                            TT, match self.cols_info[i].as_accessor().collation()? {
+                                Collation::TT => {
+                                    let mut mut_val = val;
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
+                                    if decoded_val == Datum::Null {
+                                        val.to_vec()
+                                    } else {
+                                        let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
+                                    }
                                 }
                             }
-                        }
-                    };
-                    collector.collect(sorted_val);
-                    continue;
+                        };
+                        collector.collect(sorted_val);
+                        continue;
+                    }
+                    collector.collect(val.to_vec());
                 }
-                collector.collect(val);
             }
         }
         Ok((collectors, pk_builder))

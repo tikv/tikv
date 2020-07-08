@@ -103,6 +103,54 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         })?;
         Ok(Self(wrapper))
     }
+
+    pub fn new_for_analyze(
+        storage: S,
+        config: Arc<EvalConfig>,
+        cols_len: usize,
+        key_ranges: Vec<KeyRange>,
+        primary_column_ids_len: usize,
+        is_backward: bool,
+        unique: bool,
+    ) -> Result<Self> {
+        use DecodeHandleStrategy::*;
+
+        let (decode_strategy, handle_column_cnt) = if primary_column_ids_len > 0 {
+            (DecodeCommonHandle, primary_column_ids_len)
+        } else {
+            (NoDecode, 0)
+        };
+
+        if handle_column_cnt > cols_len {
+            return Err(other_err!(
+                "The number of handle columns exceeds the length of `columns_info`"
+            ));
+        }
+
+        let schema: Vec<_> = (0..cols_len)
+            .map(|_| field_type_with_unspecified_tp())
+            .collect();
+
+        let columns_id_without_handle: Vec<_> = (0..cols_len - handle_column_cnt)
+            .map(|i| i as i64)
+            .collect();
+
+        let imp = IndexScanExecutorImpl {
+            context: EvalContext::new(config),
+            schema,
+            columns_id_without_handle,
+            decode_strategy,
+        };
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+            imp,
+            storage,
+            key_ranges,
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+        })?;
+        Ok(Self(wrapper))
+    }
 }
 
 impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {

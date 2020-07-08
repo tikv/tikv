@@ -109,6 +109,7 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(&descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                _ => return Err(other_err!("Unsupported executor type: {:?}", ed.get_tp())),
             }
         }
 
