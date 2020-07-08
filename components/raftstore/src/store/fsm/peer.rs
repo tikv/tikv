@@ -1534,7 +1534,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
-        if self.ctx.cfg.dev_assert && self.fsm.peer.local_first_replicate {
+        if self.ctx.cfg.dev_assert
+            && self.fsm.peer.local_first_replicate
+            && !self.fsm.peer.is_initialized()
+        {
             // If the region is not initialized and snapshot checking has passed, `is_splitting` flag must be false.
             // The split process only change this flag to true if it's exactly the same peer,
             // if so, this peer can't pass the previous range check.
@@ -1690,13 +1693,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
-        if self.fsm.peer.local_first_replicate && !is_initialized {
+        if self.fsm.peer.local_first_replicate {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-            // it means this peer will be replaced from the new one from splitting.
-            if let Some(status) = pending_create_peers.get(&region_id) {
-                if *status == (self.fsm.peer_id(), false) {
-                    pending_create_peers.remove(&region_id);
+            if is_initialized {
+                assert!(pending_create_peers.get(&region_id).is_none());
+            } else {
+                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
+                // it means this peer will be replaced from the new one from splitting.
+                if let Some(status) = pending_create_peers.get(&region_id) {
+                    if *status == (self.fsm.peer_id(), false) {
+                        pending_create_peers.remove(&region_id);
+                    }
                 }
             }
         }
@@ -2663,15 +2670,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.tag, prev_region, prev,
                 );
             }
-        } else {
+        } else if self.fsm.peer.local_first_replicate {
             // This peer is uninitialized previously.
-            if self.fsm.peer.local_first_replicate {
-                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-                assert_eq!(
-                    pending_create_peers.remove(&self.fsm.region_id()),
-                    Some((self.fsm.peer_id(), false))
-                );
-            }
+            // More accurately, the `RegionLocalState` has been persisted so the data can be removed from `pending_create_peers`.
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            assert_eq!(
+                pending_create_peers.remove(&self.fsm.region_id()),
+                Some((self.fsm.peer_id(), false))
+            );
         }
 
         if let Some(r) = meta
