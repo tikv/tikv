@@ -271,7 +271,7 @@ where
     S: Snapshot,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<S>>, Cmd)>,
 }
 
 impl<S> ApplyCallback<S>
@@ -284,16 +284,16 @@ where
     }
 
     fn invoke_all(self, host: &CoprocessorHost<RocksEngine>) {
-        for (cb, mut resp) in self.cbs {
-            host.post_apply(&self.region, &mut resp);
+        for (cb, mut cmd) in self.cbs {
+            host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
-                cb.invoke_with_response(resp)
+                cb.invoke_with_response(cmd.response)
             };
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
-        self.cbs.push((cb, resp));
+    fn push(&mut self, cb: Option<Callback<S>>, cmd: Cmd) {
+        self.cbs.push((cb, cmd));
     }
 }
 
@@ -953,11 +953,14 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx
-                .cbs
-                .last_mut()
-                .unwrap()
-                .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
+            apply_ctx.cbs.last_mut().unwrap().push(
+                cmd.cb.take(),
+                Cmd::new(
+                    cmd.index,
+                    RaftCmdRequest::default(),
+                    cmd_resp::err_resp(Error::StaleCommand, term),
+                ),
+            );
         }
         ApplyResult::None
     }
@@ -1067,14 +1070,14 @@ where
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_cb(index, term, is_conf_change);
+        let cmd = Cmd::new(index, cmd, resp);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            let cmd = Cmd::new(index, cmd, resp.clone());
             apply_ctx
                 .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
+                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
         }
 
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, resp);
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
         exec_result
     }
@@ -3875,7 +3878,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
