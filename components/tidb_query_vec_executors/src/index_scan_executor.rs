@@ -14,7 +14,9 @@ use codec::prelude::NumberDecoder;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
+use tidb_query_datatype::codec::table::{
+    check_index_key, check_record_key, MAX_OLD_ENCODED_VALUE_LEN,
+};
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
@@ -109,29 +111,21 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         config: Arc<EvalConfig>,
         cols_len: usize,
         key_ranges: Vec<KeyRange>,
-        primary_column_ids_len: usize,
-        is_backward: bool,
-        unique: bool,
+        is_common_handle: bool,
     ) -> Result<Self> {
         use DecodeHandleStrategy::*;
 
-        let (decode_strategy, handle_column_cnt) = if primary_column_ids_len > 0 {
-            (DecodeCommonHandle, primary_column_ids_len)
+        let (decode_strategy, handle_column_cnt) = if is_common_handle {
+            (DecodeCommonHandleRowKey, cols_len)
         } else {
             (NoDecode, 0)
         };
 
-        if handle_column_cnt > cols_len {
-            return Err(other_err!(
-                "The number of handle columns exceeds the length of `columns_info`"
-            ));
-        }
-
-        let schema: Vec<_> = (0..cols_len)
+        let schema = (0..cols_len)
             .map(|_| field_type_with_unspecified_tp())
             .collect();
 
-        let columns_id_without_handle: Vec<_> = (0..cols_len - handle_column_cnt)
+        let columns_id_without_handle = (0..cols_len - handle_column_cnt)
             .map(|i| i as i64)
             .collect();
 
@@ -141,13 +135,14 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             columns_id_without_handle,
             decode_strategy,
         };
+
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
             storage,
             key_ranges,
-            is_backward,
+            is_backward: false,
             is_key_only: false,
-            accept_point_range: unique,
+            accept_point_range: false,
         })?;
         Ok(Self(wrapper))
     }
@@ -192,6 +187,8 @@ enum DecodeHandleStrategy {
     NoDecode,
     DecodeIntHandle,
     DecodeCommonHandle,
+    // Use for analyze common handle index.
+    DecodeCommonHandleRowKey,
 }
 
 struct IndexScanExecutorImpl {
@@ -242,7 +239,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                     EvalType::Int,
                 ));
             }
-            DecodeCommonHandle => {
+            DecodeCommonHandle | DecodeCommonHandleRowKey => {
                 for _ in self.columns_id_without_handle.len()..columns_len {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
@@ -301,15 +298,28 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |  Length:   8
     fn process_kv_pair(
         &mut self,
-        key: &[u8],
+        mut key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use DecodeHandleStrategy::*;
-        check_index_key(key)?;
+        match self.decode_strategy {
+            DecodeCommonHandleRowKey => {
+                check_record_key(key)?;
+                key = &key[table::PREFIX_LEN..];
+                Self::extract_columns_from_datum_format(
+                    &mut key,
+                    &mut columns[0..self.schema.len()],
+                )?;
+                return Ok(());
+            }
+            _ => {
+                check_index_key(key)?;
+                key = &key[table::PREFIX_LEN + table::ID_LEN..];
+            }
+        }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_COMMON_HANDLE_FLAG {
-                assert!(self.decode_strategy == DecodeCommonHandle);
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
                 self.process_normal_new_collation_value(key, value, columns)
@@ -389,7 +399,7 @@ impl IndexScanExecutorImpl {
 
     fn process_unique_common_handle_value(
         &mut self,
-        key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
@@ -402,7 +412,6 @@ impl IndexScanExecutorImpl {
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
             // The datum payload part of the key.
-            let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
             Self::extract_columns_from_datum_format(
                 &mut key_payload,
                 &mut columns[0..self.columns_id_without_handle.len()],
@@ -420,7 +429,7 @@ impl IndexScanExecutorImpl {
 
     fn process_normal_new_collation_value(
         &mut self,
-        mut key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
@@ -430,11 +439,10 @@ impl IndexScanExecutorImpl {
         self.extract_columns_from_row_format(restore_values, columns)?;
 
         match self.decode_strategy {
-            NoDecode => {}
+            NoDecode | DecodeCommonHandleRowKey => {}
             DecodeIntHandle if tail_len < 8 => {
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
-                let handle = self.decode_handle_from_key(key)?;
+                datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                let handle = self.decode_handle_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
@@ -446,10 +454,9 @@ impl IndexScanExecutorImpl {
                     .push_int(Some(handle));
             }
             DecodeCommonHandle => {
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
+                datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
                 Self::extract_columns_from_datum_format(
-                    &mut key,
+                    &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
                 )?;
             }
@@ -459,14 +466,11 @@ impl IndexScanExecutorImpl {
 
     fn process_normal_old_collation_value(
         &mut self,
-        key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use DecodeHandleStrategy::*;
-
-        // The payload part of the key
-        let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
         Self::extract_columns_from_datum_format(
             &mut key_payload,
@@ -474,7 +478,7 @@ impl IndexScanExecutorImpl {
         )?;
 
         match self.decode_strategy {
-            NoDecode => {}
+            NoDecode | DecodeCommonHandleRowKey => {}
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
             DecodeIntHandle if key_payload.is_empty() => {

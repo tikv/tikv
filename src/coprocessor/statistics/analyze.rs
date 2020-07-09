@@ -126,8 +126,6 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     Arc::new(EvalConfig::default()),
                     req.get_num_columns() as usize,
                     mem::replace(&mut self.ranges, Vec::new()),
-                    0,
-                    false,
                     false,
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
@@ -142,9 +140,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     Arc::new(EvalConfig::default()),
                     req.get_num_columns() as usize,
                     mem::replace(&mut self.ranges, Vec::new()),
-                    0,
-                    false,
-                    false,
+                    true,
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
                 scanner.collect_storage_stats(&mut self.storage_stats);
