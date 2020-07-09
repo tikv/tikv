@@ -17,6 +17,7 @@ use tidb_query_vec_executors::{
     interface::BatchExecutor, util::scan_executor::field_type_from_column_info,
     BatchIndexScanExecutor, BatchTableScanExecutor,
 };
+use tidb_query_vec_expr::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 
 use super::cmsketch::CmSketch;
@@ -91,7 +92,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut is_drained = false;
 
         while !is_drained {
-            let result = scanner.next_batch(1024);
+            let result = scanner.next_batch(BATCH_MAX_SIZE);
             is_drained = result.is_drained?;
             for logical_row in result.logical_rows {
                 let mut bytes = vec![];
@@ -252,7 +253,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         ];
         let mut is_drained = false;
         while !is_drained {
-            let result = self.data.next_batch(1024);
+            let result = self.data.next_batch(BATCH_MAX_SIZE);
             is_drained = result.is_drained?;
 
             for logical_row in result.logical_rows {
