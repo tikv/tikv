@@ -197,8 +197,8 @@ mod tests {
             .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 4)
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
-        let vec = exp_result.as_ref().to_real_vec();
-        let chunked_vec: NotChunkedVec<Real> = vec.into();
+        let vec = exp_result.as_ref().as_real_vec();
+        let chunked_vec: ChunkedVecSized<Real> = vec.into();
         update_vector!(state, &mut ctx, &chunked_vec, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];

@@ -1,5 +1,5 @@
 use super::chunked_bool_vec::ChunkedBoolVec;
-use super::{Evaluable, EvaluableRet, ChunkRef, ChunkedVec};
+use super::{Evaluable, EvaluableRet, ChunkRef, ChunkedVec, UnsafeRefInto};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
@@ -109,6 +109,19 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
 
     fn phantom_data(self) -> Option<&'a T> {
         None
+    }
+}
+
+
+impl<T: Clone> Into<ChunkedVecSized<T>> for Vec<Option<T>> {
+    fn into(self) -> ChunkedVecSized<T> {
+        ChunkedVecSized::from_vec(self)
+    }
+}
+
+impl<'a, T: Evaluable> UnsafeRefInto<&'static ChunkedVecSized<T>> for &'a ChunkedVecSized<T> {
+    unsafe fn unsafe_into(self) -> &'static ChunkedVecSized<T> {
+        std::mem::transmute(self)
     }
 }
 

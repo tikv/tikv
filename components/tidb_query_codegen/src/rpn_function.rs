@@ -1208,7 +1208,7 @@ impl NormalRpnFn {
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
-                        result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
+                        result.chunked_push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(#vec_type::into_vector_value(result))
                 }
