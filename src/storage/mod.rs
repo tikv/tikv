@@ -536,7 +536,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
+            acquire_pessimistic_lock::AcquirePessimisticLock, prewrite::Prewrite,
+            prewrite_pessimistic::PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1461,7 +1462,7 @@ pub mod test_util {
     ) -> PessimisticLockCommand {
         let primary = keys[0].0.clone().to_raw().unwrap();
         let for_update_ts: TimeStamp = for_update_ts.into();
-        commands::AcquirePessimisticLock::new(
+        commands::acquire_pessimistic_lock::AcquirePessimisticLock::new(
             keys,
             primary,
             start_ts.into(),
@@ -1484,7 +1485,7 @@ pub mod test_util {
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::PessimisticRollback::new(
+                commands::pessimistic_rollback::PessimisticRollback::new(
                     vec![key],
                     start_ts.into(),
                     for_update_ts.into(),

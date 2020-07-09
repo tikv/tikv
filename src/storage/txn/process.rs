@@ -19,9 +19,12 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::{
     commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
-        Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
-        Rollback, ScanLock, TxnHeartBeat,
+        acquire_pessimistic_lock::AcquirePessimisticLock, check_txn_status::CheckTxnStatus,
+        cleanup::Cleanup, commit::Commit, mvcc_by_key::MvccByKey, mvcc_by_start_ts::MvccByStartTs,
+        pause::Pause, pessimistic_rollback::PessimisticRollback, prewrite::Prewrite,
+        prewrite_pessimistic::PrewritePessimistic, resolve_lock::ResolveLock,
+        resolve_lock_lite::ResolveLockLite, rollback::Rollback, scan_lock::ScanLock,
+        txn_heart_beat::TxnHeartBeat, Command,
     },
     sched_pool::*,
     scheduler::Msg,
