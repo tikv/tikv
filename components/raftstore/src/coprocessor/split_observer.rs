@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use tidb_query_datatype::codec::table;
 use tikv_util::codec::bytes::{self, encode_bytes};
 
 use crate::store::util;
@@ -23,7 +22,7 @@ impl SplitObserver {
             return Err("key is empty".to_owned());
         }
 
-        let mut key = match bytes::decode_bytes(&mut key.as_slice(), false) {
+        let key = match bytes::decode_bytes(&mut key.as_slice(), false) {
             Ok(x) => x,
             // It's a raw key, skip it.
             Err(_) => return Ok(key),
