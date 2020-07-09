@@ -29,7 +29,7 @@ struct LogIterator {
     level_flag: usize,
     patterns: Vec<regex::Regex>,
 
-    pre_log: LogMessage
+    pre_log: LogMessage,
 }
 
 #[derive(Debug)]
@@ -189,9 +189,10 @@ impl Iterator for LogIterator {
                     continue;
                 }
                 // always keep unknown level log
-                if item.level != LogLevel::Unknown &&
-                    self.level_flag != 0 &&
-                    self.level_flag & (1 << (item.level as usize)) == 0 {
+                if item.level != LogLevel::Unknown
+                    && self.level_flag != 0
+                    && self.level_flag & (1 << (item.level as usize)) == 0
+                {
                     continue;
                 }
                 if !self.patterns.is_empty() {
@@ -718,9 +719,9 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:10:06.387 +08:00", // for invalid line
         ]
-            .iter()
-            .map(|s| timestamp(s))
-            .collect::<Vec<i64>>();
+        .iter()
+        .map(|s| timestamp(s))
+        .collect::<Vec<i64>>();
         assert_eq!(
             log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
             expected
