@@ -147,37 +147,16 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
-    type ChunkedType: IntoVectorValue;
+    type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(phantom_owned_data: Option<Self>, vec: Self::ChunkedType) -> VectorValue; 
+    fn into_vector_value(vec: Self::ChunkedType) -> VectorValue; 
 }
 
-pub trait IntoVectorValue {
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
-    fn into_vector_value(vec: Self) -> VectorValue;
+pub trait ChunkedVec<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self;
+    fn chunked_push(&mut self, value: Option<T>);
 }
-
-macro_rules! impl_into {
-    ($chunk:ty) => {
-        impl IntoVectorValue for $chunk {
-            #[inline]
-            fn into_vector_value(s: $chunk) -> VectorValue {
-                VectorValue::from(s)
-            }
-        }
-    };
-}
-
-impl_into! { ChunkedVecSized<Int> }
-impl_into! { ChunkedVecSized<Decimal> }
-impl_into! { ChunkedVecSized<DateTime> }
-impl_into! { ChunkedVecSized<Real> }
-impl_into! { ChunkedVecSized<Duration> }
-impl_into! { ChunkedVecJson }
-impl_into! { ChunkedVecBytes }
-
 
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
@@ -222,6 +201,11 @@ macro_rules! impl_evaluable_ret {
         impl EvaluableRet for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
             type ChunkedType = $chunk;
+            
+            #[inline]
+            fn into_vector_value(vec: $chunk) -> VectorValue {
+                VectorValue::from(vec)
+            }
         }
     };
 }
@@ -229,10 +213,10 @@ macro_rules! impl_evaluable_ret {
 impl_evaluable_ret! { Int, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Real, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Decimal, ChunkedVecSized<Self> }
-impl_evaluable_ret! { Bytes, NotChunkedVec<Self> }
+impl_evaluable_ret! { Bytes, ChunkedVecBytes }
 impl_evaluable_ret! { DateTime, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Duration, ChunkedVecSized<Self> }
-impl_evaluable_ret! { Json, NotChunkedVec<Self> }
+impl_evaluable_ret! { Json, ChunkedVecJson }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;

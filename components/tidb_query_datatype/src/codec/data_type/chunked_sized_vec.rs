@@ -1,5 +1,5 @@
 use super::chunked_bool_vec::ChunkedBoolVec;
-use super::{Evaluable, EvaluableRet, ChunkRef};
+use super::{Evaluable, EvaluableRet, ChunkRef, ChunkedVec};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
@@ -91,9 +91,14 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         }
         x
     }
+}
 
-    pub fn phantom_owned_data(&self) -> Option<T> {
-        None
+impl <T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn chunked_push(&mut self, value: Option<T>) {
+        self.push(value)
     }
 }
 

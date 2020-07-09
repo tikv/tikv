@@ -77,9 +77,14 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
     pub fn as_vec(&self) -> Vec<Option<T>> {
         self.data.clone()
     }
+}
 
-    pub fn phantom_owned_data(&self) -> Option<T> {
-        None
+impl <T: Clone> ChunkedVec<T> for NotChunkedVec<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn chunked_push(&mut self, value: Option<T>) {
+        self.push(value)
     }
 }
 

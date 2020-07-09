@@ -18,10 +18,10 @@ pub enum VectorValue {
     Real(ChunkedVecSized<Real>),
     Decimal(ChunkedVecSized<Decimal>),
     // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
-    Bytes(NotChunkedVec<Bytes>),
+    Bytes(ChunkedVecBytes),
     DateTime(ChunkedVecSized<DateTime>),
     Duration(ChunkedVecSized<Duration>),
-    Json(NotChunkedVec<Json>),
+    Json(ChunkedVecJson),
 }
 
 impl VectorValue {
@@ -472,23 +472,23 @@ impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
-    ($ty:tt, $chunk:tt) => {
-        impl From<$chunk<$ty>> for VectorValue {
+    ($ty:tt, $chunk:ty) => {
+        impl From<$chunk> for VectorValue {
             #[inline]
-            fn from(s: $chunk<$ty>) -> VectorValue {
+            fn from(s: $chunk) -> VectorValue {
                 VectorValue::$ty(s)
             }
         }
     };
 }
 
-impl_from! { Int, ChunkedVecSized }
-impl_from! { Real, ChunkedVecSized }
-impl_from! { Decimal, ChunkedVecSized }
-impl_from! { Bytes, NotChunkedVec }
-impl_from! { DateTime, ChunkedVecSized }
-impl_from! { Duration, ChunkedVecSized }
-impl_from! { Json, NotChunkedVec }
+impl_from! { Int, ChunkedVecSized<Int> }
+impl_from! { Real, ChunkedVecSized<Real> }
+impl_from! { Decimal, ChunkedVecSized<Decimal> }
+impl_from! { Bytes, ChunkedVecBytes }
+impl_from! { DateTime, ChunkedVecSized<DateTime> }
+impl_from! { Duration, ChunkedVecSized<Duration> }
+impl_from! { Json, ChunkedVecJson }
 
 #[cfg(test)]
 mod tests {
