@@ -134,13 +134,8 @@ apply-pool-size = 4
 store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
-<<<<<<< HEAD
 hibernate-regions = true
-=======
-hibernate-regions = false
 hibernate-timeout = "10m"
-early-apply = false
->>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955)
 dev-assert = true
 perf-level = 4
 

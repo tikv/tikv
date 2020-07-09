@@ -926,12 +926,8 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
             perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
-=======
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
->>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955):components/raftstore/src/store/fsm/store.rs
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),
