@@ -244,12 +244,8 @@ impl Default for Config {
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
-<<<<<<< HEAD
             hibernate_regions: false,
-=======
-            hibernate_regions: true,
             hibernate_timeout: ReadableDuration::minutes(10),
->>>>>>> ceff7d4... raftstore: add hibernate-timeout to prevent leader become hibernated too fast  (#7955)
             early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
