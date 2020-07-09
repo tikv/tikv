@@ -1535,12 +1535,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Now all checking passed.
 
         if self.fsm.peer.local_first_replicate && !self.fsm.peer.is_initialized() {
-            // If the region is not initialized and snapshot checking has passed, `is_splitting` flag must be false.
-            // The split process only change this flag to true if it's exactly the same peer,
-            // if so, this peer can't pass the previous range check.
-            // The condition of passing the range check is this region must merge the other regions and then split.
-            // It's impossible because this peer does not exist which does not satisfy the merge condition, i.e.
-            // all target peer must exist during merging.
+            // If the peer is not initialized and passes the snapshot range check, `is_splitting` flag must
+            // be false.
+            // 1. If `is_splitting` is set to true, then the uninitialized peer is created before split is applied
+            //    and the peer id is the same as split one. So there should be no initialized peer before.
+            // 2. If the peer is also created by splitting, then the snapshot range is not overlapped with
+            //    parent peer. It means leader has applied merge and split at least one time. However,
+            //    the prerequisite of merge includes the initialization of all target peers and source peers,
+            //    which is conflict with 1.
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             let status = pending_create_peers.get(&region_id).cloned();
             if status != Some((self.fsm.peer_id(), false)) {
@@ -1696,7 +1698,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 assert!(pending_create_peers.get(&region_id).is_none());
             } else {
                 // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-                // it means this peer will be replaced from the new one from splitting.
+                // it means this peer will be replaced by the split one.
                 if let Some(status) = pending_create_peers.get(&region_id) {
                     if *status == (self.fsm.peer_id(), false) {
                         pending_create_peers.remove(&region_id);

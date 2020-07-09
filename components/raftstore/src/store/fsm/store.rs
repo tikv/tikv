@@ -1306,8 +1306,6 @@ enum CheckMsgStatus {
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     /// Checks if the message is targeting a stale peer.
-    ///
-    /// Returns CheckMsgStatus.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
@@ -1580,7 +1578,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         let mut is_overlapped = false;
-        let mut maybe_new_split = false;
+        let mut keep_vote_msg = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
             Excluded(data_key(msg.get_start_key())),
@@ -1630,17 +1628,15 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
                 // Maybe this peer is splitted from exist_region.
-                maybe_new_split = true;
+                keep_vote_msg = true;
             }
         }
-        if maybe_new_split {
-            // Save it if it's the first vote msg.
-            if util::is_first_vote_msg(msg.get_message()) {
-                meta.pending_votes.push(msg.to_owned());
-            }
-        }
+
         if is_overlapped {
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
+            if keep_vote_msg && util::is_first_vote_msg(msg.get_message()) {
+                meta.pending_votes.push(msg.to_owned());
+            }
             return Ok(false);
         }
 
