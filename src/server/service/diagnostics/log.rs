@@ -16,7 +16,6 @@ use nom::sequence::tuple;
 use nom::*;
 use regex::Regex;
 
-const INVALID_TIMESTAMP: i64 = -1;
 const TIMESTAMP_LENGTH: usize = 30;
 
 #[derive(Default)]
@@ -161,52 +160,53 @@ impl Iterator for LogIterator {
                 if self.pre_log.time < self.begin_time && input.len() < TIMESTAMP_LENGTH {
                     continue;
                 }
+                let mut item = LogMessage::default();
                 match parse(&input) {
                     Ok((content, (time, level))) => {
-                        // The remain content timestamp more the end time or this file contains inrecognation formation
-                        if time == INVALID_TIMESTAMP || time > self.end_time {
-                            break;
-                        }
-                        if time < self.begin_time {
-                            continue;
-                        }
-                        // always keep unknown level log
-                        if level != LogLevel::Unknown && self.level_flag != 0 && self.level_flag & (1 << (level as usize)) == 0 {
-                            continue;
-                        }
-                        if !self.patterns.is_empty() {
-                            let mut not_match = false;
-                            for pattern in self.patterns.iter() {
-                                if !pattern.is_match(content) {
-                                    not_match = true;
-                                    break;
-                                }
-                            }
-                            if not_match {
-                                continue;
-                            }
-                        }
                         self.pre_log.set_time(time);
                         self.pre_log.set_level(level);
 
-                        let mut item = LogMessage::default();
                         item.set_time(time);
                         item.set_level(level);
                         item.set_message(content.to_owned());
-                        return Some(item);
                     }
                     Err(err) => {
                         warn!("parse line failed: {:?}", err);
-                        // treat the invalid log with the pre valid log time and level but its own whole line content
-                        if self.pre_log.time >= self.begin_time {
-                            let mut item = LogMessage::default();
-                            item.set_time(self.pre_log.time);
-                            item.set_level(self.pre_log.level);
-                            item.set_message(input.to_owned());
-                            return Some(item);
+                        if self.pre_log.time < self.begin_time {
+                            continue;
                         }
+                        // treat the invalid log with the pre valid log time and level but its own whole line content
+                        item.set_time(self.pre_log.time);
+                        item.set_level(self.pre_log.level);
+                        item.set_message(input.to_owned());
                     }
                 }
+                // stop to handle remain contents
+                if item.time > self.end_time {
+                    return None;
+                }
+                if item.time < self.begin_time {
+                    continue;
+                }
+                // always keep unknown level log
+                if item.level != LogLevel::Unknown &&
+                    self.level_flag != 0 &&
+                    self.level_flag & (1 << (item.level as usize)) == 0 {
+                    continue;
+                }
+                if !self.patterns.is_empty() {
+                    let mut not_match = false;
+                    for pattern in self.patterns.iter() {
+                        if !pattern.is_match(&item.message) {
+                            not_match = true;
+                            break;
+                        }
+                    }
+                    if not_match {
+                        continue;
+                    }
+                }
+                return Some(item);
             }
         }
         None
@@ -247,9 +247,15 @@ fn parse_level(input: &str) -> IResult<&str, &str> {
 /// Parses the single log line and retrieve the log meta and log body.
 fn parse(input: &str) -> IResult<&str, (i64, LogLevel)> {
     let (content, (time, level, _)) = tuple((parse_time, parse_level, space1))(input)?;
-    let timestamp = match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
-        Ok(t) => t.timestamp_millis(),
-        Err(_) => INVALID_TIMESTAMP,
+    let timestamp;
+    // return Err if parse time failed
+    match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
+        Ok(t) => {
+            timestamp = t.timestamp_millis();
+        }
+        Err(_) => {
+            return Err(Err::Incomplete(Needed::Unknown));
+        }
     };
     let level = match level {
         "trace" | "TRACE" => LogLevel::Trace,
@@ -351,6 +357,8 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::tempdir;
+
+    const INVALID_TIMESTAMP: i64 = -1;
 
     #[test]
     fn test_parse_time() {
@@ -515,6 +523,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_time_range_with_invalid_logs() {
+        let dir = tempdir().unwrap();
+        let log_file = dir.path().join("tikv.log");
+        let mut file = File::create(&log_file).unwrap();
+        write!(
+            file,
+            r#"Some invalid logs in the beginning,
+Hello TiKV,
+[2019/08/23 18:09:52.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:09:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]
+Welcome to TiKV,
+Some invalid logs in the end,"#
+        )
+        .unwrap();
+
+        let file = File::open(&log_file).unwrap();
+        let start_time = timestamp("2019/08/23 18:09:52.387 +08:00");
+        let end_time = timestamp("2019/08/23 18:09:58.387 +08:00");
+        assert_eq!(parse_time_range(&file).unwrap(), (start_time, end_time));
+    }
+
+    #[test]
     fn test_log_iterator() {
         let dir = tempdir().unwrap();
         let log_file = dir.path().join("tikv.log");
@@ -524,7 +559,9 @@ mod tests {
             r#"[2019/08/23 18:09:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:09:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:09:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+Some invalid logs 1: Welcome to TiKV
 [2019/08/23 18:09:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+Some invalid logs 2: Welcome to TiKV
 [2019/08/23 18:09:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:09:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
 [2019/08/23 18:09:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]"#
@@ -538,9 +575,11 @@ mod tests {
             r#"[2019/08/23 18:10:01.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:02.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:03.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+Some invalid logs 3: Welcome to TiKV
 [2019/08/23 18:10:04.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:10:05.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
-[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]"#
+[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]
+Some invalid logs 4: Welcome to TiKV - test-filter"#
         )
         .unwrap();
 
@@ -551,16 +590,20 @@ mod tests {
             "2019/08/23 18:09:53.387 +08:00",
             "2019/08/23 18:09:54.387 +08:00",
             "2019/08/23 18:09:55.387 +08:00",
+            "2019/08/23 18:09:55.387 +08:00", // for invalid line
             "2019/08/23 18:09:56.387 +08:00",
+            "2019/08/23 18:09:56.387 +08:00", // for invalid line
             "2019/08/23 18:09:57.387 +08:00",
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:09:59.387 +08:00",
             "2019/08/23 18:10:01.387 +08:00",
             "2019/08/23 18:10:02.387 +08:00",
             "2019/08/23 18:10:03.387 +08:00",
+            "2019/08/23 18:10:03.387 +08:00", // for invalid line
             "2019/08/23 18:10:04.387 +08:00",
             "2019/08/23 18:10:05.387 +08:00",
             "2019/08/23 18:10:06.387 +08:00",
+            "2019/08/23 18:10:06.387 +08:00", // for invalid line
         ]
         .iter()
         .map(|s| timestamp(s))
@@ -581,12 +624,14 @@ mod tests {
         .unwrap();
         let expected = vec![
             "2019/08/23 18:09:56.387 +08:00",
+            "2019/08/23 18:09:56.387 +08:00", // for invalid line
             "2019/08/23 18:09:57.387 +08:00",
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:09:59.387 +08:00",
             "2019/08/23 18:10:01.387 +08:00",
             "2019/08/23 18:10:02.387 +08:00",
             "2019/08/23 18:10:03.387 +08:00",
+            "2019/08/23 18:10:03.387 +08:00", // for invalid line
         ]
         .iter()
         .map(|s| timestamp(s))
@@ -595,6 +640,7 @@ mod tests {
             log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
             expected
         );
+
         let log_iter = LogIterator::new(
             &log_file,
             timestamp("2019/08/23 18:09:56.387 +08:00"),
@@ -605,6 +651,7 @@ mod tests {
         .unwrap();
         let expected = vec![
             "2019/08/23 18:09:56.387 +08:00",
+            "2019/08/23 18:09:56.387 +08:00", // for invalid line
             "2019/08/23 18:09:57.387 +08:00",
             "2019/08/23 18:09:58.387 +08:00",
         ]
@@ -625,7 +672,6 @@ mod tests {
             vec![],
         )
         .unwrap();
-
         let expected = vec!["2019/08/23 18:09:53.387 +08:00"]
             .iter()
             .map(|s| timestamp(s))
@@ -648,6 +694,7 @@ mod tests {
                 "2019/08/23 18:09:58.387 +08:00",
                 "2019/08/23 18:09:59.387 +08:00",
                 "2019/08/23 18:10:06.387 +08:00",
+                "2019/08/23 18:10:06.387 +08:00", // for invalid line
             ]
             .iter()
             .map(|s| timestamp(s))
@@ -667,7 +714,10 @@ mod tests {
             vec![regex::Regex::new(".*test-filter.*").unwrap()],
         )
         .unwrap();
-        let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
+        let expected = vec![
+            "2019/08/23 18:09:58.387 +08:00",
+            "2019/08/23 18:10:06.387 +08:00", // for invalid line
+        ]
             .iter()
             .map(|s| timestamp(s))
             .collect::<Vec<i64>>();
@@ -694,6 +744,7 @@ mod tests {
         )
         .unwrap();
 
+        // this file is ignored because its filename is not expected
         let log_file2 = dir.path().join("tikv.log.2");
         let mut file = File::create(&log_file2).unwrap();
         write!(
@@ -714,10 +765,12 @@ mod tests {
             r#"[2019/08/23 18:11:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:54.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:55.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+Some invalid logs 1: Welcome to TiKV - test-filter
 [2019/08/23 18:11:56.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:57.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
 [2019/08/23 18:11:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
-[2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]"#
+[2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]
+Some invalid logs 2: Welcome to TiKV - test-filter"#
         )
         .unwrap();
 
@@ -729,6 +782,7 @@ mod tests {
         let expected = vec![
             "2019/08/23 18:09:58.387 +08:00",
             "2019/08/23 18:11:58.387 +08:00",
+            "2019/08/23 18:11:59.387 +08:00", // for invalid line
         ]
         .iter()
         .map(|s| timestamp(s))
