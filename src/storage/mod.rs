@@ -33,15 +33,13 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
+use crate::storage::txn::Command;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
-    txn::{
-        commands::{Command, TypedCommand},
-        scheduler::Scheduler as TxnScheduler,
-    },
+    txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler},
     types::StorageCallbackType,
 };
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
@@ -538,7 +536,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, CommandKind, Prewrite, PrewritePessimistic,
+            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -548,22 +546,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(());
         }
 
-        match &cmd.kind {
-            CommandKind::Prewrite(Prewrite { mutations, .. }) => {
+        match &cmd {
+            Command::Prewrite(Prewrite { mutations, .. }) => {
                 check_key_size!(
                     mutations.iter().map(|m| m.key().as_encoded()),
                     self.max_key_size,
                     callback
                 );
             }
-            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
+            Command::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
                 check_key_size!(
                     mutations.iter().map(|(m, _)| m.key().as_encoded()),
                     self.max_key_size,
                     callback
                 );
             }
-            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
                 check_key_size!(
                     keys.iter().map(|k| k.0.as_encoded()),
                     self.max_key_size,
@@ -1454,6 +1452,7 @@ pub mod test_util {
     }
 
     type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
+
     pub fn new_acquire_pessimistic_lock_command(
         keys: Vec<(Key, bool)>,
         start_ts: impl Into<TimeStamp>,

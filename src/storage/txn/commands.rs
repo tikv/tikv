@@ -22,8 +22,22 @@ use crate::storage::Result;
 /// These are typically scheduled and used through the [`Storage`](Storage) with functions like
 /// [`Storage::prewrite`](Storage::prewrite) trait and are executed asynchronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
-pub struct Command {
-    pub kind: CommandKind,
+pub enum Command {
+    Prewrite(Prewrite),
+    PrewritePessimistic(PrewritePessimistic),
+    AcquirePessimisticLock(AcquirePessimisticLock),
+    Commit(Commit),
+    Cleanup(Cleanup),
+    Rollback(Rollback),
+    PessimisticRollback(PessimisticRollback),
+    TxnHeartBeat(TxnHeartBeat),
+    CheckTxnStatus(CheckTxnStatus),
+    ScanLock(ScanLock),
+    ResolveLock(ResolveLock),
+    ResolveLockLite(ResolveLockLite),
+    Pause(Pause),
+    MvccByKey(MvccByKey),
+    MvccByStartTs(MvccByStartTs),
 }
 
 pub struct TypedCommand<T> {
@@ -305,13 +319,10 @@ macro_rules! command {
                 $($arg: $arg_ty,)*
                 ctx: Context,
             ) -> TypedCommand<$cmd_ty> {
-                Command {
-                    kind: CommandKind::$cmd($cmd {
+                Command::$cmd($cmd {
                         ctx,
                         $($arg,)*
-                    }),
-                }
-                .into()
+                }).into()
             }
         }
 
@@ -404,8 +415,8 @@ macro_rules! command_method {
 command! {
     /// The prewrite phase of a transaction. The first phase of 2PC.
     ///
-    /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
-    /// or a [`Rollback`](CommandKind::Rollback) should follow.
+    /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
+    /// or a [`Rollback`](Command::Rollback) should follow.
     Prewrite:
         cmd_ty => Vec<Result<()>>,
         display => "kv::command::prewrite mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
@@ -509,8 +520,8 @@ impl Prewrite {
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
     ///
-    /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
-    /// or a [`Rollback`](CommandKind::Rollback) should follow.
+    /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
+    /// or a [`Rollback`](Command::Rollback) should follow.
     PrewritePessimistic:
         cmd_ty => Vec<Result<()>>,
         display => "kv::command::prewrite_pessimistic mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
@@ -558,7 +569,7 @@ impl CommandExt for PrewritePessimistic {
 command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
-    /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
+    /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => Result<PessimisticLockRes>,
         display => "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
@@ -601,7 +612,7 @@ impl CommandExt for AcquirePessimisticLock {
 command! {
     /// Commit the transaction that started at `lock_ts`.
     ///
-    /// This should be following a [`Prewrite`](CommandKind::Prewrite).
+    /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
         display => "kv::command::commit {} {} -> {} | {:?}", (keys.len, lock_ts, commit_ts, ctx),
@@ -626,7 +637,7 @@ impl CommandExt for Commit {
 command! {
     /// Rollback mutations on a single key.
     ///
-    /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Cleanup:
         cmd_ty => (),
         display => "kv::command::cleanup {} @ {} | {:?}", (key, start_ts, ctx),
@@ -651,7 +662,7 @@ impl CommandExt for Cleanup {
 command! {
     /// Rollback from the transaction that was started at `start_ts`.
     ///
-    /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
         display => "kv::command::rollback keys({}) @ {} | {:?}", (keys.len, start_ts, ctx),
@@ -673,7 +684,7 @@ impl CommandExt for Rollback {
 command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
-    /// This can roll back an [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) command.
+    /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<Result<()>>,
         display => "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
@@ -699,8 +710,8 @@ command! {
     /// Heart beat of a transaction. It enlarges the primary lock's TTL.
     ///
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
-    /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
-    /// [`Prewrite`](CommandKind::Prewrite).
+    /// [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) or
+    /// [`Prewrite`](Command::Prewrite).
     TxnHeartBeat:
         cmd_ty => TxnStatus,
         display => "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}", (primary_key, start_ts, advise_ttl, ctx),
@@ -730,8 +741,8 @@ command! {
     /// `min_commit_ts`. Returns a [`TxnStatus`](TxnStatus) to represent the status.
     ///
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
-    /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
-    /// [`Prewrite`](CommandKind::Prewrite).
+    /// [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) or
+    /// [`Prewrite`](Command::Prewrite).
     CheckTxnStatus:
         cmd_ty => TxnStatus,
         display => "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}", (primary_key, lock_ts, caller_start_ts, current_ts, ctx),
@@ -929,64 +940,46 @@ impl CommandExt for MvccByStartTs {
     gen_lock!(empty);
 }
 
-pub enum CommandKind {
-    Prewrite(Prewrite),
-    PrewritePessimistic(PrewritePessimistic),
-    AcquirePessimisticLock(AcquirePessimisticLock),
-    Commit(Commit),
-    Cleanup(Cleanup),
-    Rollback(Rollback),
-    PessimisticRollback(PessimisticRollback),
-    TxnHeartBeat(TxnHeartBeat),
-    CheckTxnStatus(CheckTxnStatus),
-    ScanLock(ScanLock),
-    ResolveLock(ResolveLock),
-    ResolveLockLite(ResolveLockLite),
-    Pause(Pause),
-    MvccByKey(MvccByKey),
-    MvccByStartTs(MvccByStartTs),
-}
-
 impl Command {
     // These two are for backward compatibility, after some other refactors are done
-    // we can remove CommandKind totally and use `&dyn CommandExt` instead
+    // we can remove Command totally and use `&dyn CommandExt` instead
     fn command_ext(&self) -> &dyn CommandExt {
-        match &self.kind {
-            CommandKind::Prewrite(t) => t,
-            CommandKind::PrewritePessimistic(t) => t,
-            CommandKind::AcquirePessimisticLock(t) => t,
-            CommandKind::Commit(t) => t,
-            CommandKind::Cleanup(t) => t,
-            CommandKind::Rollback(t) => t,
-            CommandKind::PessimisticRollback(t) => t,
-            CommandKind::TxnHeartBeat(t) => t,
-            CommandKind::CheckTxnStatus(t) => t,
-            CommandKind::ScanLock(t) => t,
-            CommandKind::ResolveLock(t) => t,
-            CommandKind::ResolveLockLite(t) => t,
-            CommandKind::Pause(t) => t,
-            CommandKind::MvccByKey(t) => t,
-            CommandKind::MvccByStartTs(t) => t,
+        match &self {
+            Command::Prewrite(t) => t,
+            Command::PrewritePessimistic(t) => t,
+            Command::AcquirePessimisticLock(t) => t,
+            Command::Commit(t) => t,
+            Command::Cleanup(t) => t,
+            Command::Rollback(t) => t,
+            Command::PessimisticRollback(t) => t,
+            Command::TxnHeartBeat(t) => t,
+            Command::CheckTxnStatus(t) => t,
+            Command::ScanLock(t) => t,
+            Command::ResolveLock(t) => t,
+            Command::ResolveLockLite(t) => t,
+            Command::Pause(t) => t,
+            Command::MvccByKey(t) => t,
+            Command::MvccByStartTs(t) => t,
         }
     }
 
     fn command_ext_mut(&mut self) -> &mut dyn CommandExt {
-        match &mut self.kind {
-            CommandKind::Prewrite(t) => t,
-            CommandKind::PrewritePessimistic(t) => t,
-            CommandKind::AcquirePessimisticLock(t) => t,
-            CommandKind::Commit(t) => t,
-            CommandKind::Cleanup(t) => t,
-            CommandKind::Rollback(t) => t,
-            CommandKind::PessimisticRollback(t) => t,
-            CommandKind::TxnHeartBeat(t) => t,
-            CommandKind::CheckTxnStatus(t) => t,
-            CommandKind::ScanLock(t) => t,
-            CommandKind::ResolveLock(t) => t,
-            CommandKind::ResolveLockLite(t) => t,
-            CommandKind::Pause(t) => t,
-            CommandKind::MvccByKey(t) => t,
-            CommandKind::MvccByStartTs(t) => t,
+        match self {
+            Command::Prewrite(t) => t,
+            Command::PrewritePessimistic(t) => t,
+            Command::AcquirePessimisticLock(t) => t,
+            Command::Commit(t) => t,
+            Command::Cleanup(t) => t,
+            Command::Rollback(t) => t,
+            Command::PessimisticRollback(t) => t,
+            Command::TxnHeartBeat(t) => t,
+            Command::CheckTxnStatus(t) => t,
+            Command::ScanLock(t) => t,
+            Command::ResolveLock(t) => t,
+            Command::ResolveLockLite(t) => t,
+            Command::Pause(t) => t,
+            Command::MvccByKey(t) => t,
+            Command::MvccByStartTs(t) => t,
         }
     }
 
