@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -550,6 +551,9 @@ path = "/master/key/path"
 
 [security.encryption.previous-master-key]
 type = "plaintext"
+
+[backup]
+num-threads = 456
 
 [import]
 num-threads = 123

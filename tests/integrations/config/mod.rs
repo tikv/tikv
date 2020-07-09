@@ -25,7 +25,7 @@ use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -55,6 +55,7 @@ fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
+    value.log_format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.server = ServerConfig {
@@ -630,6 +631,7 @@ fn test_serde_custom_tikv_config() {
             previous_master_key: MasterKeyConfig::Plaintext,
         },
     };
+    value.backup = BackupConfig { num_threads: 456 };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
