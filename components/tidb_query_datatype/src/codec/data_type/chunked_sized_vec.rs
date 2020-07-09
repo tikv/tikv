@@ -3,16 +3,13 @@ use super::{Evaluable, EvaluableRet, ChunkRef};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
-    data: Vec<u8>,
+    data: Vec<T>,
     bitmap: ChunkedBoolVec,
-    length: usize,
     null_cnt: usize,
     phantom: std::marker::PhantomData<T>,
 }
 
 impl<T: Sized + Clone> ChunkedVecSized<T> {
-    const TYPE_SIZE: usize = std::mem::size_of::<T>();
-
     pub fn from_slice(slice: &[Option<T>]) -> Self {
         let mut x = Self::with_capacity(slice.len());
         for i in slice {
@@ -23,9 +20,8 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            data: Vec::with_capacity(capacity * Self::TYPE_SIZE),
+            data: Vec::with_capacity(capacity),
             bitmap: ChunkedBoolVec::with_capacity(capacity),
-            length: 0,
             phantom: std::marker::PhantomData,
             null_cnt: 0,
         }
@@ -40,21 +36,13 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     }
 
     pub fn push_data(&mut self, value: T) {
-        self.prepare_append();
         self.bitmap.push(true);
-        let chunk_begin = (self.length - 1) * Self::TYPE_SIZE;
-        let mut_ptr = &mut self.data[chunk_begin] as *mut u8 as *mut T;
-        unsafe { std::ptr::write(mut_ptr, value); };
+        self.data.push(value);
     }
 
     pub fn push_null(&mut self) {
-        self.prepare_append();
         self.bitmap.push(false);
-    }
-
-    fn prepare_append(&mut self) {
-        self.length += 1;
-        self.data.resize(self.length * Self::TYPE_SIZE, 0);
+        self.data.push(unsafe { std::mem::zeroed() });
     }
 
     pub fn push(&mut self, value: Option<T>) {
@@ -66,7 +54,7 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.length
+        self.data.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -74,30 +62,23 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     }
 
     pub fn truncate(&mut self, len: usize) {
-        if len < self.length {
-            self.length = len;
-            self.data.truncate(len * Self::TYPE_SIZE);
-        }
+        self.data.truncate(len);
+        self.bitmap.truncate(len);
     }
 
     pub fn capacity(&self) -> usize {
-        self.data.capacity() / Self::TYPE_SIZE
+        self.data.capacity()
     }
 
     pub fn append(&mut self, other: &mut Self) {
-        for i in 0..other.len() {
-            self.push(other.get(i).cloned());
-        }
-        other.truncate(0);
+        self.data.append(&mut other.data);
+        self.bitmap.append(&mut other.bitmap);
     }
 
     pub fn get(&self, idx: usize) -> Option<&T> {
-        assert!(idx < self.length);
-        let chunk_begin = idx * Self::TYPE_SIZE;
-        let chunk_end = chunk_begin + Self::TYPE_SIZE;
-        let ref_data = &self.data[chunk_begin..chunk_end];
+        assert!(idx < self.data.len());
         if self.bitmap.get(idx) {
-            Some(unsafe { std::mem::transmute::<&u8, &T>(&ref_data[0]) })
+            Some(&self.data[idx])
         } else {
             None
         }
