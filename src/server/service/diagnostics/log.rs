@@ -252,30 +252,45 @@ fn parse(input: &str) -> IResult<&str, (i64, LogLevel)> {
 /// Parses the start time and end time of a log file and return the maximal and minimal
 /// timestamp in unix milliseconds.
 fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
-    let buffer = BufReader::new(file);
-    let file_start_time = match buffer.lines().next() {
-        Some(Ok(line)) => {
-            let (_, (time, _)) =
-                parse(&line).map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
-            time
-        }
-        Some(Err(err)) => {
-            return Err(err.into());
-        }
-        None => INVALID_TIMESTAMP,
-    };
-
-    let buffer = BufReader::new(file);
-    let mut rev_lines = rev_lines::RevLines::with_capacity(512, buffer)?;
-    let file_end_time = match rev_lines.next() {
-        Some(line) => {
-            let (_, (time, _)) =
-                parse(&line).map_err(|err| Error::ParseError(format!("Parse error: {:?}", err)))?;
-            time
-        }
-        None => INVALID_TIMESTAMP,
-    };
+    let file_start_time = parse_start_time(file, 10)?;
+    let file_end_time = parse_end_time(file, 10)?;
     Ok((file_start_time, file_end_time))
+}
+
+fn parse_start_time(file: &std::fs::File, try_lines: usize) -> Result<i64, Error> {
+    let buffer = BufReader::new(file);
+    for (i, line) in buffer.lines().enumerate() {
+        match line {
+            Ok(l) => {
+                if let Ok((_, (time, _))) = parse(&l) {
+                    return Ok(time);
+                }
+            }
+            Err(err) => {
+                return Err(err.into());
+            }
+        }
+        if i >= try_lines {
+            break;
+        }
+    }
+
+    Err(Error::ParseError("Invalid log file".to_string()))
+}
+
+fn parse_end_time(file: &std::fs::File, try_lines: usize) -> Result<i64, Error> {
+    let buffer = BufReader::new(file);
+    let rev_lines = rev_lines::RevLines::with_capacity(512, buffer)?;
+    for (i, line) in rev_lines.enumerate() {
+        if let Ok((_, (time, _))) = parse(&line) {
+            return Ok(time);
+        }
+        if i >= try_lines {
+            break;
+        }
+    }
+
+    Err(Error::ParseError("Invalid log file".to_string()))
 }
 
 // Batch size of the log streaming
