@@ -29,6 +29,8 @@ struct LogIterator {
     end_time: i64,
     level_flag: usize,
     patterns: Vec<regex::Regex>,
+
+    pre_log: LogMessage
 }
 
 #[derive(Debug)]
@@ -128,6 +130,7 @@ impl LogIterator {
             end_time,
             level_flag,
             patterns,
+            pre_log: LogMessage::default(),
         })
     }
 }
@@ -155,7 +158,7 @@ impl Iterator for LogIterator {
                         continue;
                     }
                 };
-                if input.len() < TIMESTAMP_LENGTH {
+                if self.pre_log.time < self.begin_time && input.len() < TIMESTAMP_LENGTH {
                     continue;
                 }
                 match parse(&input) {
@@ -167,7 +170,8 @@ impl Iterator for LogIterator {
                         if time < self.begin_time {
                             continue;
                         }
-                        if self.level_flag != 0 && self.level_flag & (1 << (level as usize)) == 0 {
+                        // always keep unknown level log
+                        if level != LogLevel::Unknown && self.level_flag != 0 && self.level_flag & (1 << (level as usize)) == 0 {
                             continue;
                         }
                         if !self.patterns.is_empty() {
@@ -182,6 +186,9 @@ impl Iterator for LogIterator {
                                 continue;
                             }
                         }
+                        self.pre_log.set_time(time);
+                        self.pre_log.set_level(level);
+
                         let mut item = LogMessage::default();
                         item.set_time(time);
                         item.set_level(level);
@@ -190,7 +197,14 @@ impl Iterator for LogIterator {
                     }
                     Err(err) => {
                         warn!("parse line failed: {:?}", err);
-                        continue;
+                        // treat the invalid log with the pre valid log time and level but its own whole line content
+                        if self.pre_log.time >= self.begin_time {
+                            let mut item = LogMessage::default();
+                            item.set_time(self.pre_log.time);
+                            item.set_level(self.pre_log.level);
+                            item.set_message(input.to_owned());
+                            return Some(item);
+                        }
                     }
                 }
             }
