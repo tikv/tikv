@@ -43,7 +43,7 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
             data: slice.to_vec(),
         }
     }
-    
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
@@ -79,7 +79,7 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
     }
 }
 
-impl <T: Clone> ChunkedVec<T> for NotChunkedVec<T> {
+impl<T: Clone> ChunkedVec<T> for NotChunkedVec<T> {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }

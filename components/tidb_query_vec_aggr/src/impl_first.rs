@@ -244,7 +244,13 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[None]);
 
         result[0].clear();
-        update_vector!(state, &mut ctx, &ChunkedVecSized::from_slice(&[Some(1)]), &[]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &ChunkedVecSized::from_slice(&[Some(1)]),
+            &[]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[None]);
 
