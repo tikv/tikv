@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 pub trait SstExt: Sized {
     type SstReader: SstReader;
-    type SstWriterConfExt;
     type SstWriter: SstWriter;
     type SstWriterBuilder: SstWriterBuilder<Self>;
 }
@@ -43,6 +42,14 @@ pub trait SstWriter {
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
+// compression type used for write sst file
+#[derive(Copy, Clone)]
+pub enum SstCompressionType {
+    Lz4,
+    Snappy,
+    Zstd,
+}
+
 /// A builder builds a SstWriter.
 pub trait SstWriterBuilder<E>
 where
@@ -61,7 +68,7 @@ where
     fn set_in_memory(self, in_memory: bool) -> Self;
 
     /// set other config specified by writer
-    fn set_conf_ext(self, conf: E::SstWriterConfExt) -> Self;
+    fn set_compression(self, compression: Option<SstCompressionType>) -> Self;
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;

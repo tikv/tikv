@@ -8,8 +8,8 @@ use std::sync::*;
 use std::time::*;
 
 use configuration::Configuration;
-use engine_rocks::raw::{DBCompressionType, DB};
-use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_rocks::raw::DB;
+use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -266,7 +266,7 @@ impl BackupRange {
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
-        ct: Option<DBCompressionType>,
+        ct: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone(), ct) {
             Ok(w) => w,
@@ -296,7 +296,7 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
-        ct: Option<DBCompressionType>,
+        ct: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer =
             match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
@@ -626,7 +626,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_db_compression_type(request.compress_type);
+                let ct = to_sst_compression_type(request.compress_type);
 
                 let res = if is_raw_kv {
                     brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct)
@@ -839,12 +839,12 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 }
 
 // convert BackupCompresionType to rocks db DBCompressionType
-fn to_db_compression_type(ct: CompressionType) -> Option<DBCompressionType> {
+fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
     match ct {
-        CompressionType::Lz4 => Some(DBCompressionType::Lz4),
-        CompressionType::Snappy => Some(DBCompressionType::Snappy),
-        CompressionType::Zstd => Some(DBCompressionType::Zstd),
-        _ => None,
+        CompressionType::Lz4 => Some(SstCompressionType::Lz4),
+        CompressionType::Snappy => Some(SstCompressionType::Snappy),
+        CompressionType::Zstd => Some(SstCompressionType::Zstd),
+        CompressionType::Unknown => None,
     }
 }
 

@@ -2,15 +2,14 @@
 
 use crate::engine::PanicEngine;
 use engine_traits::{
-    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey, SstExt,
-    SstReader, SstWriter, SstWriterBuilder,
+    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
+    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
 use std::path::PathBuf;
 
 impl SstExt for PanicEngine {
     type SstReader = PanicSstReader;
     type SstWriter = PanicSstWriter;
-    type SstWriterConfExt = ();
     type SstWriterBuilder = PanicSstWriterBuilder;
 }
 
@@ -106,7 +105,7 @@ impl SstWriterBuilder<PanicEngine> for PanicSstWriterBuilder {
     fn set_in_memory(self, in_memory: bool) -> Self {
         panic!()
     }
-    fn set_conf_ext(self, conf: ()) -> Self {
+    fn set_compression(self, compression: Option<SstCompressionType>) -> Self {
         panic!()
     }
 

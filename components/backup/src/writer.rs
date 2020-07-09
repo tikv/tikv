@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine_rocks::raw::{DBCompressionType, DB};
-use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder, RocksSstWriterConfExt};
+use engine_rocks::raw::DB;
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
-use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
@@ -124,19 +124,19 @@ impl BackupWriter {
         db: Arc<DB>,
         name: &str,
         limiter: Limiter,
-        compression_type: Option<DBCompressionType>,
+        compression_type: Option<SstCompressionType>,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
-            .set_conf_ext(RocksSstWriterConfExt::new(compression_type))
+            .set_compression(compression_type)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
-            .set_conf_ext(RocksSstWriterConfExt::new(compression_type))
+            .set_compression(compression_type)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -224,13 +224,13 @@ impl BackupRawKVWriter {
         name: &str,
         cf: CfName,
         limiter: Limiter,
-        compression_type: Option<DBCompressionType>,
+        compression_type: Option<SstCompressionType>,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
-            .set_conf_ext(RocksSstWriterConfExt::new(compression_type))
+            .set_compression(compression_type)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),

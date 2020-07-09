@@ -5,7 +5,7 @@ use crate::options::RocksReadOptions;
 use engine_traits::Error;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
 use rocksdb::rocksdb::supported_compression;
@@ -25,7 +25,6 @@ use std::path::PathBuf;
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
     type SstWriter = RocksSstWriter;
-    type SstWriterConfExt = RocksSstWriterConfExt;
     type SstWriterBuilder = RocksSstWriterBuilder;
 }
 
@@ -146,12 +145,12 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn set_conf_ext(mut self, conf: RocksSstWriterConfExt) -> Self {
-        self.compression_type = conf.compression_type;
+    fn set_compression(mut self, compression: Option<SstCompressionType>) -> Self {
+        self.compression_type = compression.map(to_rocks_compression_type);
         self
     }
 
-    fn build(mut self, path: &str) -> Result<RocksSstWriter> {
+    fn build(self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
@@ -194,16 +193,6 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
-    }
-}
-
-pub struct RocksSstWriterConfExt {
-    compression_type: Option<DBCompressionType>,
-}
-
-impl RocksSstWriterConfExt {
-    pub fn new(compression_type: Option<DBCompressionType>) -> Self {
-        Self { compression_type }
     }
 }
 
@@ -302,6 +291,14 @@ fn fmt_db_compression_type(ct: DBCompressionType) -> &'static str {
         DBCompressionType::Snappy => "snappy",
         DBCompressionType::Zstd => "zstd",
         _ => unreachable!(),
+    }
+}
+
+fn to_rocks_compression_type(ct: SstCompressionType) -> DBCompressionType {
+    match ct {
+        SstCompressionType::Lz4 => DBCompressionType::Lz4,
+        SstCompressionType::Snappy => DBCompressionType::Snappy,
+        SstCompressionType::Zstd => DBCompressionType::Zstd,
     }
 }
 
