@@ -14,7 +14,8 @@ use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_vec_executors::{
-    interface::BatchExecutor, BatchIndexScanExecutor, BatchTableScanExecutor,
+    interface::BatchExecutor, util::scan_executor::field_type_from_column_info,
+    BatchIndexScanExecutor, BatchTableScanExecutor,
 };
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 
@@ -258,23 +259,35 @@ impl<S: Snapshot> SampleBuilder<S> {
                 let mut columns_slice = result.physical_columns.as_slice();
                 if self.col_len != columns_slice.len() {
                     if let Some(column) = columns_slice.first() {
-                        let data = &column.raw()[logical_row];
-                        pk_builder.append(data);
+                        let mut data = vec![];
+                        column.encode(
+                            logical_row,
+                            &field_type_from_column_info(&self.cols_info[0]),
+                            &mut EvalContext::default(),
+                            &mut data,
+                        )?;
+                        pk_builder.append(&data);
                         columns_slice = &columns_slice[1..];
                     }
                 }
                 for (i, (collector, column)) in
                     collectors.iter_mut().zip(columns_slice.iter()).enumerate()
                 {
-                    let val = &column.raw()[logical_row];
+                    let mut val = vec![];
+                    column.encode(
+                        logical_row,
+                        &field_type_from_column_info(&self.cols_info[0]),
+                        &mut EvalContext::default(),
+                        &mut val,
+                    )?;
                     if self.cols_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
                             TT, match self.cols_info[i].as_accessor().collation()? {
                                 Collation::TT => {
-                                    let mut mut_val = val;
+                                    let mut mut_val = &val[..];
                                     let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
                                     if decoded_val == Datum::Null {
-                                        val.to_vec()
+                                        val
                                     } else {
                                         let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
                                         encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
@@ -285,7 +298,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                         collector.collect(sorted_val);
                         continue;
                     }
-                    collector.collect(val.to_vec());
+                    collector.collect(val);
                 }
             }
         }
