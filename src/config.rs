@@ -2536,9 +2536,9 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         let fields: Vec<_> = name.as_str().split('.').collect();
         let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
-            dst.insert(name, format!("\"{}\"", value));
+            dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
         } else {
-            dst.insert(name, value);
+            dst.insert(name.replace("_", "-"), value);
         }
     }
     Ok(dst)
@@ -3013,7 +3013,7 @@ mod tests {
         // Can not update block cache through storage module
         // when shared block cache is disabled
         assert!(cfg_controller
-            .update_config("storage.block_cache.capacity", "512MB")
+            .update_config("storage.block-cache.capacity", "512MB")
             .is_err());
     }
 
@@ -3030,7 +3030,7 @@ mod tests {
             .is_err());
 
         cfg_controller
-            .update_config("storage.block_cache.capacity", "256MB")
+            .update_config("storage.block-cache.capacity", "256MB")
             .unwrap();
 
         let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
