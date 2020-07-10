@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::test;
 use tempfile::{Builder, TempDir};
 
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
@@ -24,7 +24,7 @@ use tikv::storage::kv::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult, WriteData,
 };
 use tikv::storage::Engine;
-use txn_types::Key;
+use txn_types::{Key, TxnExtra};
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -49,6 +49,7 @@ impl SyncBenchRouter {
                 cb(ReadResponse {
                     response,
                     snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
+                    txn_extra_op: TxnExtraOp::Noop,
                 })
             }
             Callback::Write(cb) => {
@@ -70,6 +71,16 @@ impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
+        Ok(())
+    }
+
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
         Ok(())
     }
 
@@ -102,6 +113,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
             Arc::new(snapshot),
             Region::default(),
         )),
+        txn_extra_op: TxnExtraOp::Noop,
     };
 
     b.iter(|| {
