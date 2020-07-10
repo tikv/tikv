@@ -73,6 +73,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -88,7 +89,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: primary_column_ids_set.is_empty(),
+            accept_point_range: no_common_handle,
         })?;
         Ok(Self(wrapper))
     }
