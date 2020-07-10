@@ -49,7 +49,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
 
-        let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
+        let primary_column_ids_set = primary_column_ids.iter().cloned().collect::<HashSet<_>>();
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -88,7 +88,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: true,
+            accept_point_range: primary_column_ids_set.is_empty(),
         })?;
         Ok(Self(wrapper))
     }
