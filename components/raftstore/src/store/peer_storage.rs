@@ -1700,8 +1700,8 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine_rocks::raw_util::new_engine;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_rocks::util::new_engine;
+    use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::KvEngines;
     use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
@@ -1724,13 +1724,11 @@ mod tests {
         sched: Scheduler<RegionTask<RocksSnapshot>>,
         path: &TempDir,
     ) -> PeerStorage<RocksEngine, RocksEngine> {
-        let kv_db =
-            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
+        let kv_db = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db =
-            Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(kv_db.c().clone(), raft_db.c().clone(), shared_block_cache);
+        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
@@ -2553,12 +2551,11 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let kv_db = Arc::new(new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
+        let kv_db = new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db =
-            Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
+        let raft_db = new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(kv_db.c().clone(), raft_db.c().clone(), shared_block_cache);
+        let engines = KvEngines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
