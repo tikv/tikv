@@ -7,19 +7,14 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
-use engine_traits::{
-    KvEngine, MiscExt, TablePropertiesExt, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
-};
+use engine_rocks::RocksEngine;
+use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-use kvproto::metapb;
 use pd_client::{ClusterVersion, PdClient};
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
-use raftstore::store::RegionSnapshot;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
@@ -29,13 +24,12 @@ use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
-use crate::storage::kv::{merge_put_and_deletes, Engine, ScanMode, Statistics};
+use crate::storage::kv::{Engine, ScanMode, Statistics};
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::AutoGcConfig;
-use super::gc_manager::{GcManager, GcManagerHandle};
+use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -50,7 +44,6 @@ pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 /// Provides safe point.
-/// TODO: Give it a better name?
 pub trait GcSafePointProvider: Send + 'static {
     fn get_safe_point(&self) -> Result<TimeStamp>;
 }
@@ -67,6 +60,7 @@ impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
 
 pub enum GcTask {
     Gc {
+        region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         safe_point: TimeStamp,
@@ -135,9 +129,8 @@ impl Display for GcTask {
 /// Used to perform GC operations on the engine.
 struct GcRunner<E: Engine> {
     engine: E,
-    local_storage: Option<RocksEngine>,
+
     raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
-    region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -151,10 +144,8 @@ struct GcRunner<E: Engine> {
 impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<RocksEngine>,
         raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         cfg_tracker: Tracker<GcConfig>,
-        region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> Self {
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
@@ -164,9 +155,7 @@ impl<E: Engine> GcRunner<E> {
         });
         Self {
             engine,
-            local_storage,
             raft_store_router,
-            region_info_accessor,
             limiter,
             cfg,
             cfg_tracker,
@@ -174,83 +163,60 @@ impl<E: Engine> GcRunner<E> {
         }
     }
 
-    fn get_snapshot(&self) -> RocksSnapshot {
-        let db = self.local_storage.as_ref().unwrap();
-        db.snapshot()
-    }
-
     /// Check need gc without getting snapshot.
     /// If this is not supported or any error happens, returns true to do further check after
     /// getting snapshot.
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
-        let db = self.local_storage.as_ref().unwrap();
-        let start_key = keys::data_key(start_key);
-        let end_key = keys::data_end_key(end_key);
-
-        let collection = match db.get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
+        let collection = match self
+            .engine
+            .get_properties_cf(CF_WRITE, &start_key, &end_key)
+        {
             Ok(c) => c,
-            Err(e) => {
-                error!(
-                    "failed to get range properties from write cf";
-                    "start_key" => hex::encode_upper(&start_key),
-                    "end_key" => hex::encode_upper(&end_key),
-                    "err" => ?e,
-                );
-                return true;
-            }
+            Err(_) => return true,
         };
         check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
     }
 
     /// Cleans up outdated data.
-    fn gc_keys(&mut self, safe_point: TimeStamp, keys: Vec<Key>) {
-        let snapshot = Arc::new(self.get_snapshot());
-        for k in keys {
-            let mut gc_info = GcInfo::default();
-            while !gc_info.is_completed {
-                let mut txn = MvccTxn::for_scan(
-                    snapshot.clone(),
-                    Some(ScanMode::Forward),
-                    TimeStamp::zero(),
-                    false,
-                );
+    fn gc_key(&mut self, safe_point: TimeStamp, key: &Key) -> Result<()> {
+        let mut gc_info = GcInfo::default();
+        while !gc_info.is_completed {
+            let mut txn = MvccTxn::for_scan(
+                self.engine.snapshot_on_kv_engine(b"", b"")?,
+                Some(ScanMode::Forward),
+                TimeStamp::zero(),
+                false,
+            );
 
-                // TODO: handle errors more robust.
-                let next_gc_info = txn.gc(k.clone(), safe_point).unwrap();
-                gc_info.found_versions += next_gc_info.found_versions;
-                gc_info.deleted_versions += next_gc_info.deleted_versions;
-                gc_info.is_completed = next_gc_info.is_completed;
+            let next_gc_info = txn.gc(key.clone(), safe_point).unwrap();
+            gc_info.found_versions += next_gc_info.found_versions;
+            gc_info.deleted_versions += next_gc_info.deleted_versions;
+            gc_info.is_completed = next_gc_info.is_completed;
+            self.stats.add(&txn.take_statistics());
 
-                self.stats.add(&txn.take_statistics());
-
-                let write_size = txn.write_size();
-                let modifies = txn.into_modifies();
-                if !modifies.is_empty() {
-                    let db = self.local_storage.as_ref().unwrap();
-                    let mut wb = RocksWriteBatch::with_capacity(db.as_inner().clone(), write_size);
-                    for modify in modifies {
-                        merge_put_and_deletes(&mut wb, modify);
-                    }
-                    self.limiter.blocking_consume(write_size);
-                    db.write_opt(&wb, &WriteOptions::default()).unwrap();
-                }
-            }
-
-            if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                debug!(
-                    "GC found plenty versions for a key";
-                    "key" => %k,
-                    "versions" => gc_info.found_versions,
-                );
-            }
-            if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                debug!(
-                    "GC deleted plenty versions for a key";
-                    "key" => %k,
-                    "versions" => gc_info.deleted_versions,
-                );
+            let write_size = txn.write_size();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                self.limiter.blocking_consume(write_size);
+                self.engine.modify_on_kv_engine(modifies)?;
             }
         }
+
+        if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+            debug!(
+            "GC found plenty versions for a key";
+            "key" => %key,
+            "versions" => gc_info.found_versions,
+            );
+        }
+        if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+            debug!(
+            "GC deleted plenty versions for a key";
+            "key" => %key,
+            "versions" => gc_info.deleted_versions,
+            );
+        }
+        Ok(())
     }
 
     fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
@@ -259,27 +225,19 @@ impl<E: Engine> GcRunner<E> {
             return Ok(());
         }
 
-        let mut region = metapb::Region::default();
-        // TODO: It's only used for `get_data_version`, so it's ok here.
-        // But it's better to move `get_data_version` into `CachableSnapshot`.
-        region.set_id(u64::MAX);
-        region.set_start_key(start_key.to_owned());
-        region.set_end_key(end_key.to_owned());
-
-        let db = self.local_storage.clone().unwrap();
         let mut reader = MvccReader::new(
-            RegionSnapshot::from_raw(db, region),
+            self.engine
+                .snapshot_on_kv_engine(start_key, end_key)
+                .unwrap(),
             Some(ScanMode::Forward),
             false,
             IsolationLevel::Si,
         );
+
         let mut next_key = Some(Key::from_encoded_slice(start_key));
-        loop {
+        while next_key.is_some() {
             // Scans at most `GcConfig.batch_keys` keys.
-            let batch_size = self.cfg.batch_keys; // TODO: allow dynamic.
-            let (keys, updated_next_key) = reader
-                .scan_keys(next_key, batch_size)
-                .map_err(Error::from)?;
+            let (keys, updated_next_key) = reader.scan_keys(next_key, self.cfg.batch_keys)?;
             next_key = updated_next_key;
 
             if keys.is_empty() {
@@ -287,7 +245,11 @@ impl<E: Engine> GcRunner<E> {
                 break;
             }
 
-            self.gc_keys(safe_point, keys);
+            for key in keys {
+                if let Err(e) = self.gc_key(safe_point, &key) {
+                    error!("gc fail"; "key" => %key, "err" => ?e);
+                }
+            }
         }
 
         self.stats.add(reader.get_statistics());
@@ -306,13 +268,7 @@ impl<E: Engine> GcRunner<E> {
             "start_key" => %start_key, "end_key" => %end_key
         );
 
-        // TODO: Refine usage of errors
-
-        let local_storage = self.local_storage.as_ref().ok_or_else(|| {
-            let e: Error = box_err!("unsafe destroy range not supported: local_storage not set");
-            warn!("unsafe destroy range failed"; "err" => ?e);
-            e
-        })?;
+        let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is to do it in
@@ -389,18 +345,10 @@ impl<E: Engine> GcRunner<E> {
         start_key: &Key,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        let db = self.local_storage.clone().ok_or_else::<Error, _>(|| {
-            box_err!("local storage not set, physical scan lock not supported")
-        })?;
-
-        // Create a `RegionSnapshot`, which can converts the 'z'-prefixed keys into normal keys
-        // internally. A fake region meta is given to make the snapshot's range unbounded.
-        // TODO: Should we implement a special snapshot and iterator types for this?
-        let mut fake_region = metapb::Region::default();
-        // Add a peer to pass initialized check.
-        fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
-
+        let snap = self
+            .engine
+            .snapshot_on_kv_engine(start_key.as_encoded(), &[])
+            .unwrap();
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
 
@@ -462,6 +410,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 end_key,
                 safe_point,
                 callback,
+                ..
             } => {
                 let res = self.gc(&start_key, &end_key, safe_point);
                 update_metrics(res.is_err());
@@ -526,6 +475,7 @@ fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
     scheduler: &FutureScheduler<GcTask>,
+    region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     safe_point: TimeStamp,
@@ -533,6 +483,7 @@ fn schedule_gc(
 ) -> Result<()> {
     scheduler
         .schedule(GcTask::Gc {
+            region_id,
             start_key,
             end_key,
             safe_point,
@@ -544,11 +495,12 @@ fn schedule_gc(
 /// Does GC synchronously.
 pub fn sync_gc(
     scheduler: &FutureScheduler<GcTask>,
+    region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, start_key, end_key, safe_point, callback))
+    wait_op!(|callback| schedule_gc(scheduler, region_id, start_key, end_key, safe_point, callback))
         .unwrap_or_else(|| {
             error!("failed to receive result of gc");
             Err(box_err!("gc_worker: failed to receive result of gc"))
@@ -558,14 +510,9 @@ pub fn sync_gc(
 /// Used to schedule GC operations.
 pub struct GcWorker<E: Engine> {
     engine: E,
-    /// `local_storage` represent the underlying RocksDB of the `engine`.
-    local_storage: Option<RocksEngine>,
+
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
-    /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
-    /// This is useful to do the `need_gc` check without waking hibernatin regions up.
-    /// This is not set for tests.
-    region_info_accessor: Option<RegionInfoAccessor>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -591,10 +538,8 @@ impl<E: Engine> Clone for GcWorker<E> {
 
         Self {
             engine: self.engine.clone(),
-            local_storage: self.local_storage.clone(),
             raft_store_router: self.raft_store_router.clone(),
             config_manager: self.config_manager.clone(),
-            region_info_accessor: self.region_info_accessor.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
@@ -625,9 +570,7 @@ impl<E: Engine> Drop for GcWorker<E> {
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<RocksEngine>,
         raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
-        region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
     ) -> GcWorker<E> {
@@ -635,10 +578,8 @@ impl<E: Engine> GcWorker<E> {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {
             engine,
-            local_storage,
             raft_store_router,
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
-            region_info_accessor,
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
             worker,
@@ -654,12 +595,11 @@ impl<E: Engine> GcWorker<E> {
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
-        if let Some(db) = self.local_storage.clone() {
-            let safe_point = Arc::clone(&safe_point);
-            let cfg_mgr = self.config_manager.clone();
-            let cluster_version = self.cluster_version.clone();
-            init_compaction_filter(db, safe_point, cfg_mgr, cluster_version);
-        }
+
+        let kvdb = self.engine.kv_engine();
+        let cfg_mgr = self.config_manager.clone();
+        let cluster_version = self.cluster_version.clone();
+        init_compaction_filter(kvdb, safe_point.clone(), cfg_mgr, cluster_version);
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
@@ -678,10 +618,8 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(&mut self) -> Result<()> {
         let runner = GcRunner::new(
             self.engine.clone(),
-            self.local_storage.clone(),
             self.raft_store_router.take(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
-            self.region_info_accessor.take(),
             self.config_manager.value().clone(),
         );
         self.worker
@@ -733,6 +671,23 @@ impl<E: Engine> GcWorker<E> {
             scheduled_tasks.fetch_sub(1, Ordering::SeqCst);
             callback(r);
         }))
+    }
+
+    /// Only for tests.
+    pub fn gc(&self, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            let start_key = vec![];
+            let end_key = vec![];
+            self.worker_scheduler
+                .schedule(GcTask::Gc {
+                    region_id: 0,
+                    start_key,
+                    end_key,
+                    safe_point,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over
@@ -822,21 +777,25 @@ impl<E: Engine> GcWorker<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::kv::{
-        self, Callback as EngineCallback, Modify, Result as EngineResult, TestEngineBuilder,
-    };
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{txn::commands, Storage, TestStorageBuilder};
-    use engine_rocks::Compat;
-    use futures::Future;
-    use kvproto::kvrpcpb::Op;
-    use kvproto::metapb;
     use std::collections::BTreeMap;
     use std::sync::mpsc::channel;
+
+    use engine_rocks::RocksSnapshot;
+    use futures::Future;
+    use kvproto::{kvrpcpb::Op, metapb};
+    use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
+
+    use crate::storage::kv::{
+        self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
+        TestEngineBuilder, WriteData,
+    };
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
+
+    use super::*;
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
@@ -849,6 +808,43 @@ mod tests {
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
         type Snap = RegionSnapshot<RocksSnapshot>;
+
+        fn kv_engine(&self) -> RocksEngine {
+            self.0.kv_engine()
+        }
+
+        fn snapshot_on_kv_engine(
+            &self,
+            start_key: &[u8],
+            end_key: &[u8],
+        ) -> kv::Result<Self::Snap> {
+            let mut region = metapb::Region::default();
+            region.set_start_key(start_key.to_owned());
+            region.set_end_key(end_key.to_owned());
+            Ok(RegionSnapshot::from_raw(self.kv_engine(), region))
+        }
+
+        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+            for modify in &mut modifies {
+                match modify {
+                    Modify::Delete(_, ref mut key) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::Put(_, ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                        let bytes = keys::data_key(key1.as_encoded());
+                        *key1 = Key::from_encoded(bytes);
+                        let bytes = keys::data_end_key(key2.as_encoded());
+                        *key2 = Key::from_encoded(bytes);
+                    }
+                }
+            }
+            write_modifies(&self.kv_engine(), modifies)
+        }
 
         fn async_write(
             &self,
@@ -865,11 +861,12 @@ mod tests {
                 }
                 Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
-                    *end_key = Key::from_encoded(keys::data_key(end_key.as_encoded()));
+                    *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
             self.0.async_write(ctx, batch, callback)
         }
+
         fn async_snapshot(
             &self,
             ctx: &Context,
@@ -881,10 +878,8 @@ mod tests {
                     callback((
                         cb_ctx,
                         r.map(|snap| {
-                            let mut fake_region = metapb::Region::default();
-                            // Add a peer to pass initialized check.
-                            fake_region.mut_peers().push(metapb::Peer::default());
-                            RegionSnapshot::from_snapshot(snap, fake_region)
+                            let region = metapb::Region::default();
+                            RegionSnapshot::from_snapshot(snap, region)
                         }),
                     ))
                 }),
@@ -932,11 +927,8 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(engine.clone())
             .build()
             .unwrap();
-        let db = engine.get_rocksdb();
         let mut gc_worker = GcWorker::new(
             engine,
-            Some(db.c().clone()),
-            None,
             None,
             GcConfig::default(),
             ClusterVersion::new(semver::Version::new(5, 0, 0)),
@@ -1093,7 +1085,6 @@ mod tests {
     #[test]
     fn test_physical_scan_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
         let storage =
             TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
@@ -1101,8 +1092,6 @@ mod tests {
                 .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
-            Some(db.c().clone()),
-            None,
             None,
             GcConfig::default(),
             ClusterVersion::default(),

@@ -383,8 +383,6 @@ mod tests {
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
             None,
-            None,
-            None,
             Default::default(),
             Default::default(),
         );

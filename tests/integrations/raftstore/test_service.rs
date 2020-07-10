@@ -432,16 +432,6 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     assert!(!get_resp1.has_error());
     assert_eq!(get_resp1.value, new_v);
 
-    // GC `k` at the latest ts.
-    ts += 1;
-    let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
-    gc_req.set_context(ctx.clone());
-    gc_req.safe_point = gc_safe_ponit;
-    let gc_resp = client.kv_gc(&gc_req).unwrap();
-    assert!(!gc_resp.has_region_error());
-    assert!(!gc_resp.has_error());
-
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
     let mut get_req2 = GetRequest::default();

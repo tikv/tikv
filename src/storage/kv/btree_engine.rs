@@ -7,6 +7,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
@@ -70,6 +71,18 @@ impl Default for BTreeEngine {
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
 
+    fn kv_engine(&self) -> RocksEngine {
+        unimplemented!();
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+        unimplemented!();
+    }
+
+    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+        unimplemented!();
+    }
+
     fn async_write(
         &self,
         _ctx: &Context,
@@ -83,6 +96,7 @@ impl Engine for BTreeEngine {
 
         Ok(())
     }
+
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
     fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));

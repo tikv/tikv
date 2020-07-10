@@ -526,8 +526,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (range, next_key) = self.get_next_gc_context(from_key);
-        let (start, end) = match range {
-            Some((s, e)) => (s, e),
+        let (region_id, start, end) = match range {
+            Some((r, s, e)) => (r, s, e),
             None => return Ok(None),
         };
 
@@ -535,7 +535,13 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         let hex_end = hex::encode(&end);
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
-        if let Err(e) = sync_gc(&self.worker_scheduler, start, end, self.curr_safe_point()) {
+        if let Err(e) = sync_gc(
+            &self.worker_scheduler,
+            region_id,
+            start,
+            end,
+            self.curr_safe_point(),
+        ) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.
             error!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
@@ -553,7 +559,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     /// leader, so we can do GC on it.
     /// Returns context to call GC and end_key of the region. The returned end_key will be none if
     /// the region's end_key is empty.
-    fn get_next_gc_context(&mut self, key: Key) -> (Option<(Vec<u8>, Vec<u8>)>, Option<Key>) {
+    #[allow(clippy::type_complexity)]
+    fn get_next_gc_context(&mut self, key: Key) -> (Option<(u64, Vec<u8>, Vec<u8>)>, Option<Key>) {
         let (tx, rx) = mpsc::channel();
         let store_id = self.cfg.self_store_id;
 
@@ -588,13 +595,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
         match seek_region_res {
             Ok(Some(mut region)) => {
+                let r = region.get_id();
                 let (s, e) = (region.take_start_key(), region.take_end_key());
                 let next_key = if e.is_empty() {
                     None
                 } else {
                     Some(Key::from_encoded_slice(&e))
                 };
-                (Some((s, e)), next_key)
+                (Some((r, s, e)), next_key)
             }
             Ok(None) => (None, None),
             Err(e) => {
@@ -770,8 +778,10 @@ mod tests {
             .iter()
             .map(|task| match task {
                 GcTask::Gc {
-                    ctx, safe_point, ..
-                } => (ctx.get_region_id(), *safe_point),
+                    region_id,
+                    safe_point,
+                    ..
+                } => (*region_id, *safe_point),
                 _ => unreachable!(),
             })
             .collect();
