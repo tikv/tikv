@@ -31,7 +31,7 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
 /// Flag that indicate if the index value has common handle.
-pub const INDEX_COMMON_HANDLE_FLAG: u8 = 127;
+pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
 
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
