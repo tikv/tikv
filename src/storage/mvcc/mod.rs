@@ -8,7 +8,7 @@ mod txn;
 
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,

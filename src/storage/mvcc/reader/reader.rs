@@ -433,24 +433,6 @@ fn get_mvcc_properties(
     Some(props)
 }
 
-pub fn check_region_need_gc<E: Engine, S: Snapshot>(
-    engine: &E,
-    snap: S,
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-) -> bool {
-    let start = snap.lower_bound();
-    let end = snap.upper_bound();
-    if start.is_none() || end.is_none() {
-        return true;
-    }
-    let prop = match engine.get_properties_cf(CF_WRITE, start.unwrap(), end.unwrap()) {
-        Ok(v) => v,
-        Err(_) => return true,
-    };
-    check_need_gc(safe_point, ratio_threshold, &prop)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,7 +22,9 @@ use txn_types::{Key, TxnExtra, Value};
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{
+    merge_put_and_deletes, RocksEngine, RocksSnapshot, TestEngineBuilder,
+};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };

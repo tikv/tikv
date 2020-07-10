@@ -3,27 +3,18 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::{
-    atomic::{self, AtomicU64},
-    mpsc, Arc, Mutex,
-};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{MiscExt, TablePropertiesExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatch};
+use engine_traits::{
+    KvEngine, MiscExt, TablePropertiesExt, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
-use tokio_core::reactor::Handle;
-
-use crate::server::metrics::*;
-use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
-};
-use crate::storage::mvcc::{
-    check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
-};
 use pd_client::{ClusterVersion, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
@@ -34,7 +25,12 @@ use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
+use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
+
+use crate::server::metrics::*;
+use crate::storage::kv::{merge_put_and_deletes, Engine, ScanMode, Statistics};
+use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
@@ -51,7 +47,6 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
-const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 /// Provides safe point.
@@ -72,7 +67,8 @@ impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
 
 pub enum GcTask {
     Gc {
-        ctx: Context,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
         safe_point: TimeStamp,
         callback: Callback<()>,
     },
@@ -109,15 +105,16 @@ impl Display for GcTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             GcTask::Gc {
-                ctx, safe_point, ..
-            } => {
-                let epoch = format!("{:?}", ctx.region_epoch.as_ref());
-                f.debug_struct("GC")
-                    .field("region_id", &ctx.get_region_id())
-                    .field("region_epoch", &epoch)
-                    .field("safe_point", safe_point)
-                    .finish()
-            }
+                start_key,
+                end_key,
+                safe_point,
+                ..
+            } => f
+                .debug_struct("GC")
+                .field("start_key", &hex::encode_upper(&start_key))
+                .field("end_key", &hex::encode_upper(&end_key))
+                .field("safe_point", safe_point)
+                .finish(),
             GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
@@ -177,84 +174,24 @@ impl<E: Engine> GcRunner<E> {
         }
     }
 
-    fn get_snapshot(&self, ctx: &mut Context) -> Result<E::Snap> {
-        let timeout = Duration::from_secs(GC_SNAPSHOT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.engine.async_snapshot(ctx, cb), timeout) {
-            Some((cb_ctx, Ok(snapshot))) => {
-                if let Some(term) = cb_ctx.term {
-                    ctx.set_term(term);
-                }
-                Ok(snapshot)
-            }
-            Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
-        }
-        .map_err(Error::from)
+    fn get_snapshot(&self) -> RocksSnapshot {
+        let db = self.local_storage.as_ref().unwrap();
+        db.snapshot()
     }
 
     /// Check need gc without getting snapshot.
     /// If this is not supported or any error happens, returns true to do further check after
     /// getting snapshot.
-    fn need_gc(&self, ctx: &Context, safe_point: TimeStamp) -> bool {
-        let region_info_accessor = match &self.region_info_accessor {
-            Some(r) => r,
-            None => {
-                info!(
-                    "region_info_accessor not set. cannot check need_gc without getting snapshot"
-                );
-                return true;
-            }
-        };
-
-        let db = match &self.local_storage {
-            Some(db) => db,
-            None => {
-                info!("local_storage not set. cannot check need_gc without getting snapshot");
-                return true;
-            }
-        };
-
-        let (tx, rx) = mpsc::channel();
-        if let Err(e) = region_info_accessor.find_region_by_id(
-            ctx.get_region_id(),
-            Box::new(move |region| match tx.send(region) {
-                Ok(()) => (),
-                Err(e) => error!(
-                    "find_region_by_id failed to send result";
-                    "err" => ?e
-                ),
-            }),
-        ) {
-            error!(
-                "failed to find_region_by_id from region_info_accessor";
-                "region_id" => ctx.get_region_id(),
-                "err" => ?e
-            );
-            return true;
-        }
-
-        let region_info = match rx.recv() {
-            Ok(None) => return true,
-            Ok(Some(r)) => r,
-            Err(e) => {
-                error!(
-                    "failed to find_region_by_id from region_info_accessor";
-                    "region_id" => ctx.get_region_id(),
-                    "err" => ?e
-                );
-                return true;
-            }
-        };
-
-        let start_key = keys::data_key(region_info.region.get_start_key());
-        let end_key = keys::data_end_key(region_info.region.get_end_key());
+    fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
+        let db = self.local_storage.as_ref().unwrap();
+        let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
 
         let collection = match db.get_range_properties_cf(CF_WRITE, &start_key, &end_key) {
             Ok(c) => c,
             Err(e) => {
                 error!(
                     "failed to get range properties from write cf";
-                    "region_id" => ctx.get_region_id(),
                     "start_key" => hex::encode_upper(&start_key),
                     "end_key" => hex::encode_upper(&end_key),
                     "err" => ?e,
@@ -265,140 +202,99 @@ impl<E: Engine> GcRunner<E> {
         check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
     }
 
-    /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
-    fn scan_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: TimeStamp,
-        from: Option<Key>,
-    ) -> Result<(Vec<Key>, Option<Key>)> {
-        let snapshot = self.get_snapshot(ctx)?;
-        let mut reader = MvccReader::new(
-            snapshot.clone(),
-            Some(ScanMode::Forward),
-            !ctx.get_not_fill_cache(),
-            ctx.get_isolation_level(),
-        );
-
-        let is_range_start = from.is_none();
-
-        // range start gc with from == None, and this is an optimization to
-        // skip gc before scanning all data.
-        let skip_gc = is_range_start
-            && !check_region_need_gc(&self.engine, snapshot, safe_point, self.cfg.ratio_threshold);
-        let res = if skip_gc {
-            GC_SKIPPED_COUNTER.inc();
-            Ok((vec![], None))
-        } else {
-            reader
-                .scan_keys(from, self.cfg.batch_keys)
-                .map_err(Error::from)
-                .map(|(keys, next)| {
-                    if keys.is_empty() {
-                        assert!(next.is_none());
-                        if is_range_start {
-                            GC_EMPTY_RANGE_COUNTER.inc();
-                        }
-                    }
-                    (keys, next)
-                })
-        };
-        self.stats.add(reader.get_statistics());
-        res
-    }
-
     /// Cleans up outdated data.
-    fn gc_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: TimeStamp,
-        keys: Vec<Key>,
-        mut next_scan_key: Option<Key>,
-    ) -> Result<Option<Key>> {
-        let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::for_scan(
-            snapshot,
-            Some(ScanMode::Forward),
-            TimeStamp::zero(),
-            !ctx.get_not_fill_cache(),
-        );
+    fn gc_keys(&mut self, safe_point: TimeStamp, keys: Vec<Key>) {
+        let snapshot = Arc::new(self.get_snapshot());
         for k in keys {
-            let gc_info = txn.gc(k.clone(), safe_point)?;
+            let mut gc_info = GcInfo::default();
+            while !gc_info.is_completed {
+                let mut txn = MvccTxn::for_scan(
+                    snapshot.clone(),
+                    Some(ScanMode::Forward),
+                    TimeStamp::zero(),
+                    false,
+                );
+
+                // TODO: handle errors more robust.
+                let next_gc_info = txn.gc(k.clone(), safe_point).unwrap();
+                gc_info.found_versions += next_gc_info.found_versions;
+                gc_info.deleted_versions += next_gc_info.deleted_versions;
+                gc_info.is_completed = next_gc_info.is_completed;
+
+                self.stats.add(&txn.take_statistics());
+
+                let write_size = txn.write_size();
+                let modifies = txn.into_modifies();
+                if !modifies.is_empty() {
+                    let db = self.local_storage.as_ref().unwrap();
+                    let mut wb = RocksWriteBatch::with_capacity(db.as_inner().clone(), write_size);
+                    for modify in modifies {
+                        merge_put_and_deletes(&mut wb, modify);
+                    }
+                    self.limiter.blocking_consume(write_size);
+                    db.write_opt(&wb, &WriteOptions::default()).unwrap();
+                }
+            }
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                 debug!(
                     "GC found plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
+                    "key" => %k,
                     "versions" => gc_info.found_versions,
-                    "key" => %k
                 );
             }
-            // TODO: we may delete only part of the versions in a batch, which may not beyond
-            // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
                 debug!(
                     "GC deleted plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
+                    "key" => %k,
                     "versions" => gc_info.deleted_versions,
-                    "key" => %k
                 );
             }
-
-            if !gc_info.is_completed {
-                next_scan_key = Some(k);
-                break;
-            }
         }
-        self.stats.add(&txn.take_statistics());
-
-        let write_size = txn.write_size();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            self.refresh_cfg();
-            self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, WriteData::from_modifies(modifies))?;
-        }
-        Ok(next_scan_key)
     }
 
-    fn gc(&mut self, ctx: &mut Context, safe_point: TimeStamp) -> Result<()> {
-        debug!(
-            "start doing GC";
-            "region_id" => ctx.get_region_id(),
-            "safe_point" => safe_point
-        );
-
-        if !self.need_gc(ctx, safe_point) {
+    fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
+        if !self.need_gc(start_key, end_key, safe_point) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
 
-        let mut next_key = None;
+        let mut region = metapb::Region::default();
+        // TODO: It's only used for `get_data_version`, so it's ok here.
+        // But it's better to move `get_data_version` into `CachableSnapshot`.
+        region.set_id(u64::MAX);
+        region.set_start_key(start_key.to_owned());
+        region.set_end_key(end_key.to_owned());
+
+        let db = self.local_storage.clone().unwrap();
+        let mut reader = MvccReader::new(
+            RegionSnapshot::from_raw(db, region),
+            Some(ScanMode::Forward),
+            false,
+            IsolationLevel::Si,
+        );
+        let mut next_key = Some(Key::from_encoded_slice(start_key));
         loop {
-            // Scans at most `GCConfig.batch_keys` keys
-            let (keys, next) = self
-                .scan_keys(ctx, safe_point, next_key)
-                .map_err(|e| {
-                    warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                    e
-                })?;
+            // Scans at most `GcConfig.batch_keys` keys.
+            let batch_size = self.cfg.batch_keys; // TODO: allow dynamic.
+            let (keys, updated_next_key) = reader
+                .scan_keys(next_key, batch_size)
+                .map_err(Error::from)?;
+            next_key = updated_next_key;
+
             if keys.is_empty() {
+                GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
 
-            // Does the GC operation on all scanned keys
-            next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc gc_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                e
-            })?;
-            if next_key.is_none() {
-                break;
-            }
+            self.gc_keys(safe_point, keys);
         }
 
+        self.stats.add(reader.get_statistics());
         debug!(
             "gc has finished";
-            "region_id" => ctx.get_region_id(),
+            "start_key" => hex::encode_upper(start_key),
+            "end_key" => hex::encode_upper(end_key),
             "safe_point" => safe_point
         );
         Ok(())
@@ -562,19 +458,20 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 
         match task {
             GcTask::Gc {
-                mut ctx,
+                start_key,
+                end_key,
                 safe_point,
                 callback,
             } => {
-                let res = self.gc(&mut ctx, safe_point);
+                let res = self.gc(&start_key, &end_key, safe_point);
                 update_metrics(res.is_err());
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
                     T timer,
-                    "GC on region {}, epoch {:?}, safe_point {}",
-                    ctx.get_region_id(),
-                    ctx.get_region_epoch(),
+                    "GC on range [{}, {}), safe_point {}",
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
                     safe_point
                 );
             }
@@ -629,13 +526,15 @@ fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
     scheduler: &FutureScheduler<GcTask>,
-    ctx: Context,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
         .schedule(GcTask::Gc {
-            ctx,
+            start_key,
+            end_key,
             safe_point,
             callback,
         })
@@ -645,13 +544,15 @@ fn schedule_gc(
 /// Does GC synchronously.
 pub fn sync_gc(
     scheduler: &FutureScheduler<GcTask>,
-    ctx: Context,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
-        error!("failed to receive result of gc");
-        Err(box_err!("gc_worker: failed to receive result of gc"))
-    })
+    wait_op!(|callback| schedule_gc(scheduler, start_key, end_key, safe_point, callback))
+        .unwrap_or_else(|| {
+            error!("failed to receive result of gc");
+            Err(box_err!("gc_worker: failed to receive result of gc"))
+        })
 }
 
 /// Used to schedule GC operations.
@@ -669,11 +570,11 @@ pub struct GcWorker<E: Engine> {
     config_manager: GcWorkerConfigManager,
 
     /// How many requests are scheduled from outside and unfinished.
-    scheduled_tasks: Arc<atomic::AtomicUsize>,
+    scheduled_tasks: Arc<AtomicUsize>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
-    refs: Arc<atomic::AtomicUsize>,
+    refs: Arc<AtomicUsize>,
     worker: Arc<Mutex<FutureWorker<GcTask>>>,
     worker_scheduler: FutureScheduler<GcTask>,
 
@@ -686,7 +587,7 @@ pub struct GcWorker<E: Engine> {
 impl<E: Engine> Clone for GcWorker<E> {
     #[inline]
     fn clone(&self) -> Self {
-        self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+        self.refs.fetch_add(1, Ordering::SeqCst);
 
         Self {
             engine: self.engine.clone(),
@@ -708,7 +609,7 @@ impl<E: Engine> Clone for GcWorker<E> {
 impl<E: Engine> Drop for GcWorker<E> {
     #[inline]
     fn drop(&mut self) {
-        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
 
         if refs != 1 {
             return;
@@ -738,8 +639,8 @@ impl<E: Engine> GcWorker<E> {
             raft_store_router,
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             region_info_accessor,
-            scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
-            refs: Arc::new(atomic::AtomicUsize::new(1)),
+            scheduled_tasks: Arc::new(AtomicUsize::new(0)),
+            refs: Arc::new(AtomicUsize::new(1)),
             worker,
             worker_scheduler,
             applied_lock_collector: None,
@@ -822,29 +723,16 @@ impl<E: Engine> GcWorker<E> {
     /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
     /// callback as well as decrease the scheduled task counter.
     fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
-        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
-            self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+        if self.scheduled_tasks.fetch_add(1, Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
+            self.scheduled_tasks.fetch_sub(1, Ordering::SeqCst);
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             return None;
         }
         let scheduled_tasks = Arc::clone(&self.scheduled_tasks);
         Some(Box::new(move |r| {
-            scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            scheduled_tasks.fetch_sub(1, Ordering::SeqCst);
             callback(r);
         }))
-    }
-
-    pub fn gc(&self, ctx: Context, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        self.check_is_busy(callback).map_or(Ok(()), |callback| {
-            self.worker_scheduler
-                .schedule(GcTask::Gc {
-                    ctx,
-                    safe_point,
-                    callback,
-                })
-                .or_else(handle_gc_task_schedule_error)
-        })
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over

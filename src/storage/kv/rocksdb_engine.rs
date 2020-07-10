@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine_rocks::raw_util::CFOptions;
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, SeekKey, WriteBatchExt,
@@ -511,5 +511,19 @@ mod tests {
 
         iter.prev(&mut statistics);
         assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+    }
+}
+
+pub fn merge_put_and_deletes(wb: &mut RocksWriteBatch, modify: Modify) {
+    match modify {
+        Modify::Delete(cf_name, key) => {
+            let key = keys::data_key(key.as_encoded());
+            wb.delete_cf(cf_name, &key).unwrap();
+        }
+        Modify::Put(cf_name, key, value) => {
+            let key = keys::data_key(key.as_encoded());
+            wb.put_cf(cf_name, &key, &value).unwrap();
+        }
+        _ => unreachable!(),
     }
 }
