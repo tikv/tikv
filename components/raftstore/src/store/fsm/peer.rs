@@ -969,10 +969,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // `missing_tick` + 1 times(default 8).
                 // So the follower's `election_elapsed` should be 1 + `missing_tick` + 1(default 9)
                 // which is less than the min election timeout.
-                // The reason that is we don't want let all followers become (pre)candidate if one
+                // The reason is that we don't want let all followers become (pre)candidate if one
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
                 // to others. As long as the leader can wake up and broadcast hearbeats in one raft base
-                // tick time(default 1), no more followers will wake up and sends vote msg again.
+                // tick time(default 1s), no more followers will wake up and sends vote msg again.
                 if self.fsm.missing_ticks + 3 < self.ctx.cfg.raft_election_timeout_ticks {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
