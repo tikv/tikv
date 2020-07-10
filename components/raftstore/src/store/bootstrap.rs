@@ -116,11 +116,9 @@ pub fn clear_prepare_bootstrap_key(engines: &KvEngines<RocksEngine, RocksEngine>
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use tempfile::Builder;
 
     use super::*;
-    use engine_rocks::Compat;
     use engine_traits::KvEngines;
     use engine_traits::{Peekable, CF_DEFAULT};
 
@@ -128,30 +126,18 @@ mod tests {
     fn test_bootstrap() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
-        let kv_engine = Arc::new(
-            engine_rocks::raw_util::new_engine(
-                path.path().to_str().unwrap(),
-                None,
-                &[CF_DEFAULT, CF_RAFT],
-                None,
-            )
-            .unwrap(),
-        );
-        let raft_engine = Arc::new(
-            engine_rocks::raw_util::new_engine(
-                raft_path.to_str().unwrap(),
-                None,
-                &[CF_DEFAULT],
-                None,
-            )
-            .unwrap(),
-        );
+        let kv_engine = engine_rocks::util::new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            &[CF_DEFAULT, CF_RAFT],
+            None,
+        )
+        .unwrap();
+        let raft_engine =
+            engine_rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap();
         let shared_block_cache = false;
-        let engines = KvEngines::new(
-            kv_engine.c().clone(),
-            raft_engine.c().clone(),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
@@ -159,22 +145,18 @@ mod tests {
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
-            .c()
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some());
         assert!(kv_engine
-            .c()
             .get_value_cf(CF_RAFT, &keys::region_state_key(1))
             .unwrap()
             .is_some());
         assert!(kv_engine
-            .c()
             .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .is_some());
         assert!(raft_engine
-            .c()
             .get_value(&keys::raft_state_key(1))
             .unwrap()
             .is_some());
@@ -182,14 +164,14 @@ mod tests {
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
         assert!(is_range_empty(
-            kv_engine.c(),
+            &kv_engine,
             CF_RAFT,
             &keys::region_meta_prefix(1),
             &keys::region_meta_prefix(2)
         )
         .unwrap());
         assert!(is_range_empty(
-            raft_engine.c(),
+            &raft_engine,
             CF_DEFAULT,
             &keys::region_raft_prefix(1),
             &keys::region_raft_prefix(2)
