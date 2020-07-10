@@ -147,12 +147,11 @@ where
 mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
-    use engine_rocks::raw::Writable;
-    use engine_rocks::raw_util::new_engine;
+    use engine_rocks::util::new_engine;
     use engine_rocks::RocksSnapshot;
-    use engine_traits::{CF_DEFAULT, CF_RAFT};
+    use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
-    use std::sync::{mpsc, Arc};
+    use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
@@ -167,7 +166,6 @@ mod tests {
             None,
         )
         .unwrap();
-        let db = Arc::new(db);
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
@@ -190,7 +188,7 @@ mod tests {
         runner.run(Task::<RocksSnapshot>::ComputeHash {
             index: 10,
             region: region.clone(),
-            snap: RocksSnapshot::new(Arc::clone(&db)),
+            snap: db.snapshot(),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
