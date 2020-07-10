@@ -33,13 +33,12 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
-use crate::storage::txn::Command;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
-    txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler},
+    txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
     types::StorageCallbackType,
 };
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
