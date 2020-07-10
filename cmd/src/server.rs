@@ -726,6 +726,11 @@ impl TiKVServer {
             engines.engine.clone(),
             self.region_info_accessor.clone(),
             engines.engines.kv.as_inner().clone(),
+            self.config.backup.clone(),
+        );
+        self.cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
         );
         let backup_timer = backup_endpoint.new_timer();
         backup_worker
