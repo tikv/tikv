@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
-use txn_types::{Key, Value};
+use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -207,6 +207,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -238,8 +239,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_txn_extra(
                 cmd,
+                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -316,10 +318,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
 
-        // TODO(5kbpers): send WriteData::TxnExtra to raftstore here.
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();
