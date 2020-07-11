@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                     group,
                                     &mut self.states,
                                     &mut self.states_offset_each_logical_row,
-                                    |val| Ok(val)
+                                    |val| Ok(val.map(|x| x.to_owned_value()))
                                 )?;
                             } else {
                                 panic!();
@@ -309,7 +309,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                                 group,
                                                 &mut self.states,
                                                 &mut self.states_offset_each_logical_row,
-                                                |val| Ok(SortKey::map_option(val)?)
+                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.to_owned_value()))?)
                                             )?;
                                         }
                                     }
@@ -381,8 +381,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T, S, F>(
-    physical_column: &[Option<T>],
+fn calc_groups_each_row<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>, S, F>(
+    physical_column: T,
     logical_rows: &[usize],
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<S>, usize>,
@@ -392,13 +392,13 @@ fn calc_groups_each_row<T, S, F>(
 ) -> Result<()>
 where
     S: Hash + Eq + Clone,
-    F: Fn(&Option<T>) -> Result<&Option<S>>,
+    F: Fn(Option<TT>) -> Result<Option<S>>,
 {
     for physical_idx in logical_rows {
-        let val = map_to_sort_key(&physical_column[*physical_idx])?;
+        let val = map_to_sort_key(physical_column.get_option_ref(*physical_idx))?;
 
         // Not using the entry API so that when entry exists there is no clone.
-        match group.get(val) {
+        match group.get(&val) {
             Some(offset) => {
                 // Group exists, use the offset of existing group.
                 states_offset_each_logical_row.push(*offset);
@@ -407,7 +407,7 @@ where
                 // Group does not exist, prepare groups.
                 let offset = states.len();
                 states_offset_each_logical_row.push(offset);
-                group.insert(val.clone(), offset);
+                group.insert(val, offset);
                 for aggr_fn in aggr_fns {
                     states.push(aggr_fn.create_state());
                 }

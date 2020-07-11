@@ -143,7 +143,7 @@ impl Extract for Duration {
     }
 }
 
-pub trait InByCompare: Evaluable + Eq {}
+pub trait InByCompare: Evaluable + EvaluableRet + Eq {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}

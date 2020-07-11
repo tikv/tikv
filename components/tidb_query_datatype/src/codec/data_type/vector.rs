@@ -14,14 +14,14 @@ use crate::codec::Result;
 /// this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
-    Int(Vec<Option<Int>>),
-    Real(Vec<Option<Real>>),
-    Decimal(Vec<Option<Decimal>>),
+    Int(NotChunkedVec<Int>),
+    Real(NotChunkedVec<Real>),
+    Decimal(NotChunkedVec<Decimal>),
     // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
-    Bytes(Vec<Option<Bytes>>),
-    DateTime(Vec<Option<DateTime>>),
-    Duration(Vec<Option<Duration>>),
-    Json(Vec<Option<Json>>),
+    Bytes(NotChunkedVec<Bytes>),
+    DateTime(NotChunkedVec<DateTime>),
+    Duration(NotChunkedVec<Duration>),
+    Json(NotChunkedVec<Json>),
 }
 
 impl VectorValue {
@@ -31,7 +31,7 @@ impl VectorValue {
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
         match_template_evaluable! {
             TT, match eval_tp {
-                EvalType::TT => VectorValue::TT(Vec::with_capacity(capacity)),
+                EvalType::TT => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
             }
         }
     }
@@ -41,7 +41,7 @@ impl VectorValue {
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match_template_evaluable! {
             TT, match self {
-                VectorValue::TT(_) => VectorValue::TT(Vec::with_capacity(capacity)),
+                VectorValue::TT(_) => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
             }
         }
     }
@@ -135,7 +135,7 @@ impl VectorValue {
                 VectorValue::TT(v) => {
                     let l = self.len();
                     for i in 0..l {
-                        outputs[i] = v[i].as_mysql_bool(ctx)?;
+                        outputs[i] = v.get_option_ref(i).as_mysql_bool(ctx)?;
                     }
                 },
             }
@@ -150,14 +150,10 @@ impl VectorValue {
     /// Panics if index is out of range.
     #[inline]
     pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
-        match self {
-            VectorValue::Int(v) => ScalarValueRef::Int(v[index].as_ref()),
-            VectorValue::Duration(v) => ScalarValueRef::Duration(v[index].as_ref()),
-            VectorValue::DateTime(v) => ScalarValueRef::DateTime(v[index].as_ref()),
-            VectorValue::Real(v) => ScalarValueRef::Real(v[index].as_ref()),
-            VectorValue::Decimal(v) => ScalarValueRef::Decimal(v[index].as_ref()),
-            VectorValue::Bytes(v) => ScalarValueRef::Bytes(v[index].as_deref()),
-            VectorValue::Json(v) => ScalarValueRef::Json(v[index].as_ref().map(|x| x.as_ref())),
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => ScalarValueRef::TT(v.get_option_ref(index)),
+            }
         }
     }
 
@@ -173,7 +169,7 @@ impl VectorValue {
             VectorValue::Decimal(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             // FIXME: We don't need approximate size. Maximum size is enough (so
@@ -190,7 +186,7 @@ impl VectorValue {
             VectorValue::Bytes(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
@@ -207,10 +203,10 @@ impl VectorValue {
             VectorValue::Json(vec) => {
                 let mut size = 0;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
-                            size += 1 /* FLAG */ + v.as_ref().binary_len();
+                            size += 1 /* FLAG */ + v.binary_len();
                         }
                         None => {
                             size += 1;
@@ -233,7 +229,7 @@ impl VectorValue {
             VectorValue::Bytes(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
                             size += 8 /* Offset */ + v.len();
@@ -248,10 +244,10 @@ impl VectorValue {
             VectorValue::Json(vec) => {
                 let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
-                    let el = &vec[*idx];
+                    let el = vec.get_option_ref(*idx);
                     match el {
                         Some(v) => {
-                            size += 8 /* Offset */ + v.as_ref().binary_len();
+                            size += 8 /* Offset */ + v.binary_len();
                         }
                         None => {
                             size += 8 /* Offset */;
@@ -275,20 +271,20 @@ impl VectorValue {
 
         match self {
             VectorValue::Int(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
                         let is_unsigned = field_type.as_accessor().is_unsigned();
-                        output.write_evaluable_datum_int(val, is_unsigned)?;
+                        output.write_evaluable_datum_int(*val, is_unsigned)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Real(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
@@ -299,56 +295,56 @@ impl VectorValue {
                 Ok(())
             }
             VectorValue::Decimal(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_decimal(val)?;
+                        output.write_evaluable_datum_decimal(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Bytes(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_bytes(val)?;
+                        output.write_evaluable_datum_bytes(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::DateTime(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_date_time(val, ctx)?;
+                        output.write_evaluable_datum_date_time(*val, ctx)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Duration(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_duration(val)?;
+                        output.write_evaluable_datum_duration(*val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Json(ref vec) => {
-                match &vec[row_index] {
+                match &vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_json(val.as_ref())?;
+                        output.write_evaluable_datum_json(*val)?;
                     }
                 }
                 Ok(())
@@ -369,7 +365,7 @@ impl VectorValue {
 
         match self {
             VectorValue::Bytes(ref vec) => {
-                match vec[row_index] {
+                match vec.get_option_ref(row_index) {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
@@ -414,21 +410,6 @@ macro_rules! impl_as_slice {
             #[inline]
             fn as_ref(&self) -> &[Option<$ty>] {
                 self.$name()
-            }
-        }
-
-        // TODO: We should only expose interface for push value, not the entire Vec.
-        impl AsMut<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
-            fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
-                match self {
-                    VectorValue::$ty(ref mut vec) => vec,
-                    other => panic!(
-                        "Cannot retrieve a mutable `{}` vector over a {} column",
-                        stringify!($ty),
-                        other.eval_type()
-                    ),
-                }
             }
         }
     };
@@ -493,9 +474,9 @@ impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
-        impl From<Vec<Option<$ty>>> for VectorValue {
+        impl From<NotChunkedVec<$ty>> for VectorValue {
             #[inline]
-            fn from(s: Vec<Option<$ty>>) -> VectorValue {
+            fn from(s: NotChunkedVec<$ty>) -> VectorValue {
                 VectorValue::$ty(s)
             }
         }
@@ -659,8 +640,8 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Real::new(1.0).ok()];
-        let vec = slice.to_vec();
-        let column = VectorValue::from(vec);
+        let chunked_vec = NotChunkedVec::from_slice(slice);
+        let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
         assert_eq!(column.as_real_slice(), slice);
     }
