@@ -48,7 +48,6 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
-use tikv_util::time::ThreadReadId;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -328,7 +327,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    pub fn run_cmd(&self, cmd: Command, batch_id: Option<ThreadReadId>, callback: StorageCallback) {
+    pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
@@ -337,7 +336,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             });
             return;
         }
-        self.schedule_command(cmd, batch_id, callback);
+        self.schedule_command(cmd, callback);
     }
 }
 
@@ -368,12 +367,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_command(
-        &self,
-        cmd: Command,
-        batch_id: Option<ThreadReadId>,
-        callback: StorageCallback,
-    ) {
+    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
@@ -383,7 +377,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
         if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid, batch_id);
+            self.get_snapshot(cid);
         }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -395,13 +389,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid, None);
+            self.get_snapshot(cid);
         }
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&self, cid: u64, batch_id: Option<ThreadReadId>) {
+    fn get_snapshot(&self, cid: u64) {
         let task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
@@ -415,7 +409,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, batch_id, cb) {
+            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
@@ -460,7 +454,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, None, tctx.cb.unwrap());
+            self.schedule_command(cmd, tctx.cb.unwrap());
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -499,7 +493,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, None, cb);
+                self.schedule_command(cmd, cb);
             } else {
                 cb.execute(pr);
             }

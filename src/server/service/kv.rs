@@ -37,7 +37,6 @@ use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
-use tikv_util::time::ThreadReadId;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
@@ -122,7 +121,7 @@ macro_rules! handle_request {
                 return;
             }
             let begin_instant = Instant::now_coarse();
-            let future = $future_name(&self.storage, None, req)
+            let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
                 .map(move |_| GRPC_MSG_HISTOGRAM_STATIC.$fn_name.observe(duration_to_sec(begin_instant.elapsed())))
                 .map_err(move |e| {
@@ -266,7 +265,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
             return;
         }
         let begin_instant = Instant::now_coarse();
-        let future = future_gc(&self.gc_worker, None, req)
+        let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM_STATIC
@@ -289,7 +288,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
             return;
         }
         let begin_instant = Instant::now_coarse();
-        let future = future_cop(&self.cop, Some(ctx.peer()), None, req)
+        let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM_STATIC
@@ -1033,7 +1032,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                         batcher.as_mut().unwrap().add_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let resp = future_get(storage, None, req)
+                       let resp = future_get(storage, req)
                             .map(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
@@ -1047,7 +1046,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let resp = future_raw_get(storage, None, req)
+                       let resp = future_raw_get(storage, req)
                             .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
@@ -1055,8 +1054,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
-                    let batch_id = batcher.as_ref().map(|req_batch|req_batch.get_batch_id());
-                    let resp = $future_fn($($arg,)* batch_id, req)
+                    let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
@@ -1101,7 +1099,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
 }
 
 fn future_handle_empty(
-    _batch_id: Option<ThreadReadId>,
     req: BatchCommandsEmptyRequest,
 ) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
     let mut res = BatchCommandsEmptyResponse::default();
@@ -1125,7 +1122,6 @@ fn future_handle_empty(
 
 fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
@@ -1151,7 +1147,6 @@ fn future_get<E: Engine, L: LockManager>(
 
 fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1183,7 +1178,6 @@ fn future_scan<E: Engine, L: LockManager>(
 
 fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1202,7 +1196,6 @@ fn future_batch_get<E: Engine, L: LockManager>(
 
 fn future_gc<E: Engine>(
     gc_worker: &GcWorker<E>,
-    _batch_id: Option<ThreadReadId>,
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1221,7 +1214,6 @@ fn future_gc<E: Engine>(
 
 fn future_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1246,7 +1238,6 @@ fn future_delete_range<E: Engine, L: LockManager>(
 
 fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
@@ -1268,7 +1259,6 @@ fn future_raw_get<E: Engine, L: LockManager>(
 
 fn future_raw_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
@@ -1287,7 +1277,6 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
 
 fn future_raw_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
@@ -1312,7 +1301,6 @@ fn future_raw_put<E: Engine, L: LockManager>(
 
 fn future_raw_batch_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1338,7 +1326,6 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
 
 fn future_raw_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1357,7 +1344,6 @@ fn future_raw_delete<E: Engine, L: LockManager>(
 
 fn future_raw_batch_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1378,7 +1364,6 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
 
 fn future_raw_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawScanRequest,
 ) -> impl Future<Item = RawScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1409,7 +1394,6 @@ fn future_raw_scan<E: Engine, L: LockManager>(
 
 fn future_raw_batch_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
@@ -1434,7 +1418,6 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
 
 fn future_raw_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1460,7 +1443,6 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_get<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerGetRequest,
 ) -> impl Future<Item = VerGetResponse, Error = Error> {
     let resp = VerGetResponse::default();
@@ -1470,7 +1452,6 @@ fn future_ver_get<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_batch_get<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerBatchGetRequest,
 ) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
     let resp = VerBatchGetResponse::default();
@@ -1480,7 +1461,6 @@ fn future_ver_batch_get<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_mut<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerMutRequest,
 ) -> impl Future<Item = VerMutResponse, Error = Error> {
     let resp = VerMutResponse::default();
@@ -1490,7 +1470,6 @@ fn future_ver_mut<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_batch_mut<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerBatchMutRequest,
 ) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
     let resp = VerBatchMutResponse::default();
@@ -1500,7 +1479,6 @@ fn future_ver_batch_mut<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_scan<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerScanRequest,
 ) -> impl Future<Item = VerScanResponse, Error = Error> {
     let resp = VerScanResponse::default();
@@ -1510,7 +1488,6 @@ fn future_ver_scan<E: Engine, L: LockManager>(
 // unimplemented
 fn future_ver_delete_range<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
-    _batch_id: Option<ThreadReadId>,
     mut _req: VerDeleteRangeRequest,
 ) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
     let resp = VerDeleteRangeResponse::default();
@@ -1520,7 +1497,6 @@ fn future_ver_delete_range<E: Engine, L: LockManager>(
 fn future_cop<E: Engine>(
     cop: &Endpoint<E>,
     peer: Option<String>,
-    _batch_id: Option<ThreadReadId>,
     req: Request,
 ) -> impl Future<Item = Response, Error = Error> {
     cop.parse_and_handle_unary_request(req, peer)
@@ -1531,12 +1507,11 @@ macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
-            batch_id: Option<ThreadReadId>,
             $req: $req_ty,
         ) -> impl Future<Item = $resp_ty, Error = Error> {
             $prelude
             let (cb, f) = paired_future_callback();
-            let res = storage.sched_txn_command($req.into(), batch_id, cb);
+            let res = storage.sched_txn_command($req.into(), cb);
 
             AndThenWith::new(res, f.map_err(Error::from)).map(move |$v| {
                 let mut $resp = $resp_ty::default();

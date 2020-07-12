@@ -537,7 +537,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
-        batch_id: Option<ThreadReadId>,
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
@@ -578,7 +577,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         fail_point!("storage_drop_message", |_| Ok(()));
         cmd.incr_cmd_metric();
-        self.sched.run_cmd(cmd, batch_id, T::callback(callback));
+        self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
     }
@@ -1458,7 +1457,6 @@ pub mod test_util {
                     for_update_ts.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -1510,7 +1508,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -1534,7 +1531,6 @@ mod tests {
                     101.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 3),
             )
             .unwrap();
@@ -1571,7 +1567,6 @@ mod tests {
                     b"a".to_vec(),
                     1.into(),
                 ),
-                None,
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
@@ -1665,7 +1660,6 @@ mod tests {
                     b"a".to_vec(),
                     1.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -1773,7 +1767,6 @@ mod tests {
                     2.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 1),
             )
             .unwrap();
@@ -1926,7 +1919,6 @@ mod tests {
                     b"a".to_vec(),
                     1.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2034,7 +2026,6 @@ mod tests {
                     2.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 1),
             )
             .unwrap();
@@ -2155,7 +2146,6 @@ mod tests {
                     b"a".to_vec(),
                     1.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2182,7 +2172,6 @@ mod tests {
                     2.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 1),
             )
             .unwrap();
@@ -2230,7 +2219,6 @@ mod tests {
                     b"a".to_vec(),
                     1.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2264,7 +2252,6 @@ mod tests {
                     2.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 1),
             )
             .unwrap();
@@ -2303,7 +2290,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2314,7 +2300,6 @@ mod tests {
                     b"y".to_vec(),
                     101.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2328,7 +2313,6 @@ mod tests {
                     110.into(),
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 2, TxnStatus::committed(110.into())),
             )
             .unwrap();
@@ -2340,7 +2324,6 @@ mod tests {
                     111.into(),
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 3, TxnStatus::committed(111.into())),
             )
             .unwrap();
@@ -2365,7 +2348,6 @@ mod tests {
                     b"x".to_vec(),
                     105.into(),
                 ),
-                None,
                 expect_fail_callback(tx, 6, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::WriteConflict { .. },
@@ -2391,7 +2373,6 @@ mod tests {
         storage
             .sched_txn_command::<()>(
                 commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2402,7 +2383,6 @@ mod tests {
                     b"y".to_vec(),
                     101.into(),
                 ),
-                None,
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
@@ -2415,7 +2395,6 @@ mod tests {
                     b"y".to_vec(),
                     102.into(),
                 ),
-                None,
                 expect_ok_callback(tx, 3),
             )
             .unwrap();
@@ -2433,7 +2412,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2446,7 +2424,6 @@ mod tests {
                     TimeStamp::zero(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 1),
             )
             .unwrap();
@@ -2472,7 +2449,6 @@ mod tests {
                     ts(110, 0),
                     100,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2486,7 +2462,6 @@ mod tests {
                     ts(120, 0),
                     Context::default(),
                 ),
-                None,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::KeyIsLocked(info),
@@ -2505,7 +2480,6 @@ mod tests {
                     ts(220, 0),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -2534,7 +2508,6 @@ mod tests {
                     100.into(),
                     ctx,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2544,7 +2517,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Commit::new(vec![Key::from_raw(b"x")], 100.into(), 101.into(), ctx),
-                None,
                 expect_ok_callback(tx, 2),
             )
             .unwrap();
@@ -2578,7 +2550,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2591,7 +2562,6 @@ mod tests {
                     101.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
@@ -2600,7 +2570,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Pause::new(vec![Key::from_raw(b"y")], 1000, Context::default()),
-                None,
                 expect_ok_callback(tx, 3),
             )
             .unwrap();
@@ -2630,7 +2599,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2647,7 +2615,6 @@ mod tests {
                     101.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -3690,7 +3657,6 @@ mod tests {
                     b"x".to_vec(),
                     100.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3712,7 +3678,6 @@ mod tests {
                     TimeStamp::default(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3772,7 +3737,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(99.into(), None, 10, Context::default()),
-                None,
                 expect_value_callback(tx.clone(), 0, vec![]),
             )
             .unwrap();
@@ -3780,7 +3744,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(100.into(), None, 10, Context::default()),
-                None,
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3797,7 +3760,6 @@ mod tests {
                     10,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3814,7 +3776,6 @@ mod tests {
                     10,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
             )
             .unwrap();
@@ -3822,7 +3783,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(101.into(), None, 10, Context::default()),
-                None,
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3841,7 +3801,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(101.into(), None, 4, Context::default()),
-                None,
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3858,7 +3817,6 @@ mod tests {
                     4,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3880,7 +3838,6 @@ mod tests {
                     0,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
             )
             .unwrap();
@@ -3906,7 +3863,6 @@ mod tests {
                     b"c".to_vec(),
                     99.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3967,7 +3923,6 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::Prewrite::with_defaults(mutations, b"x".to_vec(), ts),
-                        None,
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -3985,7 +3940,6 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::ResolveLock::new(txn_status, None, vec![], Context::default()),
-                        None,
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -3995,7 +3949,6 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::ScanLock::new(ts, None, 0, Context::default()),
-                        None,
                         expect_value_callback(
                             tx.clone(),
                             0,
@@ -4026,7 +3979,6 @@ mod tests {
                     b"c".to_vec(),
                     99.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4042,7 +3994,6 @@ mod tests {
                     resolve_keys,
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4059,7 +4010,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(99.into(), None, 0, Context::default()),
-                None,
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),
             )
             .unwrap();
@@ -4074,7 +4024,6 @@ mod tests {
                     vec![Key::from_raw(b"a")],
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4091,7 +4040,6 @@ mod tests {
                     b"c".to_vec(),
                     101.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4107,7 +4055,6 @@ mod tests {
                     resolve_keys,
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4124,7 +4071,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ScanLock::new(101.into(), None, 0, Context::default()),
-                None,
                 expect_value_callback(tx, 0, vec![lock_a]),
             )
             .unwrap();
@@ -4145,7 +4091,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
-                None,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnLockNotFound { .. },
@@ -4164,7 +4109,6 @@ mod tests {
                     10.into(),
                     100,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4174,7 +4118,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
-                None,
                 expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
             )
             .unwrap();
@@ -4185,7 +4128,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
-                None,
                 expect_value_callback(tx.clone(), 0, uncommitted(110, TimeStamp::zero())),
             )
             .unwrap();
@@ -4195,7 +4137,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
-                None,
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnLockNotFound { .. },
@@ -4231,7 +4172,6 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                None,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },
@@ -4254,7 +4194,6 @@ mod tests {
                     true,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, LockNotExist),
             )
             .unwrap();
@@ -4268,7 +4207,6 @@ mod tests {
                     k.as_encoded().to_vec(),
                     ts(9, 0),
                 ),
-                None,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::WriteConflict { .. },
@@ -4287,7 +4225,6 @@ mod tests {
                     ts(10, 0),
                     100,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4304,7 +4241,6 @@ mod tests {
                     true,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
             )
             .unwrap();
@@ -4315,7 +4251,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Commit::new(vec![k.clone()], ts(10, 0), ts(20, 0), Context::default()),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4332,7 +4267,6 @@ mod tests {
                     true,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
             )
             .unwrap();
@@ -4346,7 +4280,6 @@ mod tests {
                     ts(25, 0),
                     100,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4363,7 +4296,6 @@ mod tests {
                     true,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, TtlExpire),
             )
             .unwrap();
@@ -4372,7 +4304,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Commit::new(vec![k], ts(25, 0), ts(28, 0), Context::default()),
-                None,
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnLockNotFound { .. },
@@ -4410,7 +4341,6 @@ mod tests {
                         10,
                         return_values,
                     ),
-                    None,
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
                 .unwrap();
@@ -4425,7 +4355,6 @@ mod tests {
                         10,
                         return_values,
                     ),
-                    None,
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
                 )
                 .unwrap();
@@ -4437,7 +4366,6 @@ mod tests {
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false),
-                None,
                 expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
             )
             .unwrap();
@@ -4453,7 +4381,6 @@ mod tests {
                         20,
                         return_values,
                     ),
-                    None,
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                             mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(_)),
@@ -4482,7 +4409,6 @@ mod tests {
                     TimeStamp::zero(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4495,7 +4421,6 @@ mod tests {
                     20.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4511,7 +4436,6 @@ mod tests {
                         15,
                         return_values,
                     ),
-                    None,
                     expect_fail_callback(tx.clone(), 0, |e| match e {
                         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                             mvcc::Error(box mvcc::ErrorInner::WriteConflict { .. }),
@@ -4542,7 +4466,6 @@ mod tests {
                         30,
                         return_values,
                     ),
-                    None,
                     expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res),
                 )
                 .unwrap();
@@ -4660,7 +4583,6 @@ mod tests {
                     k.clone(),
                     10.into(),
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4683,7 +4605,6 @@ mod tests {
                     21.into(),
                     Context::default(),
                 ),
-                None,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -4775,7 +4696,6 @@ mod tests {
                         keys[0].to_raw().unwrap(),
                         ts,
                     ),
-                    None,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -4790,7 +4710,6 @@ mod tests {
                         ts,
                         false,
                     ),
-                    None,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -4811,7 +4730,6 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::Commit::new(keys.clone(), 10.into(), 20.into(), Context::default()),
-                    None,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -4844,7 +4762,6 @@ mod tests {
                             TimeStamp::max(),
                             Context::default(),
                         ),
-                        None,
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -4873,7 +4790,6 @@ mod tests {
                 storage
                     .sched_txn_command(
                         commands::Rollback::new(keys.clone(), ts, Context::default()),
-                        None,
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -4900,7 +4816,6 @@ mod tests {
                         50.into(),
                         Context::default(),
                     ),
-                    None,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -4934,7 +4849,6 @@ mod tests {
                             keys.clone(),
                             Context::default(),
                         ),
-                        None,
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -4967,7 +4881,6 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ResolveLock::new(txn_status, None, vec![], Context::default()),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4998,7 +4911,6 @@ mod tests {
                     start_ts,
                     100,
                 ),
-                None,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -5015,7 +4927,6 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, TxnStatus::uncommitted(100, 0.into())),
             )
             .unwrap();
@@ -5034,7 +4945,6 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                None,
                 expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
             )
             .unwrap();

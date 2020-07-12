@@ -1076,7 +1076,6 @@ mod tests {
         // Write these data to the storage.
         wait_op!(|cb| storage.sched_txn_command(
             commands::Prewrite::with_defaults(mutations, primary, start_ts),
-            None,
             cb,
         ))
         .unwrap()
@@ -1086,7 +1085,6 @@ mod tests {
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
         wait_op!(|cb| storage.sched_txn_command(
             commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
-            None,
             cb
         ))
         .unwrap()
@@ -1252,7 +1250,6 @@ mod tests {
             storage
                 .sched_txn_command(
                     commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
-                    None,
                     Box::new(move |res| tx.send(res).unwrap()),
                 )
                 .unwrap();
