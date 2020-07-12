@@ -434,23 +434,9 @@ cert-allowed-cn = [
     "example.tikv.com",
 ]
 
-<<<<<<< HEAD
-=======
-[security.encryption]
-data-encryption-method = "aes128-ctr"
-data-key-rotation-period = "14d"
-
-[security.encryption.master-key]
-type = "file"
-path = "/master/key/path"
-
-[security.encryption.previous-master-key]
-type = "plaintext"
-
 [backup]
 num-threads = 456
 
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 [import]
 import-dir = "/abc"
 num-threads = 123

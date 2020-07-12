@@ -7,28 +7,16 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-<<<<<<< HEAD
 use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
-=======
-use configuration::Configuration;
-use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-<<<<<<< HEAD
+use tikv::config::BackupConfig;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider, ScanMode, Snapshot};
-=======
-use raftstore::coprocessor::RegionInfoProvider;
-use raftstore::store::util::find_peer;
-use tikv::config::BackupConfig;
-use tikv::storage::kv::{Engine, ScanMode, Snapshot};
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::{Key, Statistics};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
@@ -1102,12 +1090,7 @@ pub mod tests {
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
             req.set_start_version(0);
-<<<<<<< HEAD
             req.set_end_version(ts);
-            req.set_concurrency(4);
-=======
-            req.set_end_version(ts.into_inner());
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
             let (tx, rx) = unbounded();
             // Empty path should return an error.
             Task::new(req.clone(), tx.clone()).unwrap_err();
