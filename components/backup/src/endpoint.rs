@@ -315,13 +315,6 @@ type BackupRes = (Vec<File>, Statistics);
 #[derive(Clone)]
 pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
 
-impl configuration::ConfigManager for ConfigManager {
-    fn dispatch(&mut self, change: configuration::ConfigChange) -> configuration::Result<()> {
-        self.0.write().unwrap().update(change);
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 impl ConfigManager {
     fn set_num_threads(&self, num_threads: usize) {

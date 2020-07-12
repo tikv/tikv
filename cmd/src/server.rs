@@ -326,6 +326,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engine.clone(),
         region_info_accessor.clone(),
         engines.kv.clone(),
+        cfg.backup.clone(),
     );
     let backup_timer = backup_endpoint.new_timer();
     backup_worker

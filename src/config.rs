@@ -1265,7 +1265,7 @@ impl Default for BackupConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
