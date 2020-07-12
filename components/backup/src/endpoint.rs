@@ -7,14 +7,9 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-<<<<<<< HEAD
+use configuration::Configuration;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN, DB};
 use engine_traits::{name_to_cf, CfName};
-=======
-use configuration::Configuration;
-use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;

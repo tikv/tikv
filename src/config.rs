@@ -2136,12 +2136,7 @@ impl TiKvConfig {
         self.pd.validate()?;
         self.security.validate()?;
         self.import.validate()?;
-<<<<<<< HEAD
-=======
         self.backup.validate()?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
         Ok(())
     }
 

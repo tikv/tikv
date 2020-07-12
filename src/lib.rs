@@ -26,11 +26,8 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
-<<<<<<< HEAD
 #![feature(str_strip)]
-=======
 #![feature(clamp)]
->>>>>>> 0be3dfb... backup,config: set backup thread pool size via config instead of gRPC (#8193)
 
 #[macro_use(fail_point)]
 extern crate fail;
