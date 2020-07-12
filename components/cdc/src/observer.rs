@@ -10,6 +10,7 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
+use txn_types::TxnExtra;
 
 use crate::endpoint::{Deregister, Task};
 use crate::Error as CdcError;
@@ -106,7 +107,8 @@ impl CmdObserver for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    fn on_flush_apply(&self) {
+    // TODO(5kbpers): handle TxnExtra.
+    fn on_flush_apply(&self, _: Vec<TxnExtra>) {
         fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
@@ -181,7 +183,7 @@ mod tests {
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply();
+        observer.on_flush_apply(Vec::default());
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi } => {

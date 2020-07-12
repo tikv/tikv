@@ -155,12 +155,13 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
-                                aggr_state.update_repeat(
+                        TT, match value.as_scalar_value_ref() {
+                            ScalarValueRef::TT(scalar_value) => {
+                                update_repeat!(
+                                    aggr_state,
                                     &mut entities.context,
                                     scalar_value,
-                                    rows_len,
+                                    rows_len
                                 )?;
                             },
                         }
@@ -172,10 +173,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                     match_template_evaluable! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
-                                aggr_state.update_vector(
+                                update_vector!(
+                                    aggr_state,
                                     &mut entities.context,
                                     vec,
-                                    logical_rows,
+                                    logical_rows
                                 )?;
                             },
                         }
@@ -244,12 +246,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = Bytes;
+            type ParameterType = BytesRef<'static>;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Self::ParameterType>,
+                value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 if let Some(value) = value {
                     self.len += value.len();
@@ -297,12 +299,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnBarState {
-            type ParameterType = Real;
+            type ParameterType = &'static Real;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Self::ParameterType>,
+                value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 self.rows_with_null += 1;
                 if let Some(value) = value {
@@ -573,12 +575,12 @@ mod tests {
         struct AggrFnFooState;
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = Real;
+            type ParameterType = &'static Real;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                _value: &Option<Self::ParameterType>,
+                _value: Option<Self::ParameterType>,
             ) -> Result<()> {
                 // Update should never be called since we are testing aggregate for no row.
                 unreachable!()
@@ -598,9 +600,9 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
-                        5,
-                    )])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(5)].into(),
+                    )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
