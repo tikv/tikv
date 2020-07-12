@@ -53,10 +53,6 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
         self.data.push(value)
     }
 
-    pub fn replace(&mut self, idx: usize, value: Option<T>) {
-        self.data[idx] = value
-    }
-
     pub fn len(&self) -> usize {
         self.data.len()
     }
