@@ -52,13 +52,9 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
-<<<<<<< HEAD
-use tikv_util::config::{self, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
-=======
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+    self, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
 };
->>>>>>> 75edb25... config: support change shared block cache (#8222)
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -1188,17 +1184,12 @@ pub struct DBConfigManger {
 }
 
 impl DBConfigManger {
-<<<<<<< HEAD
-    pub fn new(db: Arc<DB>, db_type: DBType) -> Self {
-        DBConfigManger { db, db_type }
-=======
-    pub fn new(db: RocksEngine, db_type: DBType, shared_block_cache: bool) -> Self {
+    pub fn new(db: Arc<DB>, db_type: DBType, shared_block_cache: bool) -> Self {
         DBConfigManger {
             db,
             db_type,
             shared_block_cache,
         }
->>>>>>> 75edb25... config: support change shared block cache (#8222)
     }
 }
 
@@ -1230,16 +1221,12 @@ impl DBConfigManger {
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
-<<<<<<< HEAD
-        let handle = get_cf_handle(&self.db, cf)?;
-=======
         if self.shared_block_cache {
             return Err("shared block cache is enabled, change cache size through \
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        let handle = self.db.cf_handle(cf)?;
->>>>>>> 75edb25... config: support change shared block cache (#8222)
+        let handle = get_cf_handle(&self.db, cf)?;
         let opt = self.db.get_options_cf(handle);
         opt.set_block_cache_capacity(size.0)?;
         // Write config to metric
@@ -2647,13 +2634,8 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-<<<<<<< HEAD
-    use engine::rocks::util::new_engine_opt;
-=======
     use crate::storage::config::StorageConfigManger;
-    use engine_rocks::raw_util::new_engine_opt;
-    use engine_traits::DBOptions as DBOptionsTrait;
->>>>>>> 75edb25... config: support change shared block cache (#8222)
+    use engine::rocks::util::new_engine_opt;
     use slog::Level;
     use std::sync::Arc;
     use toml;
@@ -2902,19 +2884,9 @@ mod tests {
         let engine = Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
-<<<<<<< HEAD
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-=======
                 cfg.rocksdb.build_opt(),
                 cfg.rocksdb
                     .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
->>>>>>> 75edb25... config: support change shared block cache (#8222)
             )
             .unwrap(),
         );
@@ -2938,11 +2910,7 @@ mod tests {
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
-<<<<<<< HEAD
-=======
-        cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.storage.block_cache.shared = false;
->>>>>>> 75edb25... config: support change shared block cache (#8222)
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 

@@ -26,11 +26,7 @@ use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::collections::HashSet;
-<<<<<<< HEAD
-use tikv_util::config::{ReadableDuration, ReadableSize};
-=======
-use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
->>>>>>> 75edb25... config: support change shared block cache (#8222)
+use tikv_util::config::{OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;

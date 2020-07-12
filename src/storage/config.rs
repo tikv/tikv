@@ -2,17 +2,15 @@
 
 //! Storage configuration.
 
-<<<<<<< HEAD
-use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
-=======
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
-use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_rocks::RocksEngine;
-use engine_traits::{CFHandleExt, ColumnFamilyOptions, CF_DEFAULT};
->>>>>>> 75edb25... config: support change shared block cache (#8222)
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
+use engine::DB;
+use engine_traits::CF_DEFAULT;
 use libc::c_int;
 use std::error::Error;
+use std::sync::Arc;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
@@ -85,12 +83,12 @@ impl Config {
 }
 
 pub struct StorageConfigManger {
-    kvdb: RocksEngine,
+    kvdb: Arc<DB>,
     shared_block_cache: bool,
 }
 
 impl StorageConfigManger {
-    pub fn new(kvdb: RocksEngine, shared_block_cache: bool) -> StorageConfigManger {
+    pub fn new(kvdb: Arc<DB>, shared_block_cache: bool) -> StorageConfigManger {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
@@ -111,7 +109,7 @@ impl ConfigManager for StorageConfigManger {
                     // the size through any of them. Here we change it through default CF in kvdb.
                     // A better way to do it is to hold the cache reference somewhere, and use it to
                     // change cache size.
-                    let handle = self.kvdb.cf_handle(CF_DEFAULT)?;
+                    let handle = get_cf_handle(&self.kvdb, CF_DEFAULT)?;
                     let opt = self.kvdb.get_options_cf(handle);
                     opt.set_block_cache_capacity(size.0)?;
                     // Write config to metric
