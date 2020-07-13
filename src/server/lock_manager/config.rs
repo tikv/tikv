@@ -12,9 +12,6 @@ use tikv_util::config::ReadableDuration;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // Deprecated. The enable flag was only for compatible issue from v3.0 or older version.
-    #[config(skip)]
-    pub enabled: bool,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
@@ -47,7 +44,6 @@ where
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: true,
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: false,
