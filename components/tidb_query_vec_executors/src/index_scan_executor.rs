@@ -263,7 +263,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
                 if self.decode_handle_strategy != DecodeCommonHandle {
-                    return Err(other_err!("index value with common handles encouter, but missing `primary_column_ids`"));
+                    return Err(other_err!("Expect to decode index values with common handles in `DecodeCommonHandle` mode."));
                 }
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
