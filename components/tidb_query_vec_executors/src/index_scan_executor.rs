@@ -401,7 +401,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -409,7 +409,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[
                     Real::new(10.5).ok(),
                     Real::new(5.1).ok(),
@@ -455,7 +455,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -463,12 +463,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5), Some(2)]
             );
         }
@@ -530,7 +530,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -538,12 +538,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5), Some(2)]
             );
         }
@@ -585,7 +585,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -593,12 +593,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5)]
             );
         }

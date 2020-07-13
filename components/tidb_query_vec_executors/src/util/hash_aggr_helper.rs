@@ -5,7 +5,7 @@ use crate::interface::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_vec_aggr::AggrFunctionState;
+use tidb_query_vec_aggr::{update, AggrFunctionState};
 use tidb_query_vec_expr::RpnStackNode;
 
 pub struct HashAggregationHelper;
@@ -37,11 +37,11 @@ impl HashAggregationHelper {
             match aggr_expr_result {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
+                        TT, match value.as_scalar_value_ref() {
+                            ScalarValueRef::TT(scalar_value) => {
                                 for offset in states_offset_each_logical_row {
                                     let aggr_fn_state = &mut states[*offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, scalar_value)?;
+                                    update!(aggr_fn_state, &mut entities.context, scalar_value)?;
                                 }
                             },
                         }
@@ -58,7 +58,7 @@ impl HashAggregationHelper {
                                     .zip(logical_rows)
                                 {
                                     let aggr_fn_state = &mut states[*states_offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, &vec[*physical_idx])?;
+                                    update!(aggr_fn_state, &mut entities.context, vec.get_option_ref(*physical_idx))?;
                                 }
                             }
                         }

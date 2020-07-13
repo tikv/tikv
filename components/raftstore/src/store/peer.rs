@@ -7,8 +7,10 @@ use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -30,6 +32,7 @@ use raft::{
 };
 use smallvec::SmallVec;
 use time::Timespec;
+use txn_types::TxnExtra;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -277,6 +280,8 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl Peer {
@@ -360,6 +365,7 @@ impl Peer {
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1802,6 +1808,7 @@ impl Peer {
         cb: Callback<RocksSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        txn_extra: TxnExtra,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -1849,6 +1856,7 @@ impl Peer {
                     index: idx,
                     term: self.term(),
                     cb,
+                    txn_extra,
                     renew_lease_time: None,
                 };
                 self.post_propose(ctx, p);
@@ -2226,6 +2234,7 @@ impl Peer {
                     index,
                     term: self.term(),
                     cb: Callback::None,
+                    txn_extra: TxnExtra::default(),
                     renew_lease_time: Some(renew_lease_time),
                 };
                 self.post_propose(poll_ctx, p);
@@ -2593,6 +2602,7 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region(), read_index);
+        resp.txn_extra_op = self.txn_extra_op.load();
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -3102,6 +3112,7 @@ where
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
             }
         }
@@ -3123,6 +3134,7 @@ where
                         return ReadResponse {
                             response: cmd_resp::new_error(e),
                             snapshot: None,
+                            txn_extra_op: TxnExtraOp::Noop,
                         };
                     }
                 },
@@ -3162,7 +3174,11 @@ where
         } else {
             None
         };
-        ReadResponse { response, snapshot }
+        ReadResponse {
+            response,
+            snapshot,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
     }
 }
 
