@@ -154,13 +154,13 @@ mod tests {
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         update!(state, &mut ctx, Option::<&Real>::None).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         update!(state, &mut ctx, Real::new(5.0).ok().as_ref()).unwrap();
         update!(state, &mut ctx, Option::<&Real>::None).unwrap();
@@ -168,20 +168,20 @@ mod tests {
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
 
         update_repeat!(state, &mut ctx, Some(&3i64), 4).unwrap();
         update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(6)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(6)]);
 
         let chunked_vec: NotChunkedVec<Int> = vec![Some(1i64), None, Some(-1i64)].into();
         update_vector!(state, &mut ctx, &chunked_vec, &[1, 2]).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(7)]);
     }
 }

@@ -548,7 +548,7 @@ mod tests {
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[4]
                 .decoded()
-                .as_real_slice()
+                .to_real_vec()
                 .iter()
                 .map(|v| {
                     use std::hash::Hasher;
@@ -563,7 +563,7 @@ mod tests {
             // Use the order of the sorted column to sort other columns
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[4].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[4].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -571,22 +571,22 @@ mod tests {
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(3)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[1].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[2].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[2].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(0)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[3].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[3].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -676,13 +676,13 @@ mod tests {
                 .unwrap();
 
             // Group by a constant, So should be only one group.
-            assert_eq!(r.physical_columns[4].decoded().as_int_slice().len(), 1);
+            assert_eq!(r.physical_columns[4].decoded().to_int_vec().len(), 1);
 
-            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
-            assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(4)]);
-            assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(2)]);
+            assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
+            assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(4)]);
+            assert_eq!(r.physical_columns[2].decoded().to_int_vec(), &[Some(2)]);
             assert_eq!(
-                r.physical_columns[3].decoded().as_real_slice(),
+                r.physical_columns[3].decoded().to_real_vec(),
                 &[Real::new(8.5).ok()]
             );
         }
@@ -764,8 +764,8 @@ mod tests {
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
                 .decoded()
-                .as_bytes_slice()
-                .iter()
+                .to_bytes_vec()
+                .into_iter()
                 .enumerate()
                 .collect();
             sort_column.sort_by(|a, b| a.1.cmp(&b.1));
@@ -773,7 +773,7 @@ mod tests {
             // Use the order of the sorted column to sort other columns
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+                .map(|(idx, _)| r.physical_columns[3].decoded().to_bytes_vec()[*idx].clone())
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -781,17 +781,17 @@ mod tests {
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(0), Some(0), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[1].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[2].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -984,7 +984,7 @@ mod tests {
                 .unwrap();
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[0]
                 .decoded()
-                .as_real_slice()
+                .to_real_vec()
                 .iter()
                 .map(|v| {
                     use std::hash::{Hash, Hasher};
@@ -997,7 +997,7 @@ mod tests {
             sort_column.sort_by(|a, b| a.1.cmp(&b.1));
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -1051,7 +1051,7 @@ mod tests {
             r.physical_columns[0]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[0])
                 .unwrap();
-            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(1)]);
+            assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(1)]);
         }
     }
 }
