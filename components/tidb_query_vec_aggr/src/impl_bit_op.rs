@@ -154,7 +154,7 @@ mod tests {
 
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
-            result[0].as_int_vec(),
+            result[0].to_int_vec(),
             &[Some(0xffff_ffff_ffff_ffff_u64 as i64)]
         );
 
@@ -162,7 +162,7 @@ mod tests {
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
-            result[0].as_int_vec(),
+            result[0].to_int_vec(),
             &[Some(0xffff_ffff_ffff_ffff_u64 as i64)]
         );
 
@@ -170,19 +170,19 @@ mod tests {
         update!(state, &mut ctx, Some(&7i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(7)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(7)]);
 
         update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(4)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(4)]);
 
         update_repeat!(state, &mut ctx, Some(&4), 10).unwrap();
         update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(4)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(4)]);
 
         // Reset the state
         let mut state = function.create_state();
@@ -193,13 +193,13 @@ mod tests {
         update_vector!(state, &mut ctx, &int_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(1)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(1)]);
 
         // 7 & 1 & 2 == 0
         update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
     }
 
     #[test]
@@ -211,30 +211,30 @@ mod tests {
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         // 1 | 4 == 5
         update!(state, &mut ctx, Some(&1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(1)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(1)]);
 
         update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(5)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(5)]);
 
         update_repeat!(state, &mut ctx, Some(&8), 10).unwrap();
         update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(13)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(13)]);
 
         // 13 | 2 == 15
         update!(state, &mut ctx, Some(&2i64)).unwrap();
@@ -242,20 +242,20 @@ mod tests {
         update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(15)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(15)]);
 
         // 15 | 2 == 15
         update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(15)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(15)]);
 
         // 15 | 2 | -1 == 18446744073709551615
         update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
-            result[0].as_int_vec(),
+            result[0].to_int_vec(),
             &[Some(18446744073709551615u64 as i64)]
         );
     }
@@ -269,23 +269,23 @@ mod tests {
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(0)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
 
         // 1 ^ 5 == 4
         update!(state, &mut ctx, Some(&1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(1)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(1)]);
 
         update!(state, &mut ctx, Some(&5i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(4)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(4)]);
 
         // 1 ^ 5 ^ 8 == 12
         update_repeat!(state, &mut ctx, Some(&8), 9).unwrap();
@@ -293,13 +293,13 @@ mod tests {
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(12)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(12)]);
 
         // Will not change due to xor even times
         update_repeat!(state, &mut ctx, Some(&9), 10).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(12)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(12)]);
 
         // 1 ^ 5 ^ 8 ^ ^ 2 ^ 2 ^ 1 == 13
         update!(state, &mut ctx, Some(&2i64)).unwrap();
@@ -307,13 +307,13 @@ mod tests {
         update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(13)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(13)]);
 
         // 13 ^ 2 == 15
         update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_vec(), &[Some(15)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(15)]);
 
         // 15 ^ 2 ^ -1 == 18446744073709551602
         update!(state, &mut ctx, Some(&2i64)).unwrap();
@@ -321,7 +321,7 @@ mod tests {
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
-            result[0].as_int_vec(),
+            result[0].to_int_vec(),
             &[Some(18446744073709551602u64 as i64)]
         );
     }
@@ -399,7 +399,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_and_result = bit_and_result.vector_value().unwrap();
-            let bit_and_slice = bit_and_result.as_ref().as_int_vec();
+            let bit_and_slice = bit_and_result.as_ref().to_int_vec();
             let bit_and_vec: NotChunkedVec<Int> = bit_and_slice.into();
 
             update_vector!(
@@ -420,7 +420,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_or_result = bit_or_result.vector_value().unwrap();
-            let bit_or_slice = bit_or_result.as_ref().as_int_vec();
+            let bit_or_slice = bit_or_result.as_ref().to_int_vec();
             let bit_or_vec: NotChunkedVec<Int> = bit_or_slice.into();
 
             update_vector!(
@@ -441,7 +441,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_xor_result = bit_xor_result.vector_value().unwrap();
-            let bit_xor_slice = bit_xor_result.as_ref().as_int_vec();
+            let bit_xor_slice = bit_xor_result.as_ref().to_int_vec();
             let bit_xor_vec: NotChunkedVec<Int> = bit_xor_slice.into();
 
             update_vector!(
@@ -457,7 +457,7 @@ mod tests {
         }
 
         assert_eq!(
-            aggr_result[0].as_int_vec(),
+            aggr_result[0].to_int_vec(),
             &[
                 Some(0),
                 Some(18446744073709551615u64 as i64),

@@ -408,13 +408,13 @@ macro_rules! impl_as_slice {
     };
 }
 
-impl_as_slice! { Int, as_int_vec }
-impl_as_slice! { Real, as_real_vec }
-impl_as_slice! { Decimal, as_decimal_vec }
-impl_as_slice! { Bytes, as_bytes_vec }
-impl_as_slice! { DateTime, as_date_time_vec }
-impl_as_slice! { Duration, as_duration_vec }
-impl_as_slice! { Json, as_json_vec }
+impl_as_slice! { Int, to_int_vec }
+impl_as_slice! { Real, to_real_vec }
+impl_as_slice! { Decimal, to_decimal_vec }
+impl_as_slice! { Bytes, to_bytes_vec }
+impl_as_slice! { DateTime, to_date_time_vec }
+impl_as_slice! { Duration, to_duration_vec }
+impl_as_slice! { Json, to_json_vec }
 
 /// Additional `VectorValue` methods available via generics. These methods support different
 /// concrete types but have same names and should be specified via the generic parameter type.
@@ -495,84 +495,84 @@ mod tests {
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 0);
         assert!(column.is_empty());
-        assert_eq!(column.as_bytes_vec(), &[]);
+        assert_eq!(column.to_bytes_vec(), &[]);
 
         column.push_bytes(None);
         assert_eq!(column.len(), 1);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
-        assert_eq!(column.as_bytes_vec(), &[None]);
+        assert_eq!(column.to_bytes_vec(), &[None]);
 
         column.push_bytes(Some(vec![1, 2, 3]));
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
-        assert_eq!(column.as_bytes_vec(), &[None, Some(vec![1, 2, 3])]);
+        assert_eq!(column.to_bytes_vec(), &[None, Some(vec![1, 2, 3])]);
 
         let mut column = VectorValue::with_capacity(3, EvalType::Real);
         assert_eq!(column.eval_type(), EvalType::Real);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
-        assert_eq!(column.as_real_vec(), &[]);
+        assert_eq!(column.to_real_vec(), &[]);
         let column_cloned = column.clone();
         assert_eq!(column_cloned.capacity(), 0);
-        assert_eq!(column_cloned.as_real_vec(), column.as_real_vec());
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(Real::new(1.0).ok());
         assert_eq!(column.len(), 1);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_vec(), &[Real::new(1.0).ok()]);
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok()]);
         let column_cloned = column.clone();
         assert_eq!(column_cloned.capacity(), 1);
-        assert_eq!(column_cloned.as_real_vec(), column.as_real_vec());
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(None);
         assert_eq!(column.len(), 2);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_vec(), &[Real::new(1.0).ok(), None]);
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok(), None]);
         let column_cloned = column.clone();
         assert_eq!(column_cloned.capacity(), 2);
-        assert_eq!(column_cloned.as_real_vec(), column.as_real_vec());
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(Real::new(4.5).ok());
         assert_eq!(column.len(), 3);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(
-            column.as_real_vec(),
+            column.to_real_vec(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
         );
         let column_cloned = column.clone();
         assert_eq!(column_cloned.capacity(), 3);
-        assert_eq!(column_cloned.as_real_vec(), column.as_real_vec());
+        assert_eq!(column_cloned.to_real_vec(), column.to_real_vec());
 
         column.push_real(None);
         assert_eq!(column.len(), 4);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(
-            column.as_real_vec(),
+            column.to_real_vec(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
         );
-        assert_eq!(column.as_real_vec(), column.as_real_vec());
+        assert_eq!(column.to_real_vec(), column.to_real_vec());
 
         column.truncate(2);
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_vec(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.as_real_vec(), column.as_real_vec());
+        assert_eq!(column.to_real_vec(), &[Real::new(1.0).ok(), None]);
+        assert_eq!(column.to_real_vec(), column.to_real_vec());
 
         let column = VectorValue::with_capacity(10, EvalType::DateTime);
         assert_eq!(column.eval_type(), EvalType::DateTime);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
-        assert_eq!(column.as_date_time_vec(), &[]);
-        assert_eq!(column.as_date_time_vec(), column.as_date_time_vec());
+        assert_eq!(column.to_date_time_vec(), &[]);
+        assert_eq!(column.to_date_time_vec(), column.to_date_time_vec());
     }
 
     #[test]
@@ -590,20 +590,20 @@ mod tests {
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert_eq!(column1.capacity(), 0);
-        assert_eq!(column1.as_real_vec(), &[]);
+        assert_eq!(column1.to_real_vec(), &[]);
         assert_eq!(column2.len(), 1);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_vec(), &[Real::new(1.0).ok()]);
+        assert_eq!(column2.to_real_vec(), &[Real::new(1.0).ok()]);
 
         column1.push_real(None);
         column1.push_real(None);
         column1.append(&mut column2);
         assert_eq!(column1.len(), 3);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_vec(), &[None, None, Real::new(1.0).ok()]);
+        assert_eq!(column1.to_real_vec(), &[None, None, Real::new(1.0).ok()]);
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_vec(), &[]);
+        assert_eq!(column2.to_real_vec(), &[]);
 
         column1.push_real(Real::new(1.1).ok());
         column2.push_real(Real::new(3.5).ok());
@@ -612,11 +612,11 @@ mod tests {
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_vec(), &[]);
+        assert_eq!(column1.to_real_vec(), &[]);
         assert_eq!(column2.len(), 5);
         assert!(column2.capacity() > 3);
         assert_eq!(
-            column2.as_real_vec(),
+            column2.to_real_vec(),
             &[
                 Real::new(3.5).ok(),
                 None,
@@ -633,6 +633,6 @@ mod tests {
         let chunked_vec = NotChunkedVec::from_slice(slice);
         let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
-        assert_eq!(column.as_real_vec(), slice);
+        assert_eq!(column.to_real_vec(), slice);
     }
 }
