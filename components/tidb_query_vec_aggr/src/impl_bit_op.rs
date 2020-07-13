@@ -399,7 +399,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_and_result = bit_and_result.vector_value().unwrap();
-            let bit_and_slice = bit_and_result.as_ref().as_int_vec();
+            let bit_and_slice = bit_and_result.as_ref().to_int_vec();
             let bit_and_vec: ChunkedVecSized<Int> = bit_and_slice.into();
 
             update_vector!(
@@ -420,7 +420,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_or_result = bit_or_result.vector_value().unwrap();
-            let bit_or_slice = bit_or_result.as_ref().as_int_vec();
+            let bit_or_slice = bit_or_result.as_ref().to_int_vec();
             let bit_or_vec: ChunkedVecSized<Int> = bit_or_slice.into();
 
             update_vector!(
@@ -441,7 +441,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let bit_xor_result = bit_xor_result.vector_value().unwrap();
-            let bit_xor_slice = bit_xor_result.as_ref().as_int_vec();
+            let bit_xor_slice = bit_xor_result.as_ref().to_int_vec();
             let bit_xor_vec: ChunkedVecSized<Int> = bit_xor_slice.into();
 
             update_vector!(

@@ -1375,10 +1375,10 @@ mod tests_normal {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<
-                    'arg_,
-                    Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
-                    Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
-                > Foo_Fn for crate::function::Arg<Arg0_, crate::function::Arg<Arg1_, crate::function::Null> >
+                'arg_,
+                Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
+                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
+            > Foo_Fn for crate::function::Arg<Arg0_, crate::function::Arg<Arg1_, crate::function::Null> >
             {
                 default fn eval(
                     self,
@@ -1389,15 +1389,15 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
-                        result.push(foo(arg0, arg1)?);
+                        result.chunked_push(foo(arg0, arg1)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
+                    Ok(Decimal::into_vector_value(result))
                 }
-            }
+            }        
         };
         assert_eq!(
             expected.to_string(),
@@ -1542,15 +1542,11 @@ mod tests_normal {
     fn test_generic_generate_real_fn_trait_impl() {
         let gen = generic_fn();
         let expected: TokenStream = quote! {
-            impl<
-                'arg_,
-                A: M,
-                B,
-                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ A::X> >
-            > Foo_Fn<A, B> for crate::function::Arg<
-                Arg0_,
-                crate::function::Null
-            > where B: N<A> {
+            impl<'arg_, A: M, B, Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ A::X> > > Foo_Fn<A, B>
+                for crate::function::Arg<Arg0_, crate::function::Null>
+            where
+                B: N<A>
+            {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
@@ -1560,12 +1556,12 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <B as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
-                        result.push(foo :: <A, B> (arg0)?);
+                        result.chunked_push(foo::<A, B>(arg0)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
+                    Ok(B::into_vector_value(result))
                 }
             }
         };
@@ -1689,20 +1685,16 @@ mod tests_normal {
         let gen = no_generic_fn_with_extras();
         let expected: TokenStream = quote! {
             impl<
-                'arg_,
-                Arg2_: crate::function::RpnFnArg<Type = Option<JsonRef<'arg_> > > ,
-                Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> > ,
-                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
-            > Foo_Fn for crate::function::Arg<
-                Arg0_,
-                crate::function::Arg<
-                    Arg1_,
-                    crate::function::Arg<
-                        Arg2_,
-                        crate::function::Null
-                    >
+                    'arg_,
+                    Arg2_: crate::function::RpnFnArg<Type = Option<JsonRef<'arg_> > >,
+                    Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
+                    Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
+                > Foo_Fn
+                for crate::function::Arg<
+                    Arg0_,
+                    crate::function::Arg<Arg1_, crate::function::Arg<Arg2_, crate::function::Null> >
                 >
-            > {
+            {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
@@ -1712,14 +1704,14 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
                         let (arg2, arg) = arg.extract(row_index);
-                        result.push(foo(ctx, arg0, arg1, arg2)?);
+                        result.chunked_push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result.phantom_owned_data(), result))
+                    Ok(Decimal::into_vector_value(result))
                 }
             }
         };

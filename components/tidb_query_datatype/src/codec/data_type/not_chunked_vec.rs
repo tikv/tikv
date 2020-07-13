@@ -74,7 +74,7 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
         self.data.append(&mut other.data)
     }
 
-    pub fn as_vec(&self) -> Vec<Option<T>> {
+    pub fn to_vec(&self) -> Vec<Option<T>> {
         self.data.clone()
     }
 }

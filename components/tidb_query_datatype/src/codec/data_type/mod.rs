@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod chunked_bool_vec;
-mod chunked_sized_vec;
+mod chunked_vec_bool;
+mod chunked_vec_sized;
 mod not_chunked_vec;
 mod scalar;
 mod vector;
@@ -12,7 +12,7 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
-pub use chunked_sized_vec::ChunkedVecSized;
+pub use chunked_vec_sized::ChunkedVecSized;
 use not_chunked_vec::NotChunkedVec;
 pub type ChunkedVecBytes = NotChunkedVec<Bytes>;
 pub type ChunkedVecJson = NotChunkedVec<Json>;

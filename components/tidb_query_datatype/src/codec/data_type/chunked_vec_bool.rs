@@ -1,10 +1,10 @@
 #[derive(Debug, PartialEq, Clone)]
-pub struct ChunkedBoolVec {
+pub struct ChunkedVecBool {
     data: Vec<u8>,
     length: usize,
 }
 
-impl ChunkedBoolVec {
+impl ChunkedVecBool {
     fn upper_bound(size: usize) -> usize {
         (size + 7) >> 3
     }
@@ -76,20 +76,20 @@ mod test {
 
     #[test]
     fn test_with_capacity() {
-        ChunkedBoolVec::with_capacity(0);
-        ChunkedBoolVec::with_capacity(8);
-        ChunkedBoolVec::with_capacity(233);
+        ChunkedVecBool::with_capacity(0);
+        ChunkedVecBool::with_capacity(8);
+        ChunkedVecBool::with_capacity(233);
     }
 
     #[test]
     fn test_len_is_empty() {
-        assert_eq!(ChunkedBoolVec::with_capacity(0).len(), 0);
-        assert_eq!(ChunkedBoolVec::with_capacity(8).len(), 0);
-        assert_eq!(ChunkedBoolVec::with_capacity(233).len(), 0);
-        assert!(ChunkedBoolVec::with_capacity(0).is_empty());
-        assert!(ChunkedBoolVec::with_capacity(8).is_empty());
-        assert!(ChunkedBoolVec::with_capacity(233).is_empty());
-        let mut x = ChunkedBoolVec::with_capacity(233);
+        assert_eq!(ChunkedVecBool::with_capacity(0).len(), 0);
+        assert_eq!(ChunkedVecBool::with_capacity(8).len(), 0);
+        assert_eq!(ChunkedVecBool::with_capacity(233).len(), 0);
+        assert!(ChunkedVecBool::with_capacity(0).is_empty());
+        assert!(ChunkedVecBool::with_capacity(8).is_empty());
+        assert!(ChunkedVecBool::with_capacity(233).is_empty());
+        let mut x = ChunkedVecBool::with_capacity(233);
         x.push(false);
         assert_eq!(x.len(), 1);
         assert!(!x.is_empty());
@@ -110,7 +110,7 @@ mod test {
 
     #[test]
     fn test_push() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         x.push(false);
         x.push(true);
         assert_eq!(x.get(0), false);
@@ -119,7 +119,7 @@ mod test {
 
     #[test]
     fn test_push_all_combinations() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         for i in 0..256 {
             for bit in 0..8 {
                 x.push(i & (1 << bit) != 0);
@@ -132,7 +132,7 @@ mod test {
 
     #[test]
     fn test_push_on_edge() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         let mut base = 0;
         for _ in 0..8 {
             for i in 0..256 {
@@ -150,7 +150,7 @@ mod test {
 
     #[test]
     fn test_replace() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         x.push(false);
         x.push(true);
         assert!(!x.get(0));
@@ -165,7 +165,7 @@ mod test {
 
     #[test]
     fn test_replace_all_combinations() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         for i in 0..256 {
             for bit in 0..8 {
                 x.push(i & (1 << bit) != 0);
@@ -180,7 +180,7 @@ mod test {
 
     #[test]
     fn test_append() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         x.push(true);
         x.push(false);
         x.push(true);
@@ -188,7 +188,7 @@ mod test {
         x.push(true);
         x.push(false);
         x.push(true);
-        let mut y = ChunkedBoolVec::with_capacity(0);
+        let mut y = ChunkedVecBool::with_capacity(0);
         y.push(false);
         y.push(true);
         y.push(false);
@@ -208,7 +208,7 @@ mod test {
 
     #[test]
     fn test_truncate() {
-        let mut x = ChunkedBoolVec::with_capacity(0);
+        let mut x = ChunkedVecBool::with_capacity(0);
         x.push(true);
         x.push(false);
         x.push(true);

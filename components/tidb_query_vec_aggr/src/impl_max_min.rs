@@ -497,7 +497,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
-            let max_slice: ChunkedVecSized<Int> = max_result.as_ref().as_int_vec().into();
+            let max_slice: ChunkedVecSized<Int> = max_result.as_ref().to_int_vec().into();
             update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
@@ -508,7 +508,7 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
-            let min_slice: ChunkedVecSized<Int> = min_result.as_ref().as_int_vec().into();
+            let min_slice: ChunkedVecSized<Int> = min_result.as_ref().to_int_vec().into();
             update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }

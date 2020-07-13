@@ -402,7 +402,7 @@ macro_rules! impl_as_slice {
             #[inline]
             pub fn $name(&self) -> Vec<Option<$ty>> {
                 match self {
-                    VectorValue::$ty(vec) => vec.as_vec(),
+                    VectorValue::$ty(vec) => vec.to_vec(),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($name),

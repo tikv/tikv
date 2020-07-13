@@ -249,7 +249,7 @@ mod tests {
             .eval(&mut ctx, &src_schema, &mut columns, &[4, 1, 2, 3], 4)
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
-        let slice = exp_result.as_ref().as_decimal_vec();
+        let slice = exp_result.as_ref().to_decimal_vec();
         let slice: ChunkedVecSized<Decimal> = slice.into();
         update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
 
