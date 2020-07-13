@@ -224,4 +224,13 @@ impl RangePropertiesExt for RocksEngine {
         }
         Ok(split_keys)
     }
+
+    fn get_range_approximate_middle(&self, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
+        panic!()
+    }
+
+    fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
+        panic!()
+    }
+
 }

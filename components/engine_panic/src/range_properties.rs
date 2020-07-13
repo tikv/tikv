@@ -27,4 +27,13 @@ impl RangePropertiesExt for PanicEngine {
     fn get_range_approximate_split_keys_cf(&self, cfname: &str, range: Range, region_id: u64, split_size: u64, max_size: u64, batch_split_limit: u64) -> Result<Vec<Vec<u8>>> {
         panic!()
     }
+
+    fn get_range_approximate_middle(&self, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
+        panic!()
+    }
+
+    fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
+        panic!()
+    }
+
 }
