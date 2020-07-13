@@ -5,7 +5,7 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
-use kvproto::kvrpcpb::{CommandPri, Context, ExtraOp, LockInfo};
+use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
@@ -24,11 +24,11 @@ use crate::storage::txn::{
         Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
-    scheduler::{Msg, Scheduler},
+    scheduler::{Msg, Scheduler, Task},
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
-    metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
+    metrics::{KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
@@ -36,46 +36,11 @@ use engine_traits::CF_WRITE;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
-pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
-
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
-/// Task is a running command.
-pub struct Task {
-    pub cid: u64,
-    pub tag: metrics::CommandKind,
-
-    cmd: Command,
-    ts: TimeStamp,
-    region_id: u64,
-}
-
-impl Task {
-    /// Creates a task for a running command.
-    pub fn new(cid: u64, cmd: Command) -> Task {
-        Task {
-            cid,
-            tag: cmd.tag(),
-            region_id: cmd.ctx().get_region_id(),
-            ts: cmd.ts(),
-            cmd,
-        }
-    }
-
-    pub fn cmd(&self) -> &Command {
-        &self.cmd
-    }
-
-    pub fn priority(&self) -> CommandPri {
-        self.cmd.priority()
-    }
-
-    pub fn context(&self) -> &Context {
-        &self.cmd.ctx()
-    }
-}
+const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 pub struct Executor<E: Engine, L: LockManager> {
     // We put time consuming tasks to the thread pool.
@@ -91,7 +56,7 @@ pub struct Executor<E: Engine, L: LockManager> {
 }
 
 impl<E: Engine, L: LockManager> Executor<E, L> {
-    pub fn new(
+    pub(super) fn new(
         scheduler: Scheduler<E, L>,
         pool: SchedPool,
         lock_mgr: L,
@@ -119,7 +84,13 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
     }
 
     /// Start the execution of the task.
-    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
+    pub(super) fn execute(
+        mut self,
+        cb_ctx: CbContext,
+        snapshot: EngineResult<E::Snap>,
+        task: Task,
+    ) {
+        let tag = task.cmd.tag();
         debug!(
             "receive snapshot finish msg";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -127,25 +98,21 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
         match snapshot {
             Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_ok.inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
 
                 self.process_by_worker(cb_ctx, snapshot, task);
             }
             Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
                 info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool()
                     .pool
                     .spawn(async move {
-                        notify_scheduler(
-                            self.take_scheduler(),
-                            Msg::FinishedWithErr {
-                                cid: task.cid,
-                                err: Error::from(err),
-                                tag: task.tag,
-                            },
-                        );
+                        self.take_scheduler().on_msg(Msg::FinishedWithErr {
+                            cid: task.cid,
+                            err: Error::from(err),
+                        });
                     })
                     .unwrap();
             }
@@ -154,12 +121,12 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
+        let tag = task.cmd.tag();
+        SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
         debug!(
             "process cmd with snapshot";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
         );
-        let tag = task.tag;
         if let Some(term) = cb_ctx.term {
             task.cmd.ctx_mut().set_term(term);
         }
@@ -173,8 +140,8 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
                 let read_duration = Instant::now_coarse();
 
-                let region_id = task.region_id;
-                let ts = task.ts;
+                let region_id = task.cmd.ctx().get_region_id();
+                let ts = task.cmd.ts();
                 let timer = Instant::now_coarse();
 
                 let statistics = if readonly {
@@ -206,14 +173,15 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
     fn process_read(mut self, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
-        let tag = task.tag;
+        let tag = task.cmd.tag();
         let cid = task.cid;
         let mut statistics = Statistics::default();
         let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        self.take_scheduler()
+            .on_msg(Msg::ReadFinished { cid, pr, tag });
         statistics
     }
 
@@ -227,9 +195,9 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
         extra_op: ExtraOp,
     ) -> Statistics {
         fail_point!("txn_before_process_write");
-        let tag = task.tag;
+        let tag = task.cmd.tag();
         let cid = task.cid;
-        let ts = task.ts;
+        let ts = task.cmd.ts();
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
@@ -292,16 +260,13 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
 
-                                notify_scheduler(
-                                    sched,
-                                    Msg::WriteFinished {
-                                        cid,
-                                        pr: write_finished_pr,
-                                        result,
-                                        pipelined,
-                                        tag,
-                                    },
-                                );
+                                sched.on_msg(Msg::WriteFinished {
+                                    cid,
+                                    pr: write_finished_pr,
+                                    result,
+                                    pipelined,
+                                    tag,
+                                });
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
@@ -315,7 +280,7 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
-                        Msg::FinishedWithErr { cid, err, tag }
+                        Msg::FinishedWithErr { cid, err }
                     } else if pipelined {
                         fail_point!("scheduler_pipelined_write_finish");
 
@@ -337,10 +302,10 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);
-                Msg::FinishedWithErr { cid, err, tag }
+                Msg::FinishedWithErr { cid, err }
             }
         };
-        notify_scheduler(scheduler, msg);
+        scheduler.on_msg(msg);
         statistics
     }
 }
@@ -945,10 +910,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         pr,
         lock_info,
     })
-}
-
-pub fn notify_scheduler<E: Engine, L: LockManager>(scheduler: Scheduler<E, L>, msg: Msg) {
-    scheduler.on_msg(msg);
 }
 
 type LockWritesVals = (

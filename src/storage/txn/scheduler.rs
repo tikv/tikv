@@ -40,7 +40,7 @@ use crate::storage::metrics::{
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    process::{Executor, Task},
+    process::Executor,
     sched_pool::SchedPool,
     Error, ProcessResult,
 };
@@ -52,11 +52,7 @@ use crate::storage::{
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 /// Message types for the scheduler event loop.
-pub enum Msg {
-    RawCmd {
-        cmd: Command,
-        cb: StorageCallback,
-    },
+pub(super) enum Msg {
     ReadFinished {
         cid: u64,
         pr: ProcessResult,
@@ -72,7 +68,6 @@ pub enum Msg {
     FinishedWithErr {
         cid: u64,
         err: Error,
-        tag: metrics::CommandKind,
     },
     WaitForLock {
         cid: u64,
@@ -100,13 +95,38 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
             Msg::WaitForLock { cid, .. } => write!(f, "WaitForLock [cid={}]", cid),
             Msg::PipelinedWrite { cid, .. } => write!(f, "PipelinedWrite [cid={}]", cid),
         }
+    }
+}
+
+/// Task is a running command.
+pub(super) struct Task {
+    pub(super) cid: u64,
+    pub(super) cmd: Command,
+}
+
+impl Task {
+    /// Creates a task for a running command.
+    pub(super) fn new(cid: u64, cmd: Command) -> Task {
+        Task { cid, cmd }
+    }
+}
+
+struct CmdTimer {
+    tag: metrics::CommandKind,
+    begin: Instant,
+}
+
+impl Drop for CmdTimer {
+    fn drop(&mut self) {
+        SCHED_HISTOGRAM_VEC_STATIC
+            .get(self.tag)
+            .observe(self.begin.elapsed_secs());
     }
 }
 
@@ -125,29 +145,16 @@ struct TaskContext {
     _cmd_timer: CmdTimer,
 }
 
-struct CmdTimer {
-    tag: metrics::CommandKind,
-    begin: Instant,
-}
-
-impl Drop for CmdTimer {
-    fn drop(&mut self) {
-        SCHED_HISTOGRAM_VEC_STATIC
-            .get(self.tag)
-            .observe(self.begin.elapsed_secs());
-    }
-}
-
 impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
-        let tag = task.cmd().tag();
-        let lock = task.cmd().gen_lock(latches);
+        let tag = task.cmd.tag();
+        let lock = task.cmd.gen_lock(latches);
         // Write command should acquire write lock.
-        if !task.cmd().readonly() && !lock.is_write_lock() {
-            panic!("write lock is expected for command {}", task.cmd());
+        if !task.cmd.readonly() && !lock.is_write_lock() {
+            panic!("write lock is expected for command {}", task.cmd);
         }
         let write_bytes = if lock.is_write_lock() {
-            task.cmd().write_bytes()
+            task.cmd.write_bytes()
         } else {
             0
         };
@@ -288,7 +295,7 @@ unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
 impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
-    pub fn new(
+    pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
         concurrency: usize,
@@ -327,19 +334,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
-        self.on_receive_new_cmd(cmd, callback);
+    pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+        // write flow control
+        if cmd.need_flow_control() && self.inner.too_busy() {
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
+            callback.execute(ProcessResult::Failed {
+                err: StorageError::from(StorageErrorInner::SchedTooBusy),
+            });
+            return;
+        }
+        self.schedule_command(cmd, callback);
     }
 
-    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, L> {
-        let pool = if priority == CommandPri::High || is_sys_cmd {
+    fn fetch_executor(&self, priority: CommandPri) -> Executor<E, L> {
+        let pool = if priority == CommandPri::High {
             self.inner.high_priority_pool.clone()
         } else {
             self.inner.worker_pool.clone()
         };
         let scheduler = Scheduler {
             engine: None,
-            inner: Arc::clone(&self.inner),
+            inner: self.inner.clone(),
         };
         Executor::new(
             scheduler,
@@ -381,25 +396,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCallback) {
-        // write flow control
-        if cmd.need_flow_control() && self.inner.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            callback.execute(ProcessResult::Failed {
-                err: StorageError::from(StorageErrorInner::SchedTooBusy),
-            });
-            return;
-        }
-        self.schedule_command(cmd, callback);
-    }
-
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
         let task = self.inner.dequeue_task(cid);
-        let tag = task.tag;
-        let ctx = task.context().clone();
-        let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let tag = task.cmd.tag();
+        let ctx = task.cmd.ctx().clone();
+        let executor = self.fetch_executor(task.cmd.priority());
 
         let cb = must_call(
             move |(cb_ctx, snapshot)| {
@@ -539,7 +542,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // It won't release locks here until write finished.
     }
 
-    pub fn on_msg(&self, task: Msg) {
+    pub(super) fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
             Msg::WriteFinished {
@@ -559,7 +562,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 wait_timeout,
             } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
             Msg::PipelinedWrite { cid, pr, tag } => self.on_pipelined_write(cid, pr, tag),
-            _ => unreachable!(),
         }
     }
 }
