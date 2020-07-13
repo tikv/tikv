@@ -1,12 +1,10 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::txn::latch::{self, Latches};
 use crate::storage::PessimisticLockRes;
-use crate::storage::{Context, Result, TimeStamp};
-use crate::{command, command_method, ctx, gen_lock, tag, ts};
-use std::fmt::{self, Debug, Display, Formatter};
-use txn_types::Key;
+use crate::storage::Result;
+use txn_types::{Key, TimeStamp};
 
 command! {
     /// Acquire a Pessimistic lock on the keys.

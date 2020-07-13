@@ -1,10 +1,8 @@
-use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::txn::latch::{self, Latches};
-use crate::storage::{Context, Result, TimeStamp};
-use crate::{command, command_method, ctx, gen_lock, tag, ts, write_bytes};
-use std::fmt::{self, Debug, Display, Formatter};
-use txn_types::Key;
+use crate::storage::Result;
+use txn_types::{Key, TimeStamp};
 
 command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.

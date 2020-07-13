@@ -1,10 +1,7 @@
-use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::txn::latch::{self, Latches};
-use crate::storage::{Context, TimeStamp};
-use crate::{command, command_method, ctx, gen_lock, tag, ts, write_bytes};
-use std::fmt::{self, Debug, Display, Formatter};
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.

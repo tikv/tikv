@@ -1,9 +1,7 @@
-use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::txn::latch::{self, Latches};
-use crate::storage::{Context, TimeStamp, TxnStatus};
-use crate::{command, ctx, gen_lock, tag, ts, write_bytes};
-use std::fmt::{self, Debug, Display, Formatter};
+use crate::storage::TxnStatus;
 use txn_types::Key;
 
 command! {
@@ -17,9 +15,9 @@ command! {
             /// The keys affected.
             keys: Vec<Key>,
             /// The lock timestamp.
-            lock_ts: TimeStamp,
+            lock_ts: txn_types::TimeStamp,
             /// The commit timestamp.
-            commit_ts: TimeStamp,
+            commit_ts: txn_types::TimeStamp,
         }
 }
 
