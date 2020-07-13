@@ -251,6 +251,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |
     // |  Layout: Handle
     // |  Length:   8
+    // For more intuitive explanation, check the docs: https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     #[inline]
     fn process_kv_pair(
         &mut self,
