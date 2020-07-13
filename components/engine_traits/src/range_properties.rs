@@ -22,5 +22,12 @@ pub trait RangePropertiesExt {
     fn get_range_approximate_size(&self, range: Range, region_id: u64, large_threshold: u64) -> Result<u64>;
 
     fn get_range_approximate_size_cf(&self, cfname: &str, range: Range, region_id: u64, large_threshold: u64) -> Result<u64>;
+
+    /// Get range approximate split keys based on default, write and lock cf.
+    ///
+    /// The region_id is used only for logging and means nothing internally.
+    fn get_range_approximate_split_keys(&self, range: Range, region_id: u64, split_size: u64, max_size: u64, batch_split_limit: u64) -> Result<Vec<Vec<u8>>>;
+
+    fn get_range_approximate_split_keys_cf(&self, cfname: &str, range: Range, region_id: u64, split_size: u64, max_size: u64, batch_split_limit: u64) -> Result<Vec<Vec<u8>>>;
 }
 
