@@ -502,27 +502,27 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         // COUNT
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().to_int_vec(),
             &[Some(1), Some(2)]
         );
         // AVG_COUNT
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().to_int_vec(),
             &[Some(0), Some(2)]
         );
         // AVG_SUM
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[None, Real::new(5.0).ok()]
         );
         // col_0
         assert_eq!(
-            r.physical_columns[3].decoded().as_bytes_slice(),
+            r.physical_columns[3].decoded().to_bytes_vec(),
             &[None, None]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().to_real_vec(),
             &[None, Real::new(3.5).ok()]
         );
 
@@ -537,22 +537,22 @@ mod tests {
         assert_eq!(r.physical_columns.columns_len(), 5);
         assert!(r.is_drained.unwrap());
         // COUNT
-        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
         // AVG_COUNT
-        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(5)]);
         // AVG_SUM
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(-20.0).ok()]
         );
         // col_0
         assert_eq!(
-            r.physical_columns[3].decoded().as_bytes_slice(),
+            r.physical_columns[3].decoded().to_bytes_vec(),
             &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().to_real_vec(),
             &[Real::new(-3.0).ok()]
         );
     }
@@ -586,12 +586,12 @@ mod tests {
         assert!(!r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[None, None]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[1].decoded().as_real_slice(),
+            r.physical_columns[1].decoded().to_real_vec(),
             &[None, Real::new(1.5).ok()]
         );
 
@@ -607,12 +607,12 @@ mod tests {
         assert!(r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[Some(b"ABC".to_vec())]
         );
         // col_1
         assert_eq!(
-            r.physical_columns[1].decoded().as_real_slice(),
+            r.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(-5.0).ok()]
         );
     }
