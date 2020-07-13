@@ -145,7 +145,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn set_compression(mut self, compression: Option<SstCompressionType>) -> Self {
+    fn set_compression_type(mut self, compression: Option<SstCompressionType>) -> Self {
         self.compression_type = compression.map(to_rocks_compression_type);
         self
     }

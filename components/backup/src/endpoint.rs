@@ -266,15 +266,16 @@ impl BackupRange {
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
-        ct: Option<SstCompressionType>,
+        compression_type: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone(), ct) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
             Ok(s) => s,
             Err(e) => return Err(e),

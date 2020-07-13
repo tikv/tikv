@@ -130,13 +130,13 @@ impl BackupWriter {
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
-            .set_compression(compression_type)
+            .set_compression_type(compression_type)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
-            .set_compression(compression_type)
+            .set_compression_type(compression_type)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -230,7 +230,7 @@ impl BackupRawKVWriter {
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
-            .set_compression(compression_type)
+            .set_compression_type(compression_type)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
