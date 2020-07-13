@@ -905,7 +905,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -913,7 +913,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -921,7 +921,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
 
@@ -947,7 +947,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -955,7 +955,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -963,7 +963,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
@@ -1039,7 +1039,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1047,7 +1047,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -1055,7 +1055,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
@@ -1138,7 +1138,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1146,12 +1146,12 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_real_slice(),
+            result.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(3.0).ok()]
         );
         assert!(result.physical_columns[2].is_decoded());
         assert_eq!(
-            result.physical_columns[2].decoded().as_int_slice(),
+            result.physical_columns[2].decoded().to_int_vec(),
             &[Some(4)]
         );
     }
@@ -1231,7 +1231,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1239,12 +1239,12 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_real_slice(),
+            result.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(3.0).ok()]
         );
         assert!(result.physical_columns[2].is_decoded());
         assert_eq!(
-            result.physical_columns[2].decoded().as_int_slice(),
+            result.physical_columns[2].decoded().to_int_vec(),
             &[Some(4)]
         );
     }
@@ -1323,7 +1323,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1331,7 +1331,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -1339,7 +1339,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
