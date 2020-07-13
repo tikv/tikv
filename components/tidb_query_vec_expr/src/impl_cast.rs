@@ -590,7 +590,7 @@ fn cast_decimal_as_unsigned_real(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
+fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&T>,
@@ -828,7 +828,7 @@ fn cast_decimal_as_unsigned_decimal(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
+fn cast_any_as_decimal<From: Evaluable + EvaluableRet + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&From>,
@@ -1181,7 +1181,7 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable + EvaluableRet>(
+fn cast_any_as_any<From: ConvertTo<To> + Evaluable + EvaluableRet, To: Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<To>> {
@@ -1211,7 +1211,7 @@ fn cast_json_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Json>>(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_json<From: ConvertTo<Json> + Evaluable>(
+fn cast_any_as_json<From: ConvertTo<Json> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<Json>> {
@@ -1226,7 +1226,7 @@ fn cast_any_as_json<From: ConvertTo<Json> + Evaluable>(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable>(
+fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<Bytes>> {
