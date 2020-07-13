@@ -251,6 +251,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |
     // |  Layout: Handle
     // |  Length:   8
+    #[inline]
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -261,13 +262,15 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         check_index_key(key)?;
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
-                assert!(self.decode_handle_strategy == DecodeCommonHandle);
+                if self.decode_handle_strategy != DecodeCommonHandle {
+                    return Err(other_err!("index value with common handles encouter, but missing `primary_column_ids`"));
+                }
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
-                self.process_normal_new_collation_value(key, value, columns)
+                self.process_new_collation_value(key, value, columns)
             }
         } else {
-            self.process_normal_old_collation_value(key, value, columns)
+            self.process_old_collation_value(key, value, columns)
         }
     }
 }
@@ -339,6 +342,15 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
+    // Process index values that contain common handle flags.
+    // NOTE: If there is no restore data in index value, we need to extract the index column from the key.
+    // 1. Unique common handle in new collation
+    // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       | RestoreData
+    // |  Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData)
+    //
+    // 2. Unique common handle in old collation
+    // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       |
+    // |  Length: 1    | 1            | 2           | size(CHandle) |
     fn process_unique_common_handle_value(
         &mut self,
         key: &[u8],
@@ -347,7 +359,7 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         let handle_len = (&value[2..]).read_u16().map_err(|_| {
             other_err!(
-                "Fail to read common handle's length from value: {:?}",
+                "Fail to read common handle's length from value: {:X?}",
                 value
             )
         })? as usize;
@@ -357,12 +369,12 @@ impl IndexScanExecutorImpl {
             return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
         }
 
-        // If there are some restore data.
+        // If there are some restore data, the index value is in new collation.
         if handle_end_offset < value.len() {
             let restore_values = &value[handle_end_offset..];
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
-            // The datum payload part of the key.
+            // Otherwise, the index value is in old collation, we should extract the index columns from the key.
             let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
             Self::extract_columns_from_datum_format(
                 &mut key_payload,
@@ -370,6 +382,7 @@ impl IndexScanExecutorImpl {
             )?;
         }
 
+        // Decode the common handles.
         let mut common_handle = &value[4..handle_end_offset];
         Self::extract_columns_from_datum_format(
             &mut common_handle,
@@ -379,7 +392,14 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    fn process_normal_new_collation_value(
+    // Process index values that are in new collation but don't contain common handle.
+    // These index values have 2 types.
+    // 1. Non-unique index
+    //      * Key contains a int handle.
+    //      * Key contains a common handle.
+    // 2. Unique index
+    //      * Value contains a int handle.
+    fn process_new_collation_value(
         &mut self,
         mut key: &[u8],
         value: &[u8],
@@ -397,6 +417,7 @@ impl IndexScanExecutorImpl {
 
         match self.decode_handle_strategy {
             NoDecode => {}
+            // This is a non-unique index value, we should extract the int handle from the key.
             DecodeIntHandle if tail_len < 8 => {
                 key = &key[table::PREFIX_LEN + table::ID_LEN..];
                 datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
@@ -405,12 +426,14 @@ impl IndexScanExecutorImpl {
                     .mut_decoded()
                     .push_int(Some(handle));
             }
+            // This is a unique index value, we should extract the int handle from the value.
             DecodeIntHandle => {
                 let handle = self.decode_handle_from_value(&value[value.len() - tail_len..])?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
             }
+            // This is a non-unique index value, we should extract the common handle from the key.
             DecodeCommonHandle => {
                 key = &key[table::PREFIX_LEN + table::ID_LEN..];
                 datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
@@ -423,7 +446,8 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    fn process_normal_old_collation_value(
+    // Process index values that are in old collation but don't contain common handles.
+    fn process_old_collation_value(
         &mut self,
         key: &[u8],
         value: &[u8],
@@ -444,19 +468,21 @@ impl IndexScanExecutorImpl {
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
             DecodeIntHandle if key_payload.is_empty() => {
-                // This is a unique index, and we should look up PK handle in value.
+                // This is a unique index, and we should look up PK int handle in the value.
                 let handle_val = self.decode_handle_from_value(value)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
             }
             DecodeIntHandle => {
+                // This is a normal index, and we should look up PK handle in the key.
                 let handle_val = self.decode_handle_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
             }
             DecodeCommonHandle => {
+                // Otherwise, if the handle is common handle, we extract it from the key.
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..],
@@ -484,7 +510,7 @@ mod tests {
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::{
         datum,
-        row::v2::encoder::{Column, RowEncoder},
+        row::v2::encoder_for_test::{Column, RowEncoder},
         table, Datum,
     };
     use tidb_query_datatype::expr::EvalConfig;
@@ -838,8 +864,7 @@ mod tests {
         // Common handle flag
         value_prefix.push(127);
         // Common handle length
-        value_prefix.push(((common_handle.len() & 0xff00) >> 8) as u8);
-        value_prefix.push((common_handle.len() & 0xff) as u8);
+        value_prefix.write_u16(common_handle.len() as u16).unwrap();
 
         // Common handle
         value_prefix.extend(common_handle);

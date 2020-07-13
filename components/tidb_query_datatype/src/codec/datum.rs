@@ -1093,7 +1093,7 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
     for i in 0..n {
         if buf.is_empty() {
             return Err(box_err!(
-                "The {}th slice are missing in the datum buffer: {:?}",
+                "The {}th slice are missing in the datum buffer: {:X?}",
                 i,
                 origin
             ));
