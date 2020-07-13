@@ -1489,45 +1489,12 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             CheckMsgStatus::DropMsg => return Ok(()),
             CheckMsgStatus::PeerExist => (),
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
-                if !is_initial_msg(msg.get_message()) {
-                    let msg_type = msg.get_message().get_msg_type();
-                    debug!(
-                        "target peer doesn't exist, stale message";
-                        "target_peer" => ?msg.get_to_peer(),
-                        "region_id" => region_id,
-                        "msg_type" => ?msg_type,
-                    );
-                    self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                if !self.maybe_create_peer(
+                    region_id,
+                    &msg,
+                    check_msg_status == CheckMsgStatus::NewPeerFirst,
+                )? {
                     return Ok(());
-                }
-
-                let is_local_first = check_msg_status == CheckMsgStatus::NewPeerFirst;
-                if is_local_first {
-                    let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-                    if pending_create_peers.contains_key(&region_id) {
-                        return Ok(());
-                    }
-                    pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
-                }
-
-                let res = self.maybe_create_peer(region_id, &msg, is_local_first);
-                match res {
-                    Ok(true) => (),
-                    _ => {
-                        if is_local_first {
-                            let mut pending_create_peers =
-                                self.ctx.pending_create_peers.lock().unwrap();
-                            if let Some(status) = pending_create_peers.get(&region_id) {
-                                if *status == (msg.get_to_peer().get_id(), false) {
-                                    pending_create_peers.remove(&region_id);
-                                }
-                            }
-                        }
-                        if let Err(e) = res {
-                            return Err(e.into());
-                        }
-                        return Ok(());
-                    }
                 }
             }
         }
@@ -1540,6 +1507,47 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
     fn maybe_create_peer(
+        &mut self,
+        region_id: u64,
+        msg: &RaftMessage,
+        is_local_first: bool,
+    ) -> Result<bool> {
+        if !is_initial_msg(msg.get_message()) {
+            let msg_type = msg.get_message().get_msg_type();
+            debug!(
+                "target peer doesn't exist, stale message";
+                "target_peer" => ?msg.get_to_peer(),
+                "region_id" => region_id,
+                "msg_type" => ?msg_type,
+            );
+            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+            return Ok(false);
+        }
+
+        if is_local_first {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if pending_create_peers.contains_key(&region_id) {
+                return Ok(false);
+            }
+            pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
+        }
+
+        let res = self.maybe_create_peer_internal(region_id, &msg, is_local_first);
+        // If failed, i.e. Err or Ok(false), remove this peer data from `pending_create_peers`.
+        if !*res.as_ref().unwrap_or(&false) {
+            if is_local_first {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                if let Some(status) = pending_create_peers.get(&region_id) {
+                    if *status == (msg.get_to_peer().get_id(), false) {
+                        pending_create_peers.remove(&region_id);
+                    }
+                }
+            }
+        }
+        res
+    }
+
+    fn maybe_create_peer_internal(
         &mut self,
         region_id: u64,
         msg: &RaftMessage,
