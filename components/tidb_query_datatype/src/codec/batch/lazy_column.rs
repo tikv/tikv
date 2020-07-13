@@ -171,11 +171,19 @@ impl LazyBatchColumn {
         match_template_evaluable! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
+                    let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
                     for _ in 0..raw_vec_len {
-                        vec.push(None);
+                        decode_bitmap.push(false);
                     }
                     for row_index in logical_rows {
-                        vec.replace(*row_index, raw_vec[*row_index].decode(field_type, ctx)?);
+                        decode_bitmap[*row_index] = true;
+                    }
+                    for i in 0..raw_vec_len {
+                        if decode_bitmap[i] {
+                            vec.push(raw_vec[i].decode(field_type, ctx)?);
+                        } else {
+                            vec.push(None);
+                        }
                     }
                 }
             }
