@@ -40,7 +40,7 @@ use crate::storage::metrics::{
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    process::{Executor, MsgScheduler, Task},
+    process::{Executor, Task},
     sched_pool::SchedPool,
     Error, ProcessResult,
 };
@@ -330,10 +330,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         self.on_receive_new_cmd(cmd, callback);
     }
-}
 
-impl<E: Engine, L: LockManager> Scheduler<E, L> {
-    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L> {
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, L> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
         } else {
@@ -540,10 +538,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
         // It won't release locks here until write finished.
     }
-}
 
-impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
-    fn on_msg(&self, task: Msg) {
+    pub fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
             Msg::WriteFinished {

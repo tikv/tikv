@@ -24,7 +24,7 @@ use crate::storage::txn::{
         Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
-    scheduler::Msg,
+    scheduler::{Msg, Scheduler},
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
@@ -77,15 +77,11 @@ impl Task {
     }
 }
 
-pub trait MsgScheduler: Clone + Send + 'static {
-    fn on_msg(&self, task: Msg);
-}
-
-pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
+pub struct Executor<E: Engine, L: LockManager> {
     // We put time consuming tasks to the thread pool.
     sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
-    scheduler: Option<S>,
+    scheduler: Option<Scheduler<E, L>>,
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: L,
 
@@ -94,9 +90,9 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
+impl<E: Engine, L: LockManager> Executor<E, L> {
     pub fn new(
-        scheduler: S,
+        scheduler: Scheduler<E, L>,
         pool: SchedPool,
         lock_mgr: L,
         pipelined_pessimistic_lock: bool,
@@ -118,7 +114,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         self.sched_pool.clone().unwrap()
     }
 
-    fn take_scheduler(&mut self) -> S {
+    fn take_scheduler(&mut self) -> Scheduler<E, L> {
         self.scheduler.take().unwrap()
     }
 
@@ -951,7 +947,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     })
 }
 
-pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
+pub fn notify_scheduler<E: Engine, L: LockManager>(scheduler: Scheduler<E, L>, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
