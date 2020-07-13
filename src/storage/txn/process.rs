@@ -19,9 +19,9 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::{
     commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, CommandKind, Commit, MvccByKey,
-        MvccByStartTs, Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock,
-        ResolveLockLite, Rollback, ScanLock, TxnHeartBeat,
+        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
+        Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
+        Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
     scheduler::Msg,
@@ -360,8 +360,8 @@ fn process_read_impl<E: Engine>(
     statistics: &mut Statistics,
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
-    match cmd.kind {
-        CommandKind::MvccByKey(MvccByKey { ref key, ref ctx }) => {
+    match cmd {
+        Command::MvccByKey(MvccByKey { ref key, ref ctx }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -379,7 +379,7 @@ fn process_read_impl<E: Engine>(
                 },
             })
         }
-        CommandKind::MvccByStartTs(MvccByStartTs { start_ts, ctx }) => {
+        Command::MvccByStartTs(MvccByStartTs { start_ts, ctx }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -406,7 +406,7 @@ fn process_read_impl<E: Engine>(
             }
         }
         // Scans locks with timestamp <= `max_ts`
-        CommandKind::ScanLock(ScanLock {
+        Command::ScanLock(ScanLock {
             max_ts,
             ref start_key,
             limit,
@@ -437,7 +437,7 @@ fn process_read_impl<E: Engine>(
 
             Ok(ProcessResult::Locks { locks })
         }
-        CommandKind::ResolveLock(ResolveLock {
+        Command::ResolveLock(ResolveLock {
             ref mut txn_status,
             ref scan_key,
             ref ctx,
@@ -546,8 +546,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
-    let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
-        CommandKind::Prewrite(Prewrite {
+    let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
+        Command::Prewrite(Prewrite {
             mut mutations,
             primary,
             start_ts,
@@ -621,7 +621,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
-        CommandKind::PrewritePessimistic(PrewritePessimistic {
+        Command::PrewritePessimistic(PrewritePessimistic {
             mutations,
             primary,
             start_ts,
@@ -669,7 +669,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
-        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
+        Command::AcquirePessimisticLock(AcquirePessimisticLock {
             keys,
             primary,
             start_ts,
@@ -726,7 +726,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, lock_info)
             }
         }
-        CommandKind::Commit(Commit {
+        Command::Commit(Commit {
             keys,
             lock_ts,
             commit_ts,
@@ -756,7 +756,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, ctx, None)
         }
-        CommandKind::Cleanup(Cleanup {
+        Command::Cleanup(Cleanup {
             key,
             start_ts,
             current_ts,
@@ -775,7 +775,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, 1, ctx, None)
         }
-        CommandKind::Rollback(Rollback {
+        Command::Rollback(Rollback {
             keys,
             start_ts,
             ctx,
@@ -794,7 +794,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, ctx, None)
         }
-        CommandKind::PessimisticRollback(PessimisticRollback {
+        Command::PessimisticRollback(PessimisticRollback {
             keys,
             start_ts,
             for_update_ts,
@@ -821,7 +821,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 None,
             )
         }
-        CommandKind::ResolveLock(ResolveLock {
+        Command::ResolveLock(ResolveLock {
             txn_status,
             mut scan_key,
             key_locks,
@@ -874,7 +874,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, ctx, None)
         }
-        CommandKind::ResolveLockLite(ResolveLockLite {
+        Command::ResolveLockLite(ResolveLockLite {
             start_ts,
             commit_ts,
             resolve_keys,
@@ -899,7 +899,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, ctx, None)
         }
-        CommandKind::TxnHeartBeat(TxnHeartBeat {
+        Command::TxnHeartBeat(TxnHeartBeat {
             primary_key,
             start_ts,
             advise_ttl,
@@ -916,7 +916,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
         }
-        CommandKind::CheckTxnStatus(CheckTxnStatus {
+        Command::CheckTxnStatus(CheckTxnStatus {
             primary_key,
             lock_ts,
             caller_start_ts,
@@ -944,7 +944,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
         }
-        CommandKind::Pause(Pause { duration, ctx, .. }) => {
+        Command::Pause(Pause { duration, ctx, .. }) => {
             thread::sleep(Duration::from_millis(duration));
             (ProcessResult::Res, WriteData::default(), 0, ctx, None)
         }

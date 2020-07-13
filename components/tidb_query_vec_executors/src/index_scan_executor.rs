@@ -59,7 +59,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
 
         let is_int_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
-        let (decode_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
+        let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
             (false, false) => (NoDecode, 0),
             (false, true) => (DecodeCommonHandle, primary_column_ids_len),
             (true, false) => (DecodeIntHandle, 1),
@@ -93,7 +93,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             context: EvalContext::new(config),
             schema,
             columns_id_without_handle,
-            decode_strategy,
+            decode_handle_strategy,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -115,7 +115,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
     ) -> Result<Self> {
         use DecodeHandleStrategy::*;
 
-        let (decode_strategy, handle_column_cnt) = if is_common_handle {
+        let (decode_handle_strategy, handle_column_cnt) = if is_common_handle {
             (DecodeCommonHandleRowKey, cols_len)
         } else {
             (NoDecode, 0)
@@ -133,7 +133,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             context: EvalContext::new(config),
             schema,
             columns_id_without_handle,
-            decode_strategy,
+            decode_handle_strategy,
         };
 
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -203,7 +203,7 @@ struct IndexScanExecutorImpl {
 
     /// The strategy to decode handles.
     /// Handle will be always placed in the last column.
-    decode_strategy: DecodeHandleStrategy,
+    decode_handle_strategy: DecodeHandleStrategy,
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -231,7 +231,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
 
-        match self.decode_strategy {
+        match self.decode_handle_strategy {
             NoDecode => {}
             DecodeIntHandle => {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -296,6 +296,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |
     // |  Layout: Handle
     // |  Length:   8
+    #[inline]
     fn process_kv_pair(
         &mut self,
         mut key: &[u8],
@@ -303,7 +304,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use DecodeHandleStrategy::*;
-        match self.decode_strategy {
+        match self.decode_handle_strategy {
             DecodeCommonHandleRowKey => {
                 check_record_key(key)?;
                 key = &key[table::PREFIX_LEN..];
@@ -319,13 +320,16 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             }
         }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
-            if value[0] <= 1 && value[1] == table::INDEX_COMMON_HANDLE_FLAG {
+            if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
+                if self.decode_handle_strategy != DecodeCommonHandle {
+                    return Err(other_err!("index value with common handles encouter, but missing `primary_column_ids`"));
+                }
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
-                self.process_normal_new_collation_value(key, value, columns)
+                self.process_new_collation_value(key, value, columns)
             }
         } else {
-            self.process_normal_old_collation_value(key, value, columns)
+            self.process_old_collation_value(key, value, columns)
         }
     }
 }
@@ -386,9 +390,9 @@ impl IndexScanExecutorImpl {
         datum: &mut &[u8],
         columns: &mut [LazyBatchColumn],
     ) -> Result<()> {
-        for column in columns {
+        for (i, column) in columns.iter_mut().enumerate() {
             if datum.is_empty() {
-                return Err(other_err!("Value is missing some columns"));
+                return Err(other_err!("{}th column is missing value", i));
             }
             let (value, remaining) = datum::split_datum(datum, false)?;
             column.mut_raw().push(value);
@@ -397,37 +401,63 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
+    // Process index values that contain common handle flags.
+    // NOTE: If there is no restore data in index value, we need to extract the index column from the key.
+    // 1. Unique common handle in new collation
+    // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       | RestoreData
+    // |  Length: 1    | 1            | 2           | size(CHandle) | size(RestoreData)
+    //
+    // 2. Unique common handle in old collation
+    // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       |
+    // |  Length: 1    | 1            | 2           | size(CHandle) |
     fn process_unique_common_handle_value(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        let handle_len = ((value[2] as usize) << 8) + value[3] as usize;
+        let handle_len = (&value[2..]).read_u16().map_err(|_| {
+            other_err!(
+                "Fail to read common handle's length from value: {:X?}",
+                value
+            )
+        })? as usize;
         let handle_end_offset = 4 + handle_len;
 
-        // If there are some restore data.
+        if handle_end_offset > value.len() {
+            return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
+        }
+
+        // If there are some restore data, the index value is in new collation.
         if handle_end_offset < value.len() {
             let restore_values = &value[handle_end_offset..];
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
-            // The datum payload part of the key.
+            // Otherwise, the index value is in old collation, we should extract the index columns from the key.
             Self::extract_columns_from_datum_format(
                 &mut key_payload,
-                &mut columns[0..self.columns_id_without_handle.len()],
+                &mut columns[..self.columns_id_without_handle.len()],
             )?;
         }
 
+        // Decode the common handles.
         let mut common_handle = &value[4..handle_end_offset];
         Self::extract_columns_from_datum_format(
             &mut common_handle,
-            &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
+            &mut columns[self.columns_id_without_handle.len()..],
         )?;
 
         Ok(())
     }
 
-    fn process_normal_new_collation_value(
+    // Process index values that are in new collation but don't contain common handle.
+    // These index values have 2 types.
+    // 1. Non-unique index
+    //      * Key contains a int handle.
+    //      * Key contains a common handle.
+    // 2. Unique index
+    //      * Value contains a int handle.
+    fn process_new_collation_value(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
@@ -435,11 +465,17 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         use DecodeHandleStrategy::*;
         let tail_len = value[0] as usize;
+
+        if tail_len > value.len() {
+            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
+        }
+
         let restore_values = &value[1..value.len() - tail_len];
         self.extract_columns_from_row_format(restore_values, columns)?;
 
-        match self.decode_strategy {
+        match self.decode_handle_strategy {
             NoDecode | DecodeCommonHandleRowKey => {}
+            // This is a non-unique index value, we should extract the int handle from the key.
             DecodeIntHandle if tail_len < 8 => {
                 datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
                 let handle = self.decode_handle_from_key(key_payload)?;
@@ -447,24 +483,27 @@ impl IndexScanExecutorImpl {
                     .mut_decoded()
                     .push_int(Some(handle));
             }
+            // This is a unique index value, we should extract the int handle from the value.
             DecodeIntHandle => {
                 let handle = self.decode_handle_from_value(&value[value.len() - tail_len..])?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
             }
+            // This is a non-unique index value, we should extract the common handle from the key.
             DecodeCommonHandle => {
                 datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
+                    &mut columns[self.columns_id_without_handle.len()..],
                 )?;
             }
         }
         Ok(())
     }
 
-    fn process_normal_old_collation_value(
+    // Process index values that are in old collation but don't contain common handles.
+    fn process_old_collation_value(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
@@ -474,30 +513,32 @@ impl IndexScanExecutorImpl {
 
         Self::extract_columns_from_datum_format(
             &mut key_payload,
-            &mut columns[0..self.columns_id_without_handle.len()],
+            &mut columns[..self.columns_id_without_handle.len()],
         )?;
 
-        match self.decode_strategy {
+        match self.decode_handle_strategy {
             NoDecode | DecodeCommonHandleRowKey => {}
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
             DecodeIntHandle if key_payload.is_empty() => {
-                // This is a unique index, and we should look up PK handle in value.
+                // This is a unique index, and we should look up PK int handle in the value.
                 let handle_val = self.decode_handle_from_value(value)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
             }
             DecodeIntHandle => {
+                // This is a normal index, and we should look up PK handle in the key.
                 let handle_val = self.decode_handle_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
             }
             DecodeCommonHandle => {
+                // Otherwise, if the handle is common handle, we extract it from the key.
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[self.columns_id_without_handle.len()..self.schema.len()],
+                    &mut columns[self.columns_id_without_handle.len()..],
                 )?;
             }
         }
@@ -522,7 +563,7 @@ mod tests {
     use tidb_query_datatype::codec::data_type::*;
     use tidb_query_datatype::codec::{
         datum,
-        row::v2::encoder::{Column, RowEncoder},
+        row::v2::encoder_for_test::{Column, RowEncoder},
         table, Datum,
     };
     use tidb_query_datatype::expr::EvalConfig;
@@ -621,7 +662,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -629,7 +670,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[
                     Real::new(10.5).ok(),
                     Real::new(5.1).ok(),
@@ -676,7 +717,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -684,12 +725,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5), Some(2)]
             );
         }
@@ -752,7 +793,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5), Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -760,12 +801,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5), Some(2)]
             );
         }
@@ -808,7 +849,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(5)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -816,12 +857,12 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().to_real_vec(),
                 &[Real::new(5.1).ok()]
             );
             assert!(result.physical_columns[2].is_decoded());
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(5)]
             );
         }
@@ -876,8 +917,7 @@ mod tests {
         // Common handle flag
         value_prefix.push(127);
         // Common handle length
-        value_prefix.push(((common_handle.len() & 0xff00) >> 8) as u8);
-        value_prefix.push((common_handle.len() & 0xff) as u8);
+        value_prefix.write_u16(common_handle.len() as u16).unwrap();
 
         // Common handle
         value_prefix.extend(common_handle);
@@ -918,7 +958,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -926,7 +966,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -934,7 +974,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
 
@@ -960,7 +1000,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -968,7 +1008,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -976,7 +1016,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
@@ -1052,7 +1092,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1060,7 +1100,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -1068,7 +1108,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
@@ -1151,7 +1191,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1159,12 +1199,12 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_real_slice(),
+            result.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(3.0).ok()]
         );
         assert!(result.physical_columns[2].is_decoded());
         assert_eq!(
-            result.physical_columns[2].decoded().as_int_slice(),
+            result.physical_columns[2].decoded().to_int_vec(),
             &[Some(4)]
         );
     }
@@ -1244,7 +1284,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1252,12 +1292,12 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_real_slice(),
+            result.physical_columns[1].decoded().to_real_vec(),
             &[Real::new(3.0).ok()]
         );
         assert!(result.physical_columns[2].is_decoded());
         assert_eq!(
-            result.physical_columns[2].decoded().as_int_slice(),
+            result.physical_columns[2].decoded().to_int_vec(),
             &[Some(4)]
         );
     }
@@ -1336,7 +1376,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[0])
             .unwrap();
         assert_eq!(
-            result.physical_columns[0].decoded().as_int_slice(),
+            result.physical_columns[0].decoded().to_int_vec(),
             &[Some(2)]
         );
         assert!(result.physical_columns[1].is_raw());
@@ -1344,7 +1384,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[1])
             .unwrap();
         assert_eq!(
-            result.physical_columns[1].decoded().as_int_slice(),
+            result.physical_columns[1].decoded().to_int_vec(),
             &[Some(3)]
         );
         assert!(result.physical_columns[2].is_raw());
@@ -1352,7 +1392,7 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[2])
             .unwrap();
         assert_eq!(
-            result.physical_columns[2].decoded().as_real_slice(),
+            result.physical_columns[2].decoded().to_real_vec(),
             &[Real::new(4.0).ok()]
         );
     }
