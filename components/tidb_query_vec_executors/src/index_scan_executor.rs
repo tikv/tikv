@@ -70,7 +70,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             }
         };
 
-        if handle_column_cnt >= columns_info.len() {
+        if handle_column_cnt > columns_info.len() {
             return Err(other_err!(
                 "The number of handle columns exceeds the length of `columns_info`"
             ));
