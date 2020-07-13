@@ -1397,7 +1397,7 @@ mod tests_normal {
                     }
                     Ok(Decimal::into_vector_value(result))
                 }
-            }        
+            }
         };
         assert_eq!(
             expected.to_string(),
