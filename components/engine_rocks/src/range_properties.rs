@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use engine_traits::{RangePropertiesExt, Result, Range, CF_WRITE, CFHandleExt, MiscExt, TablePropertiesExt, TablePropertiesCollection, TableProperties};
+use engine_traits::{RangePropertiesExt, Result, Range, CF_WRITE, CFHandleExt, MiscExt, TablePropertiesExt, TablePropertiesCollection, TableProperties, LARGE_CFS, CF_LOCK};
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
 
@@ -68,11 +68,56 @@ impl RangePropertiesExt for RocksEngine {
     }
 
     fn get_range_approximate_size(&self, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
-        panic!()
+        let mut size = 0;
+        for cfname in LARGE_CFS {
+            size += self.get_range_approximate_size_cf(cfname, range, region_id, large_threshold)
+            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+            // backward compatibility.
+                .or_else(|e| if cfname == &CF_LOCK { Ok(0) } else { Err(e) })?;
+        }
+        Ok(size)
     }
 
     fn get_range_approximate_size_cf(&self, cfname: &str, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
-        panic!()
+        let start_key = &range.start_key;
+        let end_key = &range.end_key;
+        let mut total_size = 0;
+        let (_, mem_size) = box_try!(self.get_approximate_memtable_stats_cf(cfname, &range));
+        total_size += mem_size;
+
+        let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
+        for (_, v) in collection.iter() {
+            let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            total_size += props.get_approximate_size_in_range(&start_key, &end_key);
+        }
+
+        if large_threshold != 0 && total_size > large_threshold {
+            let ssts = collection
+                .iter()
+                .map(|(k, v)| {
+                    let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
+                    let size = props.get_approximate_size_in_range(&start_key, &end_key);
+                    format!(
+                        "{}:{}",
+                        Path::new(&*k)
+                            .file_name()
+                            .map(|f| f.to_str().unwrap())
+                            .unwrap_or(&*k),
+                        size
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            info!(
+                "region size is too large";
+                "region_id" => region_id,
+                "total_size" => total_size,
+                "memtable" => mem_size,
+                "ssts_size" => ssts,
+                "cf" => cfname,
+            )
+        }
+        Ok(total_size)
     }
 
 }
