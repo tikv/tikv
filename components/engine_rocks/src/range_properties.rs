@@ -226,11 +226,43 @@ impl RangePropertiesExt for RocksEngine {
     }
 
     fn get_range_approximate_middle(&self, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
-        panic!()
+        let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, region_id, 0);
+
+        let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+        let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+        let middle_by_cf = if default_cf_size >= write_cf_size {
+            CF_DEFAULT
+        } else {
+            CF_WRITE
+        };
+
+        self.get_range_approximate_middle_cf(middle_by_cf, range, region_id)
     }
 
-    fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
-        panic!()
+    fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, _region_id: u64) -> Result<Option<Vec<u8>>> {
+        let start_key = &range.start_key;
+        let end_key = &range.end_key;
+        let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
+
+        let mut keys = Vec::new();
+        for (_, v) in collection.iter() {
+            let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            keys.extend(
+                props
+                    .take_excluded_range(start_key, end_key)
+                    .into_iter()
+                    .map(|(k, _)| k),
+            );
+        }
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        keys.sort();
+        // Calculate the position by (len-1)/2. So it's the left one
+        // of two middle positions if the number of keys is even.
+        let middle = (keys.len() - 1) / 2;
+        Ok(Some(keys.swap_remove(middle)))
     }
 
 }
