@@ -60,8 +60,6 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         let mut gc_worker = GcWorker::new(
             self.engine,
             None,
-            None,
-            None,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -264,8 +262,8 @@ impl<E: Engine> SyncTestStorage<E> {
         .unwrap()
     }
 
-    pub fn gc(&self, ctx: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(ctx, safe_point.into(), cb)).unwrap()
+    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {

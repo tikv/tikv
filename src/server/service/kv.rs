@@ -267,27 +267,8 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         unimplemented!();
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
-        let begin_instant = Instant::now_coarse();
-        let future = future_gc(&self.gc_worker, req)
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .kv_gc
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "kv_gc",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
-            });
-
-        ctx.spawn(future);
+    fn kv_gc(&mut self, _: RpcContext<'_>, _: GcRequest, _: UnarySink<GcResponse>) {
+        unimplemented!();
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
@@ -830,7 +811,6 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let gc_worker = self.gc_worker.clone();
         if self.enable_req_batch {
             let stopped = Arc::new(AtomicBool::new(false));
             let req_batcher = ReqBatcher::new(
@@ -869,15 +849,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
                 GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
                 for (id, mut req) in request_ids.into_iter().zip(requests) {
                     if !req_batcher.lock().unwrap().filter(id, &mut req) {
-                        handle_batch_commands_request(
-                            &storage,
-                            &gc_worker,
-                            &cop,
-                            &peer,
-                            id,
-                            req,
-                            tx.clone(),
-                        );
+                        handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
                     }
                 }
                 req_batcher.lock().unwrap().maybe_submit(&storage);
@@ -898,15 +870,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
                 let requests: Vec<_> = req.take_requests().into();
                 GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
                 for (id, req) in request_ids.into_iter().zip(requests) {
-                    handle_batch_commands_request(
-                        &storage,
-                        &gc_worker,
-                        &cop,
-                        &peer,
-                        id,
-                        req,
-                        tx.clone(),
-                    );
+                    handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
                 }
                 future::ok(())
             });
@@ -1055,7 +1019,6 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    gc_worker: &GcWorker<E>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -1106,7 +1069,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
-        Gc, future_gc(gc_worker), kv_gc;
+        Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
         RawGet, future_raw_get(storage), raw_get;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
@@ -1281,22 +1244,11 @@ fn future_batch_get<E: Engine, L: LockManager>(
         })
 }
 
-fn future_gc<E: Engine>(
-    gc_worker: &GcWorker<E>,
-    mut req: GcRequest,
-) -> impl Future<Item = GcResponse, Error = Error> {
-    let (cb, f) = paired_future_callback();
-    let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
-
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GcResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else if let Err(e) = v {
-            resp.set_error(extract_key_error(&e));
-        }
-        resp
-    })
+fn future_gc(_: GcRequest) -> impl Future<Item = GcResponse, Error = Error> {
+    future::err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        RpcStatusCode::UNIMPLEMENTED,
+        None,
+    ))))
 }
 
 fn future_delete_range<E: Engine, L: LockManager>(
