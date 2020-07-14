@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecBool {
     data: Vec<u8>,
