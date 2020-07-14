@@ -114,8 +114,6 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         is_common_handle: bool,
     ) -> Result<Self> {
-        use DecodeHandleStrategy::*;
-
         let (decode_handle_strategy, handle_column_cnt) = if is_common_handle {
             (DecodeCommonHandleRowKey, cols_len)
         } else {
