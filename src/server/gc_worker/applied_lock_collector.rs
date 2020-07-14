@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use keys::origin_key;
+use std::cmp::Ordering::*;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,20 @@ struct LockObserverState {
     /// specified max_ts) are monitored and collected. If there are too many stale locks or any
     /// error happens, `is_clean` must be set to `false`.
     is_clean: AtomicBool,
+}
+
+impl LockObserverState {
+    fn load_max_ts(&self) -> TimeStamp {
+        self.max_ts.load(Ordering::Acquire).into()
+    }
+
+    fn is_clean(&self) -> bool {
+        self.is_clean.load(Ordering::Acquire)
+    }
+
+    fn mark_dirty(&self) {
+        self.is_clean.store(false, Ordering::Release);
+    }
 }
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -117,22 +132,10 @@ impl LockObserver {
                 error!("lock observer failed to send locks because collector is stopped");
             }
             Err(ScheduleError::Full(_)) => {
-                self.mark_dirty();
+                self.state.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full");
             }
         }
-    }
-
-    fn mark_dirty(&self) {
-        self.state.is_clean.store(false, Ordering::Release);
-    }
-
-    fn is_clean(&self) -> bool {
-        self.state.is_clean.load(Ordering::Acquire)
-    }
-
-    fn load_max_ts(&self) -> TimeStamp {
-        self.state.max_ts.load(Ordering::Acquire).into()
     }
 }
 
@@ -140,11 +143,11 @@ impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, requests: &[RaftRequest]) {
-        if !self.is_clean() {
+        if !self.state.is_clean() {
             return;
         }
 
-        let max_ts = self.load_max_ts();
+        let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
             return;
         }
@@ -168,7 +171,7 @@ impl QueryObserver for LockObserver {
                         "value" => hex::encode_upper(put_request.get_value()),
                         "err" => ?e
                     );
-                    self.mark_dirty();
+                    self.state.mark_dirty();
                     return;
                 }
             };
@@ -195,11 +198,11 @@ impl ApplySnapshotObserver for LockObserver {
             return;
         }
 
-        if !self.is_clean() {
+        if !self.state.is_clean() {
             return;
         }
 
-        let max_ts = self.load_max_ts();
+        let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
             return;
         }
@@ -225,7 +228,7 @@ impl ApplySnapshotObserver for LockObserver {
                     "cannot parse lock";
                     "err" => ?e
                 );
-                self.mark_dirty()
+                self.state.mark_dirty()
             }
             Ok(l) => self.send(l),
         }
@@ -234,7 +237,7 @@ impl ApplySnapshotObserver for LockObserver {
     fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
         if cf == CF_LOCK {
             error!("cannot collect all applied lock: snapshot of lock cf applied from sst file");
-            self.mark_dirty();
+            self.state.mark_dirty();
         }
     }
 }
@@ -267,20 +270,29 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        if self.observer_state.max_ts.load(Ordering::Acquire) >= max_ts.into_inner() {
-            // Stale request. Ignore it.
-            return Ok(());
+        let curr_max_ts: TimeStamp = self.observer_state.max_ts.load(Ordering::Acquire).into();
+        match max_ts.cmp(&self.observer_state.load_max_ts()) {
+            Less => Err(box_err!(
+                "collecting locks with a greater max_ts: {}",
+                curr_max_ts
+            )),
+            Equal => {
+                // Stale request. Ignore it.
+                Ok(())
+            }
+            Greater => {
+                info!("start collecting locks"; "max_ts" => max_ts);
+                self.collected_locks.clear();
+                // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
+                // previous observing. It need to be solved, although it's very unlikely to happen and
+                // doesn't affect correctness of data.
+                self.observer_state.is_clean.store(true, Ordering::Release);
+                self.observer_state
+                    .max_ts
+                    .store(max_ts.into_inner(), Ordering::Release);
+                Ok(())
+            }
         }
-        info!("start collecting locks"; "max_ts" => max_ts);
-        self.collected_locks.clear();
-        // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
-        // previous observing. It need to be solved, although it's very unlikely to happen and
-        // doesn't affect correctness of data.
-        self.observer_state.is_clean.store(true, Ordering::Release);
-        self.observer_state
-            .max_ts
-            .store(max_ts.into_inner(), Ordering::Release);
-        Ok(())
     }
 
     fn get_collected_locks(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
@@ -532,9 +544,12 @@ mod tests {
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
         // Do not allow aborting previous observing with a smaller max_ts.
-        start_collecting(&c, 3).unwrap();
+        start_collecting(&c, 3).unwrap_err();
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
+        // Do not allow stoping observing with a different max_ts.
+        stop_collecting(&c, 3).unwrap_err();
+        stop_collecting(&c, 5).unwrap_err();
         stop_collecting(&c, 4).unwrap();
     }
 
@@ -582,6 +597,13 @@ mod tests {
         ];
         coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
         expected_result.push(locks[0].clone());
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_result.clone(), true)
+        );
+
+        // When start collecting with the same max_ts again, shouldn't clean up the observer state.
+        start_collecting(&c, 100).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result.clone(), true)
@@ -673,7 +695,7 @@ mod tests {
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
         );
-        start_collecting(&c, 90).unwrap();
+        start_collecting(&c, 90).unwrap_err();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks, true)
