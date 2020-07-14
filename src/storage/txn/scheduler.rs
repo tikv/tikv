@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
-use kvproto::kvrpcpb::CommandPri;
+use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
@@ -54,12 +54,17 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
+    pub(super) extra_op: ExtraOp,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
-        Task { cid, cmd }
+        Task {
+            cid,
+            cmd,
+            extra_op: ExtraOp::Noop,
+        }
     }
 }
 
@@ -345,7 +350,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
-        let task = self.inner.dequeue_task(cid);
+        let mut task = self.inner.dequeue_task(cid);
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let executor = self.fetch_executor(task.cmd.priority());
@@ -368,7 +373,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
 
-                        executor.process_by_worker(cb_ctx, snapshot, task);
+                        if let Some(term) = cb_ctx.term {
+                            task.cmd.ctx_mut().set_term(term);
+                        }
+                        task.extra_op = cb_ctx.extra_op;
+
+                        debug!(
+                            "process cmd with snapshot";
+                            "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                        );
+                        executor.process_by_worker(snapshot, task);
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();

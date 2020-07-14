@@ -7,9 +7,7 @@ use futures::future;
 use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
-use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, ScanMode, Snapshot, Statistics, WriteData,
-};
+use crate::storage::kv::{with_tls_engine, Engine, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
@@ -71,19 +69,12 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
     }
 
     /// Delivers a command to a worker thread for processing.
-    pub(super) fn process_by_worker(self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
+    pub(super) fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
-        debug!(
-            "process cmd with snapshot";
-            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-        );
-        if let Some(term) = cb_ctx.term {
-            task.cmd.ctx_mut().set_term(term);
-        }
+
         let sched_pool = self.sched_pool.clone();
         let readonly = task.cmd.readonly();
-        let extra_op = cb_ctx.extra_op;
         sched_pool
             .pool
             .spawn(async move {
@@ -99,11 +90,7 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                     self.process_read(snapshot, task)
                 } else {
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, extra_op)
-                        })
-                    }
+                    unsafe { with_tls_engine(|engine| self.process_write(engine, snapshot, task)) }
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
@@ -137,13 +124,7 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(
-        mut self,
-        engine: &E,
-        snapshot: E::Snap,
-        task: Task,
-        extra_op: ExtraOp,
-    ) -> Statistics {
+    fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -156,8 +137,8 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
         match process_write_impl(
             task.cmd,
             snapshot,
-            &self.lock_mgr,
-            extra_op,
+            lock_mgr,
+            task.extra_op,
             &mut statistics,
             self.pipelined_pessimistic_lock,
         ) {
