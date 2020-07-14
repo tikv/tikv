@@ -11,6 +11,7 @@ use crate::store::{
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
+use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<S>: Send + Clone
@@ -21,7 +22,17 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()> {
+        self.send_command_txn_extra(req, TxnExtra::default(), cb)
+    }
+
+    /// Sends RaftCmdRequest to local store with txn extras.
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<S>,
+    ) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -71,8 +82,13 @@ where
         Ok(())
     }
 
-    /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<S>) -> RaftStoreResult<()> {
+    /// Sends RaftCmdRequest to local store with txn extra.
+    fn send_command_txn_extra(
+        &self,
+        _: RaftCmdRequest,
+        _: TxnExtra,
+        _: Callback<S>,
+    ) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -153,8 +169,13 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb);
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<E::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
         if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())

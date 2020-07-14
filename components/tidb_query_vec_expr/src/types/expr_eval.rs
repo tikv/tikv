@@ -361,7 +361,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(1), Some(5), None, None, Some(42)]
         );
         assert_eq!(
@@ -380,7 +380,7 @@ mod tests {
         assert!(val.is_vector());
         // Physical column is unchanged
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(1), Some(5), None, None, Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
@@ -395,7 +395,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [Real::new(1.0).ok(), None, Real::new(7.5).ok(), None, None]
         );
         assert_eq!(
@@ -450,7 +450,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(42), Some(42), Some(42), Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2, 3]);
@@ -476,7 +476,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [
                 Real::new(3.0).ok(),
                 Real::new(3.0).ok(),
@@ -514,7 +514,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [None, Some(6)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
@@ -565,7 +565,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(8), Some(0), Some(-2)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
@@ -592,7 +592,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
@@ -631,7 +631,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [
                 Real::new(-5.8).ok(), // original row 2
                 Real::new(-0.5).ok(), // original row 0
@@ -669,7 +669,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [
                 Real::new(-3.5).ok(), // original row 1
                 Real::new(5.5).ok(),  // original row 2
@@ -719,7 +719,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [
                 Some(-2),  // original row 0
                 Some(22),  // original row 2
@@ -776,7 +776,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(49)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0]);
@@ -812,7 +812,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(-10), Some(-2), Some(8)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
@@ -901,7 +901,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            val.vector_value().unwrap().as_ref().to_real_vec(),
             [Real::new(146.0).ok(), Real::new(25.0).ok(),]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
@@ -1072,7 +1072,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(574), Some(-13)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
@@ -1166,7 +1166,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             [Some(2), Some(2)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);

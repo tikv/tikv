@@ -55,7 +55,7 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
     },
-    storage,
+    storage::{self, config::StorageConfigManger},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -134,7 +134,7 @@ struct Engines {
 }
 
 struct Servers {
-    lock_mgr: Option<LockManager>,
+    lock_mgr: LockManager,
     server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
@@ -371,12 +371,27 @@ impl TiKVServer {
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                engines.kv.clone(),
+                self.config.storage.block_cache.shared,
+            )),
+        );
+        cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(
+                engines.kv.clone(),
+                DBType::Kv,
+                self.config.storage.block_cache.shared,
+            )),
         );
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+            Box::new(DBConfigManger::new(
+                engines.raft.clone(),
+                DBType::Raft,
+                self.config.storage.block_cache.shared,
+            )),
         );
 
         let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
@@ -422,17 +437,12 @@ impl TiKVServer {
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
-        let lock_mgr = if self.config.pessimistic_txn.enabled {
-            let lock_mgr = LockManager::new();
-            cfg_controller.register(
-                tikv::config::Module::PessimisticTxn,
-                Box::new(lock_mgr.config_manager()),
-            );
-            lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
-            Some(lock_mgr)
-        } else {
-            None
-        };
+        let lock_mgr = LockManager::new();
+        cfg_controller.register(
+            tikv::config::Module::PessimisticTxn,
+            Box::new(lock_mgr.config_manager()),
+        );
+        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let engines = self.engines.as_ref().unwrap();
 
@@ -672,27 +682,26 @@ impl TiKVServer {
         }
 
         // Lock manager.
-        if let Some(lock_mgr) = servers.lock_mgr.as_mut() {
-            if servers
-                .server
-                .register_service(create_deadlock(
-                    lock_mgr.deadlock_service(self.security_mgr.clone()),
-                ))
-                .is_some()
-            {
-                fatal!("failed to register deadlock service");
-            }
-
-            lock_mgr
-                .start(
-                    servers.node.id(),
-                    self.pd_client.clone(),
-                    self.resolver.clone(),
-                    self.security_mgr.clone(),
-                    &self.config.pessimistic_txn,
-                )
-                .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
+        if servers
+            .server
+            .register_service(create_deadlock(
+                servers.lock_mgr.deadlock_service(self.security_mgr.clone()),
+            ))
+            .is_some()
+        {
+            fatal!("failed to register deadlock service");
         }
+
+        servers
+            .lock_mgr
+            .start(
+                servers.node.id(),
+                self.pd_client.clone(),
+                self.resolver.clone(),
+                self.security_mgr.clone(),
+                &self.config.pessimistic_txn,
+            )
+            .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
         // Backup service.
         let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
@@ -810,9 +819,8 @@ impl TiKVServer {
 
         servers.node.stop();
         self.region_info_accessor.stop();
-        if let Some(lm) = servers.lock_mgr.as_mut() {
-            lm.stop();
-        }
+
+        servers.lock_mgr.stop();
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
