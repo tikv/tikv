@@ -6,6 +6,7 @@ use std::{mem, thread, u64};
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
+use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Value};
 
@@ -25,13 +26,9 @@ use crate::storage::txn::{
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
-    types::{MvccInfo, PessimisticLockRes, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, PrewriteResult, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine_traits::CF_WRITE;
-use pd_client::PdClient;
-use tikv_util::collections::HashMap;
-use tikv_util::time::Instant;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -273,7 +270,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     snapshot,
                     scan_mode,
                     start_ts,
-                    !cmd.ctx.get_not_fill_cache(),
+                    !ctx.get_not_fill_cache(),
                     pd_client,
                 )
             } else {
@@ -285,12 +282,13 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
 
             let primary_key = Key::from_raw(&primary);
             let mut locks = vec![];
+            let mut async_commit_ts = TimeStamp::zero();
             for m in mutations {
-                let secondaries = if m.key() == &primary_key {
-                    &secondary_keys
-                } else {
-                    &None
-                };
+                let mut secondaries = &secondary_keys.as_ref().map(|_| vec![]);
+
+                if m.key() == &primary_key {
+                    secondaries = &secondary_keys
+                }
                 match txn.prewrite(
                     m,
                     &primary,
@@ -300,9 +298,17 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     txn_size,
                     min_commit_ts,
                 ) {
-                    Ok(_) => {}
+                    Ok(ts) => {
+                        if secondaries.is_some() {
+                            async_commit_ts = ts;
+                        }
+                    }
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                        locks.push(
+                            e.map(|_| ())
+                                .map_err(Error::from)
+                                .map_err(StorageError::from),
+                        );
                     }
                     Err(e) => return Err(Error::from(e)),
                 }
@@ -310,13 +316,23 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
 
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+                let pr = ProcessResult::PrewriteResult {
+                    result: PrewriteResult {
+                        locks: vec![],
+                        min_commit_ts: async_commit_ts,
+                    },
+                };
                 let txn_extra = txn.take_extra();
                 let write_data = WriteData::new(txn.into_modifies(), txn_extra);
                 (pr, write_data, rows, ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
-                let pr = ProcessResult::MultiRes { results: locks };
+                let pr = ProcessResult::PrewriteResult {
+                    result: PrewriteResult {
+                        locks,
+                        min_commit_ts: async_commit_ts,
+                    },
+                };
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
@@ -331,8 +347,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             ctx,
         }) => {
             let rows = mutations.len();
-            let mut txn =
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
             // for getting the written keys.
             txn.extra_op = extra_op;
@@ -359,13 +374,23 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
 
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+                let pr = ProcessResult::PrewriteResult {
+                    result: PrewriteResult {
+                        locks: vec![],
+                        min_commit_ts: TimeStamp::zero(),
+                    },
+                };
                 let txn_extra = txn.take_extra();
                 let write_data = WriteData::new(txn.into_modifies(), txn_extra);
                 (pr, write_data, rows, ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
-                let pr = ProcessResult::MultiRes { results: locks };
+                let pr = ProcessResult::PrewriteResult {
+                    result: PrewriteResult {
+                        locks,
+                        min_commit_ts: TimeStamp::zero(),
+                    },
+                };
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
@@ -382,8 +407,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             ctx,
             ..
         }) => {
-            let mut txn =
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             let rows = keys.len();
             let mut res = if return_values {
                 Ok(PessimisticLockRes::Values(vec![]))
@@ -464,8 +488,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             ctx,
             ..
         }) => {
-            let mut txn =
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             // The rollback must be protected, see more on
@@ -585,8 +608,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             resolve_keys,
             ctx,
         }) => {
-            let mut txn =
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
 
             let rows = resolve_keys.len();
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -612,8 +634,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             ctx,
         }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
-            let mut txn =
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -853,8 +874,11 @@ mod tests {
             statistics,
             false,
         )?;
-        if let ProcessResult::MultiRes { results } = ret.pr {
-            if !results.is_empty() {
+        if let ProcessResult::PrewriteResult {
+            result: PrewriteResult { locks, .. },
+        } = ret.pr
+        {
+            if !locks.is_empty() {
                 let info = LockInfo::default();
                 return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
                     MvccErrorInner::KeyIsLocked(info),

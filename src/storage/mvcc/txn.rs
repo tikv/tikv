@@ -214,7 +214,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
-    ) -> Result<()> {
+    ) -> Result<TimeStamp> {
         let mut lock = Lock::new(
             lock_type,
             primary.to_vec(),
@@ -236,6 +236,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
         }
 
+        let mut async_commit_ts = TimeStamp::zero();
         if let Some(secondary_keys) = secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
@@ -247,12 +248,15 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
             // TODO(nrc) this is going to block all the other keys' processing and writing, we should
             // do it async.
+            // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
+            // node gets a start ts to read the key, it can violate the snapshot property.
             let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
             lock.min_commit_ts = ts;
+            async_commit_ts = ts;
         }
 
         self.put_lock(key, &lock);
-        Ok(())
+        Ok(async_commit_ts)
     }
 
     fn rollback_lock(
@@ -531,7 +535,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             for_update_ts,
             txn_size,
             min_commit_ts,
-        )
+        )?;
+        Ok(())
     }
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
@@ -598,7 +603,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         lock_ttl: u64,
         txn_size: u64,
         min_commit_ts: TimeStamp,
-    ) -> Result<()> {
+    ) -> Result<TimeStamp> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert/checkNotExists operation, the old key should not be in the system.
         let should_not_exist = mutation.should_not_exists();
@@ -637,7 +642,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
         }
         if should_not_write {
-            return Ok(());
+            return Ok(TimeStamp::zero());
         }
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
@@ -655,7 +660,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(());
+            return Ok(TimeStamp::zero());
         }
 
         self.check_extra_op(&key, mutation_type, prev_write)?;

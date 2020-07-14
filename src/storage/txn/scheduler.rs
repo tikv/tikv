@@ -302,25 +302,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             return;
         }
         self.schedule_command(cmd, callback);
-
-    // TODO
-    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L, P> {
-        let pool = if priority == CommandPri::High || is_sys_cmd {
-            self.inner.high_priority_pool.clone()
-        } else {
-            self.inner.worker_pool.clone()
-        };
-        let scheduler = Scheduler {
-            engine: None,
-            inner: Arc::clone(&self.inner),
-        };
-        Executor::new(
-            scheduler,
-            pool,
-            self.inner.lock_mgr.clone(),
-            self.inner.pd_client.clone(),
-            self.inner.pipelined_pessimistic_lock,
-        )
     }
 
     /// Releases all the latches held by a command.
@@ -542,7 +523,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         // It won't release locks here until write finished.
     }
 
-<<<<<<< HEAD
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
@@ -615,6 +595,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             task.cmd,
             snapshot,
             &self.inner.lock_mgr,
+            self.inner.pd_client.clone(),
             task.extra_op,
             statistics,
             self.inner.pipelined_pessimistic_lock,
@@ -696,7 +677,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             }
         }
     }
+}
 
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Scheduler<E, L, P> {
     fn clone(&self) -> Self {
         Scheduler {
             engine: self.engine.clone(),

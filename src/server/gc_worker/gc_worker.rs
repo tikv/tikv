@@ -1266,6 +1266,7 @@ mod tests {
             rx.recv()
                 .unwrap()
                 .unwrap()
+                .locks
                 .into_iter()
                 .for_each(|r| r.unwrap());
         }

@@ -1,7 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::{Context, Result};
+use crate::storage::{
+    txn::commands::{Command, CommandExt, TypedCommand},
+    types::PrewriteResult,
+    Context,
+};
 use txn_types::{Mutation, TimeStamp};
 
 command! {
@@ -10,7 +13,7 @@ command! {
     /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
     /// or a [`Rollback`](Command::Rollback) should follow.
     Prewrite:
-        cmd_ty => Vec<Result<()>>,
+        cmd_ty => PrewriteResult,
         display => "kv::command::prewrite mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
         content => {
             /// The set of mutations to apply.
@@ -61,7 +64,7 @@ impl Prewrite {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-    ) -> TypedCommand<Vec<Result<()>>> {
+    ) -> TypedCommand<PrewriteResult> {
         Prewrite::new(
             mutations,
             primary,
@@ -81,7 +84,7 @@ impl Prewrite {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         lock_ttl: u64,
-    ) -> TypedCommand<Vec<Result<()>>> {
+    ) -> TypedCommand<PrewriteResult> {
         Prewrite::new(
             mutations,
             primary,
@@ -100,7 +103,7 @@ impl Prewrite {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         ctx: Context,
-    ) -> TypedCommand<Vec<Result<()>>> {
+    ) -> TypedCommand<PrewriteResult> {
         Prewrite::new(
             mutations,
             primary,

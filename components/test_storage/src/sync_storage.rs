@@ -10,7 +10,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, Result, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
+    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -172,7 +173,7 @@ impl<E: Engine> SyncTestStorage<E> {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Vec<Result<()>>> {
+    ) -> Result<PrewriteResult> {
         wait_op!(|cb| self.store.sched_txn_command(
             commands::Prewrite::with_context(mutations, primary, start_ts.into(), ctx),
             cb,
