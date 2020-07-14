@@ -5,7 +5,6 @@ use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
 pub struct ChunkedVecSized<T: Sized> {
     data: Vec<T>,
     bitmap: ChunkedVecBool,
-    null_cnt: usize,
     phantom: std::marker::PhantomData<T>,
 }
 
