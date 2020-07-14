@@ -22,7 +22,6 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
             data: Vec::with_capacity(capacity),
             bitmap: ChunkedVecBool::with_capacity(capacity),
             phantom: std::marker::PhantomData,
-            null_cnt: 0,
         }
     }
 
