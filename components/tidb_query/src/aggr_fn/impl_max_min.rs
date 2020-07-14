@@ -7,18 +7,11 @@ use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
-<<<<<<< HEAD:components/tidb_query/src/aggr_fn/impl_max_min.rs
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
-=======
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
->>>>>>> 7647f3e... copr: support collation aware min/max aggregation functions (#8082):components/tidb_query_vec_aggr/src/impl_max_min.rs
 
 /// A trait for MAX/MIN aggregation functions
 pub trait Extremum: Clone + std::fmt::Debug + Send + Sync + 'static {
