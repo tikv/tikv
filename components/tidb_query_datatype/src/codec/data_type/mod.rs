@@ -2,8 +2,8 @@
 
 mod bit_vec;
 mod chunked_vec_bytes;
-mod chunked_vec_sized;
 mod chunked_vec_json;
+mod chunked_vec_sized;
 mod scalar;
 mod vector;
 
@@ -14,8 +14,8 @@ pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 pub use chunked_vec_bytes::ChunkedVecBytes;
-pub use chunked_vec_sized::ChunkedVecSized;
 pub use chunked_vec_json::ChunkedVecJson;
+pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
