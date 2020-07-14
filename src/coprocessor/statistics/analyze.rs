@@ -290,8 +290,10 @@ impl<S: Snapshot> SampleBuilder<S> {
                                     if decoded_val == Datum::Null {
                                         val
                                     } else {
+                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                        // So it is safe the unwrap the Ok value.
                                         let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
+                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)])?
                                     }
                                 }
                             }
