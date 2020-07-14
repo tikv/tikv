@@ -39,6 +39,7 @@ pub trait AggrDefinitionParser {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
+        //TODO move to a prior position
         // bit operation outputs one column.
         out_schema.push(aggr_def.take_field_type());
 

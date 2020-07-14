@@ -61,6 +61,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         Ok(())
     }
 
+    #[inline]
     fn parse_rpn(
         &self,
         mut aggr_def: RpnExpression,
