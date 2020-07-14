@@ -2712,6 +2712,7 @@ where
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+        fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
         }
