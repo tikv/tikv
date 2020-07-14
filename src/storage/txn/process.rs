@@ -87,7 +87,7 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
-    lock_mgr: Option<L>,
+    lock_mgr: L,
 
     pipelined_pessimistic_lock: bool,
 
@@ -98,7 +98,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
     pub fn new(
         scheduler: S,
         pool: SchedPool,
-        lock_mgr: Option<L>,
+        lock_mgr: L,
         pipelined_pessimistic_lock: bool,
     ) -> Self {
         Executor {
@@ -120,10 +120,6 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
     fn take_scheduler(&mut self) -> S {
         self.scheduler.take().unwrap()
-    }
-
-    fn take_lock_mgr(&mut self) -> Option<L> {
-        self.lock_mgr.take()
     }
 
     /// Start the execution of the task.
@@ -240,12 +236,11 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let lock_mgr = self.take_lock_mgr();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,
-            lock_mgr,
+            &self.lock_mgr,
             extra_op,
             &mut statistics,
             self.pipelined_pessimistic_lock,
@@ -510,10 +505,8 @@ impl ReleasedLocks {
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    fn wake_up<L: LockManager>(self, lock_mgr: Option<&L>) {
-        if let Some(lm) = lock_mgr {
-            lm.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
-        }
+    fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }
 }
 
@@ -541,7 +534,7 @@ struct WriteResult {
 fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    lock_mgr: &L,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -747,7 +740,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.commit(k, commit_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
@@ -769,7 +762,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             released_locks.push(txn.cleanup(key, current_ts, true)?);
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -788,7 +781,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.rollback(k)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -800,8 +793,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             ctx,
         }) => {
-            assert!(lock_mgr.is_some());
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
 
             let rows = keys.len();
@@ -809,7 +800,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.pessimistic_rollback(k, for_update_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -861,7 +852,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             }
             released_locks
                 .into_iter()
-                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr.as_ref()));
+                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
             statistics.add(&txn.take_statistics());
             let pr = if scan_key.is_none() {
@@ -893,7 +884,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     txn.rollback(key)?
                 });
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -936,7 +927,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.push(released);
             // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
             if let TxnStatus::TtlExpire = txn_status {
-                released_locks.wake_up(lock_mgr.as_ref());
+                released_locks.wake_up(lock_mgr);
             }
 
             statistics.add(&txn.take_statistics());
@@ -1140,8 +1131,14 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ret = process_write_impl(
+            cmd,
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1170,8 +1167,15 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
+
+        let ret = process_write_impl(
+            cmd.into(),
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
