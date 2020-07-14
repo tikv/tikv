@@ -332,6 +332,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
+    fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
+        if priority == CommandPri::High {
+            &self.inner.high_priority_pool
+        } else {
+            &self.inner.worker_pool
+        }
+    }
+
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
@@ -339,11 +347,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
-        let pool = if task.cmd.priority() == CommandPri::High {
-            self.inner.high_priority_pool.clone()
-        } else {
-            self.inner.worker_pool.clone()
-        };
 
         let cb = must_call(
             move |(cb_ctx, snapshot)| {
@@ -365,13 +368,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             "process cmd with snapshot";
                             "cid" => task.cid, "cb_ctx" => ?cb_ctx
                         );
-                        sched.process_by_worker(snapshot, task, pool);
+                        sched.process_by_worker(snapshot, task);
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
                         info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        pool.pool
+                        sched
+                            .get_sched_pool(task.cmd.priority())
+                            .clone()
+                            .pool
                             .spawn(async move {
                                 sched.finish_with_err(task.cid, Error::from(err));
                             })
@@ -514,12 +520,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(self, snapshot: E::Snap, task: Task, sched_pool: SchedPool) {
+    fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-        let pool = sched_pool.clone();
-        sched_pool
+        self.get_sched_pool(task.cmd.priority())
+            .clone()
             .pool
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
@@ -537,7 +543,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
                     unsafe {
                         with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, pool, &mut statistics)
+                            self.process_write(engine, snapshot, task, &mut statistics)
                         });
                     }
                 };
@@ -572,17 +578,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(
-        self,
-        engine: &E,
-        snapshot: E::Snap,
-        task: Task,
-        sched_pool: SchedPool,
-        statistics: &mut Statistics,
-    ) {
+    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
+        let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
@@ -626,7 +626,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        sched_pool
+                        sched
+                            .get_sched_pool(priority)
+                            .clone()
                             .pool
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
