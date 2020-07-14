@@ -134,7 +134,7 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
-    use super::super::encoder::{Column, ScalarValueEncoder};
+    use super::super::encoder_for_test::{Column, ScalarValueEncoder};
     use super::V1CompatibleEncoder;
     use crate::FieldTypeTp;
     use crate::{
