@@ -41,21 +41,11 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
         );
 
         // COUNT doesn't need to cast, so using the expression directly.
-        let exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
-
-        Self::parse_rpn(&self, exp, ctx, src_schema, out_schema, out_exp)
-    }
-
-    #[inline]
-    fn parse_rpn(
-        &self,
-        aggr_def: RpnExpression,
-        _ctx: &mut EvalContext,
-        _src_schema: &[FieldType],
-        _out_schema: &mut Vec<FieldType>,
-        out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn AggrFunction>> {
-        out_exp.push(aggr_def);
+        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
+            child,
+            ctx,
+            src_schema.len(),
+        )?);
 
         Ok(Box::new(AggrFnCount))
     }
