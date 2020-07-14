@@ -248,13 +248,13 @@ fn test_observer_send_error() {
     fail::cfg(observer_send_fp, "return").unwrap();
     must_kv_prewrite(
         &client,
-        ctx.clone(),
+        ctx,
         vec![new_mutation(Op::Put, b"k2", b"v")],
         b"k1".to_vec(),
         10,
     );
     let resp = check_lock_observer(&client, max_ts);
     assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-    // Should mark clean if fails to send locks.
+    // Should mark dirty if fails to send locks.
     assert!(!resp.get_is_clean());
 }

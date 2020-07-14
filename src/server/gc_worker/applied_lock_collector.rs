@@ -41,9 +41,7 @@ impl LockObserverState {
     }
 
     fn store_max_ts(&self, max_ts: TimeStamp) {
-        self.max_ts
-            .store(max_ts.into_inner(), Ordering::Release)
-            .into()
+        self.max_ts.store(max_ts.into_inner(), Ordering::Release)
     }
 
     fn is_clean(&self) -> bool {
