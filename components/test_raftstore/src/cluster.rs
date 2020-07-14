@@ -524,6 +524,22 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn add_new_engine(&mut self) -> u64 {
+        self.create_engine(None);
+        self.count += 1;
+        let node_id = self.count as u64;
+
+        let engines = self.dbs.last().unwrap().clone();
+        bootstrap_store(&engines, self.id(), node_id).unwrap();
+        self.engines.insert(node_id, engines);
+
+        let key_mgr = self.key_managers.last().unwrap().clone();
+        self.key_managers_map.insert(node_id, key_mgr);
+
+        self.run_node(node_id).unwrap();
+        node_id
+    }
+
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
         self.leaders.remove(&region_id);
     }
