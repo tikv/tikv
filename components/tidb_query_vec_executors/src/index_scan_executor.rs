@@ -20,6 +20,8 @@ use tidb_query_datatype::codec::table::{
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
+use DecodeHandleStrategy::*;
+
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
@@ -55,7 +57,6 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
         // real). We accept this kind of request for compatibility considerations, but will be
         // forbidden soon.
-        use DecodeHandleStrategy::*;
 
         let is_int_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
@@ -222,8 +223,6 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     /// Note: the structure of the constructed column is the same as table scan executor but due
     /// to different reasons.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
-        use DecodeHandleStrategy::*;
-
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
@@ -296,6 +295,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |
     // |  Layout: Handle
     // |  Length:   8
+    // For more intuitive explanation, check the docs: https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     #[inline]
     fn process_kv_pair(
         &mut self,
@@ -303,7 +303,6 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use DecodeHandleStrategy::*;
         match self.decode_handle_strategy {
             DecodeCommonHandleRowKey => {
                 check_record_key(key)?;
@@ -322,7 +321,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
                 if self.decode_handle_strategy != DecodeCommonHandle {
-                    return Err(other_err!("index value with common handles encouter, but missing `primary_column_ids`"));
+                    return Err(other_err!("Expect to decode index values with common handles in `DecodeCommonHandle` mode."));
                 }
                 self.process_unique_common_handle_value(key, value, columns)
             } else {
@@ -463,7 +462,6 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use DecodeHandleStrategy::*;
         let tail_len = value[0] as usize;
 
         if tail_len > value.len() {
@@ -509,8 +507,6 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use DecodeHandleStrategy::*;
-
         Self::extract_columns_from_datum_format(
             &mut key_payload,
             &mut columns[..self.columns_id_without_handle.len()],
