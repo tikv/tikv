@@ -46,14 +46,7 @@ pub trait AggrDefinitionParser {
         let child = aggr_def.take_children().into_iter().next().unwrap();
         let exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
 
-        Self::parse_rpn(
-            &self,
-            exp,
-            ctx,
-            src_schema,
-            out_schema,
-            out_exp,
-        )
+        Self::parse_rpn(&self, exp, ctx, src_schema, out_schema, out_exp)
     }
 
     #[inline]
