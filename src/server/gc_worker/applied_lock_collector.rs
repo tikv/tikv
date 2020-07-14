@@ -40,8 +40,18 @@ impl LockObserverState {
         self.max_ts.load(Ordering::Acquire).into()
     }
 
+    fn store_max_ts(&self, max_ts: TimeStamp) {
+        self.max_ts
+            .store(max_ts.into_inner(), Ordering::Release)
+            .into()
+    }
+
     fn is_clean(&self) -> bool {
         self.is_clean.load(Ordering::Acquire)
+    }
+
+    fn mark_clean(&self) {
+        self.is_clean.store(true, Ordering::Release);
     }
 
     fn mark_dirty(&self) {
@@ -123,10 +133,21 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
-        match self
+        let res = &mut self
             .sender
-            .schedule(LockCollectorTask::ObservedLocks(locks))
-        {
+            .schedule(LockCollectorTask::ObservedLocks(locks));
+        // Wrapping the fail point in a closure, so we can modify
+        // local variables without return,
+        let mut send_fp = || {
+            fail_point!("lock_observer_send", |_| {
+                *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
+                    vec![],
+                )));
+            })
+        };
+        send_fp();
+
+        match res {
             Ok(()) => (),
             Err(ScheduleError::Stopped(_)) => {
                 error!("lock observer failed to send locks because collector is stopped");
@@ -262,7 +283,7 @@ impl LockCollectorRunner {
         }
 
         if locks.len() + self.collected_locks.len() >= MAX_COLLECT_SIZE {
-            self.observer_state.is_clean.store(false, Ordering::Release);
+            self.observer_state.mark_dirty();
             info!("lock collector marked dirty because received too many locks");
             locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
         }
@@ -270,8 +291,8 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        let curr_max_ts: TimeStamp = self.observer_state.max_ts.load(Ordering::Acquire).into();
-        match max_ts.cmp(&self.observer_state.load_max_ts()) {
+        let curr_max_ts = self.observer_state.load_max_ts();
+        match max_ts.cmp(&curr_max_ts) {
             Less => Err(box_err!(
                 "collecting locks with a greater max_ts: {}",
                 curr_max_ts
@@ -286,18 +307,15 @@ impl LockCollectorRunner {
                 // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
                 // previous observing. It need to be solved, although it's very unlikely to happen and
                 // doesn't affect correctness of data.
-                self.observer_state.is_clean.store(true, Ordering::Release);
-                self.observer_state
-                    .max_ts
-                    .store(max_ts.into_inner(), Ordering::Release);
+                self.observer_state.mark_clean();
+                self.observer_state.store_max_ts(max_ts);
                 Ok(())
             }
         }
     }
 
     fn get_collected_locks(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
-        let curr_max_ts = self.observer_state.max_ts.load(Ordering::Acquire);
-        let curr_max_ts = TimeStamp::new(curr_max_ts);
+        let curr_max_ts = self.observer_state.load_max_ts();
         if curr_max_ts != max_ts {
             warn!(
                 "trying to fetch collected locks but now collecting with another max_ts";
@@ -319,8 +337,7 @@ impl LockCollectorRunner {
             })
             .collect();
 
-        let is_clean = self.observer_state.is_clean.load(Ordering::Acquire);
-        Ok((locks?, is_clean))
+        Ok((locks?, self.observer_state.is_clean()))
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {

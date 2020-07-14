@@ -146,6 +146,7 @@ fn test_collect_lock_from_stale_leader() {
     fail::remove(new_leader_apply_fp);
 }
 
+// FIXME: will be fixed by https://github.com/tikv/tikv/pull/8217.
 #[test]
 fn test_collect_applying_locks() {
     let mut cluster = new_server_cluster(0, 2);
@@ -226,4 +227,34 @@ fn test_collect_applying_locks() {
     let locks = must_physical_scan_lock(&store_2_client, Context::default(), safe_point, b"", 10);
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].get_key(), b"k1");
+}
+
+#[test]
+fn test_observer_send_error() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+
+    let max_ts = 100;
+    must_register_lock_observer(&client, max_ts);
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![new_mutation(Op::Put, b"k1", b"v")],
+        b"k1".to_vec(),
+        10,
+    );
+    assert_eq!(must_check_lock_observer(&client, max_ts, true).len(), 1);
+
+    let observer_send_fp = "lock_observer_send";
+    fail::cfg(observer_send_fp, "return").unwrap();
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![new_mutation(Op::Put, b"k2", b"v")],
+        b"k1".to_vec(),
+        10,
+    );
+    let resp = check_lock_observer(&client, max_ts);
+    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+    // Should mark clean if fails to send locks.
+    assert!(!resp.get_is_clean());
 }
