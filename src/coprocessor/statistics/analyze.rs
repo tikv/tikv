@@ -256,27 +256,26 @@ impl<S: Snapshot> SampleBuilder<S> {
             let result = self.data.next_batch(BATCH_MAX_SIZE);
             is_drained = result.is_drained?;
 
-            for logical_row in result.logical_rows {
-                let mut columns_slice = result.physical_columns.as_slice();
-                if self.col_len != columns_slice.len() {
-                    if let Some(column) = columns_slice.first() {
-                        let mut data = vec![];
-                        column.encode(
-                            logical_row,
-                            &field_type_from_column_info(&self.cols_info[0]),
-                            &mut EvalContext::default(),
-                            &mut data,
-                        )?;
-                        pk_builder.append(&data);
-                        columns_slice = &columns_slice[1..];
-                    }
+            let mut columns_slice = result.physical_columns.as_slice();
+            if self.col_len != columns_slice.len() {
+                for logical_row in &result.logical_rows {
+                    let mut data = vec![];
+                    columns_slice[0].encode(
+                        *logical_row,
+                        &field_type_from_column_info(&self.cols_info[0]),
+                        &mut EvalContext::default(),
+                        &mut data,
+                    )?;
+                    pk_builder.append(&data);
                 }
-                for (i, (collector, column)) in
-                    collectors.iter_mut().zip(columns_slice.iter()).enumerate()
-                {
+                columns_slice = &columns_slice[1..];
+            }
+
+            for (i, collector) in collectors.iter_mut().enumerate() {
+                for logical_row in &result.logical_rows {
                     let mut val = vec![];
-                    column.encode(
-                        logical_row,
+                    columns_slice[i].encode(
+                        *logical_row,
                         &field_type_from_column_info(&self.cols_info[0]),
                         &mut EvalContext::default(),
                         &mut val,
