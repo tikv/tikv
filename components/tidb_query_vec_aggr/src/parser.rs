@@ -39,20 +39,25 @@ pub trait AggrDefinitionParser {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        //TODO move to a prior position
-        // bit operation outputs one column.
-        out_schema.push(aggr_def.take_field_type());
-
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
         let exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
 
-        Self::parse_rpn(&self, exp, ctx, src_schema, out_schema, out_exp)
+        Self::parse_rpn(
+            &self,
+            aggr_def.take_field_type(),
+            exp,
+            ctx,
+            src_schema,
+            out_schema,
+            out_exp,
+        )
     }
 
     #[inline]
     fn parse_rpn(
         &self,
+        _root_field_type: FieldType,
         _aggr_def: RpnExpression,
         _ctx: &mut EvalContext,
         _src_schema: &[FieldType],
