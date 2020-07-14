@@ -1,19 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::chunked_vec_bool::ChunkedVecBool;
-use super::{Bytes, BytesRef};
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
+use super::{Json, JsonRef, JsonType};
+use std::convert::TryFrom;
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct ChunkedVecBytes {
+pub struct ChunkedVecJson {
     data: Vec<u8>,
     bitmap: ChunkedVecBool,
     length: usize,
     var_offset: Vec<usize>,
 }
 
-impl ChunkedVecBytes {
-    pub fn from_slice(slice: &[Option<Bytes>]) -> Self {
+impl ChunkedVecJson {
+    pub fn from_slice(slice: &[Option<Json>]) -> Self {
         let mut x = Self::with_capacity(slice.len());
         for i in slice {
             x.push(i.clone());
@@ -30,7 +31,7 @@ impl ChunkedVecBytes {
         }
     }
 
-    pub fn from_vec(data: Vec<Option<Bytes>>) -> Self {
+    pub fn from_vec(data: Vec<Option<Json>>) -> Self {
         let mut x = Self::with_capacity(data.len());
         for element in data {
             x.push(element);
@@ -38,7 +39,7 @@ impl ChunkedVecBytes {
         x
     }
 
-    pub fn to_vec(&self) -> Vec<Option<Bytes>> {
+    pub fn to_vec(&self) -> Vec<Option<Json>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
             x.push(self.get(i).map(|x| x.to_owned()));
@@ -54,9 +55,10 @@ impl ChunkedVecBytes {
         self.len() == 0
     }
 
-    pub fn push_data(&mut self, mut value: Bytes) {
+    pub fn push_data(&mut self, mut value: Json) {
         self.bitmap.push(true);
-        self.data.append(&mut value);
+        self.data.push(value.get_type() as u8);
+        self.data.append(&mut value.value);
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
@@ -67,7 +69,7 @@ impl ChunkedVecBytes {
         self.length += 1;
     }
 
-    pub fn push(&mut self, value: Option<Bytes>) {
+    pub fn push(&mut self, value: Option<Json>) {
         if let Some(x) = value {
             self.push_data(x);
         } else {
@@ -100,43 +102,45 @@ impl ChunkedVecBytes {
         other.length = 0;
     }
 
-    pub fn get(&self, idx: usize) -> Option<BytesRef> {
+    pub fn get(&self, idx: usize) -> Option<JsonRef> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
-            Some(&self.data[self.var_offset[idx]..self.var_offset[idx + 1]])
+            let json_type = JsonType::try_from(self.data[self.var_offset[idx]]).unwrap();
+            let sliced_data = &self.data[self.var_offset[idx] + 1..self.var_offset[idx + 1]];
+            Some(JsonRef::new(json_type, sliced_data))
         } else {
             None
         }
     }
 }
 
-impl ChunkedVec<Bytes> for ChunkedVecBytes {
+impl ChunkedVec<Json> for ChunkedVecJson {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
-    fn chunked_push(&mut self, value: Option<Bytes>) {
+    fn chunked_push(&mut self, value: Option<Json>) {
         self.push(value)
     }
 }
 
-impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
-    fn get_option_ref(self, idx: usize) -> Option<BytesRef<'a>> {
+impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
+    fn get_option_ref(self, idx: usize) -> Option<JsonRef<'a>> {
         self.get(idx)
     }
 
-    fn phantom_data(self) -> Option<BytesRef<'a>> {
+    fn phantom_data(self) -> Option<JsonRef<'a>> {
         None
     }
 }
 
-impl Into<ChunkedVecBytes> for Vec<Option<Bytes>> {
-    fn into(self) -> ChunkedVecBytes {
-        ChunkedVecBytes::from_vec(self)
+impl Into<ChunkedVecJson> for Vec<Option<Json>> {
+    fn into(self) -> ChunkedVecJson {
+        ChunkedVecJson::from_vec(self)
     }
 }
 
-impl<'a> UnsafeRefInto<&'static ChunkedVecBytes> for &'a ChunkedVecBytes {
-    unsafe fn unsafe_into(self) -> &'static ChunkedVecBytes {
+impl<'a> UnsafeRefInto<&'static ChunkedVecJson> for &'a ChunkedVecJson {
+    unsafe fn unsafe_into(self) -> &'static ChunkedVecJson {
         std::mem::transmute(self)
     }
 }

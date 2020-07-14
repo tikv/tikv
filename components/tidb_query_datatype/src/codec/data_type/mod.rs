@@ -3,6 +3,7 @@
 mod bit_vec;
 mod chunked_vec_bytes;
 mod chunked_vec_sized;
+mod chunked_vec_json;
 mod not_chunked_vec;
 mod scalar;
 mod vector;
@@ -15,8 +16,9 @@ pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
 pub use chunked_vec_bytes::ChunkedVecBytes;
 pub use chunked_vec_sized::ChunkedVecSized;
+pub use chunked_vec_json::ChunkedVecJson;
 use not_chunked_vec::NotChunkedVec;
-pub type ChunkedVecJson = NotChunkedVec<Json>;
+
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -359,7 +361,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Json> {
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),
