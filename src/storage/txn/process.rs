@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
@@ -9,8 +8,7 @@ use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, Result as EngineResult, ScanMode, Snapshot, Statistics,
-    WriteData,
+    with_tls_engine, CbContext, Engine, ScanMode, Snapshot, Statistics, WriteData,
 };
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
@@ -24,7 +22,7 @@ use crate::storage::txn::{
         Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
-    scheduler::{Msg, Scheduler, Task},
+    scheduler::{Scheduler, Task},
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
@@ -44,15 +42,13 @@ const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 pub struct Executor<E: Engine, L: LockManager> {
     // We put time consuming tasks to the thread pool.
-    sched_pool: Option<SchedPool>,
+    sched_pool: SchedPool,
     // And the tasks completes we post a completion to the `Scheduler`.
-    scheduler: Option<Scheduler<E, L>>,
+    scheduler: Scheduler<E, L>,
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: L,
 
     pipelined_pessimistic_lock: bool,
-
-    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, L: LockManager> Executor<E, L> {
@@ -63,64 +59,19 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
         pipelined_pessimistic_lock: bool,
     ) -> Self {
         Executor {
-            sched_pool: Some(pool),
-            scheduler: Some(scheduler),
+            sched_pool: pool,
+            scheduler,
             lock_mgr,
             pipelined_pessimistic_lock,
-            _phantom: Default::default(),
         }
     }
 
-    fn take_pool(&mut self) -> SchedPool {
-        self.sched_pool.take().unwrap()
-    }
-
-    fn clone_pool(&mut self) -> SchedPool {
-        self.sched_pool.clone().unwrap()
-    }
-
-    fn take_scheduler(&mut self) -> Scheduler<E, L> {
-        self.scheduler.take().unwrap()
-    }
-
-    /// Start the execution of the task.
-    pub(super) fn execute(
-        mut self,
-        cb_ctx: CbContext,
-        snapshot: EngineResult<E::Snap>,
-        task: Task,
-    ) {
-        let tag = task.cmd.tag();
-        debug!(
-            "receive snapshot finish msg";
-            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-        );
-
-        match snapshot {
-            Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-
-                self.process_by_worker(cb_ctx, snapshot, task);
-            }
-            Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
-
-                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                self.take_pool()
-                    .pool
-                    .spawn(async move {
-                        self.take_scheduler().on_msg(Msg::FinishedWithErr {
-                            cid: task.cid,
-                            err: Error::from(err),
-                        });
-                    })
-                    .unwrap();
-            }
-        }
+    fn take_lock_mgr(&mut self) -> Option<L> {
+        self.lock_mgr.take()
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
+    pub(super) fn process_by_worker(self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
         debug!(
@@ -130,7 +81,7 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
         if let Some(term) = cb_ctx.term {
             task.cmd.ctx_mut().set_term(term);
         }
-        let sched_pool = self.clone_pool();
+        let sched_pool = self.sched_pool.clone();
         let readonly = task.cmd.readonly();
         let extra_op = cb_ctx.extra_op;
         sched_pool
@@ -170,18 +121,17 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
-    fn process_read(mut self, snapshot: E::Snap, task: Task) -> Statistics {
+    fn process_read(self, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
-        let tag = task.cmd.tag();
-        let cid = task.cid;
         let mut statistics = Statistics::default();
+        let tag = task.cmd.tag();
+
         let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        self.take_scheduler()
-            .on_msg(Msg::ReadFinished { cid, pr, tag });
+        self.scheduler.on_read_finished(task.cid, pr, tag);
         statistics
     }
 
@@ -199,9 +149,11 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
         let cid = task.cid;
         let ts = task.cmd.ts();
         let mut statistics = Statistics::default();
-        let scheduler = self.take_scheduler();
+        let scheduler = self.scheduler.clone();
+        let lock_mgr = self.take_lock_mgr();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
-        let msg = match process_write_impl(
+
+        match process_write_impl(
             task.cmd,
             snapshot,
             &self.lock_mgr,
@@ -220,27 +172,13 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock, wait_timeout) = lock_info;
-                    Msg::WaitForLock {
-                        cid,
-                        start_ts: ts,
-                        pr,
-                        lock,
-                        is_first_lock,
-                        wait_timeout,
-                    }
+                if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
+                    scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
                 } else if to_be_write.modifies.is_empty() {
-                    Msg::WriteFinished {
-                        cid,
-                        pr,
-                        result: Ok(()),
-                        pipelined: false,
-                        tag,
-                    }
+                    scheduler.on_write_finished(cid, pr, Ok(()), false, tag);
                 } else {
                     let sched = scheduler.clone();
-                    let sched_pool = self.take_pool();
+                    let sched_pool = self.sched_pool;
                     // The normal write process is respond to clients and release latches
                     // after async write finished. If pipelined pessimistic lock is enabled,
                     // the process becomes parallel and there are two msgs for one command:
@@ -260,13 +198,13 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                             .spawn(async move {
                                 fail_point!("scheduler_async_write_finish");
 
-                                sched.on_msg(Msg::WriteFinished {
+                                sched.on_write_finished(
                                     cid,
-                                    pr: write_finished_pr,
+                                    write_finished_pr,
                                     result,
                                     pipelined,
                                     tag,
-                                });
+                                );
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
@@ -279,20 +217,13 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        let err = e.into();
-                        Msg::FinishedWithErr { cid, err }
+                        scheduler.finish_with_err(cid, e.into());
                     } else if pipelined {
                         fail_point!("scheduler_pipelined_write_finish");
 
                         // The write task is scheduled to engine successfully.
                         // Respond to client early.
-                        Msg::PipelinedWrite {
-                            cid,
-                            pr: pipelined_write_pr,
-                            tag,
-                        }
-                    } else {
-                        return statistics;
+                        scheduler.on_pipelined_write(cid, pipelined_write_pr, tag);
                     }
                 }
             }
@@ -302,10 +233,10 @@ impl<E: Engine, L: LockManager> Executor<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);
-                Msg::FinishedWithErr { cid, err }
+                scheduler.finish_with_err(cid, err);
             }
-        };
-        scheduler.on_msg(msg);
+        }
+
         statistics
     }
 }

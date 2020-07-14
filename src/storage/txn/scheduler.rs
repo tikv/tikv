@@ -21,7 +21,6 @@
 //! to the scheduler.
 
 use parking_lot::Mutex;
-use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
@@ -50,59 +49,6 @@ use crate::storage::{
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
-
-/// Message types for the scheduler event loop.
-pub(super) enum Msg {
-    ReadFinished {
-        cid: u64,
-        pr: ProcessResult,
-        tag: metrics::CommandKind,
-    },
-    WriteFinished {
-        cid: u64,
-        pr: ProcessResult,
-        result: EngineResult<()>,
-        pipelined: bool,
-        tag: metrics::CommandKind,
-    },
-    FinishedWithErr {
-        cid: u64,
-        err: Error,
-    },
-    WaitForLock {
-        cid: u64,
-        start_ts: TimeStamp,
-        pr: ProcessResult,
-        lock: lock_manager::Lock,
-        is_first_lock: bool,
-        wait_timeout: Option<WaitTimeout>,
-    },
-    PipelinedWrite {
-        cid: u64,
-        pr: ProcessResult,
-        tag: metrics::CommandKind,
-    },
-}
-
-/// Debug for messages.
-impl Debug for Msg {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-/// Display for messages.
-impl Display for Msg {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
-            Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
-            Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
-            Msg::WaitForLock { cid, .. } => write!(f, "WaitForLock [cid={}]", cid),
-            Msg::PipelinedWrite { cid, .. } => write!(f, "PipelinedWrite [cid={}]", cid),
-        }
-    }
-}
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -403,10 +349,38 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let executor = self.fetch_executor(task.cmd.priority());
+        let sched = self.clone();
+        // TODO shared code with fetch_executor
+        let pool = if task.cmd.priority() == CommandPri::High {
+            self.inner.high_priority_pool.clone()
+        } else {
+            self.inner.worker_pool.clone()
+        };
 
         let cb = must_call(
             move |(cb_ctx, snapshot)| {
-                executor.execute(cb_ctx, snapshot, task);
+                debug!(
+                    "receive snapshot finish msg";
+                    "cid" => task.cid, "cb_ctx" => ?cb_ctx
+                );
+
+                match snapshot {
+                    Ok(snapshot) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+
+                        executor.process_by_worker(cb_ctx, snapshot, task);
+                    }
+                    Err(err) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                        pool.pool
+                            .spawn(async move {
+                                sched.finish_with_err(task.cid, Error::from(err));
+                            })
+                            .unwrap();
+                    }
+                }
             },
             drop_snapshot_callback::<E>,
         );
@@ -432,7 +406,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err(&self, cid: u64, err: Error) {
+    pub(super) fn finish_with_err(&self, cid: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
@@ -450,7 +424,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+    pub(super) fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
@@ -466,7 +440,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Event handler for the success of write.
-    fn on_write_finished(
+    pub(super) fn on_write_finished(
         &self,
         cid: u64,
         pr: ProcessResult,
@@ -508,7 +482,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Event handler for the request of waiting for lock
-    fn on_wait_for_lock(
+    pub(super) fn on_wait_for_lock(
         &self,
         cid: u64,
         start_ts: TimeStamp,
@@ -531,7 +505,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+    pub(super) fn on_pipelined_write(
+        &self,
+        cid: u64,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
+    ) {
         debug!("pipelined write"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
@@ -540,29 +519,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
         // It won't release locks here until write finished.
-    }
-
-    pub(super) fn on_msg(&self, task: Msg) {
-        match task {
-            Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
-            Msg::WriteFinished {
-                cid,
-                tag,
-                pr,
-                pipelined,
-                result,
-            } => self.on_write_finished(cid, pr, result, pipelined, tag),
-            Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
-            Msg::WaitForLock {
-                cid,
-                start_ts,
-                pr,
-                lock,
-                is_first_lock,
-                wait_timeout,
-            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
-            Msg::PipelinedWrite { cid, pr, tag } => self.on_pipelined_write(cid, pr, tag),
-        }
     }
 }
 
