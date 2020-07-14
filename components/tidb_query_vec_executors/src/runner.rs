@@ -163,12 +163,14 @@ pub fn build_executors<S: Storage + 'static>(
 
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
+            let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             executor = Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
+                    primary_column_ids_len,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                 )?

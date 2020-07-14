@@ -289,6 +289,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
+    use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
@@ -379,7 +380,9 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
             None,

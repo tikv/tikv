@@ -646,7 +646,6 @@ fn test_serde_custom_tikv_config() {
         compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
-        enabled: false,
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: true,
