@@ -30,6 +30,9 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 // the maximum len of the old encoding of index value.
 pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
+/// Flag that indicate if the index value has common handle.
+pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {

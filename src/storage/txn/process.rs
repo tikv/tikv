@@ -19,9 +19,9 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::{
     commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, CommandKind, Commit, MvccByKey,
-        MvccByStartTs, Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock,
-        ResolveLockLite, Rollback, ScanLock, TxnHeartBeat,
+        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
+        Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
+        Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
     scheduler::Msg,
@@ -87,7 +87,7 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
-    lock_mgr: Option<L>,
+    lock_mgr: L,
 
     pipelined_pessimistic_lock: bool,
 
@@ -98,7 +98,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
     pub fn new(
         scheduler: S,
         pool: SchedPool,
-        lock_mgr: Option<L>,
+        lock_mgr: L,
         pipelined_pessimistic_lock: bool,
     ) -> Self {
         Executor {
@@ -120,10 +120,6 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
 
     fn take_scheduler(&mut self) -> S {
         self.scheduler.take().unwrap()
-    }
-
-    fn take_lock_mgr(&mut self) -> Option<L> {
-        self.lock_mgr.take()
     }
 
     /// Start the execution of the task.
@@ -240,12 +236,11 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let lock_mgr = self.take_lock_mgr();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,
-            lock_mgr,
+            &self.lock_mgr,
             extra_op,
             &mut statistics,
             self.pipelined_pessimistic_lock,
@@ -360,8 +355,8 @@ fn process_read_impl<E: Engine>(
     statistics: &mut Statistics,
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
-    match cmd.kind {
-        CommandKind::MvccByKey(MvccByKey { ref key, ref ctx }) => {
+    match cmd {
+        Command::MvccByKey(MvccByKey { ref key, ref ctx }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -379,7 +374,7 @@ fn process_read_impl<E: Engine>(
                 },
             })
         }
-        CommandKind::MvccByStartTs(MvccByStartTs { start_ts, ctx }) => {
+        Command::MvccByStartTs(MvccByStartTs { start_ts, ctx }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -406,7 +401,7 @@ fn process_read_impl<E: Engine>(
             }
         }
         // Scans locks with timestamp <= `max_ts`
-        CommandKind::ScanLock(ScanLock {
+        Command::ScanLock(ScanLock {
             max_ts,
             ref start_key,
             limit,
@@ -437,7 +432,7 @@ fn process_read_impl<E: Engine>(
 
             Ok(ProcessResult::Locks { locks })
         }
-        CommandKind::ResolveLock(ResolveLock {
+        Command::ResolveLock(ResolveLock {
             ref mut txn_status,
             ref scan_key,
             ref ctx,
@@ -510,10 +505,8 @@ impl ReleasedLocks {
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    fn wake_up<L: LockManager>(self, lock_mgr: Option<&L>) {
-        if let Some(lm) = lock_mgr {
-            lm.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
-        }
+    fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }
 }
 
@@ -541,13 +534,13 @@ struct WriteResult {
 fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    lock_mgr: &L,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
-    let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
-        CommandKind::Prewrite(Prewrite {
+    let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
+        Command::Prewrite(Prewrite {
             mut mutations,
             primary,
             start_ts,
@@ -621,7 +614,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
-        CommandKind::PrewritePessimistic(PrewritePessimistic {
+        Command::PrewritePessimistic(PrewritePessimistic {
             mutations,
             primary,
             start_ts,
@@ -669,7 +662,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, None)
             }
         }
-        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
+        Command::AcquirePessimisticLock(AcquirePessimisticLock {
             keys,
             primary,
             start_ts,
@@ -726,7 +719,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, WriteData::default(), 0, ctx, lock_info)
             }
         }
-        CommandKind::Commit(Commit {
+        Command::Commit(Commit {
             keys,
             lock_ts,
             commit_ts,
@@ -747,7 +740,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.commit(k, commit_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
@@ -756,7 +749,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, ctx, None)
         }
-        CommandKind::Cleanup(Cleanup {
+        Command::Cleanup(Cleanup {
             key,
             start_ts,
             current_ts,
@@ -769,13 +762,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             released_locks.push(txn.cleanup(key, current_ts, true)?);
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, 1, ctx, None)
         }
-        CommandKind::Rollback(Rollback {
+        Command::Rollback(Rollback {
             keys,
             start_ts,
             ctx,
@@ -788,20 +781,18 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.rollback(k)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, ctx, None)
         }
-        CommandKind::PessimisticRollback(PessimisticRollback {
+        Command::PessimisticRollback(PessimisticRollback {
             keys,
             start_ts,
             for_update_ts,
             ctx,
         }) => {
-            assert!(lock_mgr.is_some());
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
 
             let rows = keys.len();
@@ -809,7 +800,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.pessimistic_rollback(k, for_update_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -821,7 +812,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 None,
             )
         }
-        CommandKind::ResolveLock(ResolveLock {
+        Command::ResolveLock(ResolveLock {
             txn_status,
             mut scan_key,
             key_locks,
@@ -861,7 +852,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             }
             released_locks
                 .into_iter()
-                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr.as_ref()));
+                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
             statistics.add(&txn.take_statistics());
             let pr = if scan_key.is_none() {
@@ -874,7 +865,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, ctx, None)
         }
-        CommandKind::ResolveLockLite(ResolveLockLite {
+        Command::ResolveLockLite(ResolveLockLite {
             start_ts,
             commit_ts,
             resolve_keys,
@@ -893,13 +884,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     txn.rollback(key)?
                 });
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (ProcessResult::Res, write_data, rows, ctx, None)
         }
-        CommandKind::TxnHeartBeat(TxnHeartBeat {
+        Command::TxnHeartBeat(TxnHeartBeat {
             primary_key,
             start_ts,
             advise_ttl,
@@ -916,7 +907,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
         }
-        CommandKind::CheckTxnStatus(CheckTxnStatus {
+        Command::CheckTxnStatus(CheckTxnStatus {
             primary_key,
             lock_ts,
             caller_start_ts,
@@ -936,7 +927,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.push(released);
             // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
             if let TxnStatus::TtlExpire = txn_status {
-                released_locks.wake_up(lock_mgr.as_ref());
+                released_locks.wake_up(lock_mgr);
             }
 
             statistics.add(&txn.take_statistics());
@@ -944,7 +935,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
         }
-        CommandKind::Pause(Pause { duration, ctx, .. }) => {
+        Command::Pause(Pause { duration, ctx, .. }) => {
             thread::sleep(Duration::from_millis(duration));
             (ProcessResult::Res, WriteData::default(), 0, ctx, None)
         }
@@ -1140,8 +1131,14 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ret = process_write_impl(
+            cmd,
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1170,8 +1167,15 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
+
+        let ret = process_write_impl(
+            cmd.into(),
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
