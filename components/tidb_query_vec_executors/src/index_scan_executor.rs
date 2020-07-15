@@ -265,12 +265,12 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 if self.decode_handle_strategy != DecodeCommonHandle {
                     return Err(other_err!("Expect to decode index values with common handles in `DecodeCommonHandle` mode."));
                 }
-                self.process_unique_common_handle_value(key, value, columns)
+                self.process_unique_common_handle_kv(key, value, columns)
             } else {
-                self.process_new_collation_value(key, value, columns)
+                self.process_new_collation_kv(key, value, columns)
             }
         } else {
-            self.process_old_collation_value(key, value, columns)
+            self.process_old_collation_kv(key, value, columns)
         }
     }
 }
@@ -351,7 +351,7 @@ impl IndexScanExecutorImpl {
     // 2. Unique common handle in old collation
     // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       |
     // |  Length: 1    | 1            | 2           | size(CHandle) |
-    fn process_unique_common_handle_value(
+    fn process_unique_common_handle_kv(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
@@ -398,7 +398,7 @@ impl IndexScanExecutorImpl {
     //      * Key contains a common handle.
     // 2. Unique index
     //      * Value contains a int handle.
-    fn process_new_collation_value(
+    fn process_new_collation_kv(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
@@ -443,7 +443,7 @@ impl IndexScanExecutorImpl {
     }
 
     // Process index values that are in old collation but don't contain common handles.
-    fn process_old_collation_value(
+    fn process_old_collation_kv(
         &mut self,
         mut key_payload: &[u8],
         value: &[u8],
