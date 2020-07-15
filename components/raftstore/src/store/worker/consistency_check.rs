@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_rocks::RocksSnapshot;
 use engine_traits::Snapshot;
 use engine_traits::CF_RAFT;
 use tikv_util::worker::Runnable;
@@ -45,20 +45,21 @@ where
     }
 }
 
-pub struct Runner<C: CasualRouter<RocksSnapshot>> {
+pub struct Runner<S: Snapshot, C: CasualRouter<S>> {
+    _s: PhantomData<S>,
     router: C,
 }
 
-impl<C: CasualRouter<RocksSnapshot>> Runner<C> {
-    pub fn new(router: C) -> Runner<C> {
-        Runner { router }
+impl<S: Snapshot, C: CasualRouter<S>> Runner<S, C> {
+    pub fn new(router: C) -> Runner<S, C> {
+        Runner {
+            _s: Default::default(),
+            router,
+        }
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash<S>(&mut self, region: Region, index: u64, snap: S)
-    where
-        S: Snapshot,
-    {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: S) {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -127,10 +128,10 @@ impl<C: CasualRouter<RocksSnapshot>> Runner<C> {
     }
 }
 
-impl<C, S> Runnable<Task<S>> for Runner<C>
+impl<C, S> Runnable<Task<S>> for Runner<S, C>
 where
-    C: CasualRouter<RocksSnapshot>,
     S: Snapshot,
+    C: CasualRouter<S>,
 {
     fn run(&mut self, task: Task<S>) {
         match task {
@@ -138,7 +139,7 @@ where
                 region,
                 index,
                 snap,
-            } => self.compute_hash::<S>(region, index, snap),
+            } => self.compute_hash(region, index, snap),
         }
     }
 }
