@@ -265,4 +265,11 @@ impl RangePropertiesExt for RocksEngine {
         Ok(Some(keys.swap_remove(middle)))
     }
 
+    fn divide_range(&self, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
+        panic!()
+    }
+
+    fn divide_range_cf(&self, cf: &str, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
+        panic!()
+    }        
 }

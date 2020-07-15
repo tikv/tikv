@@ -42,5 +42,9 @@ pub trait RangePropertiesExt {
     /// The returned key maybe is timestamped if transaction KV is used,
     /// and must start with "z".
     fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, region_id: u64) -> Result<Option<Vec<u8>>>;
+
+    fn divide_range(&self, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>>;
+
+    fn divide_range_cf(&self, cf: &str, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>>;
 }
 
