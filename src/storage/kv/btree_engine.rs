@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
+use tikv_util::callback::Callback as UtilCallback;
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
@@ -75,6 +76,7 @@ impl Engine for BTreeEngine {
         _ctx: &Context,
         batch: WriteData,
         cb: EngineCallback<()>,
+        _: Option<UtilCallback<()>>,
     ) -> EngineResult<()> {
         if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));

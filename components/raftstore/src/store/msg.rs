@@ -21,6 +21,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::escape;
 
 use super::RegionSnapshot;
@@ -314,11 +315,11 @@ impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
 
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
-#[derive(Debug)]
 pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub pw_callback: Option<UtilCallback<()>>,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -328,7 +329,21 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
+            pw_callback: None,
         }
+    }
+}
+
+impl<S> fmt::Debug for RaftCommand<S>
+where
+    S: Snapshot,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("RaftCommand")
+            .field("send_time", &self.send_time)
+            .field("request", &self.request)
+            .field("callback", &self.callback)
+            .finish()
     }
 }
 

@@ -351,7 +351,7 @@ impl Simulator for NodeCluster {
             .get(&node_id)
             .cloned()
             .unwrap();
-        router.send_command(request, cb)
+        router.send_command(request, cb, None)
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

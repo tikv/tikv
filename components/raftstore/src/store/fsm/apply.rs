@@ -2203,10 +2203,10 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
         return None;
     }
     let req = msg.get_admin_request();
-    if !req.has_change_peer() {
+    if req.get_cmd_type() != AdminCmdType::ChangePeer {
         return None;
     }
-
+    assert!(req.has_change_peer());
     Some(req.get_change_peer())
 }
 

@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::VecDeque;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
+use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
@@ -145,33 +147,64 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
         || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct AdminCmdEpochState {
+    check_ver: bool,
+    check_conf_ver: bool,
+    change_ver: bool,
+    change_conf_ver: bool,
+}
+
+impl AdminCmdEpochState {
+    fn new(
+        check_ver: bool,
+        check_conf_ver: bool,
+        change_ver: bool,
+        change_conf_ver: bool,
+    ) -> AdminCmdEpochState {
+        AdminCmdEpochState {
+            check_ver,
+            check_conf_ver,
+            change_ver,
+            change_conf_ver,
+        }
+    }
+}
+
+lazy_static! {
+    static ref ADMIN_CMD_EPOCH_MAP: HashMap<AdminCmdType, AdminCmdEpochState> = [
+        (AdminCmdType::InvalidAdmin, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::CompactLog, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::ComputeHash, AdminCmdEpochState::new(false, false, false, false)),
+        (AdminCmdType::VerifyHash, AdminCmdEpochState::new(false, false, false, false)),
+        // change peer
+        (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
+        // split
+        (AdminCmdType::Split, AdminCmdEpochState::new(true, true, true, false)),
+        (AdminCmdType::BatchSplit, AdminCmdEpochState::new(true, true, true, false)),
+        // merge
+        (AdminCmdType::PrepareMerge, AdminCmdEpochState::new(true, true, true, true)),
+        (AdminCmdType::CommitMerge, AdminCmdEpochState::new(true, true, true, false)),
+        (AdminCmdType::RollbackMerge, AdminCmdEpochState::new(true, true, true, false)),
+        // transfer leader
+        (AdminCmdType::TransferLeader, AdminCmdEpochState::new(true, true, false, false)),
+    ].iter().copied().collect();
+}
+
 pub fn check_region_epoch(
     req: &RaftCmdRequest,
     region: &metapb::Region,
     include_region: bool,
 ) -> Result<()> {
-    let (mut check_ver, mut check_conf_ver) = (false, false);
-    if !req.has_admin_request() {
+    let (check_ver, check_conf_ver) = if !req.has_admin_request() {
         // for get/set/delete, we don't care conf_version.
-        check_ver = true;
+        (true, false)
     } else {
-        match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::CompactLog
-            | AdminCmdType::InvalidAdmin
-            | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
-            AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::Split
-            | AdminCmdType::BatchSplit
-            | AdminCmdType::PrepareMerge
-            | AdminCmdType::CommitMerge
-            | AdminCmdType::RollbackMerge
-            | AdminCmdType::TransferLeader => {
-                check_ver = true;
-                check_conf_ver = true;
-            }
-        };
-    }
+        let epoch_state = *ADMIN_CMD_EPOCH_MAP
+            .get(&req.get_admin_request().get_cmd_type())
+            .unwrap();
+        (epoch_state.check_ver, epoch_state.check_conf_ver)
+    };
 
     if !check_ver && !check_conf_ver {
         return Ok(());
@@ -301,6 +334,80 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     })
 }
 
+#[derive(Default)]
+pub struct RaftCmdEpochChecker {
+    proposed_admin_cmd: VecDeque<(AdminCmdEpochState, AdminCmdType, u64)>,
+    term: u64,
+}
+
+impl RaftCmdEpochChecker {
+    fn has_version_change_cmd(&self) -> bool {
+        for state in &self.proposed_admin_cmd {
+            if state.0.change_ver {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn has_conf_ver_change_cmd(&self) -> bool {
+        for state in &self.proposed_admin_cmd {
+            if state.0.change_conf_ver {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn maybe_update_term(&mut self, term: u64) {
+        assert!(term >= self.term);
+        if term > self.term {
+            self.term = term;
+            self.proposed_admin_cmd.clear();
+        }
+    }
+
+    fn check_admin_epoch(&self, cmd_type: AdminCmdType) -> bool {
+        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        (!epoch_state.check_ver || self.has_version_change_cmd())
+            && (!epoch_state.check_conf_ver || self.has_conf_ver_change_cmd())
+    }
+
+    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> bool {
+        self.maybe_update_term(term);
+        if !req.has_admin_request() {
+            self.has_version_change_cmd()
+        } else {
+            self.check_admin_epoch(req.get_admin_request().get_cmd_type())
+        }
+    }
+
+    pub fn propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
+        self.maybe_update_term(term);
+        assert!(self.check_admin_epoch(cmd_type));
+        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        if epoch_state.change_conf_ver || epoch_state.change_ver {
+            self.proposed_admin_cmd
+                .push_back((epoch_state, cmd_type, index));
+        }
+    }
+
+    pub fn advance_apply(&mut self, index: u64, term: u64) {
+        self.maybe_update_term(term);
+        let mut pop_count = 0;
+        for state in &self.proposed_admin_cmd {
+            if state.2 <= index {
+                pop_count += 1;
+            } else {
+                break;
+            }
+        }
+        for _ in 0..pop_count {
+            self.proposed_admin_cmd.pop_front();
+        }
+    }
+}
+
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Suspect Timestamp
@@ -362,7 +469,6 @@ impl Lease {
         Lease {
             bound: None,
             max_lease,
-
             max_drift: max_lease / 3,
             last_update: Timespec::new(0, 0),
             remote: None,

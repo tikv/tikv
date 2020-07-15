@@ -609,6 +609,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -831,6 +832,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 value,
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -860,6 +862,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -882,6 +885,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 Key::from_encoded(key),
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -912,6 +916,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             &ctx,
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -936,6 +941,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())

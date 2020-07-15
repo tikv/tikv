@@ -19,6 +19,7 @@ use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -267,7 +268,13 @@ fn write_modifies(
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
 
-    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
+    fn async_write(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        _: Option<UtilCallback<()>>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
         if batch.modifies.is_empty() {

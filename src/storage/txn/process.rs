@@ -33,6 +33,7 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 use engine_traits::CF_WRITE;
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -318,23 +319,37 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                             })
                             .unwrap()
                     });
+                    let sched = scheduler.clone();
+                    let sched_pool = self.take_pool();
+                    let pw_callback: Option<UtilCallback<()>> = if pipelined {
+                        Some(Box::new(move |_| {
+                            sched_pool
+                                .pool
+                                .spawn(async move {
+                                    fail_point!("scheduler_pipelined_write_finish");
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                                    notify_scheduler(
+                                        sched,
+                                        Msg::PipelinedWrite {
+                                            cid,
+                                            pr: pipelined_write_pr,
+                                            tag,
+                                        },
+                                    );
+                                    future::ok::<_, ()>(())
+                                })
+                                .unwrap()
+                        }))
+                    } else {
+                        None
+                    };
+
+                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb, pw_callback) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
-                    } else if pipelined {
-                        fail_point!("scheduler_pipelined_write_finish");
-
-                        // The write task is scheduled to engine successfully.
-                        // Respond to client early.
-                        Msg::PipelinedWrite {
-                            cid,
-                            pr: pipelined_write_pr,
-                            tag,
-                        }
                     } else {
                         return statistics;
                     }

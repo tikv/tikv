@@ -946,6 +946,7 @@ mod tests {
     use kvproto::metapb;
     use std::collections::BTreeMap;
     use std::sync::mpsc::channel;
+    use tikv_util::callback::Callback as UtilCallback;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
@@ -967,6 +968,7 @@ mod tests {
             ctx: &Context,
             mut batch: WriteData,
             callback: EngineCallback<()>,
+            _: Option<UtilCallback<()>>,
         ) -> EngineResult<()> {
             batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {

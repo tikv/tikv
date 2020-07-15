@@ -17,6 +17,7 @@ use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp};
+use tikv_util::callback::Callback as UtilCallback;
 use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -33,6 +34,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
 pub type Result<T> = result::Result<T, Error>;
+pub type PipelinedWriteCB = Option<Box<dyn FnOnce() + Send>>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -93,12 +95,18 @@ impl WriteData {
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        callback: Callback<()>,
+        pw_callback: Option<UtilCallback<()>>,
+    ) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
+        match wait_op!(|cb| self.async_write(ctx, batch, cb, None), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }

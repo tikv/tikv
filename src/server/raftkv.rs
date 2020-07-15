@@ -27,6 +27,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::time::Instant;
 
 quick_error! {
@@ -199,6 +200,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
                     let (cb_ctx, res) = on_read_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
+                None,
             )
             .map_err(From::from)
     }
@@ -208,6 +210,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         ctx: &Context,
         reqs: Vec<Request>,
         cb: Callback<CmdRes>,
+        pw_callback: Option<UtilCallback<()>>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
         {
@@ -244,6 +247,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
+                pw_callback,
             )
             .map_err(From::from)
     }
@@ -271,7 +275,13 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        pw_callback: Option<UtilCallback<()>>,
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
@@ -339,6 +349,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
                     cb((cb_ctx, Err(e)))
                 }
             }),
+            pw_callback,
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);

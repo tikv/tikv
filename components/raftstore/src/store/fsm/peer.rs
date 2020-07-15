@@ -29,6 +29,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::callback::Callback as UtilCallback;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -113,6 +114,7 @@ pub struct BatchRaftCmdRequestBuilder {
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
+    pw_callbacks: Vec<UtilCallback<()>>,
 }
 
 impl<S: Snapshot> Drop for PeerFsm<S> {
@@ -263,6 +265,7 @@ impl BatchRaftCmdRequestBuilder {
             request: None,
             batch_req_size: 0,
             callbacks: vec![],
+            pw_callbacks: vec![],
         }
     }
 
@@ -290,7 +293,13 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksSnapshot>) {
+    fn add(
+        &mut self,
+        mut req: RaftCmdRequest,
+        req_size: u32,
+        cb: Callback<RocksSnapshot>,
+        pw_cb: Option<UtilCallback<()>>,
+    ) {
         let req_num = req.get_requests().len();
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = req.take_requests().into();
@@ -302,6 +311,9 @@ impl BatchRaftCmdRequestBuilder {
         };
         self.callbacks.push((cb, req_num));
         self.batch_req_size += req_size;
+        if let Some(pw_cb) = pw_cb {
+            self.pw_callbacks.push(pw_cb);
+        }
     }
 
     fn should_finish(&self) -> bool {
@@ -321,12 +333,17 @@ impl BatchRaftCmdRequestBuilder {
     fn build(
         &mut self,
         metric: &mut RaftProposeMetrics,
-    ) -> Option<(RaftCmdRequest, Callback<RocksSnapshot>)> {
+    ) -> Option<(
+        RaftCmdRequest,
+        Callback<RocksSnapshot>,
+        Option<UtilCallback<()>>,
+    )> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (cb, _) = self.callbacks.pop().unwrap();
-                return Some((req, cb));
+                let pw_cb = self.pw_callbacks.pop();
+                return Some((req, cb, pw_cb));
             }
             metric.batch += self.callbacks.len() - 1;
             let cbs = std::mem::replace(&mut self.callbacks, vec![]);
@@ -346,7 +363,17 @@ impl BatchRaftCmdRequestBuilder {
                     last_index = next_index;
                 }
             }));
-            return Some((req, cb));
+            let pw_cb: Option<UtilCallback<()>> = if self.pw_callbacks.is_empty() {
+                None
+            } else {
+                let cbs = std::mem::replace(&mut self.pw_callbacks, vec![]);
+                Some(Box::new(move |_| {
+                    for cb in cbs {
+                        cb(());
+                    }
+                }))
+            };
+            return Some((req, cb, pw_cb));
         }
         None
     }
@@ -414,15 +441,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
-                        self.fsm
-                            .batch_req_builder
-                            .add(cmd.request, req_size, cmd.callback);
+                        self.fsm.batch_req_builder.add(
+                            cmd.request,
+                            req_size,
+                            cmd.callback,
+                            cmd.pw_callback,
+                        );
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(cmd.request, cmd.callback, cmd.pw_callback)
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -446,12 +476,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some((req, cb)) = self
+        if let Some((req, cb, pw_cb)) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(req, cb)
+            self.propose_raft_command(req, cb, pw_cb)
         }
     }
 
@@ -678,6 +708,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     },
                 )
             })),
+            None,
         );
     }
 
@@ -775,7 +806,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb);
+        self.propose_raft_command(msg, cb, None);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -2200,7 +2231,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, None);
     }
 
     fn on_check_merge(&mut self) {
@@ -2827,7 +2858,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksSnapshot>) {
+    fn propose_raft_command(
+        &mut self,
+        mut msg: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+        pw_cb: Option<UtilCallback<()>>,
+    ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2872,7 +2908,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, pw_cb) {
             self.fsm.has_ready = true;
         }
 
@@ -3005,7 +3041,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.fsm.peer.region().get_id();
         let request =
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
-        self.propose_raft_command(request, Callback::None);
+        self.propose_raft_command(request, Callback::None, None);
 
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
@@ -3395,7 +3431,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, None);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {

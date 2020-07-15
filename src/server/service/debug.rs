@@ -518,7 +518,7 @@ fn region_detail<T: RaftStoreRouter<RocksSnapshot>>(
 
     let (tx, rx) = oneshot::channel();
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
-    future::result(raft_router.send_command(raft_cmd, cb))
+    future::result(raft_router.send_command(raft_cmd, cb, None))
         .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
             rx.map_err(|e| Error::Other(Box::new(e)))
@@ -555,7 +555,7 @@ fn consistency_check<T: RaftStoreRouter<RocksSnapshot>>(
 
     let (tx, rx) = oneshot::channel();
     let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
-    future::result(raft_router.send_command(raft_cmd, cb))
+    future::result(raft_router.send_command(raft_cmd, cb, None))
         .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
             rx.map_err(|e| Error::Other(Box::new(e)))

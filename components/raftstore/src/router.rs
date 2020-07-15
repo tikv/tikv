@@ -11,6 +11,7 @@ use crate::store::{
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
+use tikv_util::callback::Callback as UtilCallback;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<S>: Send + Clone
@@ -21,7 +22,12 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()>;
+    fn send_command(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<S>,
+        pw_callback: Option<UtilCallback<()>>,
+    ) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -72,7 +78,12 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, _: RaftCmdRequest, _: Callback<S>) -> RaftStoreResult<()> {
+    fn send_command(
+        &self,
+        _: RaftCmdRequest,
+        _: Callback<S>,
+        _: Option<UtilCallback<()>>,
+    ) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -153,8 +164,14 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::new(req, cb);
+    fn send_command(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+        pw_callback: Option<UtilCallback<()>>,
+    ) -> RaftStoreResult<()> {
+        let mut cmd = RaftCommand::new(req, cb);
+        cmd.pw_callback = pw_callback;
         if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())

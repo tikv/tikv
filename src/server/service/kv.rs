@@ -768,7 +768,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
 
         let (cb, future) = paired_future_callback();
 
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
+        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb), None) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
