@@ -9,7 +9,7 @@ use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// The parser for SUM aggregate function.
 pub struct AggrFnDefinitionParserSum;
@@ -20,25 +20,24 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
+        mut root_expr: Expr,
+        mut exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
+    ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
 
-        assert_eq!(aggr_def.get_tp(), ExprType::Sum);
+        assert_eq!(root_expr.get_tp(), ExprType::Sum);
 
-        let out_ft = aggr_def.take_field_type();
+        let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
-        // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         // The rewrite should always success.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 

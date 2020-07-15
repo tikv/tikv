@@ -50,7 +50,7 @@ pub trait AggrDefinitionParser {
     fn parse_rpn(
         &self,
         _root_expr: Expr,
-        _aggr_def: RpnExpression,
+        _exp: RpnExpression,
         _ctx: &mut EvalContext,
         _src_schema: &[FieldType],
         _out_schema: &mut Vec<FieldType>,
