@@ -266,10 +266,75 @@ impl RangePropertiesExt for RocksEngine {
     }
 
     fn divide_range(&self, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
-        panic!()
+        let default_cf_size = self.get_range_approximate_keys_cf(
+            CF_DEFAULT,
+            range,
+            region_id,
+            0
+        )?;
+        let write_cf_size = self.get_range_approximate_keys_cf(CF_WRITE, range, region_id, 0)?;
+
+        let cf = if default_cf_size >= write_cf_size {
+            CF_DEFAULT
+        } else {
+            CF_WRITE
+        };
+
+        self.divide_range_cf(cf, range, region_id, parts)
     }
 
-    fn divide_range_cf(&self, cf: &str, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
-        panic!()
+    fn divide_range_cf(&self, cf: &str, range: Range, _region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
+        let start = &range.start_key;
+        let end = &range.end_key;
+        let collection = self.get_range_properties_cf(cf, start, end)?;
+
+        let mut keys = Vec::new();
+        let mut found_keys_count = 0;
+        for (_, v) in collection.iter() {
+            let props = RangeProperties::decode(&v.user_collected_properties())?;
+            keys.extend(
+                props
+                    .take_excluded_range(start, end)
+                    .into_iter()
+                    .filter(|_| {
+                        found_keys_count += 1;
+                        found_keys_count % 100 == 0
+                    })
+                    .map(|(k, _)| k),
+            );
+        }
+
+        debug!(
+            "({} points found, {} points selected for dividing)",
+            found_keys_count,
+            keys.len()
+        );
+
+        if keys.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // If there are too many keys, reduce its amount before sorting, or it may take too much
+        // time to sort the keys.
+        if keys.len() > 20000 {
+            let len = keys.len();
+            keys = keys.into_iter().step_by(len / 10000).collect();
+        }
+
+        keys.sort();
+        keys.dedup();
+
+        // If the keys are too few, return them directly.
+        if keys.len() < parts {
+            return Ok(keys);
+        }
+
+        // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
+        let mut res = Vec::with_capacity(parts - 1);
+        let section_len = (keys.len() as f64) / (parts as f64);
+        for i in 1..parts {
+            res.push(keys[(section_len * (i as f64)) as usize].clone())
+        }
+        Ok(res)
     }        
 }
