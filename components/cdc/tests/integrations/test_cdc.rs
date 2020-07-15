@@ -816,7 +816,7 @@ fn test_old_value_basic() {
         for event in events {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    for row in es.take_entries() {
+                    for row in es.take_entries().into_vec() {
                         if row.get_type() == EventLogType::Prewrite {
                             if row.get_start_ts() == m2_start_ts.into_inner() {
                                 assert_eq!(row.get_old_value(), b"v1");
@@ -850,7 +850,7 @@ fn test_old_value_basic() {
         for event in events {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    for row in es.take_entries() {
+                    for row in es.take_entries().into_vec() {
                         if row.get_type() == EventLogType::Committed
                             && row.get_start_ts() == m1_start_ts.into_inner()
                         {
