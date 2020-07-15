@@ -2,6 +2,7 @@
 
 //! This crate provides aggregate functions for batch executors.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 
@@ -62,13 +63,13 @@ pub trait AggrFunctionState:
     std::fmt::Debug
     + Send
     + 'static
-    + AggrFunctionStateUpdatePartial<Int>
-    + AggrFunctionStateUpdatePartial<Real>
-    + AggrFunctionStateUpdatePartial<Decimal>
-    + AggrFunctionStateUpdatePartial<Bytes>
-    + AggrFunctionStateUpdatePartial<DateTime>
-    + AggrFunctionStateUpdatePartial<Duration>
-    + AggrFunctionStateUpdatePartial<Json>
+    + AggrFunctionStateUpdatePartial<&'static Int>
+    + AggrFunctionStateUpdatePartial<&'static Real>
+    + AggrFunctionStateUpdatePartial<&'static Decimal>
+    + AggrFunctionStateUpdatePartial<BytesRef<'static>>
+    + AggrFunctionStateUpdatePartial<&'static DateTime>
+    + AggrFunctionStateUpdatePartial<&'static Duration>
+    + AggrFunctionStateUpdatePartial<JsonRef<'static>>
 {
     // TODO: A better implementation is to specialize different push result targets. However
     // current aggregation executor cannot utilize it.
@@ -83,27 +84,160 @@ pub trait AggrFunctionState:
 /// any eval types (but will panic when eval type does not match expectation) will be generated via
 /// implementations over this trait.
 pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
-    type ParameterType: Evaluable;
+    type ParameterType: EvaluableRef<'static>;
 
-    fn update_concrete(
+    /// # Safety
+    ///
+    /// This function should be called with `update_concrete` macro.
+    unsafe fn update_concrete_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()>;
 
     fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()>;
 }
 
+#[macro_export]
+macro_rules! update_concrete {
+    ( $state:expr, $ctx:expr, $value:expr ) => {
+        unsafe { $state.update_concrete_unsafe($ctx, $value.unsafe_into()) }
+    };
+}
+
+#[macro_export]
+macro_rules! update_vector {
+    ( $state:expr, $ctx:expr, $physical_values:expr, $logical_rows:expr ) => {
+        unsafe {
+            $state.update_vector_unsafe(
+                $ctx,
+                $physical_values.phantom_data().unsafe_into(),
+                $physical_values.unsafe_into(),
+                $logical_rows,
+            )
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! update_repeat {
+    ( $state:expr, $ctx:expr, $value:expr, $repeat_times:expr ) => {
+        unsafe { $state.update_repeat_unsafe($ctx, $value.unsafe_into(), $repeat_times) }
+    };
+}
+
+#[macro_export]
+macro_rules! update {
+    ( $state:expr, $ctx:expr, $value:expr ) => {
+        unsafe { $state.update_unsafe($ctx, $value.unsafe_into()) }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_state_update_partial {
+    ( $ty:tt ) => {
+        #[inline]
+        unsafe fn update_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+        ) -> Result<()> {
+            self.update(ctx, value)
+        }
+
+        #[inline]
+        unsafe fn update_repeat_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+            repeat_times: usize,
+        ) -> Result<()> {
+            self.update_repeat(ctx, value, repeat_times)
+        }
+
+        #[inline]
+        unsafe fn update_vector_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            phantom_data: Option<$ty>,
+            physical_values: $ty::ChunkedType,
+            logical_rows: &[usize],
+        ) -> Result<()> {
+            self.update_vector(ctx, phantom_data, physical_values, logical_rows)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_concrete_state {
+    ( $ty:ty ) => {
+        #[inline]
+        unsafe fn update_concrete_unsafe(
+            &mut self,
+            ctx: &mut EvalContext,
+            value: Option<$ty>,
+        ) -> Result<()> {
+            self.update_concrete(ctx, value)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_unmatched_function_state {
+    ( $ty:ty ) => {
+        impl<T1, T> super::AggrFunctionStateUpdatePartial<T1> for $ty
+        where
+            T1: EvaluableRef<'static> + 'static,
+            T: EvaluableRef<'static> + 'static,
+            VectorValue: VectorValueExt<T::EvaluableType>,
+        {
+            #[inline]
+            default unsafe fn update_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: Option<T1>,
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+
+            #[inline]
+            default unsafe fn update_repeat_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: Option<T1>,
+                _repeat_times: usize,
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+
+            #[inline]
+            default unsafe fn update_vector_unsafe(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _phantom_data: Option<T1>,
+                _physical_values: T1::ChunkedType,
+                _logical_rows: &[usize],
+            ) -> Result<()> {
+                panic!("Unmatched parameter type")
+            }
+        }
+    };
+}
+
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
 /// be relied in `AggrFunctionState`.
-pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
+pub trait AggrFunctionStateUpdatePartial<TT: EvaluableRef<'static>> {
     /// Updates the internal state giving one row data.
     ///
     /// # Panics
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()>;
+    ///
+    /// # Safety
+    ///
+    /// This function should be called with `update` macro.
+    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>;
 
     /// Repeatedly updates the internal state giving one row data.
     ///
@@ -111,10 +245,14 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_repeat(
+    ///
+    /// # Safety
+    ///
+    /// This function should be called with `update_repeat_unsafe` macro.
+    unsafe fn update_repeat_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<TT>,
         repeat_times: usize,
     ) -> Result<()>;
 
@@ -124,15 +262,20 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_vector(
+    ///
+    /// # Safety
+    ///
+    /// This function should be called with `update_vector` macro.
+    unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        phantom_data: Option<TT>,
+        physical_values: TT::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()>;
 }
 
-impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRef<'static>, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState,
 {
@@ -140,62 +283,68 @@ where
     // one of the trait bound that `AggrFunctionState` requires.
 
     #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T>) -> Result<()> {
+    default unsafe fn update_unsafe(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _value: Option<T>,
+    ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
     #[inline]
-    default fn update_repeat(
+    default unsafe fn update_repeat_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
-        _value: &Option<T>,
+        _value: Option<T>,
         _repeat_times: usize,
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
     #[inline]
-    default fn update_vector(
+    default unsafe fn update_vector_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
-        _physical_values: &[Option<T>],
+        _phantom_data: Option<T>,
+        _physical_values: T::ChunkedType,
         _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 }
 
-impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
+impl<T: EvaluableRef<'static>, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState<ParameterType = T>,
 {
     #[inline]
-    fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
-        self.update_concrete(ctx, value)
+    unsafe fn update_unsafe(&mut self, ctx: &mut EvalContext, value: Option<T>) -> Result<()> {
+        self.update_concrete_unsafe(ctx, value)
     }
 
     #[inline]
-    fn update_repeat(
+    unsafe fn update_repeat_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        value: &Option<T>,
+        value: Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
         for _ in 0..repeat_times {
-            self.update_concrete(ctx, value)?;
+            self.update_concrete_unsafe(ctx, value.clone())?;
         }
         Ok(())
     }
 
     #[inline]
-    fn update_vector(
+    unsafe fn update_vector_unsafe(
         &mut self,
         ctx: &mut EvalContext,
-        physical_values: &[Option<T>],
+        _phantom_data: Option<T>,
+        physical_values: T::ChunkedType,
         logical_rows: &[usize],
     ) -> Result<()> {
         for physical_index in logical_rows {
-            self.update_concrete(ctx, &physical_values[*physical_index])?;
+            self.update_concrete_unsafe(ctx, physical_values.get_option_ref(*physical_index))?;
         }
         Ok(())
     }
@@ -231,12 +380,12 @@ mod tests {
         }
 
         impl ConcreteAggrFunctionState for AggrFnStateFoo {
-            type ParameterType = Int;
+            type ParameterType = &'static Int;
 
-            fn update_concrete(
+            unsafe fn update_concrete_unsafe(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Int>,
+                value: Option<&'static Int>,
             ) -> Result<()> {
                 if let Some(v) = value {
                     self.sum += *v;
@@ -258,25 +407,37 @@ mod tests {
         let mut s = AggrFnStateFoo::new();
 
         // Update using `Int` should success.
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(1))
-            .is_ok());
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(3))
-            .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&3)
+        )
+        .is_ok());
 
         // Update using other data type should panic.
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
-            let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Real::new(1.0).ok());
+            let _ = update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Real::new(1.0).ok().as_ref()
+            );
         });
         assert!(result.is_err());
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
-            let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Some(vec![1u8]));
+            let _ = update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Some(&[1u8] as BytesRef)
+            );
         });
         assert!(result.is_err());
 
@@ -286,17 +447,20 @@ mod tests {
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target[0].as_real_slice(), &[Real::new(4.0).ok()]);
+        assert_eq!(target[0].to_real_vec(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
-        assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-            .update(&mut ctx, &Some(1))
-            .is_ok());
+        assert!(update!(
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .is_ok());
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
         assert_eq!(
-            target[0].as_real_slice(),
+            target[0].to_real_vec(),
             &[Real::new(4.0).ok(), Real::new(5.0).ok()]
         );
 

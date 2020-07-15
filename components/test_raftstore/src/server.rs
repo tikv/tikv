@@ -5,18 +5,21 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use grpcio::{EnvBuilder, Error as GrpcError, Service};
+use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
-use kvproto::debugpb::create_debug;
+use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
+use kvproto::kvrpcpb::Context;
+use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
+use kvproto::tikvpb::TikvClient;
 use tempfile::{Builder, TempDir};
 
 use super::*;
 use encryption::DataKeyManager;
-use engine::Engines;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
@@ -44,6 +47,7 @@ use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::HandyRwLock;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine>>;
 type SimulateServerTransport =
@@ -126,7 +130,7 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksSnapshot>,
         system: RaftBatchSystem,
@@ -146,12 +150,11 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
@@ -172,23 +175,27 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone(), engines.kv.c().clone());
+        let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            Some(engines.kv.c().clone()),
+            Some(engines.kv.clone()),
             Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
+            Default::default(),
         );
         gc_worker.start().unwrap();
+        gc_worker
+            .start_observe_lock_apply(&mut coprocessor_host)
+            .unwrap();
 
         let mut lock_mgr = LockManager::new();
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
-            Some(lock_mgr.clone()),
+            lock_mgr.clone(),
             false,
         )?;
         self.storages.insert(node_id, raft_engine);
@@ -202,7 +209,7 @@ impl Simulator for ServerCluster {
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             Arc::clone(&importer),
             security_mgr.clone(),
         );
@@ -297,7 +304,7 @@ impl Simulator for ServerCluster {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor,
@@ -441,4 +448,42 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client)
+}
+
+pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    let count = 1;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    (cluster, leader, ctx)
+}
+
+pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    (cluster, client, ctx)
+}
+
+pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
+    let (cluster, leader, _) = must_new_cluster();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = DebugClient::new(channel);
+
+    (cluster, client, leader.get_store_id())
 }

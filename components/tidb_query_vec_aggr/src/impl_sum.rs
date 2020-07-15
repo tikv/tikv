@@ -5,6 +5,7 @@ use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
+use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
@@ -111,6 +112,21 @@ where
             has_value: false,
         }
     }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T>,
+    {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.has_value = true;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl<T> super::ConcreteAggrFunctionState for AggrFnStateSum<T>
@@ -118,19 +134,9 @@ where
     T: Summable,
     VectorValue: VectorValueExt<T>,
 {
-    type ParameterType = T;
+    type ParameterType = &'static T;
 
-    #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
-        match value {
-            None => Ok(()),
-            Some(value) => {
-                self.sum.add_assign(ctx, value)?;
-                self.has_value = true;
-                Ok(())
-            }
-        }
-    }
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
@@ -191,15 +197,14 @@ mod tests {
             .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 4)
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
-        let slice: &[Option<Real>] = exp_result.as_ref().as_ref();
-        state
-            .update_vector(&mut ctx, slice, exp_result.logical_rows())
-            .unwrap();
+        let vec = exp_result.as_ref().to_real_vec();
+        let chunked_vec: NotChunkedVec<Real> = vec.into();
+        update_vector!(state, &mut ctx, &chunked_vec, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();
 
-        assert_eq!(aggr_result[0].as_real_slice(), &[Real::new(54.5).ok()]);
+        assert_eq!(aggr_result[0].to_real_vec(), &[Real::new(54.5).ok()]);
     }
 
     #[test]

@@ -15,12 +15,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
-use txn_types::{Key, Value};
+use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -148,6 +148,7 @@ fn on_read_result(
     mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
+    // TODO(5kbpers): set ExtraOp for cb_ctx here.
     let cb_ctx = new_ctx(&read_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -206,6 +207,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -237,8 +239,9 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_txn_extra(
                 cmd,
+                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -270,19 +273,14 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
 impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
-    fn async_write(
-        &self,
-        ctx: &Context,
-        modifies: Vec<Modify>,
-        cb: Callback<()>,
-    ) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
-        if modifies.is_empty() {
+        if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(modifies.len());
-        for m in modifies {
+        let mut reqs = Vec::with_capacity(batch.modifies.len());
+        for m in batch.modifies {
             let mut req = Request::default();
             match m {
                 Modify::Delete(cf, k) => {
@@ -323,6 +321,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

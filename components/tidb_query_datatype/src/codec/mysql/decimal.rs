@@ -1827,9 +1827,17 @@ impl ConvertTo<Decimal> for Json {
     /// Port from TiDB's types.ConvertJSONToDecimal
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self.as_ref().get_type() {
+        self.as_ref().convert(ctx)
+    }
+}
+
+impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self.get_type() {
             JsonType::String => {
-                Decimal::from_str(self.as_ref().get_str()?).or_else(|e| {
+                Decimal::from_str(self.get_str()?).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
                     // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str

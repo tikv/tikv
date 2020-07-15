@@ -20,8 +20,34 @@ where
     C::compare(lhs, rhs)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(&rhs)) as i64),
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn compare_bytes<C: Collator, F: CmpOp>(
+    lhs: Option<BytesRef>,
+    rhs: Option<BytesRef>,
+) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (None, None) => F::compare_null(),
+        (None, _) | (_, None) => F::compare_partial_null(),
+        (Some(lhs), Some(rhs)) => {
+            let ord = C::sort_compare(lhs, rhs)?;
+            Some(F::compare_order(ord) as i64)
+        }
+    })
+}
+
 pub trait Comparer {
-    type T: Evaluable;
+    type T: Evaluable + EvaluableRet;
 
     fn compare(lhs: Option<&Self::T>, rhs: Option<&Self::T>) -> Result<Option<i64>>;
 }
@@ -30,7 +56,7 @@ pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
     _phantom: std::marker::PhantomData<(T, F)>,
 }
 
-impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
+impl<T: Evaluable + EvaluableRet + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
     #[inline]
@@ -39,26 +65,6 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(rhs)) as i64),
-        })
-    }
-}
-
-pub struct StringComparer<C: Collator, F: CmpOp> {
-    _phantom: std::marker::PhantomData<(C, F)>,
-}
-
-impl<C: Collator, F: CmpOp> Comparer for StringComparer<C, F> {
-    type T = Bytes;
-
-    #[inline]
-    fn compare(lhs: Option<&Bytes>, rhs: Option<&Bytes>) -> Result<Option<i64>> {
-        Ok(match (lhs, rhs) {
-            (None, None) => F::compare_null(),
-            (None, _) | (_, None) => F::compare_partial_null(),
-            (Some(lhs), Some(rhs)) => {
-                let ord = C::sort_compare(lhs, rhs)?;
-                Some(F::compare_order(ord) as i64)
-            }
         })
     }
 }
@@ -221,10 +227,32 @@ impl CmpOp for CmpOpNullEQ {
 
 #[rpn_fn(varg)]
 #[inline]
-pub fn coalesce<T: Evaluable>(args: &[Option<&T>]) -> Result<Option<T>> {
+pub fn coalesce<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     for arg in args {
         if arg.is_some() {
             return Ok(arg.cloned());
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_vec()));
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok(arg.map(|x| x.to_owned()));
         }
     }
     Ok(None)
@@ -244,7 +272,7 @@ pub fn greatest_real(args: &[Option<&Real>]) -> Result<Option<Real>> {
 
 #[rpn_fn(varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<&Bytes>]) -> Result<Option<Bytes>> {
+pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {

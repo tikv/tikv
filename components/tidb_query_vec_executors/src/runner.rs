@@ -123,6 +123,7 @@ fn is_arrow_encodable(schema: &[FieldType]) -> bool {
         .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
+#[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
@@ -143,12 +144,15 @@ pub fn build_executors<S: Storage + 'static>(
 
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
+            let primary_column_ids = descriptor.take_primary_column_ids().into();
+
             executor = Box::new(
                 BatchTableScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
+                    primary_column_ids,
                     descriptor.get_desc(),
                 )?
                 .collect_summary(summary_slot_index),
@@ -159,12 +163,14 @@ pub fn build_executors<S: Storage + 'static>(
 
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
+            let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             executor = Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
+                    primary_column_ids_len,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                 )?

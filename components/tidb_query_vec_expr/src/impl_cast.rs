@@ -61,7 +61,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Int) => cast_any_as_any_fn_meta::<Duration, Int>(),
         (EvalType::Json, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Json, Int>()
+                cast_json_as_any_fn_meta::<Int>()
             } else {
                 cast_json_as_uint_fn_meta()
             }
@@ -104,7 +104,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
-        (EvalType::Json, EvalType::Real) => cast_any_as_any_fn_meta::<Json, Real>(),
+        (EvalType::Json, EvalType::Real) => cast_json_as_any_fn_meta::<Real>(),
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
@@ -125,7 +125,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Decimal, EvalType::Bytes) => cast_any_as_string_fn_meta::<Decimal>(),
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
+        (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -140,7 +140,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Real, EvalType::Decimal) => cast_real_as_decimal_fn_meta(),
         (EvalType::Bytes, EvalType::Decimal) => {
             if !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Bytes>()
+                cast_bytes_as_decimal_fn_meta()
             } else {
                 cast_string_as_unsigned_decimal_fn_meta()
             }
@@ -154,7 +154,7 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
+        (EvalType::Json, EvalType::Decimal) => cast_json_as_decimal_fn_meta(),
 
         // any as duration
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
@@ -181,16 +181,16 @@ fn get_cast_fn_rpn_meta(
             {
                 cast_bool_as_json_fn_meta()
             } else if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Json>()
+                cast_any_as_json_fn_meta::<Int>()
             } else {
                 cast_uint_as_json_fn_meta()
             }
         }
-        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
+        (EvalType::Real, EvalType::Json) => cast_any_as_json_fn_meta::<Real>(),
         (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
-        (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
-        (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
-        (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
+        (EvalType::Decimal, EvalType::Json) => cast_any_as_json_fn_meta::<Decimal>(),
+        (EvalType::DateTime, EvalType::Json) => cast_any_as_json_fn_meta::<DateTime>(),
+        (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
@@ -305,7 +305,7 @@ fn cast_string_as_int(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -313,7 +313,7 @@ fn cast_string_as_int(
             // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
             //  then it will return res from EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
-            let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
+            let val = get_valid_utf8_prefix(ctx, val)?;
             let val = val.trim();
             let is_str_neg = val.starts_with('-');
             if metadata.get_in_union() && is_unsigned && is_str_neg {
@@ -373,7 +373,7 @@ fn cast_string_as_int(
 }
 
 #[rpn_fn(capture = [ctx])]
-fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<&Bytes>) -> Result<Option<Int>> {
+fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -406,7 +406,7 @@ fn cast_decimal_as_uint(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<&Json>) -> Result<Option<Int>> {
+fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(j) => {
@@ -492,7 +492,7 @@ fn cast_real_as_unsigned_real(
 fn cast_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -509,7 +509,7 @@ fn cast_string_as_signed_real(
 fn cast_binary_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -527,7 +527,7 @@ fn cast_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -547,7 +547,7 @@ fn cast_string_as_unsigned_real(
 fn cast_binary_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
@@ -590,7 +590,7 @@ fn cast_decimal_as_unsigned_real(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
+fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&T>,
@@ -645,12 +645,12 @@ fn cast_float_real_as_string(
 fn cast_string_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = val.clone();
+            let val = val.to_vec();
             cast_as_string_helper(ctx, extra, val)
         }
     }
@@ -763,7 +763,7 @@ fn cast_string_as_unsigned_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &tipb::InUnionMetadata,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -828,10 +828,50 @@ fn cast_decimal_as_unsigned_decimal(
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
+fn cast_any_as_decimal<From: Evaluable + EvaluableRet + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&From>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec: Decimal = val.convert(ctx)?;
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_json_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec: Decimal = val.convert(ctx)?;
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_bytes_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<BytesRef>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
@@ -906,7 +946,7 @@ macro_rules! cast_as_duration {
         fn $as_uint_fn(
             ctx: &mut EvalContext,
             extra: &RpnFnCallExtra,
-            val: Option<&$ty>,
+            val: Option<$ty>,
         ) -> Result<Option<Duration>> {
             match val {
                 None => Ok(None),
@@ -934,21 +974,17 @@ macro_rules! cast_as_duration {
 }
 
 cast_as_duration!(
-    Real,
+    &Real,
     cast_real_as_duration,
     val.into_inner().to_string().as_bytes()
 );
-cast_as_duration!(Bytes, cast_bytes_as_duration, val);
+cast_as_duration!(BytesRef, cast_bytes_as_duration, val);
 cast_as_duration!(
-    Decimal,
+    &Decimal,
     cast_decimal_as_duration,
     val.to_string().as_bytes()
 );
-cast_as_duration!(
-    Json,
-    cast_json_as_duration,
-    val.as_ref().unquote()?.as_bytes()
-);
+cast_as_duration!(JsonRef, cast_json_as_duration, val.unquote()?.as_bytes());
 
 #[rpn_fn(capture = [ctx, extra])]
 fn cast_int_as_time(
@@ -1004,7 +1040,7 @@ fn cast_real_as_time(
 fn cast_string_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    val: Option<&Bytes>,
+    val: Option<BytesRef>,
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
@@ -1111,7 +1147,7 @@ fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
 
 #[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<&Bytes>) -> Result<Option<Json>> {
+fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -1136,19 +1172,76 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<&Bytes>) -> Resul
 
 #[rpn_fn]
 #[inline]
-fn cast_json_as_json(val: Option<&Json>) -> Result<Option<Json>> {
+fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => Ok(Some(val.clone())),
+        Some(val) => Ok(Some(val.to_owned())),
     }
 }
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
+fn cast_any_as_any<From: ConvertTo<To> + Evaluable + EvaluableRet, To: Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<To>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_json_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Json>>(
+    ctx: &mut EvalContext,
+    val: Option<JsonRef>,
+) -> Result<Option<To>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = To::convert_from(ctx, val.to_owned())?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_as_json<From: ConvertTo<Json> + Evaluable + EvaluableRet>(
+    ctx: &mut EvalContext,
+    val: Option<&From>,
+) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
+    ctx: &mut EvalContext,
+    val: Option<&From>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -1188,7 +1281,7 @@ mod tests {
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, &RpnFnCallExtra, Option<Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let ret_field_type: FieldType = FieldType::default();
@@ -1201,7 +1294,7 @@ mod tests {
 
     fn test_none_with_ctx<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, Option<Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let r = func(&mut ctx, None).unwrap();
@@ -1210,7 +1303,7 @@ mod tests {
 
     fn test_none_with_extra<F, Input, Ret>(func: F)
     where
-        F: Fn(&RpnFnCallExtra, Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(&RpnFnCallExtra, Option<Input>) -> Result<Option<Ret>>,
     {
         let ret_field_type: FieldType = FieldType::default();
         let extra = RpnFnCallExtra {
@@ -1222,7 +1315,7 @@ mod tests {
 
     fn test_none_with_metadata<F, Input, Ret>(func: F)
     where
-        F: Fn(&tipb::InUnionMetadata, Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(&tipb::InUnionMetadata, Option<Input>) -> Result<Option<Ret>>,
     {
         let metadata = make_metadata(true);
         let r = func(&metadata, None).unwrap();
@@ -1231,7 +1324,7 @@ mod tests {
 
     fn test_none_with_ctx_and_metadata<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &tipb::InUnionMetadata, Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(&mut EvalContext, &tipb::InUnionMetadata, Option<Input>) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let metadata = make_metadata(true);
@@ -1245,7 +1338,7 @@ mod tests {
             &mut EvalContext,
             &RpnFnCallExtra,
             &tipb::InUnionMetadata,
-            Option<&Input>,
+            Option<Input>,
         ) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
@@ -1260,7 +1353,7 @@ mod tests {
 
     fn test_none_with_nothing<F, Input, Ret>(func: F)
     where
-        F: Fn(Option<&Input>) -> Result<Option<Ret>>,
+        F: Fn(Option<Input>) -> Result<Option<Ret>>,
     {
         let r = func(None).unwrap();
         assert!(r.is_none());
@@ -2194,7 +2287,7 @@ mod tests {
 
     #[test]
     fn test_json_as_int() {
-        test_none_with_ctx(cast_any_as_any::<Json, Int>);
+        test_none_with_ctx(cast_json_as_any::<Int>);
 
         // no overflow
         let cs = vec![
@@ -2248,7 +2341,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Int>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_any::<Int>(&mut ctx, Some(input.as_ref()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
@@ -2288,7 +2381,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_json_as_uint(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_uint(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2330,7 +2423,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_json_as_uint(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_uint(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3093,7 +3186,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Json, Real>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_any::<Real>(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -3111,7 +3204,7 @@ mod tests {
         cast_func: FnCast,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&T>) -> Result<Option<Bytes>>,
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<T>) -> Result<Option<Bytes>>,
     {
         #[derive(Clone, Copy)]
         enum FlenType {
@@ -3348,7 +3441,7 @@ mod tests {
                 .into();
                 let extra = make_extra(&rft);
 
-                let r = cast_func(&mut ctx, &extra, Some(&input.clone()));
+                let r = cast_func(&mut ctx, &extra, Some(input.clone()));
 
                 let mut expect = bytes.clone();
                 if *pad_zero && flen > expect.len() as isize {
@@ -3372,19 +3465,25 @@ mod tests {
     fn test_int_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Int>);
 
-        let cs: Vec<(i64, Vec<u8>, String)> = vec![
+        let cs: Vec<(&i64, Vec<u8>, String)> = vec![
             (
-                i64::MAX,
+                &i64::MAX,
                 i64::MAX.to_string().into_bytes(),
                 i64::MAX.to_string(),
             ),
             (
-                i64::MIN,
+                &i64::MIN,
                 i64::MIN.to_string().into_bytes(),
                 i64::MIN.to_string(),
             ),
         ];
         test_as_string_helper(cs, cast_any_as_string::<Int>, "cast_any_as_string::<Int>");
+    }
+
+    fn helper_get_cs_ref<U, V: Clone, W: Clone>(cs: &[(U, V, W)]) -> Vec<(&U, V, W)> {
+        cs.iter()
+            .map(|(u, v, w)| (u, v.clone(), w.clone()))
+            .collect()
     }
 
     #[test]
@@ -3409,8 +3508,11 @@ mod tests {
             ),
             (0u64, 0u64.to_string().into_bytes(), 0u64.to_string()),
         ];
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
         test_as_string_helper(
-            cs,
+            ref_cs,
             |ctx, extra, val| {
                 let val = val.map(|x| *x as i64);
                 cast_uint_as_string(ctx, extra, val.as_ref())
@@ -3438,8 +3540,10 @@ mod tests {
             (0.1f32, 0.1f32.to_string().into_bytes(), 0.1f32.to_string()),
         ];
 
+        let ref_cs = helper_get_cs_ref(&cs);
+
         test_as_string_helper(
-            cs,
+            ref_cs,
             |ctx, extra, val| {
                 cast_float_real_as_string(
                     ctx,
@@ -3485,8 +3589,10 @@ mod tests {
             (0.1f64, 0.1f64.to_string().into_bytes(), 0.1f64.to_string()),
         ];
 
+        let ref_cs = helper_get_cs_ref(&cs);
+
         test_as_string_helper(
-            cs,
+            ref_cs,
             |ctx, extra, val| {
                 cast_any_as_string::<Real>(ctx, extra, val.map(|x| Real::new(*x).unwrap()).as_ref())
             },
@@ -3498,14 +3604,17 @@ mod tests {
     fn test_string_as_string() {
         test_none_with_ctx_and_extra(cast_string_as_string);
 
-        let cs: Vec<(Vec<u8>, Vec<u8>, String)> = vec![
+        let test_vec_1 = Vec::from(b"".as_ref());
+        let test_vec_2 = (0..1024).map(|_| b'0').collect::<Vec<u8>>();
+
+        let cs: Vec<(BytesRef, Vec<u8>, String)> = vec![
             (
-                Vec::from(b"".as_ref()),
+                test_vec_1.as_slice(),
                 Vec::from(b"".as_ref()),
                 String::from("<empty-str>"),
             ),
             (
-                (0..1024).map(|_| b'0').collect::<Vec<u8>>(),
+                test_vec_2.as_slice(),
                 (0..1024).map(|_| b'0').collect::<Vec<u8>>(),
                 String::from("1024 zeros('0')"),
             ),
@@ -3563,8 +3672,10 @@ mod tests {
             ),
         ];
 
+        let ref_cs = helper_get_cs_ref(&cs);
+
         test_as_string_helper(
-            cs,
+            ref_cs,
             cast_any_as_string::<Decimal>,
             "cast_any_as_string::<Decimal>",
         );
@@ -3603,7 +3714,14 @@ mod tests {
                 "2000-01-01 12:13:14.666600".to_string(),
             ),
         ];
-        test_as_string_helper(cs, cast_any_as_string::<Time>, "cast_any_as_string::<Time>");
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
+        test_as_string_helper(
+            ref_cs,
+            cast_any_as_string::<Time>,
+            "cast_any_as_string::<Time>",
+        );
     }
 
     #[test]
@@ -3632,8 +3750,11 @@ mod tests {
                 "-17:51:05".to_string(),
             ),
         ];
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
         test_as_string_helper(
-            cs,
+            ref_cs,
             cast_any_as_string::<Duration>,
             "cast_any_as_string::<Duration>",
         );
@@ -3641,7 +3762,7 @@ mod tests {
 
     #[test]
     fn test_json_as_string() {
-        test_none_with_ctx(cast_any_as_any::<Json, Bytes>);
+        test_none_with_ctx(cast_json_as_bytes);
 
         // FIXME: this case is not exactly same as TiDB's,
         //  such as(left is TiKV, right is TiDB)
@@ -3700,7 +3821,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Json, Bytes>(&mut ctx, Some(&input.clone()));
+            let r = cast_json_as_bytes(&mut ctx, Some(input.as_ref()));
             let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -4239,7 +4360,7 @@ mod tests {
 
     #[test]
     fn test_string_as_signed_decimal() {
-        test_none_with_ctx_and_extra(cast_any_as_decimal::<Bytes>);
+        test_none_with_ctx_and_extra(cast_bytes_as_decimal);
 
         // TODO: add test case that make Decimal::from_bytes return err.
         let cs = vec![
@@ -4487,8 +4608,8 @@ mod tests {
         test_as_decimal_helper(
             cs,
             |ctx, extra, _, val| {
-                let val = val.map(|x| x.as_bytes().to_vec());
-                cast_any_as_decimal::<Bytes>(ctx, extra, val.as_ref())
+                let val = val.map(|x| x.as_bytes());
+                cast_bytes_as_decimal(ctx, extra, val)
             },
             |x| (*x).to_string(),
             "cast_string_as_signed_decimal",
@@ -4694,8 +4815,8 @@ mod tests {
         test_as_decimal_helper(
             cs,
             |ctx, extra, metadata, val| {
-                let val = val.map(|x| x.as_bytes().to_vec());
-                cast_string_as_unsigned_decimal(ctx, extra, metadata, val.as_ref())
+                let val = val.map(|x| x.as_bytes());
+                cast_string_as_unsigned_decimal(ctx, extra, metadata, val)
             },
             |x| (*x).to_string(),
             "cast_string_as_unsigned_decimal",
@@ -4902,7 +5023,7 @@ mod tests {
 
     #[test]
     fn test_json_as_decimal() {
-        test_none_with_ctx_and_extra(cast_any_as_decimal::<Json>);
+        test_none_with_ctx_and_extra(cast_json_as_decimal);
 
         // TODO: add test case that make Decimal::from_str failed
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
@@ -5013,7 +5134,7 @@ mod tests {
 
         test_as_decimal_helper(
             cs,
-            cast_closure_with_metadata!(cast_any_as_decimal::<Json>),
+            |ctx, extra, _, val| cast_json_as_decimal(ctx, extra, val.map(|x| x.as_ref())),
             |x| x.to_string(),
             "cast_json_as_decimal",
         );
@@ -5168,12 +5289,12 @@ mod tests {
 
     fn test_as_duration_helper<T: Clone, FnCast>(
         base_cs: Vec<T>,
-        func_to_cast_str: impl Fn(&T) -> String,
-        func_to_debug_str: impl Fn(&T) -> String,
+        func_to_cast_str: impl Fn(T) -> String,
+        func_to_debug_str: impl Fn(T) -> String,
         func_cast: FnCast,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<&T>) -> Result<Option<Duration>>,
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<T>) -> Result<Option<Duration>>,
     {
         // cast_real_as_duration call `Duration::parse`, directly,
         // and `Duration::parse`, is test in duration.rs.
@@ -5194,9 +5315,9 @@ mod tests {
                 .into();
                 let extra = make_extra(&rft);
 
-                let result = func_cast(&mut ctx, &extra, Some(&val.clone()));
+                let result = func_cast(&mut ctx, &extra, Some(val.clone()));
 
-                let val_str = func_to_cast_str(&val);
+                let val_str = func_to_cast_str(val.clone());
                 let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
 
                 // make log
@@ -5207,7 +5328,7 @@ mod tests {
                         ERR_DATA_OUT_OF_RANGE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
+                                func_name, func_to_debug_str(val.clone()), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5215,7 +5336,7 @@ mod tests {
                         ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
+                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
                             check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5224,7 +5345,7 @@ mod tests {
                             let expect_err: tidb_query_common::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                                func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, expect_err
+                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, expect_err
                             );
                             assert!(result.is_err(), "log: {}", log)
                         }
@@ -5232,7 +5353,7 @@ mod tests {
                     Ok(v) => {
                         let log = format!(
                             "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                            func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, v
+                            func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, v
                         );
                         check_result(Some(&v), &result, log.as_str())
                     }
@@ -5261,7 +5382,7 @@ mod tests {
             |x| x.to_string(),
             |x| x.to_string(),
             |ctx, extra, val| {
-                let val = val.map(|x| Real::new(*x).unwrap());
+                let val = val.map(|x| Real::new(x).unwrap());
                 cast_real_as_duration(ctx, extra, val.as_ref())
             },
             "cast_real_as_duration",
@@ -5272,11 +5393,11 @@ mod tests {
     fn test_bytes_as_duration() {
         test_none_with_ctx_and_extra(cast_bytes_as_duration);
 
-        let cs: Vec<Bytes> = vec![
-            b"17:51:04.78".to_vec(),
-            b"-17:51:04.78".to_vec(),
-            b"17:51:04.78".to_vec(),
-            b"-17:51:04.78".to_vec(),
+        let cs: Vec<BytesRef> = vec![
+            b"17:51:04.78",
+            b"-17:51:04.78",
+            b"17:51:04.78",
+            b"-17:51:04.78",
         ];
 
         test_as_duration_helper(
@@ -5334,8 +5455,11 @@ mod tests {
                 .unwrap()
                 .unwrap(),
         ];
+
+        let cs_ref: Vec<&Decimal> = cs.iter().collect();
+
         test_as_duration_helper(
-            cs,
+            cs_ref,
             |x| x.to_string(),
             |x| x.to_string(),
             cast_decimal_as_duration,
@@ -5487,9 +5611,11 @@ mod tests {
             Json::from_bool(false).unwrap(),
             Json::none().unwrap(),
         ];
+
+        let cs_ref: Vec<JsonRef> = cs.iter().map(|x| x.as_ref()).collect();
         test_as_duration_helper(
-            cs,
-            |x| x.as_ref().unquote().unwrap(),
+            cs_ref,
+            |x| x.unquote().unwrap(),
             |x| format!("{:?}", x),
             cast_json_as_duration,
             "cast_json_as_duration",
@@ -5498,7 +5624,7 @@ mod tests {
 
     #[test]
     fn test_int_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Int, Json>);
+        test_none_with_ctx(cast_any_as_json::<Int>);
 
         let cs = vec![
             (i64::MIN, Json::from_i64(i64::MIN).unwrap()),
@@ -5507,7 +5633,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Int, Json>(&mut ctx, Some(&input));
+            let r = cast_any_as_json::<Int>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5547,7 +5673,7 @@ mod tests {
 
     #[test]
     fn test_real_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Real, Json>);
+        test_none_with_ctx(cast_any_as_json::<Real>);
 
         let cs = vec![
             (
@@ -5563,7 +5689,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Real, Json>(&mut ctx, Real::new(input).as_ref().ok());
+            let r = cast_any_as_json::<Real>(&mut ctx, Real::new(input).as_ref().ok());
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5655,7 +5781,7 @@ mod tests {
 
     #[test]
     fn test_decimal_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Decimal, Json>);
+        test_none_with_ctx(cast_any_as_json::<Decimal>);
         let cs = vec![
             (
                 Decimal::from_f64(i64::MIN as f64).unwrap(),
@@ -5681,7 +5807,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, Some(&input));
+            let r = cast_any_as_json::<Decimal>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -5689,7 +5815,7 @@ mod tests {
 
     #[test]
     fn test_time_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Time, Json>);
+        test_none_with_ctx(cast_any_as_json::<Time>);
         let mut ctx = EvalContext::default();
 
         // TODO: add more case for other TimeType
@@ -5728,7 +5854,7 @@ mod tests {
         ];
         for (input, time_type, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Time, Json>(&mut ctx, Some(&input));
+            let result = cast_any_as_json::<Time>(&mut ctx, Some(&input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
@@ -5745,7 +5871,7 @@ mod tests {
 
     #[test]
     fn test_duration_as_json() {
-        test_none_with_ctx(cast_any_as_any::<Duration, Json>);
+        test_none_with_ctx(cast_any_as_json::<Duration>);
 
         // TODO: add more case
         let cs = vec![
@@ -5761,7 +5887,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Duration, Json>(&mut ctx, Some(&input));
+            let result = cast_any_as_json::<Duration>(&mut ctx, Some(&input));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }
@@ -5795,7 +5921,7 @@ mod tests {
 
         for input in cs {
             let expect = input.clone();
-            let result = cast_json_as_json(Some(&input.clone()));
+            let result = cast_json_as_json(Some(input.as_ref()));
             let log = make_log(&input, &expect, &result);
             check_result(Some(&expect), &result, log.as_str());
         }

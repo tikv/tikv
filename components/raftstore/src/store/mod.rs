@@ -27,8 +27,8 @@ pub use self::bootstrap::{
 pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
-    SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
+    Callback, CasualMessage, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, ReadCallback,
+    ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
@@ -48,8 +48,8 @@ pub use self::snap::{
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::{
-    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadStats, SplitConfig,
-    SplitConfigManager,
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
+    SplitConfig, SplitConfigManager,
 };
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Log format, one of json, text. Default to text.
+# log-format = "text"
+
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -844,6 +847,11 @@
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
 
+[backup]
+## Number of threads to perform backup tasks.
+## The default value is set to min(CPU_NUM * 0.75, 32).
+# num-threads = 24
+
 [pessimistic-txn]
 ## Enable pessimistic transaction
 # enabled = true
@@ -869,3 +877,9 @@
 ## Max bytes that GC worker can write to rocksdb in one second.
 ## If it is set to 0, there is no limit.
 # max-write-bytes-per-sec = "0"
+
+## Enable GC by compaction filter or not.
+# enable-compaction-filter = false
+
+## Garbage ratio threshold to trigger a GC.
+# ratio-threshold = 1.1

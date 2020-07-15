@@ -40,7 +40,7 @@ pub fn pi() -> Result<Option<Real>> {
 
 #[rpn_fn]
 #[inline]
-pub fn crc32(arg: Option<&Bytes>) -> Result<Option<Int>> {
+pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(arg
         .as_ref()
         .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
@@ -100,8 +100,8 @@ pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Op
 }
 
 pub trait Ceil {
-    type Input: Evaluable;
-    type Output: Evaluable;
+    type Input: Evaluable + EvaluableRet;
+    type Output: EvaluableRet;
 
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
@@ -180,8 +180,8 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<
 }
 
 pub trait Floor {
-    type Input: Evaluable;
-    type Output: Evaluable;
+    type Input: Evaluable + EvaluableRet;
+    type Output: EvaluableRet;
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
@@ -290,13 +290,13 @@ fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
-    Ok(arg.and_then(|n| {
+    Ok(arg.map(|n| {
         if **n > 0f64 {
-            Some(1)
+            1
         } else if **n == 0f64 {
-            Some(0)
+            0
         } else {
-            Some(-1)
+            -1
         }
     }))
 }
@@ -442,7 +442,7 @@ pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Re
 #[inline]
 #[rpn_fn]
 pub fn conv(
-    n: Option<&Bytes>,
+    n: Option<BytesRef>,
     from_base: Option<&Int>,
     to_base: Option<&Int>,
 ) -> Result<Option<Bytes>> {
@@ -550,6 +550,51 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
         x
     } else {
         Real::from(tmp.trunc() / shift)
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            if *digits >= 0 {
+                Ok(Some(*number))
+            } else {
+                let power = 10.0_f64.powi(-digits as i32);
+                let frac = *number as f64 / power;
+                Ok(Some((frac.round() * power) as i64))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn round_with_frac_dec(arg0: Option<&Decimal>, arg1: Option<&Int>) -> Result<Option<Decimal>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let res: codec::Result<Decimal> = number
+                .to_owned()
+                .round(*digits as i8, RoundMode::HalfEven)
+                .into();
+            Ok(Some(res?))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_with_frac_real(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let power = 10.0_f64.powi(-digits as i32);
+            let frac = *number / power;
+            Ok(Some(Real::from(frac.round() * power)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -838,7 +883,7 @@ mod tests {
         }
     }
 
-    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    fn test_unary_func_ok_none<I: Evaluable, O: EvaluableRet>(sig: ScalarFuncSig)
     where
         O: PartialEq,
         Option<I>: Into<ScalarValue>,
@@ -1586,6 +1631,110 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let int_cases = vec![
+            (Some(Int::from(23)), Some(Int::from(2)), Some(Int::from(23))),
+            (
+                Some(Int::from(23)),
+                Some(Int::from(-1)),
+                Some(Int::from(20)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-1)),
+                Some(Int::from(-30)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (
+                Some(Int::from(-27)),
+                Some(Int::from(-2)),
+                Some(Int::from(0)),
+            ),
+            (None, Some(Int::from(-27)), None),
+            (Some(Int::from(-27)), None, None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in int_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let dec_cases = vec![
+            (
+                Some(Decimal::from_str("150.000").unwrap()),
+                Some(Int::from(2)),
+                Some(Decimal::from_str("150.000").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("150.257").unwrap()),
+                Some(Int::from(1)),
+                Some(Decimal::from_str("150.3").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("153.257").unwrap()),
+                Some(Int::from(-1)),
+                Some(Decimal::from_str("150").unwrap()),
+            ),
+            (Some(Decimal::from_str("153.257").unwrap()), None, None),
+            (None, Some(Int::from(-27)), None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in dec_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracDec)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let real_cases = vec![
+            (
+                Some(Real::from(-1.298_f64)),
+                Some(Int::from(1)),
+                Some(Real::from(-1.3_f64)),
+            ),
+            (
+                Some(Real::from(-1.298_f64)),
+                Some(Int::from(0)),
+                Some(Real::from(-1.0_f64)),
+            ),
+            (
+                Some(Real::from(23.298_f64)),
+                Some(Int::from(2)),
+                Some(Real::from(23.30_f64)),
+            ),
+            (
+                Some(Real::from(23.298_f64)),
+                Some(Int::from(-1)),
+                Some(Real::from(20.0_f64)),
+            ),
+            (Some(Real::from(23.298_f64)), None, None),
+            (None, Some(Int::from(2)), None),
+            (None, None, None),
+        ];
+
+        for (arg0, arg1, exp) in real_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracReal)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

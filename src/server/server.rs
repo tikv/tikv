@@ -289,10 +289,12 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
+    use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
+    use txn_types::TxnExtra;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -335,6 +337,16 @@ mod tests {
             Ok(())
         }
 
+        fn send_command_txn_extra(
+            &self,
+            _: RaftCmdRequest,
+            _: TxnExtra,
+            _: Callback<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
         fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
@@ -368,9 +380,17 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker =
-            GcWorker::new(storage.get_engine(), None, None, None, Default::default());
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            None,
+            None,
+            None,
+            Default::default(),
+            Default::default(),
+        );
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();

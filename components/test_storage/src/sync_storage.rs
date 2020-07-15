@@ -53,7 +53,8 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
     }
 
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder = TestStorageBuilder::from_engine(self.engine.clone());
+        let mut builder =
+            TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
@@ -63,6 +64,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             None,
             None,
             self.gc_config.unwrap_or_default(),
+            Default::default(),
         );
         gc_worker.start()?;
 

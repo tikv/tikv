@@ -4,10 +4,12 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
+use super::*;
 use tidb_query_common::Result;
+use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
@@ -64,6 +66,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         let out_ft = aggr_def.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
+        let out_coll = box_try!(out_ft.as_accessor().collation());
 
         if out_et != eval_type {
             return Err(other_err!(
@@ -80,80 +83,99 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             src_schema.len(),
         )?);
 
-        match_template_evaluable! {
-            TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT, T>::new()))
+        if out_et == EvalType::Bytes {
+            return match_template_collator! {
+                C, match out_coll {
+                    Collation::C => Ok(Box::new(AggFnExtremumForBytes::<C, T>::new()))
+                }
+            };
+        }
+
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_type {
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<&'static TT, T>::new())),
+                EvalType::Json => Ok(Box::new(AggFnExtremum::<BytesRef<'static>, T>::new())),
+                EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new()))
             }
         }
     }
 }
 
-/// The MAX/MIN aggregate functions.
 #[derive(Debug, AggrFunction)]
-#[aggr_function(state = AggFnStateExtremum::<T>::new(self.ord))]
-pub struct AggFnExtremum<T, E>
+#[aggr_function(state = AggFnStateExtremum4Bytes::<C, E>::new())]
+pub struct AggFnExtremumForBytes<C, E>
 where
-    T: Evaluable + Ord,
+    C: Collator,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<Bytes>,
 {
-    _phantom: std::marker::PhantomData<(T, E)>,
-    ord: Ordering,
+    _phantom: std::marker::PhantomData<(C, E)>,
 }
 
-impl<T, E> AggFnExtremum<T, E>
+impl<C, E> AggFnExtremumForBytes<C, E>
 where
-    T: Evaluable + Ord,
+    C: Collator,
     E: Extremum,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<Bytes>,
 {
     fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            ord: E::ORD,
         }
     }
 }
 
-/// The state of the MAX/MIN aggregate function.
 #[derive(Debug)]
-pub struct AggFnStateExtremum<T>
+pub struct AggFnStateExtremum4Bytes<C, E>
 where
-    T: Evaluable + Ord,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
 {
-    ord: Ordering,
-    extremum: Option<T>,
+    extremum: Option<Bytes>,
+    _phantom: std::marker::PhantomData<(C, E)>,
 }
 
-impl<T> AggFnStateExtremum<T>
+impl<C, E> AggFnStateExtremum4Bytes<C, E>
 where
-    T: Evaluable + Ord,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
 {
-    pub fn new(ord: Ordering) -> Self {
+    pub fn new() -> Self {
         Self {
-            ord,
             extremum: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<T> super::ConcreteAggrFunctionState for AggFnStateExtremum<T>
+impl<C, E> super::ConcreteAggrFunctionState for AggFnStateExtremum4Bytes<C, E>
 where
-    T: Evaluable + Ord,
-    VectorValue: VectorValueExt<T>,
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
 {
-    type ParameterType = T;
+    type ParameterType = BytesRef<'static>;
 
     #[inline]
-    fn update_concrete(
+    unsafe fn update_concrete_unsafe(
         &mut self,
         _ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
+        value: Option<Self::ParameterType>,
     ) -> Result<()> {
-        if value.is_some() && (self.extremum.is_none() || self.extremum.cmp(value) == self.ord) {
-            self.extremum = value.clone();
+        if value.is_none() {
+            return Ok(());
+        }
+
+        if self.extremum.is_none() {
+            self.extremum = value.map(|x| x.to_owned_value());
+            return Ok(());
+        }
+
+        if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
+            self.extremum = value.map(|x| x.to_owned_value());
         }
         Ok(())
     }
@@ -161,6 +183,89 @@ where
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         target[0].push(self.extremum.clone());
+        Ok(())
+    }
+}
+
+/// The MAX/MIN aggregate functions.
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggFnStateExtremum::<T, E>::new())]
+pub struct AggFnExtremum<T, E>
+where
+    T: EvaluableRef<'static> + 'static + Ord,
+    E: Extremum,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    _phantom: std::marker::PhantomData<(T, E)>,
+}
+
+impl<T, E> AggFnExtremum<T, E>
+where
+    T: EvaluableRef<'static> + 'static + Ord,
+    E: Extremum,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// The state of the MAX/MIN aggregate function.
+#[derive(Debug)]
+pub struct AggFnStateExtremum<T, E>
+where
+    T: EvaluableRef<'static> + 'static + Ord,
+    E: Extremum,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    extremum_value: Option<T::EvaluableType>,
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<T, E> AggFnStateExtremum<T, E>
+where
+    T: EvaluableRef<'static> + 'static + Ord,
+    E: Extremum,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    pub fn new() -> Self {
+        Self {
+            extremum_value: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    fn update_concrete<'a, TT>(&mut self, _ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
+    where
+        TT: EvaluableRef<'a, EvaluableType = T::EvaluableType> + Ord,
+    {
+        let extreme_ref = self
+            .extremum_value
+            .as_ref()
+            .map(|x| TT::from_owned_value(unsafe { std::mem::transmute(x) }));
+        if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
+            self.extremum_value = value.map(|x| x.to_owned_value());
+        }
+        Ok(())
+    }
+}
+
+impl<T, E> super::ConcreteAggrFunctionState for AggFnStateExtremum<T, E>
+where
+    T: EvaluableRef<'static> + 'static + Ord,
+    E: Extremum,
+    VectorValue: VectorValueExt<T::EvaluableType>,
+{
+    type ParameterType = T;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        target[0].push(self.extremum_value.clone());
         Ok(())
     }
 }
@@ -179,106 +284,157 @@ mod tests {
     #[test]
     fn test_max() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int, Max>::new();
+        let function = AggFnExtremum::<&'static Int, Max>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].to_int_vec(), &[None]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].to_int_vec(), &[None]);
 
-        state.update(&mut ctx, &Some(7i64)).unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(7)]);
 
-        state.update(&mut ctx, &Some(4i64)).unwrap();
+        update!(state, &mut ctx, Some(&4i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(7)]);
 
-        state.update_repeat(&mut ctx, &Some(20), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&20), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 7).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(20)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(20)]);
 
         // update vector
-        state.update(&mut ctx, &Some(7i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(21i64), None, Some(22i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&7i64)).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[Some(21i64), None, Some(22i64)]),
+            &[0, 1, 2]
+        )
+        .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(22)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(22)]);
 
-        state.update(&mut ctx, &Some(40i64)).unwrap();
+        update!(state, &mut ctx, Some(&40i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(40)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(40)]);
     }
 
     #[test]
     fn test_min() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int, Min>::new();
+        let function = AggFnExtremum::<&'static Int, Min>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].to_int_vec(), &[None]);
 
-        state.update(&mut ctx, &Option::<Int>::None).unwrap();
+        update!(state, &mut ctx, Option::<&Int>::None).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None]);
+        assert_eq!(result[0].to_int_vec(), &[None]);
 
-        state.update(&mut ctx, &Some(100i64)).unwrap();
+        update!(state, &mut ctx, Some(&100i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(100)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(100)]);
 
-        state.update(&mut ctx, &Some(90i64)).unwrap();
+        update!(state, &mut ctx, Some(&90i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(90)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(90)]);
 
-        state.update_repeat(&mut ctx, &Some(80), 10).unwrap();
-        state
-            .update_repeat(&mut ctx, &Option::<Int>::None, 10)
-            .unwrap();
+        update_repeat!(state, &mut ctx, Some(&80), 10).unwrap();
+        update_repeat!(state, &mut ctx, Option::<&Int>::None, 10).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(80)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(80)]);
 
         // update vector
-        state.update(&mut ctx, &Some(70i64)).unwrap();
-        state
-            .update_vector(&mut ctx, &[Some(69i64), None, Some(68i64)], &[0, 1, 2])
-            .unwrap();
+        update!(state, &mut ctx, Some(&70i64)).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &NotChunkedVec::from_slice(&[Some(69i64), None, Some(68i64)]),
+            &[0, 1, 2]
+        )
+        .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(68)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(68)]);
 
-        state.update(&mut ctx, &Some(2i64)).unwrap();
+        update!(state, &mut ctx, Some(&2i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
 
-        state.update(&mut ctx, &Some(-1i64)).unwrap();
+        update!(state, &mut ctx, Some(&-1i64)).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(-1i64)]);
+        assert_eq!(result[0].to_int_vec(), &[Some(-1i64)]);
+    }
+
+    #[test]
+    fn test_collation() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Collation::Binary, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4Bin, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
+            (Collation::Binary, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4BinNoPadding, false, vec!["B", "a"], "B"),
+        ];
+        for (coll, is_max, args, expected) in cases {
+            let function = match_template_collator! {
+                TT, match coll {
+                    Collation::TT => {
+                        if is_max {
+                            Box::new(AggFnExtremumForBytes::<TT, Max>::new()) as Box<dyn AggrFunction>
+                        } else {
+                            Box::new(AggFnExtremumForBytes::<TT, Min>::new()) as Box<dyn AggrFunction>
+                        }
+                    }
+                }
+            };
+            let mut state = function.create_state();
+            let mut result = [VectorValue::with_capacity(0, EvalType::Bytes)];
+            state.push_result(&mut ctx, &mut result).unwrap();
+            assert_eq!(result[0].to_bytes_vec(), &[None]);
+
+            for arg in args {
+                update!(
+                    state,
+                    &mut ctx,
+                    Some(&String::from(arg).into_bytes() as BytesRef)
+                )
+                .unwrap();
+            }
+            result[0].clear();
+            state.push_result(&mut ctx, &mut result).unwrap();
+            assert_eq!(
+                result[0].to_bytes_vec(),
+                [Some(String::from(expected).into_bytes())]
+            );
+        }
     }
 
     #[test]
@@ -341,10 +497,8 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
-            let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
-            max_state
-                .update_vector(&mut ctx, max_slice, max_result.logical_rows())
-                .unwrap();
+            let max_slice: NotChunkedVec<Int> = max_result.as_ref().to_int_vec().into();
+            update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -354,14 +508,12 @@ mod tests {
                 .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
-            let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
-            min_state
-                .update_vector(&mut ctx, min_slice, min_result.logical_rows())
-                .unwrap();
+            let min_slice: NotChunkedVec<Int> = min_result.as_ref().to_int_vec().into();
+            update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].as_int_slice(), &[Some(99), Some(-1i64),]);
+        assert_eq!(aggr_result[0].to_int_vec(), &[Some(99), Some(-1i64),]);
     }
 
     #[test]

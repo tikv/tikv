@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 
 #[macro_use]
 extern crate quick_error;
@@ -18,7 +18,10 @@ use std::io;
 
 pub use lock::{Lock, LockType};
 pub use timestamp::{TimeStamp, TsSet};
-pub use types::{is_short_value, Key, KvPair, Mutation, Value, SHORT_VALUE_MAX_LEN};
+pub use types::{
+    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, TxnExtra, Value,
+    SHORT_VALUE_MAX_LEN,
+};
 pub use write::{Write, WriteRef, WriteType};
 
 quick_error! {
