@@ -177,7 +177,7 @@ impl Iterator for LogIterator {
                         }
                         // treat the invalid log with the pre valid log time and level but its own whole line content
                         item.set_time(self.pre_log.time);
-                        item.set_level(self.pre_log.level as LogLevel);
+                        item.set_level(self.pre_log.get_level());
                         item.set_message(input.to_owned());
                     }
                 }
@@ -189,7 +189,7 @@ impl Iterator for LogIterator {
                     continue;
                 }
                 // always keep unknown level log
-                if item.level as LogLevel != LogLevel::Unknown
+                if item.get_level() != LogLevel::Unknown
                     && self.level_flag != 0
                     && self.level_flag & (1 << (item.level as usize)) == 0
                 {
