@@ -108,7 +108,7 @@ pub fn is_null_ref<'a, T: EvaluableRef<'a>>(arg: Option<T>) -> Result<Option<i64
 
 #[rpn_fn]
 #[inline]
-pub fn is_null<T: Evaluable>(arg: Option<&T>) -> Result<Option<i64>> {
+pub fn is_null<T: Evaluable + EvaluableRet>(arg: Option<&T>) -> Result<Option<i64>> {
     is_null_ref(arg)
 }
 

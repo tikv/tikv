@@ -992,11 +992,10 @@ impl Command {
     }
 
     pub fn priority(&self) -> CommandPri {
+        if self.command_ext().is_sys_cmd() {
+            return CommandPri::High;
+        }
         self.command_ext().get_ctx().get_priority()
-    }
-
-    pub fn is_sys_cmd(&self) -> bool {
-        self.command_ext().is_sys_cmd()
     }
 
     pub fn need_flow_control(&self) -> bool {
