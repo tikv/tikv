@@ -6,7 +6,7 @@ use std::time::Instant;
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
-use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
@@ -120,16 +120,23 @@ pub struct BackupWriter {
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Limiter) -> Result<BackupWriter> {
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        limiter: Limiter,
+        compression_type: Option<SstCompressionType>,
+    ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -212,11 +219,18 @@ pub struct BackupRawKVWriter {
 
 impl BackupRawKVWriter {
     /// Create a new BackupRawKVWriter.
-    pub fn new(db: Arc<DB>, name: &str, cf: CfName, limiter: Limiter) -> Result<BackupRawKVWriter> {
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        cf: CfName,
+        limiter: Limiter,
+        compression_type: Option<SstCompressionType>,
+    ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(RocksEngine::from_ref(&db))
+            .set_compression_type(compression_type)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
@@ -333,12 +347,14 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-        let mut writer = BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY)).unwrap();
+        let mut writer =
+            BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY), None).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY)).unwrap();
+        let mut writer =
+            BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY), None).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -364,7 +380,7 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
+        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY), None).unwrap();
         writer
             .write(
                 vec![
