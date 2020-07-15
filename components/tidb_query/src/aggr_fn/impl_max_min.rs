@@ -4,9 +4,10 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
+use crate::codec::collation::*;
 use crate::codec::data_type::*;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
@@ -64,6 +65,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         let out_ft = aggr_def.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
+        let out_coll = box_try!(out_ft.as_accessor().collation());
 
         if out_et != eval_type {
             return Err(other_err!(
@@ -80,11 +82,104 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             src_schema.len(),
         )?);
 
+        if out_et == EvalType::Bytes {
+            return match_template_collator! {
+                C, match out_coll {
+                    Collation::C => Ok(Box::new(AggFnExtremumForBytes::<C, T>::new()))
+                }
+            };
+        }
+
         match_template_evaluable! {
             TT, match eval_type {
                 EvalType::TT => Ok(Box::new(AggFnExtremum::<TT, T>::new()))
             }
         }
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggFnStateExtremum4Bytes::<C, E>::new())]
+pub struct AggFnExtremumForBytes<C, E>
+where
+    C: Collator,
+    E: Extremum,
+    VectorValue: VectorValueExt<Bytes>,
+{
+    _phantom: std::marker::PhantomData<(C, E)>,
+}
+
+impl<C, E> AggFnExtremumForBytes<C, E>
+where
+    C: Collator,
+    E: Extremum,
+    VectorValue: VectorValueExt<Bytes>,
+{
+    fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggFnStateExtremum4Bytes<C, E>
+where
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
+{
+    extremum: Option<Bytes>,
+    _phantom: std::marker::PhantomData<(C, E)>,
+}
+
+impl<C, E> AggFnStateExtremum4Bytes<C, E>
+where
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
+{
+    pub fn new() -> Self {
+        Self {
+            extremum: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<C, E> super::ConcreteAggrFunctionState for AggFnStateExtremum4Bytes<C, E>
+where
+    VectorValue: VectorValueExt<Bytes>,
+    C: Collator,
+    E: Extremum,
+{
+    type ParameterType = Bytes;
+
+    #[inline]
+    fn update_concrete(
+        &mut self,
+        _ctx: &mut EvalContext,
+        value: &Option<Self::ParameterType>,
+    ) -> Result<()> {
+        if value.is_none() {
+            return Ok(());
+        }
+
+        if self.extremum.is_none() {
+            self.extremum = value.clone();
+            return Ok(());
+        }
+
+        if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
+            self.extremum = value.clone();
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        target[0].push(self.extremum.clone());
+        Ok(())
     }
 }
 
@@ -282,6 +377,50 @@ mod tests {
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(-1i64)]);
+    }
+
+    #[test]
+    fn test_collation() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Collation::Binary, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4Bin, true, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
+            (Collation::Binary, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4BinNoPadding, false, vec!["B", "a"], "B"),
+        ];
+        for (coll, is_max, args, expected) in cases {
+            let function = match_template_collator! {
+                TT, match coll {
+                    Collation::TT => {
+                        if is_max {
+                            Box::new(AggFnExtremumForBytes::<TT, Max>::new()) as Box<dyn AggrFunction>
+                        } else {
+                            Box::new(AggFnExtremumForBytes::<TT, Min>::new()) as Box<dyn AggrFunction>
+                        }
+                    }
+                }
+            };
+            let mut state = function.create_state();
+            let mut result = [VectorValue::with_capacity(0, EvalType::Bytes)];
+            state.push_result(&mut ctx, &mut result).unwrap();
+            assert_eq!(result[0].as_bytes_slice(), &[None]);
+
+            for arg in args {
+                state
+                    .update(&mut ctx, &Some(String::from(arg).into_bytes()))
+                    .unwrap();
+            }
+            result[0].clear();
+            state.push_result(&mut ctx, &mut result).unwrap();
+            assert_eq!(
+                result[0].as_bytes_slice(),
+                [Some(String::from(expected).into_bytes())]
+            );
+        }
     }
 
     #[test]
