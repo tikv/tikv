@@ -200,6 +200,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "crc64fast",
  "engine",
  "engine_rocks",
@@ -2557,6 +2558,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
