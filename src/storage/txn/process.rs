@@ -1,17 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
-use futures::future;
-use kvproto::kvrpcpb::{CommandPri, Context, ExtraOp, LockInfo};
+use engine_traits::CF_WRITE;
+use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
+use tikv_util::collections::HashMap;
 use txn_types::{Key, Value};
 
-use crate::storage::kv::{
-    with_tls_engine, CbContext, Engine, Result as EngineResult, ScanMode, Snapshot, Statistics,
-    WriteData,
-};
+use crate::storage::kv::{Engine, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
@@ -24,337 +21,20 @@ use crate::storage::txn::{
         Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
-    scheduler::Msg,
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
-    metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
     types::{MvccInfo, PessimisticLockRes, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
-use engine_traits::CF_WRITE;
-use tikv_util::collections::HashMap;
-use tikv_util::time::Instant;
-
-pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
-/// Task is a running command.
-pub struct Task {
-    pub cid: u64,
-    pub tag: metrics::CommandKind,
+const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
-    cmd: Command,
-    ts: TimeStamp,
-    region_id: u64,
-}
-
-impl Task {
-    /// Creates a task for a running command.
-    pub fn new(cid: u64, cmd: Command) -> Task {
-        Task {
-            cid,
-            tag: cmd.tag(),
-            region_id: cmd.ctx().get_region_id(),
-            ts: cmd.ts(),
-            cmd,
-        }
-    }
-
-    pub fn cmd(&self) -> &Command {
-        &self.cmd
-    }
-
-    pub fn priority(&self) -> CommandPri {
-        self.cmd.priority()
-    }
-
-    pub fn context(&self) -> &Context {
-        &self.cmd.ctx()
-    }
-}
-
-pub trait MsgScheduler: Clone + Send + 'static {
-    fn on_msg(&self, task: Msg);
-}
-
-pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
-    // We put time consuming tasks to the thread pool.
-    sched_pool: Option<SchedPool>,
-    // And the tasks completes we post a completion to the `Scheduler`.
-    scheduler: Option<S>,
-    // If the task releases some locks, we wake up waiters waiting for them.
-    lock_mgr: Option<L>,
-
-    pipelined_pessimistic_lock: bool,
-
-    _phantom: PhantomData<E>,
-}
-
-impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
-    pub fn new(
-        scheduler: S,
-        pool: SchedPool,
-        lock_mgr: Option<L>,
-        pipelined_pessimistic_lock: bool,
-    ) -> Self {
-        Executor {
-            sched_pool: Some(pool),
-            scheduler: Some(scheduler),
-            lock_mgr,
-            pipelined_pessimistic_lock,
-            _phantom: Default::default(),
-        }
-    }
-
-    fn take_pool(&mut self) -> SchedPool {
-        self.sched_pool.take().unwrap()
-    }
-
-    fn clone_pool(&mut self) -> SchedPool {
-        self.sched_pool.clone().unwrap()
-    }
-
-    fn take_scheduler(&mut self) -> S {
-        self.scheduler.take().unwrap()
-    }
-
-    fn take_lock_mgr(&mut self) -> Option<L> {
-        self.lock_mgr.take()
-    }
-
-    /// Start the execution of the task.
-    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
-        debug!(
-            "receive snapshot finish msg";
-            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-        );
-
-        match snapshot {
-            Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_ok.inc();
-
-                self.process_by_worker(cb_ctx, snapshot, task);
-            }
-            Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
-
-                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                self.take_pool()
-                    .pool
-                    .spawn(async move {
-                        notify_scheduler(
-                            self.take_scheduler(),
-                            Msg::FinishedWithErr {
-                                cid: task.cid,
-                                err: Error::from(err),
-                                tag: task.tag,
-                            },
-                        );
-                    })
-                    .unwrap();
-            }
-        }
-    }
-
-    /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
-        debug!(
-            "process cmd with snapshot";
-            "cid" => task.cid, "cb_ctx" => ?cb_ctx
-        );
-        let tag = task.tag;
-        if let Some(term) = cb_ctx.term {
-            task.cmd.ctx_mut().set_term(term);
-        }
-        let sched_pool = self.clone_pool();
-        let readonly = task.cmd.readonly();
-        let extra_op = cb_ctx.extra_op;
-        sched_pool
-            .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
-
-                let read_duration = Instant::now_coarse();
-
-                let region_id = task.region_id;
-                let ts = task.ts;
-                let timer = Instant::now_coarse();
-
-                let statistics = if readonly {
-                    self.process_read(snapshot, task)
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, extra_op)
-                        })
-                    }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
-
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            })
-            .unwrap();
-    }
-
-    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
-    /// `Scheduler`.
-    fn process_read(mut self, snapshot: E::Snap, task: Task) -> Statistics {
-        fail_point!("txn_before_process_read");
-        debug!("process read cmd in worker pool"; "cid" => task.cid);
-        let tag = task.tag;
-        let cid = task.cid;
-        let mut statistics = Statistics::default();
-        let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
-            Err(e) => ProcessResult::Failed { err: e.into() },
-            Ok(pr) => pr,
-        };
-        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
-        statistics
-    }
-
-    /// Processes a write command within a worker thread, then posts either a `WriteFinished`
-    /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(
-        mut self,
-        engine: &E,
-        snapshot: E::Snap,
-        task: Task,
-        extra_op: ExtraOp,
-    ) -> Statistics {
-        fail_point!("txn_before_process_write");
-        let tag = task.tag;
-        let cid = task.cid;
-        let ts = task.ts;
-        let mut statistics = Statistics::default();
-        let scheduler = self.take_scheduler();
-        let lock_mgr = self.take_lock_mgr();
-        let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
-        let msg = match process_write_impl(
-            task.cmd,
-            snapshot,
-            lock_mgr,
-            extra_op,
-            &mut statistics,
-            self.pipelined_pessimistic_lock,
-        ) {
-            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-            // message when it finishes.
-            Ok(WriteResult {
-                ctx,
-                to_be_write,
-                rows,
-                pr,
-                lock_info,
-            }) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-
-                if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock, wait_timeout) = lock_info;
-                    Msg::WaitForLock {
-                        cid,
-                        start_ts: ts,
-                        pr,
-                        lock,
-                        is_first_lock,
-                        wait_timeout,
-                    }
-                } else if to_be_write.modifies.is_empty() {
-                    Msg::WriteFinished {
-                        cid,
-                        pr,
-                        result: Ok(()),
-                        pipelined: false,
-                        tag,
-                    }
-                } else {
-                    let sched = scheduler.clone();
-                    let sched_pool = self.take_pool();
-                    // The normal write process is respond to clients and release latches
-                    // after async write finished. If pipelined pessimistic lock is enabled,
-                    // the process becomes parallel and there are two msgs for one command:
-                    //   1. Msg::PipelinedWrite: respond to clients
-                    //   2. Msg::WriteFinished: deque context and release latches
-                    // The order between these two msgs is uncertain due to thread scheduling
-                    // so we clone the result for each msg.
-                    let (write_finished_pr, pipelined_write_pr) = if pipelined {
-                        (pr.maybe_clone().unwrap(), pr)
-                    } else {
-                        (pr, ProcessResult::Res)
-                    };
-                    // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result)| {
-                        sched_pool
-                            .pool
-                            .spawn(async move {
-                                fail_point!("scheduler_async_write_finish");
-
-                                notify_scheduler(
-                                    sched,
-                                    Msg::WriteFinished {
-                                        cid,
-                                        pr: write_finished_pr,
-                                        result,
-                                        pipelined,
-                                        tag,
-                                    },
-                                );
-                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                    .get(tag)
-                                    .observe(rows as f64);
-                                future::ok::<_, ()>(())
-                            })
-                            .unwrap()
-                    });
-
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
-
-                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        let err = e.into();
-                        Msg::FinishedWithErr { cid, err, tag }
-                    } else if pipelined {
-                        fail_point!("scheduler_pipelined_write_finish");
-
-                        // The write task is scheduled to engine successfully.
-                        // Respond to client early.
-                        Msg::PipelinedWrite {
-                            cid,
-                            pr: pipelined_write_pr,
-                            tag,
-                        }
-                    } else {
-                        return statistics;
-                    }
-                }
-            }
-            // Write prepare failure typically means conflicting transactions are detected. Delivers the
-            // error to the callback, and releases the latches.
-            Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-
-                debug!("write command failed at prewrite"; "cid" => cid);
-                Msg::FinishedWithErr { cid, err, tag }
-            }
-        };
-        notify_scheduler(scheduler, msg);
-        statistics
-    }
-}
-
-fn process_read_impl<E: Engine>(
+pub(super) fn process_read_impl<E: Engine>(
     mut cmd: Command,
     snapshot: E::Snap,
     statistics: &mut Statistics,
@@ -510,10 +190,8 @@ impl ReleasedLocks {
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    fn wake_up<L: LockManager>(self, lock_mgr: Option<&L>) {
-        if let Some(lm) = lock_mgr {
-            lm.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
-        }
+    fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }
 }
 
@@ -529,19 +207,19 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
     }
 }
 
-struct WriteResult {
-    ctx: Context,
-    to_be_write: WriteData,
-    rows: usize,
-    pr: ProcessResult,
+pub(super) struct WriteResult {
+    pub ctx: Context,
+    pub to_be_write: WriteData,
+    pub rows: usize,
+    pub pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
-    lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
 }
 
-fn process_write_impl<S: Snapshot, L: LockManager>(
+pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    lock_mgr: &L,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -747,7 +425,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.commit(k, commit_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
@@ -769,7 +447,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             released_locks.push(txn.cleanup(key, current_ts, true)?);
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -788,7 +466,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.rollback(k)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -800,8 +478,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             ctx,
         }) => {
-            assert!(lock_mgr.is_some());
-
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache());
 
             let rows = keys.len();
@@ -809,7 +485,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for k in keys {
                 released_locks.push(txn.pessimistic_rollback(k, for_update_ts)?);
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -861,7 +537,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             }
             released_locks
                 .into_iter()
-                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr.as_ref()));
+                .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
             statistics.add(&txn.take_statistics());
             let pr = if scan_key.is_none() {
@@ -893,7 +569,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     txn.rollback(key)?
                 });
             }
-            released_locks.wake_up(lock_mgr.as_ref());
+            released_locks.wake_up(lock_mgr);
 
             statistics.add(&txn.take_statistics());
             let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -936,7 +612,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             released_locks.push(released);
             // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
             if let TxnStatus::TtlExpire = txn_status {
-                released_locks.wake_up(lock_mgr.as_ref());
+                released_locks.wake_up(lock_mgr);
             }
 
             statistics.add(&txn.take_statistics());
@@ -958,10 +634,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         pr,
         lock_info,
     })
-}
-
-pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
-    scheduler.on_msg(msg);
 }
 
 type LockWritesVals = (
@@ -1140,8 +812,14 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ret = process_write_impl(
+            cmd,
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1170,8 +848,15 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
-        let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
+
+        let ret = process_write_impl(
+            cmd.into(),
+            snap,
+            &DummyLockManager {},
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

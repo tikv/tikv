@@ -1088,10 +1088,12 @@ mod tests {
     fn test_physical_scan_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage =
-            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            prefixed_engine.clone(),
+            DummyLockManager {},
+        )
+        .build()
+        .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             None,

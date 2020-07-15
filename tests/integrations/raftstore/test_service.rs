@@ -4,12 +4,10 @@ use std::path::Path;
 use std::sync::*;
 
 use futures::{future, Future, Stream};
-use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use grpcio::{Error, RpcStatusCode};
 use kvproto::coprocessor::*;
-use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
@@ -29,33 +27,6 @@ use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::Key;
-
-fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
-    let count = 1;
-    let mut cluster = new_server_cluster(0, count);
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
-    ctx.set_region_epoch(epoch);
-
-    (cluster, leader, ctx)
-}
-
-fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
-
-    (cluster, client, ctx)
-}
 
 #[test]
 fn test_rawkv() {
@@ -101,66 +72,6 @@ fn test_rawkv() {
     let delete_resp = client.raw_delete(&delete_req).unwrap();
     assert!(!delete_resp.has_region_error());
     assert!(delete_resp.error.is_empty());
-}
-
-fn must_kv_prewrite(client: &TikvClient, ctx: Context, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-    let mut prewrite_req = PrewriteRequest::default();
-    prewrite_req.set_context(ctx);
-    prewrite_req.set_mutations(muts.into_iter().collect());
-    prewrite_req.primary_lock = pk;
-    prewrite_req.start_version = ts;
-    prewrite_req.lock_ttl = 3000;
-    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
-    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
-    assert!(
-        !prewrite_resp.has_region_error(),
-        "{:?}",
-        prewrite_resp.get_region_error()
-    );
-    assert!(
-        prewrite_resp.errors.is_empty(),
-        "{:?}",
-        prewrite_resp.get_errors()
-    );
-}
-
-fn must_kv_commit(
-    client: &TikvClient,
-    ctx: Context,
-    keys: Vec<Vec<u8>>,
-    start_ts: u64,
-    commit_ts: u64,
-    expect_commit_ts: u64,
-) {
-    let mut commit_req = CommitRequest::default();
-    commit_req.set_context(ctx);
-    commit_req.start_version = start_ts;
-    commit_req.set_keys(keys.into_iter().collect());
-    commit_req.commit_version = commit_ts;
-    let commit_resp = client.kv_commit(&commit_req).unwrap();
-    assert!(
-        !commit_resp.has_region_error(),
-        "{:?}",
-        commit_resp.get_region_error()
-    );
-    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
-}
-
-fn must_physical_scan_lock(
-    client: &TikvClient,
-    ctx: Context,
-    max_ts: u64,
-    start_key: &[u8],
-    limit: usize,
-) -> Vec<LockInfo> {
-    let mut req = PhysicalScanLockRequest::default();
-    req.set_context(ctx);
-    req.set_max_ts(max_ts);
-    req.set_start_key(start_key.to_owned());
-    req.set_limit(limit as _);
-    let mut resp = client.physical_scan_lock(&req).unwrap();
-    resp.take_locks().into()
 }
 
 #[test]
@@ -493,66 +404,6 @@ fn test_coprocessor() {
 }
 
 #[test]
-fn test_physical_scan_lock() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-
-    // Generate kvs like k10, v10, ts=10; k11, v11, ts=11; ...
-    let kv: Vec<_> = (10..20)
-        .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
-        .collect();
-
-    for (ts, k, v) in &kv {
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), *ts);
-    }
-
-    let all_locks: Vec<_> = kv
-        .into_iter()
-        .map(|(ts, k, _)| {
-            // Create a LockInfo that matches the prewrite request in `must_kv_prewrite`.
-            let mut lock_info = LockInfo::default();
-            lock_info.set_primary_lock(k.clone());
-            lock_info.set_lock_version(ts);
-            lock_info.set_key(k);
-            lock_info.set_lock_ttl(3000);
-            lock_info.set_lock_type(Op::Put);
-            lock_info.set_min_commit_ts(ts + 1);
-            lock_info
-        })
-        .collect();
-
-    let check_result = |got_locks: &[_], expected_locks: &[_]| {
-        for i in 0..std::cmp::max(got_locks.len(), expected_locks.len()) {
-            assert_eq!(got_locks[i], expected_locks[i], "lock {} mismatch", i);
-        }
-    };
-
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 30, b"", 100),
-        &all_locks,
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 15, b"", 100),
-        &all_locks[0..=5],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 10, b"", 100),
-        &all_locks[0..1],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx.clone(), 9, b"", 100),
-        &[],
-    );
-    check_result(
-        &must_physical_scan_lock(&client, ctx, 30, &[b'k', 13], 5),
-        &all_locks[3..8],
-    );
-}
-
-#[test]
 fn test_split_region() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
 
@@ -625,17 +476,6 @@ fn test_read_index() {
     // Read index again
     resp = client.read_index(&req).unwrap();
     assert_eq!(last_index + 1, resp.get_read_index());
-}
-
-fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = DebugClient::new(channel);
-
-    (cluster, client, leader.get_store_id())
 }
 
 #[test]
@@ -940,45 +780,6 @@ fn test_double_run_node() {
     cluster.shutdown();
 }
 
-fn kv_pessimistic_lock(
-    client: &TikvClient,
-    ctx: Context,
-    keys: Vec<Vec<u8>>,
-    ts: u64,
-    for_update_ts: u64,
-    return_values: bool,
-) -> PessimisticLockResponse {
-    let mut req = PessimisticLockRequest::default();
-    req.set_context(ctx);
-    let primary = keys[0].clone();
-    let mut mutations = vec![];
-    for key in keys {
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::PessimisticLock);
-        mutation.set_key(key);
-        mutations.push(mutation);
-    }
-    req.set_mutations(mutations.into());
-    req.primary_lock = primary;
-    req.start_version = ts;
-    req.for_update_ts = for_update_ts;
-    req.lock_ttl = 20;
-    req.is_first_lock = false;
-    req.return_values = return_values;
-    client.kv_pessimistic_lock(&req).unwrap()
-}
-
-fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let mut req = PessimisticRollbackRequest::default();
-    req.set_context(ctx);
-    req.set_keys(vec![key].into_iter().collect());
-    req.start_version = ts;
-    req.for_update_ts = ts;
-    let resp = client.kv_pessimistic_rollback(&req).unwrap();
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
-}
-
 #[test]
 fn test_pessimistic_lock() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
@@ -1034,27 +835,6 @@ fn test_pessimistic_lock() {
 
 #[test]
 fn test_check_txn_status_with_max_ts() {
-    fn must_check_txn_status(
-        client: &TikvClient,
-        ctx: Context,
-        key: &[u8],
-        lock_ts: u64,
-        caller_start_ts: u64,
-        current_ts: u64,
-    ) -> CheckTxnStatusResponse {
-        let mut req = CheckTxnStatusRequest::default();
-        req.set_context(ctx);
-        req.set_primary_key(key.to_vec());
-        req.set_lock_ts(lock_ts);
-        req.set_caller_start_ts(caller_start_ts);
-        req.set_current_ts(current_ts);
-
-        let resp = client.kv_check_txn_status(&req).unwrap();
-        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-        assert!(resp.error.is_none(), "{:?}", resp.get_error());
-        return resp;
-    }
-
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let lock_ts = 10;
