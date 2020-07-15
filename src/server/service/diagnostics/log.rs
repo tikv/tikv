@@ -246,16 +246,27 @@ fn parse_level(input: &str) -> IResult<&str, &str> {
 }
 
 /// Parses the single log line and retrieve the log meta and log body.
-fn parse(input: &str) -> IResult<&str, (i64, LogLevel)> {
-    let (content, (time, level, _)) = tuple((parse_time, parse_level, space1))(input)?;
+fn parse(input: &str) -> Result<(&str, (i64, LogLevel)), Error> {
+    let content;
+    let time;
+    let level;
+    match tuple((parse_time, parse_level, space1))(input) {
+        Ok((c, (t, l, _))) => {
+            content = c;
+            time = t;
+            level = l;
+        }
+        Err(err) => {
+            return Err(Error::ParseError(err.to_string()));
+        }
+    }
     let timestamp;
-    // return Err if parse time failed
     match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
         Ok(t) => {
             timestamp = t.timestamp_millis();
         }
-        Err(_) => {
-            return Err(Err::Incomplete(Needed::Unknown));
+        Err(err) => {
+            return Err(Error::ParseError(err.to_string()));
         }
     };
     let level = match level {
