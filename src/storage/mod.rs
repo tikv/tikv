@@ -4180,7 +4180,11 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
-                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    uncommitted(100, TimeStamp::zero(), false, vec![]),
+                ),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4190,7 +4194,11 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
-                expect_value_callback(tx.clone(), 0, uncommitted(110, TimeStamp::zero())),
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    uncommitted(110, TimeStamp::zero(), false, vec![]),
+                ),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4305,7 +4313,11 @@ mod tests {
                     true,
                     Context::default(),
                 ),
-                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    uncommitted(100, TimeStamp::zero(), false, vec![]),
+                ),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -5024,7 +5036,11 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                expect_value_callback(tx.clone(), 0, TxnStatus::uncommitted(100, 0.into())),
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    TxnStatus::uncommitted(100, 0.into(), false, vec![]),
+                ),
             )
             .unwrap();
         rx.recv().unwrap();

@@ -5,7 +5,7 @@ use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use std::fmt;
+use std::{fmt, mem};
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
     Value, Write, WriteType,
@@ -975,7 +975,15 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
-                Ok((TxnStatus::uncommitted(lock.ttl, lock.min_commit_ts), None))
+                Ok((
+                    TxnStatus::uncommitted(
+                        lock.ttl,
+                        lock.min_commit_ts,
+                        lock.use_async_commit,
+                        mem::take(&mut lock.secondaries),
+                    ),
+                    None,
+                ))
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
@@ -1562,7 +1570,7 @@ mod tests {
             ts(20, 0),
             ts(20, 0),
             true,
-            uncommitted(100, ts(20, 1)),
+            uncommitted(100, ts(20, 1), false, vec![]),
         );
         // The the min_commit_ts should be ts(20, 1)
         must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
@@ -1577,7 +1585,7 @@ mod tests {
             ts(40, 0),
             ts(40, 0),
             true,
-            uncommitted(100, ts(40, 1)),
+            uncommitted(100, ts(40, 1), false, vec![]),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
 
@@ -1590,7 +1598,7 @@ mod tests {
             ts(70, 0),
             ts(70, 0),
             true,
-            uncommitted(100, ts(70, 1)),
+            uncommitted(100, ts(70, 1), false, vec![]),
         );
         must_prewrite_put_impl(
             &engine,
@@ -2446,7 +2454,7 @@ mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
-            uncommitted(100, ts(7, 0)),
+            uncommitted(100, ts(7, 0), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
@@ -2459,7 +2467,7 @@ mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2472,7 +2480,7 @@ mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2484,7 +2492,7 @@ mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
-            uncommitted(100, ts(11, 1)),
+            uncommitted(100, ts(11, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
@@ -2496,7 +2504,7 @@ mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
-            uncommitted(100, ts(12, 1)),
+            uncommitted(100, ts(12, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
@@ -2508,7 +2516,7 @@ mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
-            uncommitted(100, ts(13, 3)),
+            uncommitted(100, ts(13, 3), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
@@ -2566,7 +2574,7 @@ mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
-            uncommitted(100, ts(21, 106)),
+            uncommitted(100, ts(21, 106), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
@@ -2592,7 +2600,7 @@ mod tests {
             ts(135, 0),
             ts(135, 0),
             r,
-            uncommitted(200, ts(135, 1)),
+            uncommitted(200, ts(135, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
 
@@ -2635,7 +2643,7 @@ mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100, ts(160, 1)),
+            uncommitted(100, ts(160, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, ts(160, 1), true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
@@ -2702,7 +2710,7 @@ mod tests {
             ts(300, 0),
             ts(300, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
         must_pessimistic_rollback(&engine, k, ts(290, 0), ts(290, 0));
@@ -2727,7 +2735,7 @@ mod tests {
             ts(310, 0),
             ts(310, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
@@ -2742,7 +2750,7 @@ mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
-            uncommitted(100, ts(310, 1)),
+            uncommitted(100, ts(310, 1), false, vec![]),
         );
         must_commit(&engine, k, ts(310, 0), ts(315, 0));
         must_check_txn_status(

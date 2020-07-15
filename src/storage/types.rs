@@ -90,16 +90,25 @@ pub enum TxnStatus {
     Uncommitted {
         lock_ttl: u64,
         min_commit_ts: TimeStamp,
+        use_async_commit: bool,
+        secondaries: Vec<Vec<u8>>,
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(lock_ttl: u64, min_commit_ts: TimeStamp) -> Self {
+    pub fn uncommitted(
+        lock_ttl: u64,
+        min_commit_ts: TimeStamp,
+        use_async_commit: bool,
+        secondaries: Vec<Vec<u8>>,
+    ) -> Self {
         Self::Uncommitted {
             lock_ttl,
             min_commit_ts,
+            use_async_commit,
+            secondaries,
         }
     }
 
