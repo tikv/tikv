@@ -2586,6 +2586,7 @@ impl ApplyFsm {
 
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries);
+        fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
         }
