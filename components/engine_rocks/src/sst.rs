@@ -14,6 +14,7 @@ use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
 use rocksdb::DB;
 use rocksdb::{ColumnFamilyOptions, SstFileReader};
 use rocksdb::{Env, EnvOptions, SequentialFile, SstFileWriter};
+use rocksdb::rocksdb::supported_compression;
 use std::rc::Rc;
 use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since
@@ -270,23 +271,6 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
     }
 }
 
-<<<<<<< HEAD
-=======
-// Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
-    DBCompressionType::Lz4,
-    DBCompressionType::Snappy,
-    DBCompressionType::Zstd,
-];
-
-fn get_fastest_supported_compression_type() -> DBCompressionType {
-    let all_supported_compression = supported_compression();
-    *COMPRESSION_PRIORITY
-        .iter()
-        .find(|c| all_supported_compression.contains(c))
-        .unwrap_or(&DBCompressionType::No)
-}
-
 fn fmt_db_compression_type(ct: DBCompressionType) -> &'static str {
     match ct {
         DBCompressionType::Lz4 => "lz4",
@@ -304,7 +288,6 @@ fn to_rocks_compression_type(ct: SstCompressionType) -> DBCompressionType {
     }
 }
 
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
 #[cfg(test)]
 mod tests {
     use super::*;

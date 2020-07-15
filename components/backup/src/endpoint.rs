@@ -8,14 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-<<<<<<< HEAD
-use engine::{IterOption, DATA_KEY_PREFIX_LEN, DB};
-use engine_traits::{name_to_cf, CfName};
-=======
-use configuration::Configuration;
-use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
+use engine::{IterOption, DB};
+use engine_traits::{name_to_cf, CfName, SstCompressionType, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;

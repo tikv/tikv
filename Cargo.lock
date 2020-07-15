@@ -1891,11 +1891,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#44301fcea60837d5abb823f9e44271e48d21db3c"
-=======
-source = "git+https://github.com/pingcap/kvproto.git#1e0910aabe6cffc721689606d88c8117d837d3cb"
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#95778e818ee167ea84587306eddb8e5fc2cebb9c"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
