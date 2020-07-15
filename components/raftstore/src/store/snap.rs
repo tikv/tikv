@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as SnapshotTrait};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
