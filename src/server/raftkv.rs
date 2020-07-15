@@ -281,6 +281,8 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         let mut region = metapb::Region::default();
         region.set_start_key(start_key.to_owned());
         region.set_end_key(end_key.to_owned());
+        // Use a fake peer to avoid panic.
+        region.mut_peers().push(Default::default());
         Ok(RegionSnapshot::from_raw(self.engine.clone(), region))
     }
 
