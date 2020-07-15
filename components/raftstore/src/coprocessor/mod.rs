@@ -7,6 +7,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::StateRole;
+use txn_types::TxnExtra;
 
 pub mod config;
 pub mod dispatcher;
@@ -235,5 +236,5 @@ pub trait CmdObserver: Coprocessor {
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self);
+    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>);
 }

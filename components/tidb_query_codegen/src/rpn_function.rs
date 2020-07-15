@@ -165,7 +165,7 @@
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
-//!         let mut result = Vec::with_capacity(output_rows);
+//!         let mut result = NotChunkedVec::with_capacity(output_rows);
 //!         for row_index in 0..output_rows {
 //!             let (text, _) = arg.extract(row_index);
 //!             result.push(regex_match_impl(&regex, text)?);
@@ -860,7 +860,7 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, Default::default());
-                        let mut result = Vec::with_capacity(output_rows);
+                        let mut result = NotChunkedVec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
@@ -997,7 +997,7 @@ impl RawVargsRpnFn {
                     crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        let mut result = Vec::with_capacity(output_rows);
+                        let mut result = NotChunkedVec::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             vargs_buf.clear();
                             for arg_index in 0..args_len {
@@ -1198,7 +1198,7 @@ impl NormalRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = NotChunkedVec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
@@ -1382,7 +1382,7 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = NotChunkedVec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
@@ -1553,7 +1553,7 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = NotChunkedVec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         result.push(foo :: <A, B> (arg0)?);
@@ -1705,7 +1705,7 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = NotChunkedVec::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);

@@ -10,6 +10,7 @@ use raftstore::router::{handle_send_error, RaftStoreRouter};
 use raftstore::store::msg::{Callback, CasualMessage, PeerMsg, SignificantMsg};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use txn_types::TxnExtra;
 
 #[derive(Clone)]
 pub struct MockRaftStoreRouter {
@@ -59,6 +60,14 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
         unimplemented!()
     }
     fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
+        unimplemented!()
+    }
+    fn send_command_txn_extra(
+        &self,
+        _: RaftCmdRequest,
+        _: TxnExtra,
+        _: Callback<RocksSnapshot>,
+    ) -> RaftStoreResult<()> {
         unimplemented!()
     }
     fn broadcast_unreachable(&self, _: u64) {
