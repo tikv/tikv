@@ -200,6 +200,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "crc64fast",
  "engine",
  "engine_rocks",
