@@ -9,7 +9,7 @@ use std::time::*;
 
 use configuration::Configuration;
 use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -48,6 +48,7 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
+    compress_type: CompressionType,
 }
 
 /// Backup Task.
@@ -112,6 +113,7 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
+                compress_type: req.get_compression_type(),
             },
             resp,
         };
@@ -264,14 +266,16 @@ impl BackupRange {
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
+        compression_type: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone()) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -293,14 +297,16 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
+        ct: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone()) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -315,8 +321,6 @@ impl BackupRange {
         }
     }
 }
-
-type BackupRes = (Vec<File>, Statistics);
 
 #[derive(Clone)]
 pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
@@ -575,9 +579,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         &self,
         prs: Arc<Mutex<Progress<R>>>,
         request: Request,
-        tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
+        tx: UnboundedSender<BackupResponse>,
     ) {
         let start_ts = request.start_ts;
+        let end_ts = request.end_ts;
         let backup_ts = request.end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -621,24 +626,68 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
+                let ct = to_sst_compression_type(request.compress_type);
 
-                let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
+                let (res, start_key, end_key) = if is_raw_kv {
+                    (
+                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct),
+                        brange
+                            .start_key
+                            .map_or_else(|| vec![], |k| k.into_encoded()),
+                        brange.end_key.map_or_else(|| vec![], |k| k.into_encoded()),
+                    )
                 } else {
-                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
+                    (
+                        brange.backup_to_file(
+                            &engine,
+                            db.clone(),
+                            &storage,
+                            name,
+                            backup_ts,
+                            start_ts,
+                            ct,
+                        ),
+                        brange
+                            .start_key
+                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                        brange
+                            .end_key
+                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
+                    )
                 };
+
+                let mut response = BackupResponse::default();
                 match res {
                     Err(e) => {
-                        if let Err(e) = tx.send((brange, Err(e))) {
-                            error!("send backup result failed"; "error" => ?e);
-                        }
-                        return;
+                        error!("backup region failed";
+                            "region" => ?brange.region,
+                            "start_key" => hex::encode_upper(&start_key),
+                            "end_key" => hex::encode_upper(&end_key),
+                            "error" => ?e);
+                        response.set_error(e.into());
                     }
-                    Ok((files, stat)) => {
-                        if let Err(e) = tx.send((brange, Ok((files, stat)))) {
-                            error!("send backup result failed"; "error" => ?e);
+                    Ok((mut files, stat)) => {
+                        debug!("backup region finish";
+                            "region" => ?brange.region,
+                            "start_key" => hex::encode_upper(&start_key),
+                            "end_key" => hex::encode_upper(&end_key),
+                            "details" => ?stat);
+
+                        for file in files.iter_mut() {
+                            file.set_start_key(start_key.clone());
+                            file.set_end_key(end_key.clone());
+                            file.set_start_version(start_ts.into_inner());
+                            file.set_end_version(end_ts.into_inner());
                         }
+                        response.set_files(files.into());
                     }
+                }
+                response.set_start_key(start_key);
+                response.set_end_key(end_key);
+
+                if let Err(e) = tx.unbounded_send(response) {
+                    error!("backup failed to send response"; "error" => ?e);
+                    return;
                 }
             }
         });
@@ -646,12 +695,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
 
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
-        let start = Instant::now();
+        let is_raw_kv = request.is_raw_kv;
         let start_key = if request.start_key.is_empty() {
             None
         } else {
             // TODO: if is_raw_kv is written everywhere. It need to be simplified.
-            if request.is_raw_kv {
+            if is_raw_kv {
                 Some(Key::from_encoded(request.start_key.clone()))
             } else {
                 Some(Key::from_raw(&request.start_key))
@@ -660,87 +709,26 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let end_key = if request.end_key.is_empty() {
             None
         } else {
-            if request.is_raw_kv {
+            if is_raw_kv {
                 Some(Key::from_encoded(request.end_key.clone()))
             } else {
                 Some(Key::from_raw(&request.end_key))
             }
         };
 
-        let (res_tx, res_rx) = mpsc::channel();
         let prs = Arc::new(Mutex::new(Progress::new(
             self.store_id,
             start_key,
             end_key,
             self.region_info.clone(),
-            request.is_raw_kv,
+            is_raw_kv,
             request.cf,
         )));
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(prs.clone(), request.clone(), res_tx.clone());
+            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone());
         }
-
-        // Drop the extra sender so that for loop does not hang up.
-        drop(res_tx);
-        let mut summary = Statistics::default();
-        for (brange, res) in res_rx {
-            let start_key = if request.is_raw_kv {
-                brange
-                    .start_key
-                    .map_or_else(|| vec![], |k| k.into_encoded())
-            } else {
-                brange
-                    .start_key
-                    .map_or_else(|| vec![], |k| k.into_raw().unwrap())
-            };
-            let end_key = if request.is_raw_kv {
-                brange.end_key.map_or_else(|| vec![], |k| k.into_encoded())
-            } else {
-                brange
-                    .end_key
-                    .map_or_else(|| vec![], |k| k.into_raw().unwrap())
-            };
-            let mut response = BackupResponse::default();
-            match res {
-                Ok((mut files, stat)) => {
-                    debug!("backup region finish";
-                        "region" => ?brange.region,
-                        "start_key" => hex::encode_upper(&start_key),
-                        "end_key" => hex::encode_upper(&end_key),
-                        "details" => ?stat);
-                    summary.add(&stat);
-                    // Fill key range and ts.
-                    for file in files.iter_mut() {
-                        file.set_start_key(start_key.clone());
-                        file.set_end_key(end_key.clone());
-                        file.set_start_version(request.start_ts.into_inner());
-                        file.set_end_version(request.end_ts.into_inner());
-                    }
-                    response.set_files(files.into());
-                }
-                Err(e) => {
-                    error!("backup region failed";
-                        "region" => ?brange.region,
-                        "start_key" => hex::encode_upper(response.get_start_key()),
-                        "end_key" => hex::encode_upper(response.get_end_key()),
-                        "error" => ?e);
-                    response.set_error(e.into());
-                }
-            }
-            response.set_start_key(start_key);
-            response.set_end_key(end_key);
-            if let Err(e) = resp.unbounded_send(response) {
-                error!("backup failed to send response"; "error" => ?e);
-                break;
-            }
-        }
-        let duration = start.elapsed();
-        BACKUP_REQUEST_HISTOGRAM.observe(duration.as_secs_f64());
-        info!("backup finished";
-            "take" => ?duration,
-            "summary" => ?summary);
     }
 }
 
@@ -821,6 +809,16 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
             region.get_id(),
             region.get_region_epoch().get_version()
         ),
+    }
+}
+
+// convert BackupCompresionType to rocks db DBCompressionType
+fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
+    match ct {
+        CompressionType::Lz4 => Some(SstCompressionType::Lz4),
+        CompressionType::Snappy => Some(SstCompressionType::Snappy),
+        CompressionType::Zstd => Some(SstCompressionType::Zstd),
+        CompressionType::Unknown => None,
     }
 }
 
@@ -1004,6 +1002,7 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
+                        compress_type: CompressionType::Unknown,
                     },
                     resp: tx,
                 };
