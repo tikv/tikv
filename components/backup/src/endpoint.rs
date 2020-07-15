@@ -8,7 +8,13 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
+<<<<<<< HEAD
 use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
+=======
+use configuration::Configuration;
+use engine_rocks::raw::DB;
+use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
+>>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -44,6 +50,7 @@ struct Request {
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
     cf: CfName,
+    compress_type: CompressionType,
 }
 
 /// Backup Task.
@@ -109,6 +116,7 @@ impl Task {
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 cf,
+                compress_type: req.get_compression_type(),
             },
             concurrency: req.get_concurrency(),
             resp,
@@ -258,16 +266,23 @@ impl BackupRange {
         db: Arc<DB>,
         storage: &LimitedStorage,
         file_name: String,
+<<<<<<< HEAD
         backup_ts: u64,
         start_ts: u64,
+=======
+        backup_ts: TimeStamp,
+        start_ts: TimeStamp,
+        compression_type: Option<SstCompressionType>,
+>>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(db, &file_name, storage.limiter.clone()) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -289,14 +304,16 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
+        ct: Option<SstCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone()) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("backup writer failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
+        let mut writer =
+            match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("backup writer failed"; "error" => ?e);
+                    return Err(e);
+                }
+            };
         let stat = match self.backup_raw(&mut writer, engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -557,11 +574,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
+                let ct = to_sst_compression_type(request.compress_type);
 
                 let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
+                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct)
                 } else {
-                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
+                    brange.backup_to_file(
+                        &engine,
+                        db.clone(),
+                        &storage,
+                        name,
+                        backup_ts,
+                        start_ts,
+                        ct,
+                    )
                 };
                 match res {
                     Err(e) => {
@@ -764,6 +790,16 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
     }
 }
 
+// convert BackupCompresionType to rocks db DBCompressionType
+fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
+    match ct {
+        CompressionType::Lz4 => Some(SstCompressionType::Lz4),
+        CompressionType::Snappy => Some(SstCompressionType::Snappy),
+        CompressionType::Zstd => Some(SstCompressionType::Zstd),
+        CompressionType::Unknown => None,
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -934,7 +970,12 @@ pub mod tests {
                         limiter: Limiter::new(INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
+<<<<<<< HEAD
                         cf: engine::CF_DEFAULT,
+=======
+                        cf: engine_traits::CF_DEFAULT,
+                        compress_type: CompressionType::Unknown,
+>>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
                     },
                     resp: tx,
                     concurrency: 4,
