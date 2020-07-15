@@ -178,30 +178,20 @@ impl<E: Engine> GcRunner<E> {
     }
 
     /// Cleans up outdated data.
-    fn gc_key(&mut self, safe_point: TimeStamp, key: &Key) -> Result<()> {
+    fn gc_key(
+        &mut self,
+        safe_point: TimeStamp,
+        key: &Key,
+        txn: &mut MvccTxn<E::Snap>,
+    ) -> Result<()> {
         let mut gc_info = GcInfo::default();
         while !gc_info.is_completed {
-            let mut txn = MvccTxn::for_scan(
-                self.engine.snapshot_on_kv_engine(b"", b"")?,
-                Some(ScanMode::Forward),
-                TimeStamp::zero(),
-                false,
-            );
-
             let next_gc_info = txn.gc(key.clone(), safe_point).unwrap();
             gc_info.found_versions += next_gc_info.found_versions;
             gc_info.deleted_versions += next_gc_info.deleted_versions;
             gc_info.is_completed = next_gc_info.is_completed;
             self.stats.add(&txn.take_statistics());
-
-            let write_size = txn.write_size();
-            let modifies = txn.into_modifies();
-            if !modifies.is_empty() {
-                self.limiter.blocking_consume(write_size);
-                self.engine.modify_on_kv_engine(modifies)?;
-            }
         }
-
         if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
             debug!(
             "GC found plenty versions for a key";
@@ -245,10 +235,22 @@ impl<E: Engine> GcRunner<E> {
                 break;
             }
 
+            let mut txn = MvccTxn::for_scan(
+                self.engine.snapshot_on_kv_engine(start_key, end_key)?,
+                Some(ScanMode::Forward),
+                TimeStamp::zero(),
+                false,
+            );
             for key in keys {
-                if let Err(e) = self.gc_key(safe_point, &key) {
+                if let Err(e) = self.gc_key(safe_point, &key, &mut txn) {
                     error!("gc fail"; "key" => %key, "err" => ?e);
                 }
+            }
+            let write_size = txn.write_size();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                self.limiter.blocking_consume(write_size);
+                self.engine.modify_on_kv_engine(modifies)?;
             }
         }
 

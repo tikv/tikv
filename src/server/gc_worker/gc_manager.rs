@@ -531,8 +531,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => return Ok(None),
         };
 
-        let hex_start = hex::encode(&start);
-        let hex_end = hex::encode(&end);
+        let hex_start = hex::encode_upper(&start);
+        let hex_end = hex::encode_upper(&end);
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(

@@ -267,8 +267,12 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         unimplemented!();
     }
 
-    fn kv_gc(&mut self, _: RpcContext<'_>, _: GcRequest, _: UnarySink<GcResponse>) {
-        unimplemented!();
+    fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
+        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+        ctx.spawn(
+            sink.fail(e)
+                .map_err(|e| error!("kv rpc failed"; "err" => ?e)),
+        );
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
