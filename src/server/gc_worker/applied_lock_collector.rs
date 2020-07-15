@@ -136,14 +136,17 @@ impl LockObserver {
             .schedule(LockCollectorTask::ObservedLocks(locks));
         // Wrapping the fail point in a closure, so we can modify
         // local variables without return,
-        let mut send_fp = || {
-            fail_point!("lock_observer_send", |_| {
-                *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
-                    vec![],
-                )));
-            })
-        };
-        send_fp();
+        #[cfg(feature = "failpoints")]
+        {
+            let mut send_fp = || {
+                fail_point!("lock_observer_send", |_| {
+                    *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
+                        vec![],
+                    )));
+                })
+            };
+            send_fp();
+        }
 
         match res {
             Ok(()) => (),
@@ -162,6 +165,7 @@ impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &mut Cmd) {
+        fail_point!("notify_lock_observer_query");
         let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
             return;
@@ -213,6 +217,7 @@ impl ApplySnapshotObserver for LockObserver {
         cf: CfName,
         kv_pairs: &[(Vec<u8>, Vec<u8>)],
     ) {
+        fail_point!("notify_lock_observer_snapshot");
         if cf != CF_LOCK {
             return;
         }
