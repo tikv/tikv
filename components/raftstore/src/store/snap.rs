@@ -1092,20 +1092,6 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-<<<<<<< HEAD
-fn notify_stats(ch: Option<&RaftRouter<RocksEngine>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
-            error!(
-                "failed to notify snapshot stats";
-                "err" => ?e,
-            )
-        }
-    }
-}
-
-=======
->>>>>>> 8caa025... raftstore: do not send store heartbeat when snapshot received (#8123)
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
