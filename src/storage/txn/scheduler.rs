@@ -194,7 +194,7 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: AtomicUsize,
 
-    lock_mgr: Option<L>,
+    lock_mgr: L,
 
     pipelined_pessimistic_lock: bool,
 }
@@ -290,7 +290,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
-        lock_mgr: Option<L>,
+        lock_mgr: L,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -519,7 +519,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
-        self.inner.lock_mgr.as_ref().unwrap().wait_for(
+        self.inner.lock_mgr.wait_for(
             start_ts,
             tctx.cb.unwrap(),
             pr,

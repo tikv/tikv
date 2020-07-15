@@ -143,7 +143,7 @@ impl Extract for Duration {
     }
 }
 
-pub trait InByCompare: Evaluable + Eq {}
+pub trait InByCompare: Evaluable + EvaluableRet + Eq {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}
@@ -384,7 +384,7 @@ mod tests {
                 let val = result.unwrap();
                 assert!(val.is_vector());
                 assert_eq!(
-                    val.vector_value().unwrap().as_ref().as_int_slice(),
+                    val.vector_value().unwrap().as_ref().to_int_vec(),
                     &[expected]
                 );
             }
@@ -495,7 +495,7 @@ mod tests {
             let val = result.unwrap();
             assert!(val.is_vector());
             assert_eq!(
-                val.vector_value().unwrap().as_ref().as_int_slice(),
+                val.vector_value().unwrap().as_ref().to_int_vec(),
                 &[expected]
             );
         }
@@ -544,7 +544,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             &[Some(1), Some(1), Some(0)],
         );
     }

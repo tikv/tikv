@@ -37,7 +37,7 @@ pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
-    lock_mgr: Option<LockManager>,
+    lock_mgr: LockManager,
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
