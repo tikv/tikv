@@ -317,7 +317,7 @@ fn parse_end_time(file: &std::fs::File, try_lines: usize) -> Result<i64, Error> 
 // Batch size of the log streaming
 const LOG_ITEM_BATCH_SIZE: usize = 256;
 
-fn bacth_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Error = ()> {
+fn batch_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Error = ()> {
     iter_ok(item.batching(|iter| {
         let batch = iter.take(LOG_ITEM_BATCH_SIZE).collect_vec();
         if batch.is_empty() {
@@ -335,7 +335,7 @@ pub fn search<P: AsRef<Path>>(
     mut req: SearchLogRequest,
 ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
     if !log_file.as_ref().exists() {
-        return Ok(bacth_log_item(LogIterator::default()));
+        return Ok(batch_log_item(LogIterator::default()));
     }
     let begin_time = req.get_start_time();
     let end_time = req.get_end_time();
@@ -350,7 +350,7 @@ pub fn search<P: AsRef<Path>>(
         .into_iter()
         .fold(0, |acc, x| acc | (1 << (x as usize)));
     let item = LogIterator::new(log_file, begin_time, end_time, level_flag, patterns)?;
-    Ok(bacth_log_item(item))
+    Ok(batch_log_item(item))
 }
 
 #[cfg(test)]
