@@ -926,9 +926,10 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
+                .build()
+                .unwrap();
         let mut gc_worker = GcWorker::new(
             engine,
             None,
