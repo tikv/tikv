@@ -621,15 +621,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
 
-<<<<<<< HEAD
-                let res = if is_raw_kv {
-                    brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf)
-                } else {
-                    brange.backup_to_file(&engine, db.clone(), &storage, name, backup_ts, start_ts)
-=======
                 let (res, start_key, end_key) = if is_raw_kv {
                     (
-                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf, ct),
+                        brange.backup_raw_kv_to_file(&engine, db.clone(), &storage, name, cf),
                         brange
                             .start_key
                             .map_or_else(|| vec![], |k| k.into_encoded()),
@@ -644,7 +638,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             name,
                             backup_ts,
                             start_ts,
-                            ct,
                         ),
                         brange
                             .start_key
@@ -653,7 +646,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             .end_key
                             .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
                     )
->>>>>>> 443afa3... backup: send task reponse concurrently (#8202)
                 };
 
                 let mut response = BackupResponse::default();
