@@ -1015,7 +1015,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             key_ranges,
-            1,
+            2,
             false,
             false,
         )
