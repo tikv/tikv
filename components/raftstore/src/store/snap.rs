@@ -28,7 +28,7 @@ use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
-use crate::errors::Error as RaftStoreError;
+use crate::errors::{Error as RaftStoreError, ErrorInner as RaftStoreErrorInner};
 use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
 use keys::{enc_end_key, enc_start_key};
@@ -502,7 +502,9 @@ impl Snap {
                             Mode::Encrypt,
                             Iv::from_slice(&enc_info.iv)?,
                         )
-                        .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
+                        .map_err(|e| {
+                            RaftStoreError::from(RaftStoreErrorInner::Snapshot(box_err!(e)))
+                        })?,
                     );
                 }
             }
@@ -1248,7 +1250,11 @@ impl<E: KvEngine> SnapManager<E> {
             }
             match old_snaps.as_mut().unwrap().pop() {
                 Some((key, snap, _)) => self.delete_snapshot(&key, snap.as_ref(), false),
-                None => return Err(RaftStoreError::Snapshot(Error::TooManySnapshots)),
+                None => {
+                    return Err(RaftStoreError::from(RaftStoreErrorInner::Snapshot(
+                        Error::TooManySnapshots,
+                    )))
+                }
             };
         }
 
@@ -1297,10 +1303,9 @@ impl<E: KvEngine> SnapManager<E> {
         let base = &self.core.base;
         let s = Snap::new_for_applying(base, key, &self.core)?;
         if !s.exists() {
-            return Err(RaftStoreError::Other(From::from(format!(
-                "snapshot of {:?} not exists.",
-                key
-            ))));
+            return Err(RaftStoreError::from(RaftStoreErrorInner::Other(
+                From::from(format!("snapshot of {:?} not exists.", key)),
+            )));
         }
         Ok(Box::new(s))
     }

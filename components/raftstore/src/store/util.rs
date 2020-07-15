@@ -16,7 +16,7 @@ use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -63,7 +63,10 @@ pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Res
     if start_key < key && (key < end_key || end_key.is_empty()) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::from(ErrorInner::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+        )))
     }
 }
 
@@ -74,7 +77,10 @@ pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Res
     if key >= start_key && (end_key.is_empty() || key <= end_key) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::from(ErrorInner::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+        )))
     }
 }
 
@@ -85,7 +91,10 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     if key >= start_key && (end_key.is_empty() || key < end_key) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::from(ErrorInner::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+        )))
     }
 }
 
@@ -222,7 +231,7 @@ pub fn compare_region_epoch(
         } else {
             vec![]
         };
-        return Err(Error::EpochNotMatch(
+        return Err(Error::from(ErrorInner::EpochNotMatch(
             format!(
                 "current epoch of region {} is {:?}, but you \
                  sent {:?}",
@@ -231,7 +240,7 @@ pub fn compare_region_epoch(
                 from_epoch
             ),
             regions,
-        ));
+        )));
     }
 
     Ok(())
@@ -243,7 +252,10 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     if peer.get_store_id() == store_id {
         Ok(())
     } else {
-        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
+        Err(Error::from(ErrorInner::StoreNotMatch(
+            peer.get_store_id(),
+            store_id,
+        )))
     }
 }
 
@@ -255,7 +267,7 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     } else {
         // If header's term is 2 verions behind current term,
         // leadership may have been changed away.
-        Err(Error::StaleCommand)
+        Err(Error::from(ErrorInner::StaleCommand))
     }
 }
 

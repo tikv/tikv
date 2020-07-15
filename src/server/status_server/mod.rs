@@ -606,7 +606,7 @@ where
             })),
         ) {
             Ok(_) => (),
-            Err(raftstore::Error::RegionNotFound(_)) => {
+            Err(raftstore::Error(box raftstore::ErrorInner::RegionNotFound(_))) => {
                 return not_found(format!("region({}) not found", id));
             }
             Err(err) => {
@@ -977,6 +977,7 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
+    use raftstore::{Error as RaftStoreError, ErrorInner as RaftStoreErrorInner};
     use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::collections::HashSet;
@@ -986,7 +987,9 @@ mod tests {
 
     impl CasualRouter<RocksSnapshot> for MockRouter {
         fn send(&self, region_id: u64, _: CasualMessage<RocksSnapshot>) -> raftstore::Result<()> {
-            Err(raftstore::Error::RegionNotFound(region_id))
+            Err(RaftStoreError::from(RaftStoreErrorInner::RegionNotFound(
+                region_id,
+            )))
         }
     }
 

@@ -4,6 +4,8 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
+#![feature(specialization)]
+#![feature(box_patterns)]
 
 #[macro_use]
 extern crate bitflags;
@@ -32,4 +34,4 @@ pub mod errors;
 pub mod router;
 pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
-pub use self::errors::{DiscardReason, Error, Result};
+pub use self::errors::{DiscardReason, Error, ErrorInner, Result};

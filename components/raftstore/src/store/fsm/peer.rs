@@ -57,7 +57,7 @@ use crate::store::{
     util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
     SnapKey, StoreMsg,
 };
-use crate::{Error, Result};
+use crate::{Error, ErrorInner, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
@@ -2197,7 +2197,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 target_id,
                 PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
             )
-            .map_err(|_| Error::RegionNotFound(target_id))
+            .map_err(|_| Error::from(ErrorInner::RegionNotFound(target_id)))
     }
 
     fn rollback_merge(&mut self) {
@@ -2792,7 +2792,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.group_state = GroupState::Chaos;
             self.register_raft_base_tick();
-            return Err(Error::NotLeader(region_id, leader));
+            return Err(Error::from(ErrorInner::NotLeader(region_id, leader)));
         }
         // peer_id must be the same as peer's.
         if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
@@ -2805,17 +2805,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .raft_metrics
                 .invalid_proposal
                 .region_not_initialized += 1;
-            return Err(Error::RegionNotInitialized(region_id));
+            return Err(Error::from(ErrorInner::RegionNotInitialized(region_id)));
         }
         // If the peer is applying snapshot, it may drop some sending messages, that could
         // make clients wait for response until timeout.
         if self.fsm.peer.is_applying_snapshot() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
-            return Err(Error::Other(box_err!(
+            return Err(Error::from(ErrorInner::Other(box_err!(
                 "{} peer is applying snapshot",
                 self.fsm.peer.tag
-            )));
+            ))));
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
@@ -2824,7 +2824,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
+            Err(Error(box ErrorInner::EpochNotMatch(msg, mut new_regions))) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -2834,7 +2834,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     new_regions.push(sibling_region);
                 }
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
-                Err(Error::EpochNotMatch(msg, new_regions))
+                Err(Error::from(ErrorInner::EpochNotMatch(msg, new_regions)))
             }
             Err(e) => Err(e),
             Ok(()) => Ok(None),
@@ -3169,10 +3169,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
-            return Err(Error::NotLeader(
+            return Err(Error::from(ErrorInner::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
-            ));
+            )));
         }
 
         let region = self.fsm.peer.region();
@@ -3189,13 +3189,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "prev_epoch" => ?region.get_region_epoch(),
                 "epoch" => ?epoch,
             );
-            return Err(Error::EpochNotMatch(
+            return Err(Error::from(ErrorInner::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch
                 ),
                 vec![region.to_owned()],
-            ));
+            )));
         }
         Ok(())
     }
@@ -3637,7 +3637,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn execute_region_detail(&mut self, request: &RaftCmdRequest) -> Result<StatusResponse> {
         if !self.fsm.peer.get_store().is_initialized() {
             let region_id = request.get_header().get_region_id();
-            return Err(Error::RegionNotInitialized(region_id));
+            return Err(Error::from(ErrorInner::RegionNotInitialized(region_id)));
         }
         let mut resp = StatusResponse::default();
         resp.mut_region_detail()

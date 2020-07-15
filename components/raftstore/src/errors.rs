@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
+use std::fmt;
 use std::io;
 use std::net;
 use std::result;
@@ -31,7 +32,7 @@ pub enum DiscardReason {
 
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
             display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
         }
@@ -139,30 +140,64 @@ quick_error! {
     }
 }
 
+pub struct Error(pub Box<ErrorInner>);
+
 pub type Result<T> = result::Result<T, Error>;
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    fn from(e: ErrorInner) -> Error {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
+    }
+}
 
 impl From<Error> for errorpb::Error {
     fn from(err: Error) -> errorpb::Error {
         let mut errorpb = errorpb::Error::default();
         errorpb.set_message(format!("{}", err));
 
-        match err {
-            Error::RegionNotFound(region_id) => {
+        match err.0 {
+            box ErrorInner::RegionNotFound(region_id) => {
                 errorpb.mut_region_not_found().set_region_id(region_id);
             }
-            Error::NotLeader(region_id, leader) => {
+            box ErrorInner::NotLeader(region_id, leader) => {
                 if let Some(leader) = leader {
                     errorpb.mut_not_leader().set_leader(leader);
                 }
                 errorpb.mut_not_leader().set_region_id(region_id);
             }
-            Error::RaftEntryTooLarge(region_id, entry_size) => {
+            box ErrorInner::RaftEntryTooLarge(region_id, entry_size) => {
                 errorpb.mut_raft_entry_too_large().set_region_id(region_id);
                 errorpb
                     .mut_raft_entry_too_large()
                     .set_entry_size(entry_size);
             }
-            Error::StoreNotMatch(to_store_id, my_store_id) => {
+            box ErrorInner::StoreNotMatch(to_store_id, my_store_id) => {
                 errorpb
                     .mut_store_not_match()
                     .set_request_store_id(to_store_id);
@@ -170,7 +205,7 @@ impl From<Error> for errorpb::Error {
                     .mut_store_not_match()
                     .set_actual_store_id(my_store_id);
             }
-            Error::KeyNotInRegion(key, region) => {
+            box ErrorInner::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb
                     .mut_key_not_in_region()
@@ -182,20 +217,25 @@ impl From<Error> for errorpb::Error {
                     .mut_key_not_in_region()
                     .set_end_key(region.get_end_key().to_vec());
             }
-            Error::EpochNotMatch(_, new_regions) => {
+            box ErrorInner::EpochNotMatch(_, new_regions) => {
                 let mut e = errorpb::EpochNotMatch::default();
                 e.set_current_regions(new_regions.into());
                 errorpb.set_epoch_not_match(e);
             }
-            Error::StaleCommand => {
+            box ErrorInner::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
-            Error::Transport(reason) if reason == DiscardReason::Full => {
+            box ErrorInner::Transport(reason) if reason == DiscardReason::Full => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
-            Error::Engine(engine_traits::Error::NotInRange(key, region_id, start_key, end_key)) => {
+            box ErrorInner::Engine(engine_traits::Error::NotInRange(
+                key,
+                region_id,
+                start_key,
+                end_key,
+            )) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb.mut_key_not_in_region().set_region_id(region_id);
                 errorpb
@@ -212,12 +252,12 @@ impl From<Error> for errorpb::Error {
     }
 }
 
-impl<T> From<TrySendError<T>> for Error {
+impl<T> From<TrySendError<T>> for ErrorInner {
     #[inline]
-    fn from(e: TrySendError<T>) -> Error {
+    fn from(e: TrySendError<T>) -> ErrorInner {
         match e {
-            TrySendError::Full(_) => Error::Transport(DiscardReason::Full),
-            TrySendError::Disconnected(_) => Error::Transport(DiscardReason::Disconnected),
+            TrySendError::Full(_) => ErrorInner::Transport(DiscardReason::Full),
+            TrySendError::Disconnected(_) => ErrorInner::Transport(DiscardReason::Disconnected),
         }
     }
 }
@@ -225,13 +265,13 @@ impl<T> From<TrySendError<T>> for Error {
 #[cfg(feature = "prost-codec")]
 impl From<prost::EncodeError> for Error {
     fn from(err: prost::EncodeError) -> Error {
-        Error::ProstEncode(err.into())
+        Error::from(ErrorInner::ProstEncode(err.into()))
     }
 }
 
 #[cfg(feature = "prost-codec")]
 impl From<prost::DecodeError> for Error {
     fn from(err: prost::DecodeError) -> Error {
-        Error::ProstDecode(err.into())
+        Error::from(ErrorInner::ProstDecode(err.into()))
     }
 }
