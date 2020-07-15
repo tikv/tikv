@@ -8,14 +8,16 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tidb_query_datatype::codec::datum::{encode_value, Datum, NIL_FLAG};
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::Range;
+use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_vec_executors::{
     interface::BatchExecutor, util::scan_executor::field_type_from_column_info,
-    BatchIndexScanExecutor, BatchTableScanExecutor,
+    BatchTableScanExecutor,
 };
 use tidb_query_vec_expr::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
@@ -82,29 +84,42 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut BatchIndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+        is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CmSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
-        let mut is_drained = false;
 
-        while !is_drained {
-            let result = scanner.next_batch(BATCH_MAX_SIZE);
-            is_drained = result.is_drained?;
-            for logical_row in result.logical_rows {
-                let mut bytes = vec![];
-                for column in result.physical_columns.as_slice() {
-                    let data = &column.raw()[logical_row];
-                    bytes.extend_from_slice(data);
-                    if let Some(c) = cms.as_mut() {
-                        c.insert(&bytes);
-                    }
-                }
-                hist.append(&bytes);
+        while let Some((key, _)) = scanner.next()? {
+            let mut key = &key[..];
+            if is_common_handle {
+                table::check_record_key(key)?;
+                key = &key[table::PREFIX_LEN..];
+            } else {
+                table::check_index_key(key)?;
+                key = &key[table::PREFIX_LEN + table::ID_LEN..];
             }
+            let mut datums = key;
+            let mut data = vec![];
+            for i in 0..req.get_num_columns() as usize {
+                if datums.is_empty() {
+                    return Err(box_err!(
+                        "{}th column is missing in datum buffer: {:X?}",
+                        i,
+                        key
+                    ));
+                }
+                let (column, remaining) = split_datum(datums, false)?;
+                datums = remaining;
+                data.extend_from_slice(column);
+                if let Some(cms) = cms.as_mut() {
+                    cms.insert(&data);
+                }
+            }
+            hist.append(&data);
         }
 
         let mut res = tipb::AnalyzeIndexResp::default();
@@ -121,30 +136,25 @@ impl<S: Snapshot> AnalyzeContext<S> {
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
-            AnalyzeType::TypeIndex => {
+            AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
-                let mut scanner = BatchIndexScanExecutor::new_for_analyze(
-                    self.storage.take().unwrap(),
-                    Arc::new(EvalConfig::default()),
-                    req.get_num_columns() as usize,
-                    mem::replace(&mut self.ranges, Vec::new()),
-                    false,
-                )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_storage_stats(&mut self.storage_stats);
-                res
-            }
-
-            AnalyzeType::TypeCommonHandle => {
-                let req = self.req.take_idx_req();
-                let mut scanner = BatchIndexScanExecutor::new_for_analyze(
-                    self.storage.take().unwrap(),
-                    Arc::new(EvalConfig::default()),
-                    req.get_num_columns() as usize,
-                    mem::replace(&mut self.ranges, Vec::new()),
-                    true,
-                )?;
-                let res = AnalyzeContext::handle_index(req, &mut scanner);
+                let ranges = mem::replace(&mut self.ranges, vec![]);
+                table::check_table_ranges(&ranges)?;
+                let mut scanner = RangesScanner::new(RangesScannerOptions {
+                    storage: self.storage.take().unwrap(),
+                    ranges: ranges
+                        .into_iter()
+                        .map(|r| Range::from_pb_range(r, false))
+                        .collect(),
+                    scan_backward_in_range: false,
+                    is_key_only: true,
+                    is_scanned_range_aware: false,
+                });
+                let res = AnalyzeContext::handle_index(
+                    req,
+                    &mut scanner,
+                    self.req.get_tp() == AnalyzeType::TypeCommonHandle,
+                );
                 scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }

@@ -14,9 +14,7 @@ use codec::prelude::NumberDecoder;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::table::{
-    check_index_key, check_record_key, MAX_OLD_ENCODED_VALUE_LEN,
-};
+use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
 use tidb_query_datatype::codec::{datum, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
@@ -106,45 +104,6 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         })?;
         Ok(Self(wrapper))
     }
-
-    pub fn new_for_analyze(
-        storage: S,
-        config: Arc<EvalConfig>,
-        cols_len: usize,
-        key_ranges: Vec<KeyRange>,
-        is_common_handle: bool,
-    ) -> Result<Self> {
-        let (decode_handle_strategy, handle_column_cnt) = if is_common_handle {
-            (DecodeCommonHandleRowKey, cols_len)
-        } else {
-            (NoDecode, 0)
-        };
-
-        let schema = (0..cols_len)
-            .map(|_| field_type_with_unspecified_tp())
-            .collect();
-
-        let columns_id_without_handle = (0..cols_len - handle_column_cnt)
-            .map(|i| i as i64)
-            .collect();
-
-        let imp = IndexScanExecutorImpl {
-            context: EvalContext::new(config),
-            schema,
-            columns_id_without_handle,
-            decode_handle_strategy,
-        };
-
-        let wrapper = ScanExecutor::new(ScanExecutorOptions {
-            imp,
-            storage,
-            key_ranges,
-            is_backward: false,
-            is_key_only: false,
-            accept_point_range: false,
-        })?;
-        Ok(Self(wrapper))
-    }
 }
 
 impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
@@ -186,8 +145,6 @@ enum DecodeHandleStrategy {
     NoDecode,
     DecodeIntHandle,
     DecodeCommonHandle,
-    // Use for analyze common handle index.
-    DecodeCommonHandleRowKey,
 }
 
 struct IndexScanExecutorImpl {
@@ -236,7 +193,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                     EvalType::Int,
                 ));
             }
-            DecodeCommonHandle | DecodeCommonHandleRowKey => {
+            DecodeCommonHandle => {
                 for _ in self.columns_id_without_handle.len()..columns_len {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
@@ -301,21 +258,8 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        match self.decode_handle_strategy {
-            DecodeCommonHandleRowKey => {
-                check_record_key(key)?;
-                key = &key[table::PREFIX_LEN..];
-                Self::extract_columns_from_datum_format(
-                    &mut key,
-                    &mut columns[0..self.schema.len()],
-                )?;
-                return Ok(());
-            }
-            _ => {
-                check_index_key(key)?;
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-            }
-        }
+        check_index_key(key)?;
+        key = &key[table::PREFIX_LEN + table::ID_LEN..];
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
                 if self.decode_handle_strategy != DecodeCommonHandle {
@@ -470,7 +414,7 @@ impl IndexScanExecutorImpl {
         self.extract_columns_from_row_format(restore_values, columns)?;
 
         match self.decode_handle_strategy {
-            NoDecode | DecodeCommonHandleRowKey => {}
+            NoDecode => {}
             // This is a non-unique index value, we should extract the int handle from the key.
             DecodeIntHandle if tail_len < 8 => {
                 datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
@@ -511,7 +455,7 @@ impl IndexScanExecutorImpl {
         )?;
 
         match self.decode_handle_strategy {
-            NoDecode | DecodeCommonHandleRowKey => {}
+            NoDecode => {}
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
             DecodeIntHandle if key_payload.is_empty() => {
