@@ -808,7 +808,7 @@ fn test_old_value_basic() {
     m5.set_op(Op::Del);
     m5.key = k1.clone();
     let m5_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m5], k1.clone(), m5_start_ts);
+    suite.must_kv_prewrite(1, vec![m5], k1, m5_start_ts);
 
     let mut event_count = 0;
     loop {
@@ -816,12 +816,11 @@ fn test_old_value_basic() {
         for event in events {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    for row in es.take_entries().into_vec() {
+                    for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            if row.get_start_ts() == m2_start_ts.into_inner() {
-                                assert_eq!(row.get_old_value(), b"v1");
-                                event_count += 1;
-                            } else if row.get_start_ts() == m3_start_ts.into_inner() {
+                            if row.get_start_ts() == m2_start_ts.into_inner()
+                                || row.get_start_ts() == m3_start_ts.into_inner()
+                            {
                                 assert_eq!(row.get_old_value(), b"v1");
                                 event_count += 1;
                             } else if row.get_start_ts() == m5_start_ts.into_inner() {
@@ -850,7 +849,7 @@ fn test_old_value_basic() {
         for event in events {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    for row in es.take_entries().into_vec() {
+                    for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Committed
                             && row.get_start_ts() == m1_start_ts.into_inner()
                         {
