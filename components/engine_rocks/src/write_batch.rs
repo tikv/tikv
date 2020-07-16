@@ -9,7 +9,7 @@ use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteBatchVecEx
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 pub const WRITE_BATCH_MAX_KEYS: usize = 256;
-pub const WRITE_BATCH_MAX_BATCH: usize = 16;
+const WRITE_BATCH_MAX_BATCH: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
