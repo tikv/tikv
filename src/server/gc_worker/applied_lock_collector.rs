@@ -136,7 +136,7 @@ impl LockObserver {
             .schedule(LockCollectorTask::ObservedLocks(locks));
         // Wrapping the fail point in a closure, so we can modify
         // local variables without return,
-        let mut send_fp = || {
+        let send_fp = || {
             fail_point!("lock_observer_send", |_| {
                 *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
                     vec![],

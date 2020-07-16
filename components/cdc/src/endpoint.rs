@@ -407,8 +407,6 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             is_new_delegate = true;
             d
         });
-        let txn_extra_op = request.get_extra_op();
-        delegate.txn_extra_op = txn_extra_op;
 
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
@@ -416,18 +414,6 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         let sched = self.scheduler.clone();
         let batch_size = self.scan_batch_size;
 
-        let init = Initializer {
-            sched,
-            region_id,
-            conn_id,
-            downstream_id,
-            batch_size,
-            txn_extra_op,
-            observe_id: delegate.id,
-            downstream_state: downstream_state.clone(),
-            checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
-        };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
             if is_new_delegate {
@@ -458,11 +444,26 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 region_id,
             }
         };
+        let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
+            delegate.txn_extra_op = request.get_extra_op();
             if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
+        let init = Initializer {
+            sched,
+            region_id,
+            conn_id,
+            downstream_id,
+            batch_size,
+            downstream_state: downstream_state.clone(),
+            txn_extra_op: delegate.txn_extra_op,
+            observe_id: delegate.id,
+            checkpoint_ts: checkpoint_ts.into(),
+            build_resolver: is_new_delegate,
+        };
+
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
