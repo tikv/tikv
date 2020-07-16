@@ -346,8 +346,6 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
-    const INVALID_TIMESTAMP: i64 = -1;
-
     #[test]
     fn test_parse_time() {
         // (input, remain, time)
@@ -380,10 +378,9 @@ mod tests {
     }
 
     fn timestamp(time: &str) -> i64 {
-        match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
-            Ok(t) => t.timestamp_millis(),
-            Err(_) => INVALID_TIMESTAMP,
-        }
+        DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z")
+            .unwrap()
+            .timestamp_millis()
     }
 
     #[test]
