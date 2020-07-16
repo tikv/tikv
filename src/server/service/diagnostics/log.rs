@@ -292,15 +292,8 @@ fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
 fn parse_start_time(file: &std::fs::File, try_lines: usize) -> Result<i64, Error> {
     let buffer = BufReader::new(file);
     for (i, line) in buffer.lines().enumerate() {
-        match line {
-            Ok(l) => {
-                if let Ok((_, (time, _))) = parse(&l) {
-                    return Ok(time);
-                }
-            }
-            Err(err) => {
-                return Err(err.into());
-            }
+        if let Ok((_, (time, _))) = parse(&line?) {
+            return Ok(time);
         }
         if i >= try_lines {
             break;
