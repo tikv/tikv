@@ -15,10 +15,7 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_vec_executors::{
-    interface::BatchExecutor, util::scan_executor::field_type_from_column_info,
-    BatchTableScanExecutor,
-};
+use tidb_query_vec_executors::{interface::BatchExecutor, BatchTableScanExecutor};
 use tidb_query_vec_expr::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 
@@ -272,7 +269,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                     let mut data = vec![];
                     columns_slice[0].encode(
                         *logical_row,
-                        &field_type_from_column_info(&self.cols_info[0]),
+                        &self.cols_info[0],
                         &mut EvalContext::default(),
                         &mut data,
                     )?;
@@ -286,7 +283,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                     let mut val = vec![];
                     columns_slice[i].encode(
                         *logical_row,
-                        &field_type_from_column_info(&self.cols_info[0]),
+                        &self.cols_info[0],
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
