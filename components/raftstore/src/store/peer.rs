@@ -198,7 +198,7 @@ pub struct Peer {
     proposals: ProposalQueue<RocksSnapshot>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pending_reads: ReadIndexQueue,
+    pending_reads: ReadIndexQueue<RocksSnapshot>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -1568,7 +1568,7 @@ impl Peer {
 
     fn response_read<T, C>(
         &self,
-        read: &mut ReadIndexRequest,
+        read: &mut ReadIndexRequest<RocksSnapshot>,
         ctx: &mut PollContext<T, C>,
         replica_read: bool,
     ) {
