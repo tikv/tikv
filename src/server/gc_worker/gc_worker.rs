@@ -293,14 +293,14 @@ impl<E: Engine> GcRunner<E> {
             reader
                 .scan_keys(from, self.cfg.batch_keys)
                 .map_err(Error::from)
-                .and_then(|(keys, next)| {
+                .map(|(keys, next)| {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
                             GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
-                    Ok((keys, next))
+                    (keys, next)
                 })
         };
         self.stats.add(reader.get_statistics());
@@ -1041,9 +1041,10 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
+                .build()
+                .unwrap();
         let db = engine.get_rocksdb();
         let mut gc_worker = GcWorker::new(
             engine,
@@ -1207,10 +1208,12 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage =
-            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            prefixed_engine.clone(),
+            DummyLockManager {},
+        )
+        .build()
+        .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),

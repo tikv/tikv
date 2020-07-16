@@ -47,7 +47,7 @@ pub fn compare_bytes<C: Collator, F: CmpOp>(
 }
 
 pub trait Comparer {
-    type T: Evaluable;
+    type T: Evaluable + EvaluableRet;
 
     fn compare(lhs: Option<&Self::T>, rhs: Option<&Self::T>) -> Result<Option<i64>>;
 }
@@ -56,7 +56,7 @@ pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
     _phantom: std::marker::PhantomData<(T, F)>,
 }
 
-impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
+impl<T: Evaluable + EvaluableRet + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
     #[inline]

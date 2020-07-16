@@ -29,6 +29,7 @@ pub struct ExecutorsRunner<SS> {
 /// Builds a normal executor pipeline.
 ///
 /// Normal executors iterate rows one by one.
+#[allow(clippy::explicit_counter_loop)]
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     exec_descriptors: Vec<tipb::Executor>,
     storage: S,
