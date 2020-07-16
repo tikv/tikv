@@ -236,8 +236,8 @@ impl<E: Engine> GcRunner<E> {
 
             let mut keys = keys.into_iter();
             let mut txn = new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
-            let (mut next_key, mut gc_info) = (keys.next(), GcInfo::default());
-            while let Some(ref key) = next_key {
+            let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
+            while let Some(ref key) = next_gc_key {
                 self.gc_key(safe_point, key, &mut gc_info, &mut txn);
                 if gc_info.is_completed {
                     if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
@@ -254,7 +254,7 @@ impl<E: Engine> GcRunner<E> {
                         "versions" => gc_info.deleted_versions,
                         );
                     }
-                    next_key = keys.next();
+                    next_gc_key = keys.next();
                     gc_info = GcInfo::default();
                 } else {
                     flush_txn(txn, &self.limiter, &self.engine)?;
