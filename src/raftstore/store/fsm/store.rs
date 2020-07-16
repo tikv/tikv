@@ -275,6 +275,7 @@ impl<T, C> PollContext<T, C> {
     /// Timeout is calculated from TiKV start, the node should not become
     /// hibernated if it still within the hibernate timeout, see
     /// https://github.com/tikv/tikv/issues/7747
+    #[allow(clippy::wrong_self_convention)]
     pub fn is_hibernate_timeout(&mut self) -> bool {
         let timeout = match self.node_start_time {
             Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
