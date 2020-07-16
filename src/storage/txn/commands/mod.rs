@@ -17,6 +17,7 @@ mod resolve_lock;
 mod resolve_lock_lite;
 mod rollback;
 mod scan_lock;
+mod scan_stale_locks;
 mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
@@ -33,6 +34,7 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
+pub use scan_stale_locks::ScanStaleLocks;
 pub use txn_heart_beat::TxnHeartBeat;
 
 use std::fmt::{self, Debug, Display, Formatter};
@@ -68,6 +70,7 @@ pub enum Command {
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
     ScanLock(ScanLock),
+    ScanStaleLocks(ScanStaleLocks),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
     Pause(Pause),
@@ -266,7 +269,7 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLock::new(txn_status, None, vec![], req.take_context())
+            ScanStaleLocks::new(txn_status, None, req.take_context())
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());
@@ -337,6 +340,7 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::ScanLock(t) => t,
+            Command::ScanStaleLocks(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
@@ -357,6 +361,7 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::ScanLock(t) => t,
+            Command::ScanStaleLocks(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,

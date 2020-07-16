@@ -1,17 +1,18 @@
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
 use tikv_util::collections::HashMap;
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, TimeStamp};
 
 command! {
-    /// Resolve locks according to `txn_status`.
+    /// Scan locks for resolving according to `txn_status`.
     ///
-    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// During the GC operation, this should be called to find out stale locks whose timestamp is
     /// before safe point.
-    ResolveLock:
+    /// This should follow by a `ResolveLock`
+    ScanStaleLocks:
         cmd_ty => (),
-        display => "kv::resolve_lock", (),
+        display => "kv::scan_stale_locks", (),
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///
@@ -31,23 +32,13 @@ command! {
             /// version.
             txn_status: HashMap<TimeStamp, TimeStamp>,
             scan_key: Option<Key>,
-            key_locks: Vec<(Key, Lock)>,
         }
 }
 
-impl CommandExt for ResolveLock {
+impl CommandExt for ScanStaleLocks {
     ctx!();
     tag!(resolve_lock);
-
-    command_method!(readonly, bool, false);
-    command_method!(is_sys_cmd, bool, true);
-
-    fn write_bytes(&self) -> usize {
-        self.key_locks
-            .iter()
-            .map(|(key, _)| key.as_encoded().len())
-            .sum()
-    }
-
-    gen_lock!(key_locks: multiple(|(key, _)| key));
+    command_method!(readonly, bool, true);
+    command_method!(write_bytes, usize, 0);
+    gen_lock!(empty);
 }

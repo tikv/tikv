@@ -18,7 +18,7 @@ use crate::storage::txn::{
     commands::{
         AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
         Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
-        Rollback, ScanLock, TxnHeartBeat,
+        Rollback, ScanLock, ScanStaleLocks, TxnHeartBeat,
     },
     sched_pool::*,
     Error, ErrorInner, ProcessResult, Result,
@@ -117,7 +117,7 @@ pub(super) fn process_read_impl<E: Engine>(
 
             Ok(ProcessResult::Locks { locks })
         }
-        Command::ResolveLock(ResolveLock {
+        Command::ScanStaleLocks(ScanStaleLocks {
             ref mut txn_status,
             ref scan_key,
             ref ctx,
@@ -544,7 +544,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager>(
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommand {
-                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], ctx.clone()).into(),
+                    cmd: ScanStaleLocks::new(txn_status, scan_key.take(), ctx.clone()).into(),
                 }
             };
             let write_data = WriteData::from_modifies(txn.into_modifies());
