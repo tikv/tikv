@@ -360,7 +360,7 @@ impl IndexScanExecutorImpl {
         let handle_len = (&value[2..]).read_u16().map_err(|_| {
             other_err!(
                 "Fail to read common handle's length from value: {}",
-                hex::encode(value)
+                hex::encode_upper(value)
             )
         })? as usize;
         let handle_end_offset = 4 + handle_len;

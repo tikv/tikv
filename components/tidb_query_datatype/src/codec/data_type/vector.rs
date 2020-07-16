@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{EvalType, FieldTypeAccessor};
-use tipb::FieldType;
 
 use super::scalar::ScalarValueRef;
 use super::*;
@@ -263,7 +262,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &dyn FieldTypeAccessor,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
@@ -355,7 +354,7 @@ impl VectorValue {
     pub fn encode_sort_key(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {

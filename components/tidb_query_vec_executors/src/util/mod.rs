@@ -30,7 +30,7 @@ pub fn ensure_columns_decoded(
 
 /// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
 /// are erased.
-pub(crate) unsafe fn eval_exprs_decoded_no_lifetime<'a>(
+pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
     ctx: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],

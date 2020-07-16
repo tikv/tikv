@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     RpnStackNode::Vector { value, field_type } => {
                         value.as_ref().encode_sort_key(
                             value.logical_rows()[logical_row_idx],
-                            field_type,
+                            *field_type,
                             context,
                             &mut self.group_key_buffer,
                         )?;

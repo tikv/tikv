@@ -1095,7 +1095,7 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
             return Err(box_err!(
                 "The {}th slice are missing in the datum buffer: {}",
                 i,
-                hex::encode(origin)
+                hex::encode_upper(origin)
             ));
         }
         let (_, remaining) = split_datum(buf, false)?;

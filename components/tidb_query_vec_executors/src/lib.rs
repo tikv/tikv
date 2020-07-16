@@ -39,7 +39,7 @@ mod slow_hash_aggr_executor;
 mod stream_aggr_executor;
 mod table_scan_executor;
 mod top_n_executor;
-pub mod util;
+mod util;
 
 pub use self::fast_hash_aggr_executor::BatchFastHashAggregationExecutor;
 pub use self::index_scan_executor::BatchIndexScanExecutor;

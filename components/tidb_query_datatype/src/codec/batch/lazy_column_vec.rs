@@ -136,7 +136,7 @@ impl LazyBatchColumnVec {
             for offset in output_offsets {
                 let offset = *offset as usize;
                 let col = &self.columns[offset];
-                col.encode(*idx, &schema[offset], ctx, output)?;
+                col.encode(*idx, &schema[offset].clone(), ctx, output)?;
             }
         }
         Ok(())
