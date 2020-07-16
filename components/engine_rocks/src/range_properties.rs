@@ -1,12 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use engine_traits::{RangePropertiesExt, Result, Range, CF_WRITE, CFHandleExt, MiscExt, TablePropertiesExt, TablePropertiesCollection, TableProperties, LARGE_CFS, CF_LOCK, CF_DEFAULT};
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
+use engine_traits::{
+    CFHandleExt, MiscExt, Range, RangePropertiesExt, Result, TableProperties,
+    TablePropertiesCollection, TablePropertiesExt, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+};
+use std::path::Path;
 
 impl RangePropertiesExt for RocksEngine {
-    fn get_range_approximate_keys(&self, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_keys(
+        &self,
+        range: Range,
+        region_id: u64,
+        large_threshold: u64,
+    ) -> Result<u64> {
         // try to get from RangeProperties first.
         match self.get_range_approximate_keys_cf(CF_WRITE, range, region_id, large_threshold) {
             Ok(v) => {
@@ -25,7 +33,13 @@ impl RangePropertiesExt for RocksEngine {
         Ok(keys)
     }
 
-    fn get_range_approximate_keys_cf(&self, cfname: &str, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_keys_cf(
+        &self,
+        cfname: &str,
+        range: Range,
+        region_id: u64,
+        large_threshold: u64,
+    ) -> Result<u64> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
         let mut total_keys = 0;
@@ -67,18 +81,30 @@ impl RangePropertiesExt for RocksEngine {
         Ok(total_keys)
     }
 
-    fn get_range_approximate_size(&self, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_size(
+        &self,
+        range: Range,
+        region_id: u64,
+        large_threshold: u64,
+    ) -> Result<u64> {
         let mut size = 0;
         for cfname in LARGE_CFS {
-            size += self.get_range_approximate_size_cf(cfname, range, region_id, large_threshold)
-            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
-            // backward compatibility.
+            size += self
+                .get_range_approximate_size_cf(cfname, range, region_id, large_threshold)
+                // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+                // backward compatibility.
                 .or_else(|e| if cfname == &CF_LOCK { Ok(0) } else { Err(e) })?;
         }
         Ok(size)
     }
 
-    fn get_range_approximate_size_cf(&self, cfname: &str, range: Range, region_id: u64, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_size_cf(
+        &self,
+        cfname: &str,
+        range: Range,
+        region_id: u64,
+        large_threshold: u64,
+    ) -> Result<u64> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
         let mut total_size = 0;
@@ -120,7 +146,14 @@ impl RangePropertiesExt for RocksEngine {
         Ok(total_size)
     }
 
-    fn get_range_approximate_split_keys(&self, range: Range, region_id: u64, split_size: u64, max_size: u64, batch_split_limit: u64) -> Result<Vec<Vec<u8>>> {
+    fn get_range_approximate_split_keys(
+        &self,
+        range: Range,
+        region_id: u64,
+        split_size: u64,
+        max_size: u64,
+        batch_split_limit: u64,
+    ) -> Result<Vec<Vec<u8>>> {
         let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, region_id, 0);
         let cfs = [
             (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
@@ -139,10 +172,25 @@ impl RangePropertiesExt for RocksEngine {
         // assume the size of keys is uniform distribution in both cfs.
         let cf_split_size = split_size * cf_size / total_size;
 
-        self.get_range_approximate_split_keys_cf(cf, range, region_id, cf_split_size, max_size, batch_split_limit)
+        self.get_range_approximate_split_keys_cf(
+            cf,
+            range,
+            region_id,
+            cf_split_size,
+            max_size,
+            batch_split_limit,
+        )
     }
 
-    fn get_range_approximate_split_keys_cf(&self, cfname: &str, range: Range, _region_id: u64, split_size: u64, max_size: u64, batch_split_limit: u64) -> Result<Vec<Vec<u8>>> {
+    fn get_range_approximate_split_keys_cf(
+        &self,
+        cfname: &str,
+        range: Range,
+        _region_id: u64,
+        split_size: u64,
+        max_size: u64,
+        batch_split_limit: u64,
+    ) -> Result<Vec<Vec<u8>>> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
         let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
@@ -225,7 +273,11 @@ impl RangePropertiesExt for RocksEngine {
         Ok(split_keys)
     }
 
-    fn get_range_approximate_middle(&self, range: Range, region_id: u64) -> Result<Option<Vec<u8>>> {
+    fn get_range_approximate_middle(
+        &self,
+        range: Range,
+        region_id: u64,
+    ) -> Result<Option<Vec<u8>>> {
         let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, region_id, 0);
 
         let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
@@ -240,7 +292,12 @@ impl RangePropertiesExt for RocksEngine {
         self.get_range_approximate_middle_cf(middle_by_cf, range, region_id)
     }
 
-    fn get_range_approximate_middle_cf(&self, cfname: &str, range: Range, _region_id: u64) -> Result<Option<Vec<u8>>> {
+    fn get_range_approximate_middle_cf(
+        &self,
+        cfname: &str,
+        range: Range,
+        _region_id: u64,
+    ) -> Result<Option<Vec<u8>>> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
         let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
@@ -266,12 +323,8 @@ impl RangePropertiesExt for RocksEngine {
     }
 
     fn divide_range(&self, range: Range, region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
-        let default_cf_size = self.get_range_approximate_keys_cf(
-            CF_DEFAULT,
-            range,
-            region_id,
-            0
-        )?;
+        let default_cf_size =
+            self.get_range_approximate_keys_cf(CF_DEFAULT, range, region_id, 0)?;
         let write_cf_size = self.get_range_approximate_keys_cf(CF_WRITE, range, region_id, 0)?;
 
         let cf = if default_cf_size >= write_cf_size {
@@ -283,7 +336,13 @@ impl RangePropertiesExt for RocksEngine {
         self.divide_range_cf(cf, range, region_id, parts)
     }
 
-    fn divide_range_cf(&self, cf: &str, range: Range, _region_id: u64, parts: usize) -> Result<Vec<Vec<u8>>> {
+    fn divide_range_cf(
+        &self,
+        cf: &str,
+        range: Range,
+        _region_id: u64,
+        parts: usize,
+    ) -> Result<Vec<Vec<u8>>> {
         let start = &range.start_key;
         let end = &range.end_key;
         let collection = self.get_range_properties_cf(cf, start, end)?;
@@ -336,5 +395,5 @@ impl RangePropertiesExt for RocksEngine {
             res.push(keys[(section_len * (i as f64)) as usize].clone())
         }
         Ok(res)
-    }        
+    }
 }

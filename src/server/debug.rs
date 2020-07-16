@@ -11,14 +11,14 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable, SeekKey,
-    TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
-    RangePropertiesExt,
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable,
+    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
+    WriteBatch, WriteOptions,
 };
-use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, Range};
+use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::{Region};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -27,7 +27,7 @@ use raft::{self, RawNode};
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use engine_rocks::properties::MvccProperties;
-use raftstore::coprocessor::{get_region_approximate_middle};
+use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
@@ -1384,8 +1384,9 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     let end = keys::data_end_key(b"");
     let range = Range::new(&start, &end);
     let region_id = 0;
-    Ok(box_try!(RocksEngine::from_db(db.clone())
-                .divide_range(range, region_id, parts)))
+    Ok(box_try!(
+        RocksEngine::from_db(db.clone()).divide_range(range, region_id, parts)
+    ))
 }
 
 #[cfg(test)]

@@ -202,7 +202,11 @@ pub fn get_region_approximate_size(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_size(range, region.get_id(), large_threshold)))
+    Ok(box_try!(db.get_range_approximate_size(
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 pub fn get_region_approximate_size_cf(
@@ -214,7 +218,12 @@ pub fn get_region_approximate_size_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_size_cf(cfname, range, region.get_id(), large_threshold)))
+    Ok(box_try!(db.get_range_approximate_size_cf(
+        cfname,
+        range,
+        region.get_id(),
+        large_threshold
+    )))
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
@@ -228,7 +237,13 @@ fn get_approximate_split_keys(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_split_keys(range, region.get_id(), split_size, max_size, batch_split_limit)))
+    Ok(box_try!(db.get_range_approximate_split_keys(
+        range,
+        region.get_id(),
+        split_size,
+        max_size,
+        batch_split_limit
+    )))
 }
 
 #[cfg(test)]
@@ -240,8 +255,8 @@ pub mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use engine_traits::{CF_LOCK};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

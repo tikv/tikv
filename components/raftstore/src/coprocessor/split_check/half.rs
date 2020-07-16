@@ -112,7 +112,9 @@ pub fn get_region_approximate_middle(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_middle(range, region.get_id())))
+    Ok(box_try!(
+        db.get_range_approximate_middle(range, region.get_id())
+    ))
 }
 
 /// Get the approximate middle key of the region. If we suppose the region
@@ -126,7 +128,6 @@ pub fn get_region_approximate_middle(
 /// here. It should be a test of the engine_traits or engine_rocks crates.
 #[cfg(test)]
 fn get_region_approximate_middle_cf(
-
     db: &impl KvEngine,
     cfname: &str,
     region: &Region,
@@ -134,7 +135,11 @@ fn get_region_approximate_middle_cf(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_middle_cf(cfname, range, region.get_id())))
+    Ok(box_try!(db.get_range_approximate_middle_cf(
+        cfname,
+        range,
+        region.get_id()
+    )))
 }
 
 #[cfg(test)]
