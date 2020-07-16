@@ -9,6 +9,7 @@ command! {
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before safe point.
+    /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
         display => "kv::resolve_lock", (),
