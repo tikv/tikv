@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod chunked_vec_bool;
+mod bit_vec;
 mod chunked_vec_sized;
 mod not_chunked_vec;
 mod scalar;

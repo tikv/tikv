@@ -1,12 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::chunked_vec_bool::ChunkedVecBool;
+use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
 
+/// A vector storing `Option<T>` with a compact layout.
+///
+/// `T` must be a primitive structure. All data must be stored
+/// in that structure itself. This includes `Int`, `Real`, `Decimal`,
+/// `DateTime` and `Duration` in copr framework.
+///
+/// Inside `ChunkedVecSized`, `bitmap` indicates if an element at given index is null,
+/// and `data` stores actual data. If the element at given index is null (or `None`),
+/// the corresponding `bitmap` bit is false, and `data` stores zero value for
+/// that element. Otherwise, `data` stores actual data, and `bitmap` bit is true.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
     data: Vec<T>,
-    bitmap: ChunkedVecBool,
+    bitmap: BitVec,
     phantom: std::marker::PhantomData<T>,
 }
 
@@ -22,7 +32,7 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
-            bitmap: ChunkedVecBool::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
             phantom: std::marker::PhantomData,
         }
     }
