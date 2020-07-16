@@ -22,7 +22,7 @@ use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
-pub use self::scheduler::{Msg, Scheduler};
+pub use self::scheduler::Scheduler;
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
