@@ -397,13 +397,13 @@ impl<S: Snapshot> Fsm for PeerFsm<S> {
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
     fsm: &'a mut PeerFsm<RocksSnapshot>,
-    ctx: &'a mut PollContext<T, C>,
+    ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn new(
         fsm: &'a mut PeerFsm<RocksSnapshot>,
-        ctx: &'a mut PollContext<T, C>,
+        ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }

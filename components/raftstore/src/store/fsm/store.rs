@@ -7,6 +7,7 @@ use engine_rocks::{
     RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
 };
 use engine_traits::{
+    KvEngine,
     CompactExt, CompactionJobInfo, Iterable, KvEngines, MiscExt, Mutable, Peekable, Snapshot,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
@@ -234,7 +235,7 @@ impl<S: Snapshot> RaftRouter<S> {
     }
 }
 
-pub struct PollContext<T, C: 'static> {
+pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
@@ -259,7 +260,7 @@ pub struct PollContext<T, C: 'static> {
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: KvEngines<RocksEngine, RocksEngine>,
+    pub engines: KvEngines<EK, ER>,
     pub kv_wb: RocksWriteBatch,
     pub raft_wb: RocksWriteBatch,
     pub pending_count: usize,
@@ -272,7 +273,7 @@ pub struct PollContext<T, C: 'static> {
     pub node_start_time: Option<Instant>,
 }
 
-impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
+impl<EK, ER, T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
@@ -298,7 +299,7 @@ impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollCont
     }
 }
 
-impl<T, C> PollContext<T, C> {
+impl<EK, ER, T, C> PollContext<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
@@ -319,7 +320,7 @@ impl<T, C> PollContext<T, C> {
     }
 }
 
-impl<T: Transport, C> PollContext<T, C> {
+impl<EK, ER, T: Transport, C> PollContext<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     #[inline]
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
@@ -438,7 +439,7 @@ impl Fsm for StoreFsm {
 
 struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
     fsm: &'a mut StoreFsm,
-    ctx: &'a mut PollContext<T, C>,
+    ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
@@ -519,7 +520,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     peer_msg_buf: Vec<PeerMsg<RocksSnapshot>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
-    poll_ctx: PollContext<T, C>,
+    poll_ctx: PollContext<RocksEngine, RocksEngine, T, C>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
