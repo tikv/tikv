@@ -791,7 +791,7 @@ impl<S: Snapshot> MvccTxn<S> {
     /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
     /// transaction, the rollback record is protected from being collapsed.
     ///
-    /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
+    /// Returns the released lock. Returns error if the key is locked or has already been
     /// committed.
     pub fn cleanup(
         &mut self,
