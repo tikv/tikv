@@ -244,7 +244,7 @@ impl<E: Engine> SyncTestStorage<E> {
             commit_ts.map(Into::into).unwrap_or_else(TimeStamp::zero),
         );
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
             cb,
         ))
         .unwrap()
@@ -257,7 +257,7 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<()> {
         let txn_status: HashMap<TimeStamp, TimeStamp> = txns.into_iter().collect();
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
             cb,
         ))
         .unwrap()
