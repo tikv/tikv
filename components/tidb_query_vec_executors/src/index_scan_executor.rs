@@ -359,8 +359,8 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         let handle_len = (&value[2..]).read_u16().map_err(|_| {
             other_err!(
-                "Fail to read common handle's length from value: {:X?}",
-                value
+                "Fail to read common handle's length from value: {}",
+                hex::encode(value)
             )
         })? as usize;
         let handle_end_offset = 4 + handle_len;
@@ -392,6 +392,7 @@ impl IndexScanExecutorImpl {
     }
 
     // Process index values that are in new collation but don't contain common handle.
+    // NOTE: We should extract the index columns from the key if there are common handles in the key or the tail length of the value is less than 8.
     // These index values have 2 types.
     // 1. Non-unique index
     //      * Key contains a int handle.
@@ -443,6 +444,8 @@ impl IndexScanExecutorImpl {
     }
 
     // Process index values that are in old collation but don't contain common handles.
+    // NOTE: We should extract the index columns from the key first, and extract the handles from value if there is no handle in the key.
+    // Otherwise, extract the handles from the key.
     fn process_old_collation_kv(
         &mut self,
         mut key_payload: &[u8],

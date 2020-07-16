@@ -110,9 +110,6 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
             FieldTypeTp::Null => {
                 self.write_u8(datum::NIL_FLAG)?;
             }
-            FieldTypeTp::Unspecified => {
-                self.write_bytes(src)?;
-            }
             fp => {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported FieldType {:?}",

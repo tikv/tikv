@@ -103,13 +103,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 key = &key[table::PREFIX_LEN + table::ID_LEN..];
             }
             let mut datums = key;
-            let mut data = vec![];
+            let mut data = Vec::with_capacity(8 * req.get_num_columns() as usize);
             for i in 0..req.get_num_columns() as usize {
                 if datums.is_empty() {
                     return Err(box_err!(
-                        "{}th column is missing in datum buffer: {:X?}",
+                        "{}th column is missing in datum buffer: {}",
                         i,
-                        key
+                        hex::encode(key)
                     ));
                 }
                 let (column, remaining) = split_datum(datums, false)?;

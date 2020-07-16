@@ -328,7 +328,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         debug_assert!(value.as_ref().eval_type() == EvalType::Bytes);
                         value.as_ref().encode(
                             value.logical_rows()[logical_row_idx],
-                            field_type,
+                            *field_type,
                             context,
                             &mut self.group_key_buffer,
                         )?;

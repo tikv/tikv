@@ -2,7 +2,7 @@
 
 mod expr;
 mod expr_builder;
-pub mod expr_eval;
+mod expr_eval;
 pub mod function;
 #[cfg(test)]
 pub mod test_util;
