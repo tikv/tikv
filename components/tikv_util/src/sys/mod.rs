@@ -24,11 +24,12 @@ pub mod sys_quota {
         pub fn cpu_cores_quota(&self) -> usize {
             let cpu_num = num_cpus::get();
             let cgroup_quota = self.cgroup.cpu_cores_quota();
-            if cgroup_quota < 0 {
+            let quota = if cgroup_quota < 0 {
                 cpu_num
             } else {
                 std::cmp::min(cpu_num, cgroup_quota as usize)
-            }
+            };
+            super::limit_cpu_cores_quota_by_env_var(quota)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
@@ -57,6 +58,7 @@ pub mod sys_quota {
 #[cfg(not(target_os = "linux"))]
 pub mod sys_quota {
     use super::super::config::KB;
+    use super::env_var_cpu_cores_quota;
 
     pub struct SysQuota {}
 
@@ -66,7 +68,8 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> usize {
-            num_cpus::get()
+            let cpu_num = num_cpus::get();
+            super::limit_cpu_cores_quota_by_env_var(cpu_num)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
@@ -87,6 +90,18 @@ pub mod sys_quota {
 }
 
 pub const HIGH_PRI: i32 = -1;
+
+const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
+
+fn limit_cpu_cores_quota_by_env_var(quota: usize) -> usize {
+    match std::env::var(CPU_CORES_QUOTA_ENV_VAR_KEY)
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
+        Some(env_var_quota) if quota > 0 => usize::min(quota, env_var_quota),
+        _ => quota,
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub mod thread {
