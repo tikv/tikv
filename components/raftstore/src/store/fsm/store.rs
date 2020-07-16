@@ -261,8 +261,8 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub engines: KvEngines<EK, ER>,
-    pub kv_wb: RocksWriteBatch,
-    pub raft_wb: RocksWriteBatch,
+    pub kv_wb: EK::WriteBatch,
+    pub raft_wb: ER::WriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
@@ -273,18 +273,18 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub node_start_time: Option<Instant>,
 }
 
-impl<EK, ER, T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
-    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch> for PollContext<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+    fn wb_mut(&mut self) -> (&mut EK::WriteBatch, &mut ER::WriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
-    fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
         &mut self.kv_wb
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    fn raft_wb_mut(&mut self) -> &mut ER::WriteBatch {
         &mut self.raft_wb
     }
 
