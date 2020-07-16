@@ -348,7 +348,7 @@ where
     host: CoprocessorHost<RocksEngine>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-    router: ApplyRouter,
+    router: ApplyRouter<RocksEngine>,
     notifier: Notifier<E::Snapshot>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
@@ -388,7 +388,7 @@ where
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
-        router: ApplyRouter,
+        router: ApplyRouter<RocksEngine>,
         notifier: Notifier<E::Snapshot>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
@@ -3199,7 +3199,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
     sender: Notifier<RocksSnapshot>,
-    router: ApplyRouter,
+    router: ApplyRouter<RocksEngine>,
     _phantom: PhantomData<W>,
 }
 
@@ -3207,7 +3207,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
         sender: Notifier<RocksSnapshot>,
-        router: ApplyRouter,
+        router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {
         Builder::<W> {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -3249,26 +3249,26 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter {
-    pub router: BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>,
+pub struct ApplyRouter<E> where E: KvEngine {
+    pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
 }
 
-impl Deref for ApplyRouter {
-    type Target = BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>;
+impl<E> Deref for ApplyRouter<E> where E: KvEngine {
+    type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
         &self.router
     }
 }
 
-impl DerefMut for ApplyRouter {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+impl<E> DerefMut for ApplyRouter<E> where E: KvEngine {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<RocksEngine>) {
+impl<E> ApplyRouter<E> where E: KvEngine {
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3280,7 +3280,7 @@ impl ApplyRouter {
                     );
                     for p in apply.cbs.drain(..) {
                         let cmd =
-                            PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                            PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3372,7 +3372,7 @@ impl ApplyBatchSystem {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
+pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
@@ -3482,7 +3482,7 @@ mod tests {
         assert_eq!(should_write_to_engine(&cmd), true);
     }
 
-    fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
+    fn validate<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
     where
         F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
     {
@@ -3501,7 +3501,7 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
+    fn batch_messages(router: &ApplyRouter<RocksEngine>, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -4632,7 +4632,7 @@ mod tests {
         let (capture_tx, capture_rx) = mpsc::channel();
         let epoch = Rc::new(RefCell::new(reg.region.get_region_epoch().to_owned()));
         let epoch_ = epoch.clone();
-        let mut exec_split = |router: &ApplyRouter, reqs| {
+        let mut exec_split = |router: &ApplyRouter<RocksEngine>, reqs| {
             let epoch = epoch_.borrow();
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)

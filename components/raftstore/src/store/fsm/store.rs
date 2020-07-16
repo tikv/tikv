@@ -245,7 +245,7 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    pub apply_router: ApplyRouter,
+    pub apply_router: ApplyRouter<RocksEngine>,
     pub router: RaftRouter<RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -773,7 +773,7 @@ pub struct RaftPollerBuilder<T, C> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    apply_router: ApplyRouter,
+    apply_router: ApplyRouter<RocksEngine>,
     pub router: RaftRouter<RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -1028,7 +1028,7 @@ struct Workers {
 
 pub struct RaftBatchSystem {
     system: BatchSystem<PeerFsm<RocksSnapshot>, StoreFsm>,
-    apply_router: ApplyRouter,
+    apply_router: ApplyRouter<RocksEngine>,
     apply_system: ApplyBatchSystem,
     router: RaftRouter<RocksSnapshot>,
     workers: Option<Workers>,
@@ -1039,7 +1039,7 @@ impl RaftBatchSystem {
         self.router.clone()
     }
 
-    pub fn apply_router(&self) -> ApplyRouter {
+    pub fn apply_router(&self) -> ApplyRouter<RocksEngine> {
         self.apply_router.clone()
     }
 
