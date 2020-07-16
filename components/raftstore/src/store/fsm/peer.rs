@@ -1406,6 +1406,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(None);
         }
 
+        let before_check_snapshot_1_2 = || {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.fsm.peer_id() == 2,
+                |_| {}
+            );
+        };
+        before_check_snapshot_1_2();
+
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);

@@ -1534,13 +1534,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         let res = self.maybe_create_peer_internal(region_id, &msg, is_local_first);
         // If failed, i.e. Err or Ok(false), remove this peer data from `pending_create_peers`.
-        if !*res.as_ref().unwrap_or(&false) {
-            if is_local_first {
-                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-                if let Some(status) = pending_create_peers.get(&region_id) {
-                    if *status == (msg.get_to_peer().get_id(), false) {
-                        pending_create_peers.remove(&region_id);
-                    }
+        if res.as_ref().map_or(true, |b| !*b) && is_local_first {
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            if let Some(status) = pending_create_peers.get(&region_id) {
+                if *status == (msg.get_to_peer().get_id(), false) {
+                    pending_create_peers.remove(&region_id);
                 }
             }
         }
