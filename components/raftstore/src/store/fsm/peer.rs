@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Peekable, Snapshot};
+use engine_traits::{KvEngines, Peekable, Snapshot, WriteBatchExt};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -321,7 +321,7 @@ impl BatchRaftCmdRequestBuilder {
             if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
                 return true;
             }
-            if batch_req.get_requests().len() > WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > RocksEngine::WRITE_BATCH_MAX_KEYS {
                 return true;
             }
         }

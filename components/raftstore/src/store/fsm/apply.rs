@@ -3393,7 +3393,7 @@ mod tests {
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
     use engine_rocks::{
-        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
+        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch,
     };
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
@@ -4246,9 +4246,11 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
+        let write_batch_max_keys = <RocksEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
+
         let mut props = vec![];
         let mut entries = vec![];
-        for i in 0..WRITE_BATCH_MAX_KEYS {
+        for i in 0..write_batch_max_keys {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
@@ -4265,14 +4267,14 @@ mod tests {
                 entries,
                 11,
                 3,
-                WRITE_BATCH_MAX_KEYS as u64 + 11,
+                write_batch_max_keys as u64 + 11,
                 props,
             )),
         );
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..write_batch_max_keys {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = write_batch_max_keys + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
