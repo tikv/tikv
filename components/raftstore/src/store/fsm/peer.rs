@@ -85,7 +85,7 @@ pub enum GroupState {
 }
 
 pub struct PeerFsm<S: Snapshot> {
-    pub peer: Peer,
+    pub peer: Peer<RocksEngine>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -235,7 +235,7 @@ impl<S: Snapshot> PeerFsm<S> {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer {
+    pub fn get_peer(&self) -> &Peer<RocksEngine> {
         &self.peer
     }
 

@@ -139,7 +139,7 @@ impl StoreMeta {
         &mut self,
         host: &CoprocessorHost<RocksEngine>,
         region: Region,
-        peer: &mut crate::store::Peer,
+        peer: &mut crate::store::Peer<RocksEngine>,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {

@@ -45,7 +45,7 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer) -> ReadDelegate {
+    pub fn from_peer<E>(peer: &Peer<E>) -> ReadDelegate where E: KvEngine {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
