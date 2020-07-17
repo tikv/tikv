@@ -84,8 +84,8 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
-    pub peer: Peer<EK, RocksEngine>,
+pub struct PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+    pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -100,7 +100,7 @@ pub struct PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<EK, S>>>,
+    mailbox: Option<BasicMailbox<PeerFsm<EK, ER, S>>>,
     pub receiver: Receiver<PeerMsg<S>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
@@ -117,7 +117,7 @@ pub struct BatchRaftCmdRequestBuilder {
     txn_extra: TxnExtra,
 }
 
-impl<EK, S> Drop for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> Drop for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -137,9 +137,9 @@ impl<EK, S> Drop for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     }
 }
 
-pub type SenderFsmPair<EK, S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<EK, S>>);
+pub type SenderFsmPair<EK, ER, S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<EK, ER, S>>);
 
-impl<EK, S> PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
@@ -147,9 +147,9 @@ impl<EK, S> PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, RocksEngine>,
+        engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<EK, S>> {
+    ) -> Result<SenderFsmPair<EK, ER, S>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -194,10 +194,10 @@ impl<EK, S> PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask<EK::Snapshot>>,
-        engines: KvEngines<EK, RocksEngine>,
+        engines: KvEngines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<EK, S>> {
+    ) -> Result<SenderFsmPair<EK, ER, S>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -235,7 +235,7 @@ impl<EK, S> PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer<EK, RocksEngine> {
+    pub fn get_peer(&self) -> &Peer<EK, ER> {
         &self.peer
     }
 
@@ -367,7 +367,7 @@ impl BatchRaftCmdRequestBuilder {
     }
 }
 
-impl<EK, S> Fsm for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     type Message = PeerMsg<S>;
 
     #[inline]
@@ -396,13 +396,13 @@ impl<EK, S> Fsm for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
 }
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksEngine, RocksSnapshot>,
+    fsm: &'a mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>,
     ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksEngine, RocksSnapshot>,
+        fsm: &'a mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>,
         ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }

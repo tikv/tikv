@@ -274,7 +274,7 @@ pub enum CasualMessage<S: Snapshot> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<RocksEngine, S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<RocksEngine, RocksEngine, S>) + Send + 'static>),
 }
 
 impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
