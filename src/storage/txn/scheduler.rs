@@ -437,15 +437,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
-        if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap());
+        if let ProcessResult::NextCommands { cmds } = pr {
+            for cmd in cmds {
+                let tctx = self.inner.dequeue_task_context(cid);
+                SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+                self.schedule_command(cmd, tctx.cb.unwrap());
+                self.release_lock(&tctx.lock, cid);
+            }
         } else {
+            let tctx = self.inner.dequeue_task_context(cid);
             tctx.cb.unwrap().execute(pr);
+            self.release_lock(&tctx.lock, cid);
         }
-
-        self.release_lock(&tctx.lock, cid);
     }
 
     /// Event handler for the success of write.
@@ -467,27 +470,34 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         }
 
         debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
-        let tctx = self.inner.dequeue_task_context(cid);
 
-        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-        if let Some(cb) = tctx.cb {
-            let pr = match result {
-                Ok(()) => pr,
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            };
-            if let ProcessResult::NextCommand { cmd } = pr {
-                SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb);
-            } else {
-                cb.execute(pr);
+        let pr = match result {
+            Ok(()) => pr,
+            Err(e) => ProcessResult::Failed {
+                err: StorageError::from(e),
+            },
+        };
+        if let ProcessResult::NextCommands { cmds } = pr {
+            for cmd in cmds {
+                let tctx = self.inner.dequeue_task_context(cid);
+                if let Some(cb) = tctx.cb {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+                    self.schedule_command(cmd, cb);
+                } else {
+                    assert!(pipelined);
+                }
+                self.release_lock(&tctx.lock, cid);
             }
         } else {
-            assert!(pipelined);
+            let tctx = self.inner.dequeue_task_context(cid);
+            if let Some(cb) = tctx.cb {
+                SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+                cb.execute(pr)
+            } else {
+                assert!(pipelined);
+            }
+            self.release_lock(&tctx.lock, cid);
         }
-
-        self.release_lock(&tctx.lock, cid);
     }
 
     /// Event handler for the request of waiting for lock

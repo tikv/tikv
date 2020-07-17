@@ -150,14 +150,14 @@ pub(super) fn process_read_impl<E: Engine>(
                     // All locks are scanned
                     None
                 };
-                Ok(ProcessResult::NextCommand {
-                    cmd: ResolveLock::new(
+                Ok(ProcessResult::NextCommands {
+                    cmds: vec![ResolveLock::new(
                         mem::take(txn_status),
                         next_scan_key,
                         kv_pairs,
                         ctx.clone(),
                     )
-                    .into(),
+                    .into()],
                 })
             }
         }
@@ -595,8 +595,10 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             let pr = if scan_key.is_none() {
                 ProcessResult::Res
             } else {
-                ProcessResult::NextCommand {
-                    cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
+                ProcessResult::NextCommands {
+                    cmds: vec![
+                        ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
+                    ],
                 }
             };
             let write_data = WriteData::from_modifies(txn.into_modifies());

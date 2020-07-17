@@ -48,8 +48,8 @@ pub enum ProcessResult {
     TxnStatus {
         txn_status: TxnStatus,
     },
-    NextCommand {
-        cmd: Command,
+    NextCommands {
+        cmds: Vec<Command>,
     },
     Failed {
         err: StorageError,
