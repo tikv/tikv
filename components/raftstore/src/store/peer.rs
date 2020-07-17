@@ -817,7 +817,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     /// Steps the raft message.
     pub fn step<T, C>(
         &mut self,
-        ctx: &mut PollContext<RocksEngine, RocksEngine, T, C>,
+        ctx: &mut PollContext<EK, ER, T, C>,
         mut m: eraftpb::Message,
     ) -> Result<()> {
         fail_point!(
@@ -908,7 +908,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<RocksEngine, RocksEngine, T, C>) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -993,7 +993,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
         false
     }
 
-    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<RocksEngine, RocksEngine, T, C>) -> StaleState {
+    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
             //
@@ -2020,7 +2020,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
 
     fn ready_to_transfer_leader<T, C>(
         &self,
-        ctx: &mut PollContext<RocksEngine, RocksEngine, T, C>,
+        ctx: &mut PollContext<EK, ER, T, C>,
         mut index: u64,
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
@@ -2434,7 +2434,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
 
     fn execute_transfer_leader<T, C>(
         &mut self,
-        ctx: &mut PollContext<RocksEngine, RocksEngine, T, C>,
+        ctx: &mut PollContext<EK, ER, T, C>,
         msg: &eraftpb::Message,
     ) {
         // log_term is set by original leader, represents the term last log is written
@@ -2704,7 +2704,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
         Some(status)
     }
 
-    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<RocksEngine, RocksEngine, T, C>) {
+    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
             region: self.region().clone(),
@@ -2826,7 +2826,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
         }
     }
 
-    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<EK, RocksEngine, T, C>) {
+    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) {
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
@@ -2871,7 +2871,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     pub fn send_want_rollback_merge<T: Transport, C>(
         &self,
         premerge_commit: u64,
-        ctx: &mut PollContext<RocksEngine, RocksEngine, T, C>,
+        ctx: &mut PollContext<EK, ER, T, C>,
     ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
