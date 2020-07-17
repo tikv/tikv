@@ -83,7 +83,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
-    fn handle_index(
+    async fn handle_index(
         req: AnalyzeIndexReq,
         scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
         is_common_handle: bool,
@@ -94,7 +94,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_width() as usize,
         );
 
+        let mut row_count = 0;
         while let Some((key, _)) = scanner.next()? {
+            row_count += 1;
+            if row_count > BATCH_MAX_SIZE {
+                reschedule().await;
+                row_count = 0;
+            }
             let mut key = &key[..];
             if is_common_handle {
                 table::check_record_key(key)?;
@@ -155,7 +161,8 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     req,
                     &mut scanner,
                     self.req.get_tp() == AnalyzeType::TypeCommonHandle,
-                );
+                )
+                .await;
                 scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
