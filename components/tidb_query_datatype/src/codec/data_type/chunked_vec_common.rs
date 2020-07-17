@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 #[macro_export]
 macro_rules! impl_chunked_vec_common {
     ($ty:ty) => {
@@ -17,7 +19,6 @@ macro_rules! impl_chunked_vec_common {
             x
         }
 
-
         pub fn push(&mut self, value: Option<$ty>) {
             if let Some(x) = value {
                 self.push_data(x);
@@ -31,4 +32,3 @@ macro_rules! impl_chunked_vec_common {
         }
     };
 }
-

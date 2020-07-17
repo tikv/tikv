@@ -13,9 +13,16 @@ pub struct ChunkedVecBytes {
     var_offset: Vec<usize>,
 }
 
+/// A vector storing `Option<Bytes>` with a compact layout.
+///
+/// Inside `ChunkedVecBytes`, `bitmap` indicates if an element at given index is null,
+/// and `data` stores actual data. Bytes data are stored adjacent to each other in
+/// `data`. If element at a given index is null, then it takes no space in `data`.
+/// Otherwise, contents of the `Bytes` are stored, and `var_offset` indicates the starting
+/// position of each element.
 impl ChunkedVecBytes {
     impl_chunked_vec_common! { Bytes }
-    
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
