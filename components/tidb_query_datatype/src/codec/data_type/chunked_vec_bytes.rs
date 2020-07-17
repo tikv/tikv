@@ -1,41 +1,28 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::chunked_vec_bool::ChunkedVecBool;
+use super::bit_vec::BitVec;
 use super::{Bytes, BytesRef};
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecBytes {
     data: Vec<u8>,
-    bitmap: ChunkedVecBool,
+    bitmap: BitVec,
     length: usize,
     var_offset: Vec<usize>,
 }
 
 impl ChunkedVecBytes {
-    pub fn from_slice(slice: &[Option<Bytes>]) -> Self {
-        let mut x = Self::with_capacity(slice.len());
-        for i in slice {
-            x.push(i.clone());
-        }
-        x
-    }
-
+    impl_chunked_vec_common! { Bytes }
+    
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
-            bitmap: ChunkedVecBool::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
             var_offset: vec![0],
             length: 0,
         }
-    }
-
-    pub fn from_vec(data: Vec<Option<Bytes>>) -> Self {
-        let mut x = Self::with_capacity(data.len());
-        for element in data {
-            x.push(element);
-        }
-        x
     }
 
     pub fn to_vec(&self) -> Vec<Option<Bytes>> {
@@ -50,10 +37,6 @@ impl ChunkedVecBytes {
         self.length
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     pub fn push_data(&mut self, mut value: Bytes) {
         self.bitmap.push(true);
         self.data.append(&mut value);
@@ -65,14 +48,6 @@ impl ChunkedVecBytes {
         self.bitmap.push(false);
         self.var_offset.push(self.data.len());
         self.length += 1;
-    }
-
-    pub fn push(&mut self, value: Option<Bytes>) {
-        if let Some(x) = value {
-            self.push_data(x);
-        } else {
-            self.push_null();
-        }
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -138,5 +113,112 @@ impl Into<ChunkedVecBytes> for Vec<Option<Bytes>> {
 impl<'a> UnsafeRefInto<&'static ChunkedVecBytes> for &'a ChunkedVecBytes {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecBytes {
         std::mem::transmute(self)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_slice_vec() {
+        let test_bytes: &[Option<Bytes>] = &[
+            None,
+            Some("我好菜啊".as_bytes().to_vec()),
+            None,
+            Some("我菜爆了".as_bytes().to_vec()),
+            Some("我失败了".as_bytes().to_vec()),
+            None,
+            Some("💩".as_bytes().to_vec()),
+            None,
+        ];
+        assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
+        assert_eq!(
+            ChunkedVecBytes::from_slice(&test_bytes.to_vec()).to_vec(),
+            test_bytes
+        );
+    }
+
+    #[test]
+    fn test_basics() {
+        let mut x: ChunkedVecBytes = ChunkedVecBytes::with_capacity(0);
+        x.push(None);
+        x.push(Some("我好菜啊".as_bytes().to_vec()));
+        x.push(None);
+        x.push(Some("我菜爆了".as_bytes().to_vec()));
+        x.push(Some("我失败了".as_bytes().to_vec()));
+        assert_eq!(x.get(0), None);
+        assert_eq!(x.get(1), Some("我好菜啊".as_bytes()));
+        assert_eq!(x.get(2), None);
+        assert_eq!(x.get(3), Some("我菜爆了".as_bytes()));
+        assert_eq!(x.get(4), Some("我失败了".as_bytes()));
+        assert_eq!(x.len(), 5);
+        assert!(!x.is_empty());
+    }
+
+    #[test]
+    fn test_truncate() {
+        let test_bytes: &[Option<Bytes>] = &[
+            None,
+            None,
+            Some("我好菜啊".as_bytes().to_vec()),
+            None,
+            Some("我菜爆了".as_bytes().to_vec()),
+            Some("我失败了".as_bytes().to_vec()),
+            None,
+            Some("💩".as_bytes().to_vec()),
+            None,
+        ];
+        let mut chunked_vec = ChunkedVecBytes::from_slice(test_bytes);
+        chunked_vec.truncate(100);
+        assert_eq!(chunked_vec.len(), 9);
+        chunked_vec.truncate(3);
+        assert_eq!(chunked_vec.len(), 3);
+        assert_eq!(chunked_vec.get(0), None);
+        assert_eq!(chunked_vec.get(1), None);
+        assert_eq!(chunked_vec.get(2), Some("我好菜啊".as_bytes()));
+        chunked_vec.truncate(2);
+        assert_eq!(chunked_vec.len(), 2);
+        assert_eq!(chunked_vec.get(0), None);
+        assert_eq!(chunked_vec.get(1), None);
+        chunked_vec.truncate(1);
+        assert_eq!(chunked_vec.len(), 1);
+        assert_eq!(chunked_vec.get(0), None);
+        chunked_vec.truncate(0);
+        assert_eq!(chunked_vec.len(), 0);
+    }
+
+    #[test]
+    fn test_append() {
+        let test_bytes_1: &[Option<Bytes>] =
+            &[None, None, Some("我好菜啊".as_bytes().to_vec()), None];
+        let test_bytes_2: &[Option<Bytes>] = &[
+            None,
+            Some("我菜爆了".as_bytes().to_vec()),
+            Some("我失败了".as_bytes().to_vec()),
+            None,
+            Some("💩".as_bytes().to_vec()),
+            None,
+        ];
+        let mut chunked_vec_1 = ChunkedVecBytes::from_slice(test_bytes_1);
+        let mut chunked_vec_2 = ChunkedVecBytes::from_slice(test_bytes_2);
+        chunked_vec_1.append(&mut chunked_vec_2);
+        assert_eq!(chunked_vec_1.len(), 10);
+        assert!(chunked_vec_2.is_empty());
+        assert_eq!(
+            chunked_vec_1.to_vec(),
+            &[
+                None,
+                None,
+                Some("我好菜啊".as_bytes().to_vec()),
+                None,
+                None,
+                Some("我菜爆了".as_bytes().to_vec()),
+                Some("我失败了".as_bytes().to_vec()),
+                None,
+                Some("💩".as_bytes().to_vec()),
+                None,
+            ]
+        );
     }
 }

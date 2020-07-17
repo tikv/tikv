@@ -1,42 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::chunked_vec_bool::ChunkedVecBool;
+use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Json, JsonRef, JsonType};
+use crate::impl_chunked_vec_common;
 use std::convert::TryFrom;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecJson {
     data: Vec<u8>,
-    bitmap: ChunkedVecBool,
+    bitmap: BitVec,
     length: usize,
     var_offset: Vec<usize>,
 }
 
 impl ChunkedVecJson {
-    pub fn from_slice(slice: &[Option<Json>]) -> Self {
-        let mut x = Self::with_capacity(slice.len());
-        for i in slice {
-            x.push(i.clone());
-        }
-        x
-    }
+    impl_chunked_vec_common! { Json }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
-            bitmap: ChunkedVecBool::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
             var_offset: vec![0],
             length: 0,
         }
-    }
-
-    pub fn from_vec(data: Vec<Option<Json>>) -> Self {
-        let mut x = Self::with_capacity(data.len());
-        for element in data {
-            x.push(element);
-        }
-        x
     }
 
     pub fn to_vec(&self) -> Vec<Option<Json>> {
@@ -51,10 +38,6 @@ impl ChunkedVecJson {
         self.length
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     pub fn push_data(&mut self, mut value: Json) {
         self.bitmap.push(true);
         self.data.push(value.get_type() as u8);
@@ -67,14 +50,6 @@ impl ChunkedVecJson {
         self.bitmap.push(false);
         self.var_offset.push(self.data.len());
         self.length += 1;
-    }
-
-    pub fn push(&mut self, value: Option<Json>) {
-        if let Some(x) = value {
-            self.push_data(x);
-        } else {
-            self.push_null();
-        }
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -142,5 +117,126 @@ impl Into<ChunkedVecJson> for Vec<Option<Json>> {
 impl<'a> UnsafeRefInto<&'static ChunkedVecJson> for &'a ChunkedVecJson {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecJson {
         std::mem::transmute(self)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_slice_vec() {
+        let test_json: &[Option<Json>] = &[
+            None,
+            Some(Json::from_str_val("我好菜啊").unwrap()),
+            None,
+            Some(Json::from_str_val("我菜爆了").unwrap()),
+            Some(Json::from_str_val("我失败了").unwrap()),
+            Some(Json::from_f64(2.333).unwrap()),
+            Some(Json::from_str_val("💩").unwrap()),
+            None,
+        ];
+        assert_eq!(ChunkedVecJson::from_slice(test_json).to_vec(), test_json);
+        assert_eq!(
+            ChunkedVecJson::from_slice(&test_json.to_vec()).to_vec(),
+            test_json
+        );
+    }
+
+    #[test]
+    fn test_basics() {
+        let mut x: ChunkedVecJson = ChunkedVecJson::with_capacity(0);
+        x.push(None);
+        x.push(Some(Json::from_str_val("我好菜啊").unwrap()));
+        x.push(None);
+        x.push(Some(Json::from_str_val("我菜爆了").unwrap()));
+        x.push(Some(Json::from_str_val("我失败了").unwrap()));
+        assert_eq!(x.get(0), None);
+        assert_eq!(
+            x.get(1),
+            Some(Json::from_str_val("我好菜啊").unwrap().as_ref())
+        );
+        assert_eq!(x.get(2), None);
+        assert_eq!(
+            x.get(3),
+            Some(Json::from_str_val("我菜爆了").unwrap().as_ref())
+        );
+        assert_eq!(
+            x.get(4),
+            Some(Json::from_str_val("我失败了").unwrap().as_ref())
+        );
+        assert_eq!(x.len(), 5);
+        assert!(!x.is_empty());
+    }
+
+    #[test]
+    fn test_truncate() {
+        let test_json: &[Option<Json>] = &[
+            None,
+            None,
+            Some(Json::from_str_val("我好菜啊").unwrap()),
+            None,
+            Some(Json::from_str_val("我菜爆了").unwrap()),
+            Some(Json::from_str_val("我失败了").unwrap()),
+            Some(Json::from_f64(2.333).unwrap()),
+            Some(Json::from_str_val("💩").unwrap()),
+            None,
+        ];
+        let mut chunked_vec = ChunkedVecJson::from_slice(test_json);
+        chunked_vec.truncate(100);
+        assert_eq!(chunked_vec.len(), 9);
+        chunked_vec.truncate(3);
+        assert_eq!(chunked_vec.len(), 3);
+        assert_eq!(chunked_vec.get(0), None);
+        assert_eq!(chunked_vec.get(1), None);
+        assert_eq!(
+            chunked_vec.get(2),
+            Some(Json::from_str_val("我好菜啊").unwrap().as_ref())
+        );
+        chunked_vec.truncate(2);
+        assert_eq!(chunked_vec.len(), 2);
+        assert_eq!(chunked_vec.get(0), None);
+        assert_eq!(chunked_vec.get(1), None);
+        chunked_vec.truncate(1);
+        assert_eq!(chunked_vec.len(), 1);
+        assert_eq!(chunked_vec.get(0), None);
+        chunked_vec.truncate(0);
+        assert_eq!(chunked_vec.len(), 0);
+    }
+
+    #[test]
+    fn test_append() {
+        let test_json_1: &[Option<Json>] = &[
+            None,
+            None,
+            Some(Json::from_str_val("我好菜啊").unwrap()),
+            None,
+        ];
+        let test_json_2: &[Option<Json>] = &[
+            Some(Json::from_str_val("我菜爆了").unwrap()),
+            Some(Json::from_str_val("我失败了").unwrap()),
+            Some(Json::from_f64(2.333).unwrap()),
+            Some(Json::from_str_val("💩").unwrap()),
+            None,
+        ];
+        let mut chunked_vec_1 = ChunkedVecJson::from_slice(test_json_1);
+        let mut chunked_vec_2 = ChunkedVecJson::from_slice(test_json_2);
+        chunked_vec_1.append(&mut chunked_vec_2);
+        assert_eq!(chunked_vec_1.len(), 9);
+        assert!(chunked_vec_2.is_empty());
+        assert_eq!(
+            chunked_vec_1.to_vec(),
+            &[
+                None,
+                None,
+                Some(Json::from_str_val("我好菜啊").unwrap()),
+                None,
+                Some(Json::from_str_val("我菜爆了").unwrap()),
+                Some(Json::from_str_val("我失败了").unwrap()),
+                Some(Json::from_f64(2.333).unwrap()),
+                Some(Json::from_str_val("💩").unwrap()),
+                None,
+            ]
+        );
     }
 }
