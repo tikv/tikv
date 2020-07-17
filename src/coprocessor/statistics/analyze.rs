@@ -2,12 +2,13 @@
 
 use std::mem;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
+use rand::rngs::StdRng;
+use rand::Rng;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
 use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
@@ -15,9 +16,12 @@ use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_vec_executors::{interface::BatchExecutor, BatchTableScanExecutor};
+use tidb_query_vec_executors::{
+    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
+};
 use tidb_query_vec_expr::BATCH_MAX_SIZE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
+use yatp::task::future::reschedule;
 
 use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
@@ -61,8 +65,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
-        let (collectors, pk_builder) = builder.collect_columns_stats()?;
+    async fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
+        let (collectors, pk_builder) = builder.collect_columns_stats().await?;
 
         let pk_hist = pk_builder.into_proto();
         let cols: Vec<tipb::SampleCollector> =
@@ -161,7 +165,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let storage = self.storage.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, storage, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder);
+                let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -246,7 +250,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     // null count, distinct values count and count-min sketch. And it also returns the statistic
     // builder for PK which contains the histogram.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
-    fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+    async fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
@@ -259,7 +263,13 @@ impl<S: Snapshot> SampleBuilder<S> {
             self.col_len
         ];
         let mut is_drained = false;
+        let mut time_slice_start = Instant::now();
         while !is_drained {
+            let time_slice_elapsed = time_slice_start.elapsed();
+            if time_slice_elapsed > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
+            }
             let result = self.data.next_batch(BATCH_MAX_SIZE);
             is_drained = result.is_drained?;
 
@@ -324,7 +334,7 @@ struct SampleCollector {
     max_sample_size: usize,
     fm_sketch: FmSketch,
     cm_sketch: Option<CmSketch>,
-    rng: ThreadRng,
+    rng: StdRng,
     total_size: u64,
 }
 
@@ -342,7 +352,7 @@ impl SampleCollector {
             max_sample_size,
             fm_sketch: FmSketch::new(max_fm_sketch_size),
             cm_sketch: CmSketch::new(cm_sketch_depth, cm_sketch_width),
-            rng: thread_rng(),
+            rng: StdRng::from_entropy(),
             total_size: 0,
         }
     }

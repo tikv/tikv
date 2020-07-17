@@ -996,10 +996,13 @@ mod tests {
 
         let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
-        let common_handle =
-            datum::encode_key(&mut EvalContext::default(), &[Datum::F64(4.0)]).unwrap();
+        let common_handle = datum::encode_key(
+            &mut EvalContext::default(),
+            &[Datum::U64(3), Datum::F64(4.0)],
+        )
+        .unwrap();
 
-        let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..2]).unwrap();
+        let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..1]).unwrap();
         let mut key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
         key.extend(common_handle);
 
