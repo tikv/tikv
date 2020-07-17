@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::future::Future;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -25,7 +27,7 @@ use tikv_util::time::Instant;
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
-use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
@@ -88,6 +90,7 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
+pub(crate) type OldValueCallback = Box<dyn FnMut(Key) -> Option<Vec<u8>> + Send>;
 
 pub enum Task {
     Register {
@@ -101,7 +104,7 @@ pub enum Task {
     },
     MultiBatch {
         multi: Vec<CmdBatch>,
-        txn_extras: Vec<TxnExtra>,
+        old_value_cb: OldValueCallback,
     },
     MinTS {
         region_id: u64,
@@ -158,10 +161,9 @@ impl fmt::Debug for Task {
                 .field("type", &"open_conn")
                 .field("conn_id", &conn.get_id())
                 .finish(),
-            Task::MultiBatch { multi, txn_extras } => de
+            Task::MultiBatch { multi, .. } => de
                 .field("type", &"multibatch")
                 .field("multibatch", &multi.len())
-                .field("txn_extras", &txn_extras.len())
                 .finish(),
             Task::MinTS {
                 ref region_id,
@@ -217,7 +219,6 @@ pub struct Endpoint<T> {
     scan_batch_size: usize,
     tso_worker: ThreadPool,
     store_meta: Arc<Mutex<StoreMeta>>,
-    kv_engine: RocksEngine,
 
     workers: ThreadPool,
 
@@ -232,7 +233,6 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
-        kv_engine: RocksEngine,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
@@ -247,7 +247,6 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             raft_router,
             observer,
             store_meta,
-            kv_engine,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(1),
             min_resolved_ts: TimeStamp::max(),
@@ -509,11 +508,8 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         }));
     }
 
-    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, txn_extras: Vec<TxnExtra>) {
-        let mut txn_extra = TxnExtra::default();
-        txn_extras
-            .into_iter()
-            .for_each(|mut e| txn_extra.extend(&mut e));
+    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
+        let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -522,7 +518,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, &mut txn_extra, &self.kv_engine) {
+                if let Err(e) = delegate.on_batch(batch, old_value_cb.clone()) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -863,7 +859,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T>
             } => {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
-            Task::MultiBatch { multi, txn_extras } => self.on_multi_batch(multi, txn_extras),
+            Task::MultiBatch {
+                multi,
+                old_value_cb,
+            } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::InitDownstream {
@@ -1055,19 +1054,12 @@ mod tests {
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
-        let temp = TempDir::new().unwrap();
-        let engine = TestEngineBuilder::new()
-            .path(temp.path())
-            .cfs(DATA_CFS)
-            .build()
-            .unwrap();
         let mut ep = Endpoint::new(
             pd_client,
             task_sched,
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
-            engine.get_rocksdb(),
         );
         let (tx, _rx) = batch::unbounded(1);
 
@@ -1119,19 +1111,12 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
-        let temp = TempDir::new().unwrap();
-        let engine = TestEngineBuilder::new()
-            .path(temp.path())
-            .cfs(DATA_CFS)
-            .build()
-            .unwrap();
         let mut ep = Endpoint::new(
             pd_client,
             task_sched,
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
-            engine.get_rocksdb(),
         );
         let (tx, rx) = batch::unbounded(1);
 

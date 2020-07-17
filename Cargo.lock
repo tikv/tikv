@@ -2992,6 +2992,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "fail",

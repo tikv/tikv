@@ -81,6 +81,8 @@ impl Iterable for RocksSstReader {
 // FIXME: See comment on RocksSstReader for why this contains Rc
 pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
+unsafe impl Send for RocksSstIterator {}
+
 impl Iterator for RocksSstIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
         let k: RocksSeekKey = key.into();

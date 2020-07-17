@@ -4,7 +4,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{IterOptions, ReadOptions};
-use engine_traits::{Peekable, TablePropertiesExt};
+use engine_traits::{Peekable, Snapshot, TablePropertiesExt};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -20,7 +20,7 @@ use txn_types::{Key, TxnExtra, Value};
 use super::metrics::*;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot as EngineSnapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -400,8 +400,8 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot<RocksSnapshot> {
-    type Iter = RegionIterator<RocksSnapshot>;
+impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
+    type Iter = RegionIterator<S>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -465,7 +465,7 @@ impl Snapshot for RegionSnapshot<RocksSnapshot> {
     }
 }
 
-impl EngineIterator for RegionIterator<RocksSnapshot> {
+impl<S: Snapshot> EngineIterator for RegionIterator<S> {
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }
