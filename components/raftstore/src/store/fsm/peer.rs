@@ -9,7 +9,7 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Peekable, Snapshot, WriteBatchExt};
+use engine_traits::{KvEngines, Peekable, Snapshot, WriteBatchExt, KvEngine};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -84,8 +84,8 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<S: Snapshot> {
-    pub peer: Peer<RocksEngine, RocksEngine>,
+pub struct PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
+    pub peer: Peer<EK, RocksEngine>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -100,7 +100,7 @@ pub struct PeerFsm<S: Snapshot> {
     stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<S>>>,
+    mailbox: Option<BasicMailbox<PeerFsm<EK, S>>>,
     pub receiver: Receiver<PeerMsg<S>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
@@ -117,7 +117,7 @@ pub struct BatchRaftCmdRequestBuilder {
     txn_extra: TxnExtra,
 }
 
-impl<S: Snapshot> Drop for PeerFsm<S> {
+impl<EK, S> Drop for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -137,19 +137,19 @@ impl<S: Snapshot> Drop for PeerFsm<S> {
     }
 }
 
-pub type SenderFsmPair<S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<S>>);
+pub type SenderFsmPair<EK, S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<EK, S>>);
 
-impl<S: Snapshot> PeerFsm<S> {
+impl<EK, S> PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        engines: KvEngines<EK, RocksEngine>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<S>> {
+    ) -> Result<SenderFsmPair<EK, S>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -193,11 +193,11 @@ impl<S: Snapshot> PeerFsm<S> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        engines: KvEngines<EK, RocksEngine>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<S>> {
+    ) -> Result<SenderFsmPair<EK, S>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -235,7 +235,7 @@ impl<S: Snapshot> PeerFsm<S> {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer<RocksEngine, RocksEngine> {
+    pub fn get_peer(&self) -> &Peer<EK, RocksEngine> {
         &self.peer
     }
 
@@ -367,7 +367,7 @@ impl BatchRaftCmdRequestBuilder {
     }
 }
 
-impl<S: Snapshot> Fsm for PeerFsm<S> {
+impl<EK, S> Fsm for PeerFsm<EK, S> where EK: KvEngine, S: Snapshot {
     type Message = PeerMsg<S>;
 
     #[inline]
@@ -396,13 +396,13 @@ impl<S: Snapshot> Fsm for PeerFsm<S> {
 }
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksSnapshot>,
+    fsm: &'a mut PeerFsm<RocksEngine, RocksSnapshot>,
     ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksSnapshot>,
+        fsm: &'a mut PeerFsm<RocksEngine, RocksSnapshot>,
         ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }

@@ -152,7 +152,7 @@ impl StoreMeta {
 }
 
 pub struct RaftRouter<S: Snapshot> {
-    pub router: BatchRouter<PeerFsm<S>, StoreFsm>,
+    pub router: BatchRouter<PeerFsm<RocksEngine, S>, StoreFsm>,
 }
 
 impl<S> Clone for RaftRouter<S>
@@ -167,9 +167,9 @@ where
 }
 
 impl<S: Snapshot> Deref for RaftRouter<S> {
-    type Target = BatchRouter<PeerFsm<S>, StoreFsm>;
+    type Target = BatchRouter<PeerFsm<RocksEngine, S>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<S>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<RocksEngine, S>, StoreFsm> {
         &self.router
     }
 }
@@ -526,7 +526,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksSnapshot>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -646,7 +646,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPoller<T, C> {
+impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksSnapshot>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
@@ -700,7 +700,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksSnapshot>) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine, RocksSnapshot>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -743,7 +743,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksSnapshot>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -792,7 +792,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksSnapshot>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine, RocksSnapshot>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -956,7 +956,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksSnapshot>, StoreFsm> for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -1027,7 +1027,7 @@ struct Workers {
 }
 
 pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm<RocksSnapshot>, StoreFsm>,
+    system: BatchSystem<PeerFsm<RocksEngine, RocksSnapshot>, StoreFsm>,
     apply_router: ApplyRouter<RocksEngine>,
     apply_system: ApplyBatchSystem,
     router: RaftRouter<RocksSnapshot>,
@@ -1131,7 +1131,7 @@ impl RaftBatchSystem {
     >(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<SenderFsmPair<RocksSnapshot>>,
+        region_peers: Vec<SenderFsmPair<RocksEngine, RocksSnapshot>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {

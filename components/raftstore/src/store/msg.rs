@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -274,7 +274,7 @@ pub enum CasualMessage<S: Snapshot> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<RocksEngine, S>) + Send + 'static>),
 }
 
 impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
