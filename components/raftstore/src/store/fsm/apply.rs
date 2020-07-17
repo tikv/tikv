@@ -2364,7 +2364,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new<E>(peer: &Peer<E>) -> Registration where E: KvEngine {
+    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2539,7 +2539,7 @@ where
         }
     }
 
-    pub fn register(peer: &Peer<E>) -> Msg<E> {
+    pub fn register(peer: &Peer<E, impl KvEngine>) -> Msg<E> {
         Msg::Registration(Registration::new(peer))
     }
 
@@ -2635,7 +2635,7 @@ impl<E> ApplyFsm<E>
 where
     E: KvEngine,
 {
-    fn from_peer(peer: &Peer<RocksEngine>) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_peer(peer: &Peer<RocksEngine, RocksEngine>) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
@@ -3362,7 +3362,7 @@ impl DerefMut for ApplyBatchSystem {
 }
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer<RocksEngine>>) {
+    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
