@@ -5,25 +5,63 @@ use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
-use std::{io, ptr, slice};
+use std::{io, ptr, slice, thread, sync::Mutex};
+use std::collections::HashMap;
 
 pub type Allocator = jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
     jemallocator::Jemalloc
 }
 
+lazy_static! {
+    static ref THREAD_MEMORY_MAP: Mutex<HashMap<String, MemoryStatsAccessor>> = {
+        Mutex::new(HashMap::new())
+    };
+}
+
+struct MemoryStatsAccessor {
+    allocated: jemalloc_ctl::thread::AllocatedP,
+    deallocated: jemalloc_ctl::thread::DeallocatedP,
+    num_arenas: jemalloc_ctl::arenas::NArenas
+}
+
+pub fn add_thread_memory_accessor() {
+    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    thread_memory_map.insert(thread::current().name().unwrap().to_string(), MemoryStatsAccessor {
+        allocated: jemalloc_ctl::thread::AllocatedP::new().unwrap(),
+        deallocated: jemalloc_ctl::thread::DeallocatedP::new().unwrap(),
+        num_arenas: jemalloc_ctl::arenas::NArenas::new().unwrap(),
+    });
+}
+
+pub fn remove_thread_memory_accessor() {
+    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    thread_memory_map.remove(&thread::current().name().unwrap().to_string());
+}
+
 pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
+    let immu_thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+
     unsafe {
         malloc_stats_print(
             write_cb,
             &mut buf as *mut Vec<u8> as *mut c_void,
             ptr::null(),
-        )
+        );
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    let mut memory_stats = format!("Memory stats summary: {}\n", String::from_utf8_lossy(&buf).into_owned().to_string());
+    memory_stats.push_str("Memory stats by thread:\n");
+
+    for (key, value) in immu_thread_memory_map.iter() {
+        memory_stats.push_str(format!("Thread {}:", key).as_str());
+        memory_stats.push_str(format!("allocated: {}, ", value.allocated.get().unwrap().get().to_string()).as_str());
+        memory_stats.push_str(format!("deallocated: {}, ", value.deallocated.get().unwrap().get().to_string()).as_str());
+        memory_stats.push_str(format!("arena limit: {}.\n", value.num_arenas.get().unwrap().to_string()).as_str());
+    }
+    memory_stats
 }
 
 pub fn fetch_stats() -> io::Result<Option<AllocStats>> {

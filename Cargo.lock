@@ -4627,6 +4627,7 @@ dependencies = [
  "jemalloc-ctl",
  "jemalloc-sys",
  "jemallocator",
+ "lazy_static",
  "libc",
  "log",
  "mimallocator",
