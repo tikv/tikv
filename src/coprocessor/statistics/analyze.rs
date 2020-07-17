@@ -98,9 +98,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut time_slice_start = Instant::now();
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
-            if row_count >= BATCH_MAX_SIZE && time_slice_start.elapsed() > MAX_TIME_SLICE {
-                reschedule().await;
-                time_slice_start = Instant::now();
+            if row_count >= BATCH_MAX_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
                 row_count = 0;
             }
             let mut key = &key[..];
