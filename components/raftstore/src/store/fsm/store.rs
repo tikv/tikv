@@ -137,9 +137,9 @@ impl StoreMeta {
     #[inline]
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost<RocksEngine>,
+        host: &CoprocessorHost<impl KvEngine>,
         region: Region,
-        peer: &mut crate::store::Peer<RocksEngine, RocksEngine>,
+        peer: &mut crate::store::Peer<impl KvEngine, impl KvEngine>,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {

@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteOptions};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -684,7 +683,7 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost<RocksEngine>,
+        host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
