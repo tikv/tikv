@@ -101,7 +101,7 @@ pub struct PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     has_ready: bool,
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER, S>>>,
-    pub receiver: Receiver<PeerMsg<S>>,
+    pub receiver: Receiver<PeerMsg<EK, S>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
@@ -137,7 +137,7 @@ impl<EK, ER, S> Drop for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S:
     }
 }
 
-pub type SenderFsmPair<EK, ER, S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<EK, ER, S>>);
+pub type SenderFsmPair<EK, ER, S> = (LooseBoundedSender<PeerMsg<EK, S>>, Box<PeerFsm<EK, ER, S>>);
 
 impl<EK, ER, S> PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     // If we create the peer actively, like bootstrap/split/merge region, we should
@@ -368,7 +368,7 @@ impl<S> BatchRaftCmdRequestBuilder<S> where S: Snapshot {
 }
 
 impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
-    type Message = PeerMsg<S>;
+    type Message = PeerMsg<EK, S>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -408,7 +408,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksSnapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine, RocksSnapshot>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {

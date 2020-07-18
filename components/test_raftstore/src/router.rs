@@ -14,7 +14,7 @@ use txn_types::TxnExtra;
 
 #[derive(Clone)]
 pub struct MockRaftStoreRouter {
-    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksSnapshot>>>>>,
+    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine, RocksSnapshot>>>>>,
 }
 
 impl MockRaftStoreRouter {
@@ -23,7 +23,7 @@ impl MockRaftStoreRouter {
             senders: Arc::default(),
         }
     }
-    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksSnapshot>> {
+    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksEngine, RocksSnapshot>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx

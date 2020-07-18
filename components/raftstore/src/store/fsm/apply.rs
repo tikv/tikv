@@ -307,7 +307,7 @@ where
 {
     Router(RaftRouter<S>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<S>>),
+    Sender(Sender<PeerMsg<RocksEngine, S>>),
 }
 
 impl<S> Clone for Notifier<S>
@@ -327,7 +327,7 @@ impl<S> Notifier<S>
 where
     S: Snapshot,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<RocksEngine, S>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -3524,7 +3524,7 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine, RocksSnapshot>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
