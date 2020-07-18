@@ -21,53 +21,6 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
-        &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
-        src_schema: &[FieldType],
-        out_schema: &mut Vec<FieldType>,
-        out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
-        use std::convert::TryFrom;
-        use tidb_query_datatype::FieldTypeAccessor;
-
-        assert_eq!(aggr_def.get_tp(), ExprType::Avg);
-
-        let col_sum_ft = aggr_def.take_field_type();
-        let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
-
-        // Rewrite expression to insert CAST() if needed.
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
-        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
-
-        let rewritten_eval_type =
-            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
-        if col_sum_et != rewritten_eval_type {
-            return Err(other_err!(
-                "Unexpected return field type {}",
-                col_sum_ft.as_accessor().tp()
-            ));
-        }
-
-        // AVG outputs two columns.
-        out_schema.push(
-            FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .flag(FieldTypeFlag::UNSIGNED)
-                .build(),
-        );
-        out_schema.push(col_sum_ft);
-        out_exp.push(exp);
-
-        Ok(match rewritten_eval_type {
-            EvalType::Decimal => Box::new(AggrFnAvg::<Decimal>::new()),
-            EvalType::Real => Box::new(AggrFnAvg::<Real>::new()),
-            _ => unreachable!(),
-        })
-    }
-
     #[inline]
     fn parse_rpn(
         &self,
