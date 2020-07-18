@@ -478,7 +478,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<RocksSnapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine, RocksSnapshot>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,

@@ -3,6 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
+use engine_rocks::RocksEngine;
 use engine_traits::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -18,7 +19,7 @@ pub trait Transport: Send + Clone {
 ///
 /// Messages are not guaranteed to be delivered by this trait.
 pub trait CasualRouter<S: Snapshot> {
-    fn send(&self, region_id: u64, msg: CasualMessage<S>) -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -38,7 +39,7 @@ pub trait StoreRouter {
 
 impl<S: Snapshot> CasualRouter<S> for RaftRouter<S> {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage<S>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -67,8 +68,8 @@ impl<S: Snapshot> StoreRouter for RaftRouter<S> {
     }
 }
 
-impl<S: Snapshot> CasualRouter<S> for mpsc::SyncSender<(u64, CasualMessage<S>)> {
-    fn send(&self, region_id: u64, msg: CasualMessage<S>) -> Result<()> {
+impl<S: Snapshot> CasualRouter<S> for mpsc::SyncSender<(u64, CasualMessage<RocksEngine, S>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

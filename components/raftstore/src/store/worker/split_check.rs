@@ -336,7 +336,7 @@ impl<S: CasualRouter<RocksSnapshot>> Runnable<Task> for Runner<S> {
 fn new_split_region(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksSnapshot> {
+) -> CasualMessage<RocksEngine, RocksSnapshot> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

@@ -408,7 +408,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine, RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -440,7 +440,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksSnapshot>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine, RocksSnapshot>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {

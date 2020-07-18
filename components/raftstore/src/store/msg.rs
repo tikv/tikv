@@ -4,7 +4,7 @@ use std::fmt;
 use std::time::Instant;
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::Snapshot;
+use engine_traits::{Snapshot, KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -229,7 +229,7 @@ pub enum SignificantMsg {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<S: Snapshot> {
+pub enum CasualMessage<EK, S> where EK: KvEngine, S: Snapshot {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -274,10 +274,10 @@ pub enum CasualMessage<S: Snapshot> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<RocksEngine, RocksEngine, S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, RocksEngine, S>) + Send + 'static>),
 }
 
-impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
+impl<EK, S> fmt::Debug for CasualMessage<EK, S> where EK: KvEngine, S: Snapshot {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -370,7 +370,7 @@ pub enum PeerMsg<S: Snapshot> {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<S>),
+    CasualMessage(CasualMessage<RocksEngine, S>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
