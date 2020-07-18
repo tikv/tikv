@@ -100,6 +100,21 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             }
         }
     }
+
+    #[inline]
+    fn parse_rpn(
+        &self,
+        _root_expr: Expr,
+        _exp: RpnExpression,
+        _ctx: &mut EvalContext,
+        _src_schema: &[FieldType],
+        _out_schema: &mut Vec<FieldType>,
+        _out_exp: &mut Vec<RpnExpression>,
+    ) -> Result<Box<dyn AggrFunction>> {
+        unimplemented!(
+            "This struct neither implemented parse nor parse_rpn, which is not expected."
+        )
+    }
 }
 
 #[derive(Debug, AggrFunction)]
