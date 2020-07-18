@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{Snapshot, KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -223,7 +223,7 @@ pub enum SignificantMsg<SK> where SK: Snapshot {
         region_epoch: RegionEpoch,
         callback: Callback<SK>,
     },
-    LeaderCallback(Callback<RocksSnapshot>),
+    LeaderCallback(Callback<SK>),
 }
 
 /// Message that will be sent to a peer.
