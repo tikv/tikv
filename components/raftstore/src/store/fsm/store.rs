@@ -244,7 +244,7 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
+    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
