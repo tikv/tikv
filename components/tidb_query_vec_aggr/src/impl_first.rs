@@ -236,7 +236,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[Some(0); 0]),
+            &ChunkedVecSized::from_slice(&[Some(0); 0]),
             &[]
         )
         .unwrap();
@@ -244,7 +244,13 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[None]);
 
         result[0].clear();
-        update_vector!(state, &mut ctx, &NotChunkedVec::from_slice(&[Some(1)]), &[]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &ChunkedVecSized::from_slice(&[Some(1)]),
+            &[]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[None]);
 
@@ -252,7 +258,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[None, Some(2)]),
+            &ChunkedVecSized::from_slice(&[None, Some(2)]),
             &[0, 1]
         )
         .unwrap();
@@ -263,7 +269,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[Some(1)]),
+            &ChunkedVecSized::from_slice(&[Some(1)]),
             &[0]
         )
         .unwrap();
@@ -277,7 +283,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[None, Some(2)]),
+            &ChunkedVecSized::from_slice(&[None, Some(2)]),
             &[1, 0]
         )
         .unwrap();

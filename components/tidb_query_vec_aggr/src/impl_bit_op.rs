@@ -185,7 +185,7 @@ mod tests {
         // 7 & 1 == 1
         update!(state, &mut ctx, Some(&7i64)).unwrap();
         let int_vec = vec![Some(1i64), None, Some(1i64)];
-        let int_vec: NotChunkedVec<Int> = int_vec.into();
+        let int_vec: ChunkedVecSized<Int> = int_vec.into();
         update_vector!(state, &mut ctx, &int_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -234,7 +234,7 @@ mod tests {
 
         // 13 | 2 == 15
         update!(state, &mut ctx, Some(&2i64)).unwrap();
-        let chunked_vec: NotChunkedVec<Int> = vec![Some(2i64), None, Some(1i64)].into();
+        let chunked_vec: ChunkedVecSized<Int> = vec![Some(2i64), None, Some(1i64)].into();
         update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -299,7 +299,7 @@ mod tests {
 
         // 1 ^ 5 ^ 8 ^ ^ 2 ^ 2 ^ 1 == 13
         update!(state, &mut ctx, Some(&2i64)).unwrap();
-        let chunked_vec: NotChunkedVec<Int> = vec![Some(2i64), None, Some(1i64)].into();
+        let chunked_vec: ChunkedVecSized<Int> = vec![Some(2i64), None, Some(1i64)].into();
         update_vector!(state, &mut ctx, &chunked_vec, &[0, 1, 2]).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -396,7 +396,7 @@ mod tests {
                 .unwrap();
             let bit_and_result = bit_and_result.vector_value().unwrap();
             let bit_and_slice = bit_and_result.as_ref().to_int_vec();
-            let bit_and_vec: NotChunkedVec<Int> = bit_and_slice.into();
+            let bit_and_vec: ChunkedVecSized<Int> = bit_and_slice.into();
 
             update_vector!(
                 bit_and_state,
@@ -417,7 +417,7 @@ mod tests {
                 .unwrap();
             let bit_or_result = bit_or_result.vector_value().unwrap();
             let bit_or_slice = bit_or_result.as_ref().to_int_vec();
-            let bit_or_vec: NotChunkedVec<Int> = bit_or_slice.into();
+            let bit_or_vec: ChunkedVecSized<Int> = bit_or_slice.into();
 
             update_vector!(
                 bit_or_state,
@@ -438,7 +438,7 @@ mod tests {
                 .unwrap();
             let bit_xor_result = bit_xor_result.vector_value().unwrap();
             let bit_xor_slice = bit_xor_result.as_ref().to_int_vec();
-            let bit_xor_vec: NotChunkedVec<Int> = bit_xor_slice.into();
+            let bit_xor_vec: ChunkedVecSized<Int> = bit_xor_slice.into();
 
             update_vector!(
                 bit_xor_state,
