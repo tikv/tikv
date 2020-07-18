@@ -1296,7 +1296,7 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksSnapshot>| {
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>| {
                 let idx = peer.peer.raft_group.store().committed_index();
                 peer.peer.raft_group.request_snapshot(idx).unwrap();
                 debug!("{} request snapshot at {}", idx, peer.peer.tag);

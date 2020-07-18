@@ -64,7 +64,7 @@ fn start_raftstore(
 ) -> (
     ConfigController,
     RaftRouter<RocksSnapshot>,
-    ApplyRouter,
+    ApplyRouter<RocksEngine>,
     RaftBatchSystem,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
@@ -131,7 +131,7 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
+fn validate_apply<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
 where
     F: FnOnce(bool) + Send + 'static,
 {

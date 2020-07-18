@@ -974,7 +974,7 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
     use configuration::Configuration;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -985,7 +985,7 @@ mod tests {
     struct MockRouter;
 
     impl CasualRouter<RocksSnapshot> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksSnapshot>) -> raftstore::Result<()> {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine, RocksSnapshot>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }

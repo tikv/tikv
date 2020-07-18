@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -205,7 +205,7 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.send_command_txn_extra(req, txn_extra, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksSnapshot>) -> Result<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine, RocksSnapshot>) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 

@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
@@ -45,7 +45,7 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksSnapshot>,
+        msg: CasualMessage<RocksEngine, RocksSnapshot>,
     ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {

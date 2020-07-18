@@ -61,7 +61,7 @@ struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksSnapshot>,
-    raw_apply_router: ApplyRouter,
+    raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
 }
 
@@ -116,7 +116,7 @@ impl ServerCluster {
         &self.addrs[&node_id]
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
