@@ -106,14 +106,14 @@ pub struct PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     skip_split_count: usize,
 
     // Batch raft command which has the same header into an entry
-    batch_req_builder: BatchRaftCmdRequestBuilder,
+    batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
 }
 
-pub struct BatchRaftCmdRequestBuilder {
+pub struct BatchRaftCmdRequestBuilder<S> where S: Snapshot {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
+    callbacks: Vec<(Callback<S>, usize)>,
     txn_extra: TxnExtra,
 }
 
@@ -258,8 +258,8 @@ impl<EK, ER, S> PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot
     }
 }
 
-impl BatchRaftCmdRequestBuilder {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder {
+impl<S> BatchRaftCmdRequestBuilder<S> where S: Snapshot {
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
             request: None,
@@ -293,7 +293,7 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<RocksSnapshot>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<S>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -328,7 +328,7 @@ impl BatchRaftCmdRequestBuilder {
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<RocksSnapshot>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<S>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
@@ -3676,11 +3676,12 @@ mod tests {
     use protobuf::Message;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use engine_rocks::RocksSnapshot;
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<RocksSnapshot>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 
