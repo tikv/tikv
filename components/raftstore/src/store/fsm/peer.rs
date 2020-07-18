@@ -695,7 +695,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         );
     }
 
-    fn on_significant_msg(&mut self, msg: SignificantMsg) {
+    fn on_significant_msg(&mut self, msg: SignificantMsg<RocksSnapshot>) {
         match msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..

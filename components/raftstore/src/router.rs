@@ -9,7 +9,7 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
 use txn_types::TxnExtra;
@@ -36,7 +36,7 @@ where
     ) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -94,7 +94,7 @@ where
     }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, _: u64, _: SignificantMsg) -> RaftStoreResult<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -188,7 +188,7 @@ where
         }
     }
 
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))

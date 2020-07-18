@@ -213,7 +213,7 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.broadcast_unreachable(store_id)
     }
 
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
 }

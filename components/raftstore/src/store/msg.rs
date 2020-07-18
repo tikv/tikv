@@ -190,7 +190,7 @@ pub enum MergeResultKind {
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
-pub enum SignificantMsg {
+pub enum SignificantMsg<SK> where SK: Snapshot {
     /// Reports whether the snapshot sending is successful or not.
     SnapshotStatus {
         region_id: u64,
@@ -221,7 +221,7 @@ pub enum SignificantMsg {
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<RocksSnapshot>,
+        callback: Callback<SK>,
     },
     LeaderCallback(Callback<RocksSnapshot>),
 }
@@ -364,7 +364,7 @@ pub enum PeerMsg<EK, S> where EK: KvEngine, S: Snapshot {
     ApplyRes { res: ApplyTaskRes<S> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
-    SignificantMsg(SignificantMsg),
+    SignificantMsg(SignificantMsg<EK::Snapshot>),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.

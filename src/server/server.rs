@@ -319,7 +319,7 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
     impl RaftStoreRouter<RocksSnapshot> for TestRaftStoreRouter {
@@ -347,7 +347,7 @@ mod tests {
             Ok(())
         }
 
-        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        fn significant_send(&self, _: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
         }
@@ -362,7 +362,7 @@ mod tests {
         }
     }
 
-    fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
+    fn is_unreachable_to(msg: &SignificantMsg<RocksSnapshot>, region_id: u64, to_peer_id: u64) -> bool {
         if let SignificantMsg::Unreachable {
             region_id: r_id,
             to_peer_id: p_id,
