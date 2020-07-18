@@ -52,7 +52,7 @@ impl yatp::pool::Runner for FuturePoolRunner {
         if let Some(after_start) = &self.after_start {
             after_start();
         }
-        tikv_alloc::add_thread_memory_accessor()
+        tikv_alloc::add_thread_memory_accessor();
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
@@ -78,7 +78,7 @@ impl yatp::pool::Runner for FuturePoolRunner {
             before_stop();
         }
         self.inner.end(local);
-        tikv_alloc::remove_thread_memory_accessor()
+        tikv_alloc::remove_thread_memory_accessor();
     }
 }
 

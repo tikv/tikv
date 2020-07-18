@@ -121,9 +121,6 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
 
 #[cfg(test)]
 mod tests {
-    use super::add_thread_memory_accessor;
-    use super::remove_thread_memory_accessor;
-    use super::THREAD_MEMORY_MAP;
 
     #[test]
     fn dump_stats() {
@@ -132,11 +129,11 @@ mod tests {
 
     #[test]
     fn test_add_and_remove_thread_pointer() {
-        add_thread_memory_accessor();
-        let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+        super::add_thread_memory_accessor();
+        let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
         assert_eq!(1, thread_memory_map.len());
 
-        remove_thread_memory_accessor();
+        super::remove_thread_memory_accessor();
         assert_eq!(0, thread_memory_map.len());
     }
 }
