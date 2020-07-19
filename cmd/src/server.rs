@@ -15,8 +15,8 @@ use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
-    debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    deadlock::create_deadlock, debugpb::create_debug, diagnosticspb::create_diagnostics,
+    import_sstpb::create_import_sst,
 };
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
@@ -138,7 +138,6 @@ struct Servers {
     server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
-    cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
 impl TiKVServer {
@@ -508,12 +507,6 @@ impl TiKVServer {
             cop_read_pools.handle()
         };
 
-        // Create and register cdc.
-        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(&mut coprocessor_host);
-
         let server_config = Arc::new(self.config.server.clone());
 
         // Create server
@@ -599,26 +592,11 @@ impl TiKVServer {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
-        // Start CDC.
-        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
-        let cdc_endpoint = cdc::Endpoint::new(
-            self.pd_client.clone(),
-            cdc_worker.scheduler(),
-            raft_router,
-            cdc_ob,
-        );
-        let cdc_timer = cdc_endpoint.new_timer();
-        cdc_worker
-            .start_with_timer(cdc_endpoint, cdc_timer)
-            .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
-        self.to_stop.push(cdc_worker);
-
         self.servers = Some(Servers {
             lock_mgr,
             server,
             node,
             importer,
-            cdc_scheduler,
         });
 
         server_config
@@ -702,46 +680,6 @@ impl TiKVServer {
                 &self.config.pessimistic_txn,
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
-
-        // Backup service.
-        let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
-        let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
-
-        let backup_endpoint = backup::Endpoint::new(
-            servers.node.id(),
-            engines.engine.clone(),
-            self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
-            self.config.backup.clone(),
-        );
-        self.cfg_controller.as_mut().unwrap().register(
-            tikv::config::Module::Backup,
-            Box::new(backup_endpoint.get_config_manager()),
-        );
-        let backup_timer = backup_endpoint.new_timer();
-        backup_worker
-            .start_with_timer(backup_endpoint, backup_timer)
-            .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
-
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
-        if servers
-            .server
-            .register_service(create_change_data(cdc_service))
-            .is_some()
-        {
-            fatal!("failed to register cdc service");
-        }
-
-        self.to_stop.push(backup_worker);
     }
 
     fn init_metrics_flusher(&mut self) {
