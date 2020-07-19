@@ -145,6 +145,8 @@ impl<T: Display + Send + 'static> Worker<T> {
             .spawn(move || poll(runner, rx))?;
 
         self.handle = Some(h);
+        tikv_alloc::add_thread_memory_accessor();
+
         Ok(())
     }
 
@@ -177,6 +179,8 @@ impl<T: Display + Send + 'static> Worker<T> {
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread"; "err" => ?e);
         }
+
+        tikv_alloc::remove_thread_memory_accessor();
         Some(handle)
     }
 }
