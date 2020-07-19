@@ -14,14 +14,14 @@ use crate::codec::Result;
 /// this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
-    Int(NotChunkedVec<Int>),
-    Real(NotChunkedVec<Real>),
-    Decimal(NotChunkedVec<Decimal>),
+    Int(ChunkedVecSized<Int>),
+    Real(ChunkedVecSized<Real>),
+    Decimal(ChunkedVecSized<Decimal>),
     // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
-    Bytes(NotChunkedVec<Bytes>),
-    DateTime(NotChunkedVec<DateTime>),
-    Duration(NotChunkedVec<Duration>),
-    Json(NotChunkedVec<Json>),
+    Bytes(ChunkedVecBytes),
+    DateTime(ChunkedVecSized<DateTime>),
+    Duration(ChunkedVecSized<Duration>),
+    Json(ChunkedVecJson),
 }
 
 impl VectorValue {
@@ -29,9 +29,12 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template_evaluable! {
-            TT, match eval_tp {
-                EvalType::TT => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match eval_tp {
+                EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                EvalType::Json => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
+                EvalType::Bytes => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
             }
         }
     }
@@ -39,9 +42,12 @@ impl VectorValue {
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(_) => VectorValue::TT(NotChunkedVec::with_capacity(capacity)),
+        match_template::match_template! {
+            TT = [Int, Real, Duration, Decimal, DateTime],
+            match self {
+                VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
+                VectorValue::Json(_) => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
+                VectorValue::Bytes(_) => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
             }
         }
     }
@@ -396,7 +402,7 @@ macro_rules! impl_as_slice {
             #[inline]
             pub fn $name(&self) -> Vec<Option<$ty>> {
                 match self {
-                    VectorValue::$ty(vec) => vec.as_vec(),
+                    VectorValue::$ty(vec) => vec.to_vec(),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($name),
@@ -466,23 +472,23 @@ impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
-    ($ty:tt) => {
-        impl From<NotChunkedVec<$ty>> for VectorValue {
+    ($ty:tt, $chunk:ty) => {
+        impl From<$chunk> for VectorValue {
             #[inline]
-            fn from(s: NotChunkedVec<$ty>) -> VectorValue {
+            fn from(s: $chunk) -> VectorValue {
                 VectorValue::$ty(s)
             }
         }
     };
 }
 
-impl_from! { Int }
-impl_from! { Real }
-impl_from! { Decimal }
-impl_from! { Bytes }
-impl_from! { DateTime }
-impl_from! { Duration }
-impl_from! { Json }
+impl_from! { Int, ChunkedVecSized<Int> }
+impl_from! { Real, ChunkedVecSized<Real> }
+impl_from! { Decimal, ChunkedVecSized<Decimal> }
+impl_from! { Bytes, ChunkedVecBytes }
+impl_from! { DateTime, ChunkedVecSized<DateTime> }
+impl_from! { Duration, ChunkedVecSized<Duration> }
+impl_from! { Json, ChunkedVecJson }
 
 #[cfg(test)]
 mod tests {
@@ -630,7 +636,7 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Real::new(1.0).ok()];
-        let chunked_vec = NotChunkedVec::from_slice(slice);
+        let chunked_vec = ChunkedVecSized::from_slice(slice);
         let column = VectorValue::from(chunked_vec);
         assert_eq!(column.len(), 2);
         assert_eq!(column.to_real_vec(), slice);

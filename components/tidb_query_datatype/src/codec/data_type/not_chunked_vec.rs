@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::*;
 
@@ -43,6 +43,7 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
             data: slice.to_vec(),
         }
     }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
@@ -73,8 +74,17 @@ impl<T: Sized + Clone> NotChunkedVec<T> {
         self.data.append(&mut other.data)
     }
 
-    pub fn as_vec(&self) -> Vec<Option<T>> {
+    pub fn to_vec(&self) -> Vec<Option<T>> {
         self.data.clone()
+    }
+}
+
+impl<T: Clone> ChunkedVec<T> for NotChunkedVec<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn chunked_push(&mut self, value: Option<T>) {
+        self.push(value)
     }
 }
 
