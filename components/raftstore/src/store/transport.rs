@@ -4,7 +4,7 @@ use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use engine_rocks::RocksEngine;
-use engine_traits::Snapshot;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
@@ -18,8 +18,8 @@ pub trait Transport: Send + Clone {
 /// Routes message to target region.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait CasualRouter<S: Snapshot> {
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()>;
+pub trait CasualRouter<EK> where EK: KvEngine {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, EK::Snapshot>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -37,9 +37,9 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<S: Snapshot> CasualRouter<S> for RaftRouter<RocksEngine, S> {
+impl<EK> CasualRouter<EK> for RaftRouter<EK, EK::Snapshot> where EK: KvEngine {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, EK::Snapshot>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -68,8 +68,8 @@ impl<S: Snapshot> StoreRouter for RaftRouter<RocksEngine, S> {
     }
 }
 
-impl<S: Snapshot> CasualRouter<S> for mpsc::SyncSender<(u64, CasualMessage<RocksEngine, S>)> {
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()> {
+impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK, EK::Snapshot>)> where EK: KvEngine {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, EK::Snapshot>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

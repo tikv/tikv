@@ -45,12 +45,12 @@ where
     }
 }
 
-pub struct Runner<EK, C: CasualRouter<EK::Snapshot>> where EK: KvEngine {
+pub struct Runner<EK, C: CasualRouter<EK>> where EK: KvEngine {
     _s: PhantomData<EK>,
     router: C,
 }
 
-impl<EK: KvEngine, C: CasualRouter<EK::Snapshot>> Runner<EK, C> {
+impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     pub fn new(router: C) -> Runner<EK, C> {
         Runner {
             _s: Default::default(),
@@ -131,7 +131,7 @@ impl<EK: KvEngine, C: CasualRouter<EK::Snapshot>> Runner<EK, C> {
 impl<EK, C> Runnable<Task<EK::Snapshot>> for Runner<EK, C>
 where
     EK: KvEngine,
-    C: CasualRouter<EK::Snapshot>,
+    C: CasualRouter<EK>,
 {
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
