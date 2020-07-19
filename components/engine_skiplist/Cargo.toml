@@ -1,0 +1,16 @@
+[package]
+name = "engine_skiplist"
+version = "0.0.1"
+description = "In-Memory TiKV storage engine built upon crossbeam skiplist"
+edition = "2018"
+publish = false
+
+[dependencies]
+engine_traits = { path = "../engine_traits" }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+
+[dependencies.crossbeam-skiplist]
+git = "https://github.com/crossbeam-rs/crossbeam.git"
+tag = "crossbeam-0.7.3"
+package = "crossbeam-skiplist"
