@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Peekable, Snapshot, WriteBatchExt, KvEngine};
+use engine_traits::{KvEngines, Snapshot, WriteBatchExt, KvEngine};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -395,20 +395,20 @@ impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: 
     }
 }
 
-pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>,
-    ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
+pub struct PeerFsmDelegate<'a, EK, T: 'static, C: 'static> where EK: KvEngine {
+    fsm: &'a mut PeerFsm<EK, RocksEngine, EK::Snapshot>,
+    ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>,
-        ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
-    ) -> PeerFsmDelegate<'a, T, C> {
+        fsm: &'a mut PeerFsm<EK, RocksEngine, EK::Snapshot>,
+        ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
+    ) -> PeerFsmDelegate<'a, EK, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine, RocksSnapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, EK::Snapshot>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -478,7 +478,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<RocksEngine, RocksSnapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK, EK::Snapshot>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -667,7 +667,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
@@ -695,7 +695,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         );
     }
 
-    fn on_significant_msg(&mut self, msg: SignificantMsg<RocksSnapshot>) {
+    fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
         match msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..
@@ -783,7 +783,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<RocksSnapshot>) {
+    fn on_leader_callback(&mut self, cb: Callback<EK::Snapshot>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -1029,7 +1029,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksSnapshot>) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
@@ -2661,7 +2661,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
+        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2857,7 +2857,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
         txn_extra: TxnExtra,
     ) {
         match self.pre_propose_raft_command(&msg) {
@@ -3117,7 +3117,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -3393,8 +3393,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
+impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
@@ -3614,7 +3614,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
