@@ -4,6 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use engine_rocks::RocksEngine;
 use engine_traits::Snapshot;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
@@ -47,7 +48,7 @@ struct Runner<T: PdClient, S: Snapshot> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<S>>,
+    router: Option<RaftRouter<RocksEngine, S>>,
 }
 
 impl<T: PdClient, S: Snapshot> Runner<T, S> {
@@ -126,7 +127,7 @@ impl PdStoreAddrResolver {
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, S>(
     pd_client: Arc<T>,
-    router: RaftRouter<S>,
+    router: RaftRouter<RocksEngine, S>,
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,

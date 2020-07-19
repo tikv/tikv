@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_stream::stream;
-use engine_traits::Snapshot;
+use engine_traits::KvEngine;
 use futures03::compat::Compat01As03;
 use futures03::executor::block_on;
 use futures03::future::{ok, poll_fn};
@@ -88,7 +88,7 @@ static MISSING_ACTIONS: &[u8] = b"Missing param actions";
 #[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
-pub struct StatusServer<S, R> {
+pub struct StatusServer<E, R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -98,7 +98,7 @@ pub struct StatusServer<S, R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
-    _snap: PhantomData<S>,
+    _snap: PhantomData<E>,
 }
 
 impl StatusServer<(), ()> {
@@ -139,9 +139,9 @@ impl StatusServer<(), ()> {
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: 'static,
+    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -561,10 +561,10 @@ where
     }
 }
 
-impl<S, R> StatusServer<S, R>
+impl<E, R> StatusServer<E, R>
 where
-    S: Snapshot,
-    R: 'static + Send + CasualRouter<S> + Clone,
+    E: KvEngine,
+    R: 'static + Send + CasualRouter<E> + Clone,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -984,7 +984,7 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksSnapshot> for MockRouter {
+    impl CasualRouter<RocksEngine> for MockRouter {
         fn send(&self, region_id: u64, _: CasualMessage<RocksEngine, RocksSnapshot>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }

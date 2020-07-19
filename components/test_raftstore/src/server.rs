@@ -60,7 +60,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksSnapshot>,
+    raw_router: RaftRouter<RocksEngine, RocksSnapshot>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
 }
@@ -132,7 +132,7 @@ impl Simulator for ServerCluster {
         mut cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -433,7 +433,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksSnapshot>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }
