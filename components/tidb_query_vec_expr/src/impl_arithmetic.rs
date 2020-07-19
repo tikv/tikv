@@ -10,10 +10,7 @@ use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn(nonnull)]
 #[inline]
-pub fn arithmetic<A: ArithmeticOp>(
-    lhs: &A::T,
-    rhs: &A::T,
-) -> Result<Option<A::T>> {
+pub fn arithmetic<A: ArithmeticOp>(lhs: &A::T, rhs: &A::T) -> Result<Option<A::T>> {
     A::calc(lhs, rhs)
 }
 
