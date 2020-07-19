@@ -1731,6 +1731,7 @@ mod tests_normal {
                 metadata_mapper: None,
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
+                is_nonnull: false,
             },
             item_fn,
         )
