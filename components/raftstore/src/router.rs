@@ -110,8 +110,8 @@ pub struct ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
-    router: RaftRouter<E::Snapshot>,
-    local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+    router: RaftRouter<RocksEngine, E::Snapshot>,
+    local_reader: LocalReader<RaftRouter<RocksEngine, E::Snapshot>, E>,
 }
 
 impl<E> Clone for ServerRaftStoreRouter<E>
@@ -132,8 +132,8 @@ where
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<E::Snapshot>,
-        local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+        router: RaftRouter<RocksEngine, E::Snapshot>,
+        local_reader: LocalReader<RaftRouter<RocksEngine, E::Snapshot>, E>,
     ) -> ServerRaftStoreRouter<E> {
         ServerRaftStoreRouter {
             router,
@@ -177,7 +177,7 @@ where
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
-        if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<RocksEngine, E::Snapshot>, E>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {

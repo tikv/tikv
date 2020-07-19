@@ -37,7 +37,7 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<S: Snapshot> CasualRouter<S> for RaftRouter<S> {
+impl<S: Snapshot> CasualRouter<S> for RaftRouter<RocksEngine, S> {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine, S>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
@@ -48,14 +48,14 @@ impl<S: Snapshot> CasualRouter<S> for RaftRouter<S> {
     }
 }
 
-impl<S: Snapshot> ProposalRouter<S> for RaftRouter<S> {
+impl<S: Snapshot> ProposalRouter<S> for RaftRouter<RocksEngine, S> {
     #[inline]
     fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl<S: Snapshot> StoreRouter for RaftRouter<S> {
+impl<S: Snapshot> StoreRouter for RaftRouter<RocksEngine, S> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {

@@ -23,6 +23,7 @@ use crate::store::{
 };
 use crate::Result;
 
+use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
@@ -176,11 +177,11 @@ where
     tag: String,
 }
 
-impl<E: KvEngine> LocalReader<RaftRouter<E::Snapshot>, E> {
+impl<E: KvEngine> LocalReader<RaftRouter<RocksEngine, E::Snapshot>, E> {
     pub fn new(
         kv_engine: E,
         store_meta: Arc<Mutex<StoreMeta>>,
-        router: RaftRouter<E::Snapshot>,
+        router: RaftRouter<RocksEngine, E::Snapshot>,
     ) -> Self {
         LocalReader {
             store_meta,
