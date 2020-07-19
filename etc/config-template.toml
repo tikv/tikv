@@ -474,7 +474,7 @@
 ## Time for the RocksDB info log file to roll (in seconds).
 ## If the log file has been active longer than this config, it will be rolled.
 ## If it is set to 0, rolling will be disabled.
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 
 ## Maximal RocksDB info log files to be kept.
 # info-log-keep-log-file-num = 10
@@ -746,7 +746,7 @@
 # wal-bytes-per-sync = "512KB"
 
 # info-log-max-size = "1GB"
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
 # info-log-level = "info"
