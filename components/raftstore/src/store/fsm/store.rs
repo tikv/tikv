@@ -1227,7 +1227,7 @@ impl RaftBatchSystem {
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner = ConsistencyCheckRunner::new(self.router.clone());
+        let consistency_check_runner = ConsistencyCheckRunner::<RocksEngine, _>::new(self.router.clone());
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
