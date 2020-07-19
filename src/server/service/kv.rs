@@ -15,7 +15,7 @@ use crate::server::Error;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error,
+        extract_region_error, extract_ver_error, extract_ver_errors, extract_verkv_pairs
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -42,7 +42,7 @@ use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
-use txn_types::{self, Key};
+use txn_types::{self, Key, TimeStamp};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -1582,22 +1582,54 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     })
 }
 
-// unimplemented
 fn future_ver_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerGetRequest,
+    storage: &Storage<E, L>,
+    mut req: VerGetRequest,
 ) -> impl Future<Item = VerGetResponse, Error = Error> {
-    let resp = VerGetResponse::default();
-    future::ok(resp)
+    let mut ver_value = VerValue::default();
+    let version: TimeStamp = req.get_start_version().into();
+    storage
+        .get(
+            req.take_context(),
+            Key::from_raw(req.get_key()),
+            version.clone()
+        )
+        .then(move |v| {
+            let mut resp = VerGetResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                match v {
+                    Ok(Some(val)) => {
+                        ver_value.set_value(val);
+                        ver_value.set_version(version.physical());
+                        resp.set_value(ver_value);
+                    },
+                    Ok(None) => resp.set_not_found(true),
+                    Err(e) => resp.set_error(extract_ver_error(&e)),
+                }
+            }
+            Ok(resp)
+        })
 }
 
-// unimplemented
 fn future_ver_batch_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerBatchGetRequest,
+    storage: &Storage<E, L>,
+    mut req: VerBatchGetRequest,
 ) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
-    let resp = VerBatchGetResponse::default();
-    future::ok(resp)
+    // TODO: modify this to get several versions of one key
+    let keys = req.get_key().iter().map(|x| Key::from_raw(x)).collect();
+    storage
+        .batch_get(req.take_context(), keys, req.get_start_version().into())
+        .then(|v| {
+            let mut resp = VerBatchGetResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_pairs(extract_verkv_pairs(v).into());
+            }
+            Ok(resp)
+        })
 }
 
 // unimplemented
@@ -1620,20 +1652,62 @@ fn future_ver_batch_mut<E: Engine, L: LockManager>(
 
 // unimplemented
 fn future_ver_scan<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerScanRequest,
+    storage: &Storage<E, L>,
+    mut req: VerScanRequest,
 ) -> impl Future<Item = VerScanResponse, Error = Error> {
-    let resp = VerScanResponse::default();
-    future::ok(resp)
+    let end_key = if req.get_end_key().is_empty() {
+        None
+    } else {
+        Some(Key::from_raw(req.get_end_key()))
+    };
+
+    storage
+        .scan(
+            req.take_context(),
+            Key::from_raw(req.get_start_key()),
+            end_key,
+            req.get_limit() as usize,
+            req.get_start_version().into(),
+            req.get_key_only(),
+            req.get_reverse(),
+        )
+        .then(|v| {
+            let mut resp = VerScanResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_pairs(extract_verkv_pairs(v).into());
+            }
+            Ok(resp)
+        })
 }
 
 // unimplemented
 fn future_ver_delete_range<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerDeleteRangeRequest,
+    storage: &Storage<E, L>,
+    mut req: VerDeleteRangeRequest,
 ) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
-    let resp = VerDeleteRangeResponse::default();
-    future::ok(resp)
+    let (cb, f) = paired_future_callback();
+    let res = storage.delete_range(
+        req.take_context(),
+        Key::from_raw(req.get_start_key()),
+        Key::from_raw(req.get_end_key()),
+        // TODO: find out what notify_only is and apply boolean value for this function
+        false,
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut ver_err = VerError::default();
+        let mut resp = VerDeleteRangeResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            ver_err.set_error(format!("{}", e));
+            resp.set_error(ver_err);
+        }
+        resp
+    })
 }
 
 fn future_cop<E: Engine>(

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
+use std::convert::TryInto;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
@@ -11,7 +12,7 @@ use crate::storage::{
     Result,
 };
 use kvproto::{errorpb, kvrpcpb};
-use txn_types::{KvPair, TimeStamp};
+use txn_types::{KvPair, VerKvPair, TimeStamp};
 
 quick_error! {
     #[derive(Debug)]
@@ -331,6 +332,57 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
     }
 }
 
+pub fn extract_ver_error(err: &Error) -> kvrpcpb::VerError {
+    // TODO: add match pattern for ver_error
+    let mut ver_error = kvrpcpb::VerError::default();
+    ver_error
+}
+
+pub fn extract_verkv_pairs(res: Result<Vec<Result<VerKvPair>>>) -> Vec<kvrpcpb::VerKvPair> {
+    match res {
+        Ok(res) => res
+            .into_iter()
+            .map(|r| match r {
+                Ok((key, value)) => {
+                    // extract version(last serialized 8 bytes as u64) from key
+                    let offset = key.len() - 8;
+                    let version:&[u8; 8] = &key[offset..].try_into().expect("slice with incorrect length");
+                    let mut ver_value = kvrpcpb::VerValue::default();
+                    ver_value.set_value(value);
+                    ver_value.set_version(u64::from_le_bytes(*version));
+                    let mut pair = kvrpcpb::VerKvPair::default();
+                    pair.set_key(key);
+                    pair.set_value(ver_value);
+                    pair
+                }
+                Err(e) => {
+                    let mut pair = kvrpcpb::VerKvPair::default();
+                    pair.set_error(extract_ver_error(&e));
+                    pair
+                }
+            })
+            .collect(),
+        Err(e) => {
+            let mut pair = kvrpcpb::VerKvPair::default();
+            pair.set_error(extract_ver_error(&e));
+            vec![pair]
+        }
+    }
+}
+
+pub fn extract_ver_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::VerError> {
+    match res {
+        Ok(res) => res
+            .into_iter()
+            .filter_map(|x| match x {
+                Err(e) => Some(extract_ver_error(&e)),
+                Ok(_) => None,
+            })
+            .collect(),
+        Err(e) => vec![extract_ver_error(&e)],
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -364,4 +416,6 @@ mod test {
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
     }
+
+    // Todo: error test for verkv in conflict
 }

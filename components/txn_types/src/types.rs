@@ -25,6 +25,12 @@ pub type Value = Vec<u8>;
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
 
+/// Versioned Key-value pair type.
+///
+/// The value is not simply raw bytes; the key is a little bit tricky, which is
+/// encoded bytes.
+pub type VerKvPair = (Vec<u8>, Value);
+
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
