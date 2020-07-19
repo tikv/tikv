@@ -246,7 +246,7 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
-    pub router: RaftRouter<RocksSnapshot>,
+    pub router: RaftRouter<EK::Snapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
