@@ -42,6 +42,14 @@ pub trait SstWriter {
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
+// compression type used for write sst file
+#[derive(Copy, Clone)]
+pub enum SstCompressionType {
+    Lz4,
+    Snappy,
+    Zstd,
+}
+
 /// A builder builds a SstWriter.
 pub trait SstWriterBuilder<E>
 where
@@ -58,6 +66,9 @@ where
 
     /// Set it to true, the builder builds a in-memory SST builder.
     fn set_in_memory(self, in_memory: bool) -> Self;
+
+    /// set other config specified by writer
+    fn set_compression_type(self, compression: Option<SstCompressionType>) -> Self;
 
     /// Builder a SstWriter.
     fn build(self, path: &str) -> Result<E::SstWriter>;

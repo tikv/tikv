@@ -171,11 +171,19 @@ impl LazyBatchColumn {
         match_template_evaluable! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
+                    let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
                     for _ in 0..raw_vec_len {
-                        vec.push(None);
+                        decode_bitmap.push(false);
                     }
                     for row_index in logical_rows {
-                        vec[*row_index] = raw_vec[*row_index].decode(field_type, ctx)?;
+                        decode_bitmap[*row_index] = true;
+                    }
+                    for i in 0..raw_vec_len {
+                        if decode_bitmap[i] {
+                            vec.push(raw_vec[i].decode(field_type, ctx)?);
+                        } else {
+                            vec.push(None);
+                        }
                     }
                 }
             }
@@ -280,12 +288,12 @@ mod tests {
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 0);
-            assert_eq!(col.decoded().as_int_slice(), &[]);
+            assert_eq!(col.decoded().to_int_vec(), &[]);
             {
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
                 assert_eq!(col.capacity(), 0);
-                assert_eq!(col.decoded().as_int_slice(), &[]);
+                assert_eq!(col.decoded().to_int_vec(), &[]);
             }
         }
 
@@ -334,7 +342,7 @@ mod tests {
         assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 3);
         // Element 1 is None because it is not referred in `logical_rows` and we don't decode it.
-        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+        assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
 
         {
             // Clone non-empty decoded LazyBatchColumn.
@@ -342,7 +350,7 @@ mod tests {
             assert!(col.is_decoded());
             assert_eq!(col.len(), 3);
             assert_eq!(col.capacity(), 3);
-            assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+            assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
         }
 
         // Decode a decoded column, even using a different logical rows, does not have effect.
@@ -351,7 +359,7 @@ mod tests {
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 3);
-        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+        assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
     }
 }
 

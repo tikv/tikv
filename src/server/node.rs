@@ -39,7 +39,7 @@ pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
-    lock_mgr: Option<LockManager>,
+    lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
@@ -318,7 +318,7 @@ where
                 Ok(_) => {
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
-                        "injected error: node_after_prepare_bootstrap_cluster"
+                        "injected error: node_after_bootstrap_cluster"
                     )));
                     store::clear_prepare_bootstrap_key(&engines)?;
                     return Ok(());
