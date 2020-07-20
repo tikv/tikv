@@ -25,6 +25,10 @@ use std::{
 };
 use txn_types::{Key, TimeStamp};
 
+// TODO: Currently we are using a Mutex<BTreeMap> to implement the lock table.
+// In the future we should replace it with a concurrent ordered map.
+// Pay attention that the async functions of ConcurrencyManager should not hold
+// the mutex.
 type OrderedLockMap = Mutex<BTreeMap<Key, Arc<MemoryLock>>>;
 pub type LockTable = self::lock_table::LockTable<OrderedLockMap>;
 
