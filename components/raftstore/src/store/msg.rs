@@ -229,7 +229,7 @@ pub enum SignificantMsg<SK> where SK: Snapshot {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<EK, S> where EK: KvEngine, S: Snapshot {
+pub enum CasualMessage<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -274,10 +274,10 @@ pub enum CasualMessage<EK, S> where EK: KvEngine, S: Snapshot {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, RocksEngine, S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER, S>) + Send + 'static>),
 }
 
-impl<EK, S> fmt::Debug for CasualMessage<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> fmt::Debug for CasualMessage<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -370,7 +370,7 @@ pub enum PeerMsg<EK, S> where EK: KvEngine, S: Snapshot {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK, S>),
+    CasualMessage(CasualMessage<EK, RocksEngine, S>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.

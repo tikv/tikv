@@ -45,7 +45,7 @@ impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksSnapshot>,
+        msg: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>,
     ) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
