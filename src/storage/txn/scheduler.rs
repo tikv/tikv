@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use pd_client::PdClient;
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
@@ -134,7 +135,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockManager> {
+struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -157,6 +158,8 @@ struct SchedulerInner<L: LockManager> {
 
     lock_mgr: L,
 
+    pd_client: Arc<P>,
+
     pipelined_pessimistic_lock: bool,
 }
 
@@ -165,7 +168,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager> SchedulerInner<L> {
+impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -238,20 +241,20 @@ impl<L: LockManager> SchedulerInner<L> {
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-#[derive(Clone)]
-pub struct Scheduler<E: Engine, L: LockManager> {
+pub struct Scheduler<E: Engine, L: LockManager, P: PdClient + 'static> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner<L>>,
+    inner: Arc<SchedulerInner<L, P>>,
 }
 
-unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
+unsafe impl<E: Engine, L: LockManager, P: PdClient + 'static> Send for Scheduler<E, L, P> {}
 
-impl<E: Engine, L: LockManager> Scheduler<E, L> {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     /// Creates a scheduler.
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
+        pd_client: Arc<P>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -278,6 +281,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
+            pd_client,
             pipelined_pessimistic_lock,
         });
 
@@ -591,6 +595,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task.cmd,
             snapshot,
             &self.inner.lock_mgr,
+            self.inner.pd_client.clone(),
             task.extra_op,
             statistics,
             self.inner.pipelined_pessimistic_lock,
@@ -674,6 +679,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Scheduler<E, L, P> {
+    fn clone(&self) -> Self {
+        Scheduler {
+            engine: self.engine.clone(),
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,7 +702,7 @@ mod tests {
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
             commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
-            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()).into(),
+            commands::ResolveLockReadPhase::new(temp_map.clone(), None, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
             commands::MvccByStartTs::new(25.into(), Context::default()).into(),
         ];
