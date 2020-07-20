@@ -211,8 +211,10 @@ where
             }
             let thread = tb
                 .spawn(move || {
+                    tikv_alloc::add_thread_memory_accessor();
                     let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
                     worker.run();
+                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .unwrap();
             threads.push(thread);

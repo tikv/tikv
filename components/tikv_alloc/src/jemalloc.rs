@@ -134,6 +134,7 @@ mod tests {
         assert_eq!(1, thread_memory_map.len());
 
         super::remove_thread_memory_accessor();
+        let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
         assert_eq!(0, thread_memory_map.len());
     }
 }

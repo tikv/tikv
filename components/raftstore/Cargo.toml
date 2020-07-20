@@ -73,6 +73,7 @@ sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_util = { path = "../tikv_util" }
+tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync"] }
 tokio-core = "0.1"
