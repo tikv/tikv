@@ -24,7 +24,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
     fn parse_rpn(
         &self,
         root_expr: Expr,
-        aggr_def: RpnExpression,
+        exp: RpnExpression,
         _ctx: &mut EvalContext,
         _src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
@@ -40,7 +40,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
                 .build(),
         );
 
-        out_exp.push(aggr_def);
+        out_exp.push(exp);
 
         Ok(Box::new(AggrFnCount))
     }

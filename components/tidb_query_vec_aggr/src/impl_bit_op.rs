@@ -65,7 +65,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
     fn parse_rpn(
         &self,
         mut root_expr: Expr,
-        mut aggr_def: RpnExpression,
+        mut exp: RpnExpression,
         _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
@@ -76,8 +76,8 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         // bit operation outputs one column.
         out_schema.push(root_expr.take_field_type());
 
-        super::util::rewrite_exp_for_bit_op(src_schema, &mut aggr_def).unwrap();
-        out_exp.push(aggr_def);
+        super::util::rewrite_exp_for_bit_op(src_schema, &mut exp).unwrap();
+        out_exp.push(exp);
 
         Ok(Box::new(AggrFnBitOp::<T>(std::marker::PhantomData)))
     }
