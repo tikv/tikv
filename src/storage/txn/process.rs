@@ -134,10 +134,11 @@ pub(super) fn process_read_impl<E: Engine>(
             let result = reader.scan_locks(
                 scan_key.as_ref(),
                 |lock| txn_status.contains_key(&lock.ts),
-                RESOLVE_LOCK_BATCH_SIZE,
+                RESOLVE_LOCK_BATCH_SIZE + 1, // +1 is for scan out the next lock to be scanned
             );
             statistics.add(reader.get_statistics());
-            let (kv_pairs, has_remain) = result?;
+            let (mut kv_pairs, _) = result?;
+            let has_remain = kv_pairs.len() > RESOLVE_LOCK_BATCH_SIZE;
             tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
             if kv_pairs.is_empty() {
@@ -145,20 +146,22 @@ pub(super) fn process_read_impl<E: Engine>(
             } else {
                 let next_scan_key = if has_remain {
                     // There might be more locks.
-                    kv_pairs.last().map(|(k, _lock)| k.clone())
+                    kv_pairs.pop().map(|(k, _lock)| k)
                 } else {
                     // All locks are scanned
                     None
                 };
-                Ok(ProcessResult::NextCommands {
-                    cmds: vec![ResolveLock::new(
-                        mem::take(txn_status),
-                        next_scan_key,
-                        kv_pairs,
-                        ctx.clone(),
-                    )
-                    .into()],
-                })
+                let mut cmds = Vec::with_capacity(2);
+                if next_scan_key.is_some() {
+                    cmds.push(
+                        ResolveLockReadPhase::new(txn_status.clone(), next_scan_key, ctx.clone())
+                            .into(),
+                    );
+                }
+                cmds.push(
+                    ResolveLock::new(mem::take(txn_status), kv_pairs.into(), ctx.clone()).into(),
+                );
+                Ok(ProcessResult::NextCommands { cmds })
             }
         }
         _ => panic!("unsupported read command"),
@@ -546,8 +549,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
         }
         Command::ResolveLock(ResolveLock {
             txn_status,
-            mut scan_key,
-            key_locks,
+            mut key_locks,
             ctx,
         }) => {
             let mut txn = MvccTxn::new(
@@ -557,11 +559,11 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                 pd_client,
             );
 
-            let mut scan_key = scan_key.take();
             let rows = key_locks.len();
             // Map txn's start_ts to ReleasedLocks
             let mut released_locks = HashMap::default();
-            for (current_key, current_lock) in key_locks {
+            while !key_locks.is_empty() {
+                let (current_key, current_lock) = key_locks.pop_front().unwrap();
                 txn.set_start_ts(current_lock.ts);
                 let commit_ts = *txn_status
                     .get(&current_lock.ts)
@@ -583,7 +585,6 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     .push(released);
 
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(current_key);
                     break;
                 }
             }
@@ -592,13 +593,11 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                 .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
             statistics.add(&txn.take_statistics());
-            let pr = if scan_key.is_none() {
+            let pr = if key_locks.is_empty() {
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommands {
-                    cmds: vec![
-                        ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
-                    ],
+                    cmds: vec![ResolveLock::new(txn_status, key_locks, ctx.clone()).into()],
                 }
             };
             let write_data = WriteData::from_modifies(txn.into_modifies());

@@ -49,7 +49,7 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    ErrorInner as StorageErrorInner, ErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -437,13 +437,40 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
-        if let ProcessResult::NextCommands { cmds } = pr {
+        if let ProcessResult::NextCommands { mut cmds } = pr {
+            // joiner reuse the finished command's context, and responsible for joining the other commands' result
+            let joiner = cmds.pop().unwrap();
+            // the rest commands (joinees) should run on their own and notify the joiner their result by using the channel
+            let joinee_count = cmds.len();
+            let mut tctx = self.inner.dequeue_task_context(cid);
+            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+            let cb = tctx.cb.take();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.schedule_command(
+                joiner,
+                StorageCallback::Boolean(Box::new(move |pr| {
+                    for _ in 0..joinee_count {
+                        if let Err(_e) = rx.recv() {
+                            return cb.unwrap().execute(ProcessResult::Failed {
+                                err: StorageError::from(ErrorInner::Closed),
+                            });
+                        }
+                    }
+                    if let Ok(_pr) = pr {
+                        cb.unwrap().execute(ProcessResult::Res)
+                    } else {
+                        cb.unwrap().execute(ProcessResult::Failed {
+                            err: pr.unwrap_err(),
+                        })
+                    }
+                })),
+            );
             for cmd in cmds {
-                let tctx = self.inner.dequeue_task_context(cid);
-                SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, tctx.cb.unwrap());
-                self.release_lock(&tctx.lock, cid);
+                let tx = tx.clone();
+                let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
+                self.schedule_command(cmd, callback);
             }
+            self.release_lock(&tctx.lock, cid);
         } else {
             let tctx = self.inner.dequeue_task_context(cid);
             tctx.cb.unwrap().execute(pr);
@@ -477,17 +504,44 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 err: StorageError::from(e),
             },
         };
-        if let ProcessResult::NextCommands { cmds } = pr {
-            for cmd in cmds {
-                let tctx = self.inner.dequeue_task_context(cid);
-                if let Some(cb) = tctx.cb {
-                    SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                    self.schedule_command(cmd, cb);
-                } else {
-                    assert!(pipelined);
+        if let ProcessResult::NextCommands { mut cmds } = pr {
+            // joiner reuse the finished command's context, and responsible for joining the other commands' result
+            let joiner = cmds.pop().unwrap();
+            let joinee_count = cmds.len();
+            let tctx = self.inner.dequeue_task_context(cid);
+            let cb = tctx.cb;
+            let lock = tctx.lock;
+            if let Some(cb) = cb {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.schedule_command(
+                    joiner,
+                    StorageCallback::Boolean(Box::new(move |pr| {
+                        for _ in 0..joinee_count {
+                            if let Err(_e) = rx.recv() {
+                                return cb.execute(ProcessResult::Failed {
+                                    err: StorageError::from(ErrorInner::Closed),
+                                });
+                            }
+                        }
+                        if let Ok(_pr) = pr {
+                            cb.execute(ProcessResult::Res)
+                        } else {
+                            cb.execute(ProcessResult::Failed {
+                                err: pr.unwrap_err(),
+                            })
+                        }
+                    })),
+                );
+                // the rest commands (joinees) should run on their own and notify the joiner their result by using the channel
+                for cmd in cmds {
+                    let tx = tx.clone();
+                    let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
+                    self.schedule_command(cmd, callback);
                 }
-                self.release_lock(&tctx.lock, cid);
+            } else {
+                assert!(pipelined);
             }
+            self.release_lock(&lock, cid);
         } else {
             let tctx = self.inner.dequeue_task_context(cid);
             if let Some(cb) = tctx.cb {
@@ -763,7 +817,6 @@ mod tests {
             .into(),
             commands::ResolveLock::new(
                 temp_map,
-                None,
                 vec![(
                     Key::from_raw(b"k"),
                     mvcc::Lock::new(
@@ -776,7 +829,8 @@ mod tests {
                         0,
                         TimeStamp::zero(),
                     ),
-                )],
+                )]
+                .into(),
                 Context::default(),
             )
             .into(),

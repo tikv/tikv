@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
+use std::collections::VecDeque;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -31,8 +32,7 @@ command! {
             /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
             /// version.
             txn_status: HashMap<TimeStamp, TimeStamp>,
-            scan_key: Option<Key>,
-            key_locks: Vec<(Key, Lock)>,
+            key_locks: VecDeque<(Key, Lock)>,
         }
 }
 

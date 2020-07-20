@@ -3962,9 +3962,11 @@ mod tests {
             RESOLVE_LOCK_BATCH_SIZE,
             RESOLVE_LOCK_BATCH_SIZE - 1,
             RESOLVE_LOCK_BATCH_SIZE + 1,
+            RESOLVE_LOCK_BATCH_SIZE + 2,
             RESOLVE_LOCK_BATCH_SIZE * 2,
             RESOLVE_LOCK_BATCH_SIZE * 2 - 1,
             RESOLVE_LOCK_BATCH_SIZE * 2 + 1,
+            RESOLVE_LOCK_BATCH_SIZE * 2 + 2,
         ];
 
         let is_rollback_coll = vec![
