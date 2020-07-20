@@ -48,7 +48,10 @@ use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics;
 use crate::storage::txn::latch::{self, Latches};
 use crate::storage::types::{MvccInfo, PessimisticLockRes, StorageCallbackType, TxnStatus};
-use crate::storage::Result;
+use crate::storage::{
+    concurrency_manager::{ConcurrencyManager, OrderedLockMap, TxnMutexGuard},
+    Result,
+};
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -323,6 +326,11 @@ pub trait CommandExt: Display {
     fn write_bytes(&self) -> usize;
 
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+
+    fn sync_lock<'a>(
+        &'a self,
+        cm: &'a ConcurrencyManager,
+    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>>;
 }
 
 impl Command {
@@ -403,6 +411,13 @@ impl Command {
 
     pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
         self.command_ext().gen_lock(latches)
+    }
+
+    pub fn sync_lock<'a>(
+        &'a self,
+        cm: &'a ConcurrencyManager,
+    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>> {
+        self.command_ext().sync_lock(cm)
     }
 
     pub fn requires_pessimistic_txn(&self) -> bool {

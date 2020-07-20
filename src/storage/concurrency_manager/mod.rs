@@ -25,7 +25,7 @@ use std::{
 };
 use txn_types::{Key, TimeStamp};
 
-type OrderedLockMap = Mutex<BTreeMap<Key, Arc<MemoryLock>>>;
+pub type OrderedLockMap = Mutex<BTreeMap<Key, Arc<MemoryLock>>>;
 pub type LockTable = self::lock_table::LockTable<OrderedLockMap>;
 
 #[derive(Clone)]
@@ -51,7 +51,7 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store LockInfo in the lock table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, OrderedLockMap> {
+    pub async fn lock_key<'a>(&'a self, key: &Key) -> TxnMutexGuard<'a, OrderedLockMap> {
         self.lock_table.lock_key(key).await
     }
 
@@ -60,11 +60,11 @@ impl ConcurrencyManager {
     ///
     /// The guards can be used to store LockInfo in the lock table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_keys(
-        &self,
-        keys: impl Iterator<Item = &Key>,
-    ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
-        let mut keys_with_index: Vec<_> = keys.enumerate().collect();
+    pub async fn lock_keys<'a>(
+        &'a self,
+        keys: impl IntoIterator<Item = &Key>,
+    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>> {
+        let mut keys_with_index: Vec<_> = keys.into_iter().enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
         let mut result: Vec<MaybeUninit<TxnMutexGuard<'_, OrderedLockMap>>> = Vec::new();

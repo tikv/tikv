@@ -102,6 +102,18 @@ macro_rules! gen_lock {
         ) -> crate::storage::txn::latch::Lock {
             crate::storage::txn::latch::Lock::new(vec![])
         }
+
+        fn sync_lock<'a>(
+            &'a self,
+            _cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
+        ) -> Vec<
+            crate::storage::concurrency_manager::TxnMutexGuard<
+                'a,
+                crate::storage::concurrency_manager::OrderedLockMap,
+            >,
+        > {
+            vec![]
+        }
     };
     ($field: ident) => {
         fn gen_lock(
@@ -110,6 +122,18 @@ macro_rules! gen_lock {
         ) -> crate::storage::txn::latch::Lock {
             latches.gen_lock(std::iter::once(&self.$field))
         }
+
+        fn sync_lock<'a>(
+            &'a self,
+            cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
+        ) -> Vec<
+            crate::storage::concurrency_manager::TxnMutexGuard<
+                'a,
+                crate::storage::concurrency_manager::OrderedLockMap,
+            >,
+        > {
+            vec![futures_executor::block_on(cm.lock_key(&self.$field))]
+        }
     };
     ($field: ident: multiple) => {
         fn gen_lock(
@@ -117,6 +141,18 @@ macro_rules! gen_lock {
             latches: &crate::storage::txn::latch::Latches,
         ) -> crate::storage::txn::latch::Lock {
             latches.gen_lock(&self.$field)
+        }
+
+        fn sync_lock<'a>(
+            &'a self,
+            cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
+        ) -> Vec<
+            crate::storage::concurrency_manager::TxnMutexGuard<
+                'a,
+                crate::storage::concurrency_manager::OrderedLockMap,
+            >,
+        > {
+            futures_executor::block_on(cm.lock_keys(&self.$field))
         }
     };
     ($field: ident: multiple$transform: tt) => {
@@ -127,6 +163,20 @@ macro_rules! gen_lock {
             #![allow(unused_parens)]
             let keys = self.$field.iter().map($transform);
             latches.gen_lock(keys)
+        }
+
+        fn sync_lock<'a>(
+            &'a self,
+            cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
+        ) -> Vec<
+            crate::storage::concurrency_manager::TxnMutexGuard<
+                'a,
+                crate::storage::concurrency_manager::OrderedLockMap,
+            >,
+        > {
+            #![allow(unused_parens)]
+            let keys = self.$field.iter().map($transform);
+            futures_executor::block_on(cm.lock_keys(keys))
         }
     };
 }

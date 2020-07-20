@@ -47,8 +47,8 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    concurrency_manager::ConcurrencyManager, get_priority_tag, types::StorageCallback,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -157,6 +157,8 @@ struct SchedulerInner<L: LockManager> {
 
     lock_mgr: L,
 
+    concurrency_manager: ConcurrencyManager,
+
     pipelined_pessimistic_lock: bool,
 }
 
@@ -230,6 +232,13 @@ impl<L: LockManager> SchedulerInner<L> {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid) {
+            let guards = tctx
+                .task
+                .as_ref()
+                .unwrap()
+                .cmd
+                .sync_lock(&self.concurrency_manager);
+
             tctx.on_schedule();
             return true;
         }
@@ -252,6 +261,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
+        concurrency_manager: ConcurrencyManager,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -278,6 +288,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
+            concurrency_manager,
             pipelined_pessimistic_lock,
         });
 
@@ -344,6 +355,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
         let mut task = self.inner.dequeue_task(cid);
+
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
         let sched = self.clone();
