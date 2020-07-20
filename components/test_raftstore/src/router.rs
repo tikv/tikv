@@ -13,6 +13,7 @@ use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use txn_types::TxnExtra;
 
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct MockRaftStoreRouter {
     senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine, RocksEngine, RocksSnapshot>>>>>,
 }
