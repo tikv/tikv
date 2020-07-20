@@ -276,7 +276,7 @@ enable-pipelined-write = true
 bytes-per-sync = "0MB"
 wal-bytes-per-sync = "0KB"
 info-log-max-size = "1GB"
-info-log-roll-time = "0"
+info-log-roll-time = "0s"
 info-log-keep-log-file-num = 10
 info-log-dir = ""
 
@@ -356,7 +356,7 @@ allow-concurrent-memtable-write = false
 bytes-per-sync = "0MB"
 wal-bytes-per-sync = "0KB"
 info-log-max-size = "1GB"
-info-log-roll-time = "0"
+info-log-roll-time = "0s"
 info-log-keep-log-file-num = 10
 info-log-dir = ""
 
