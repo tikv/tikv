@@ -395,20 +395,20 @@ impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: 
     }
 }
 
-pub struct PeerFsmDelegate<'a, EK, T: 'static, C: 'static> where EK: KvEngine {
-    fsm: &'a mut PeerFsm<EK, RocksEngine, EK::Snapshot>,
-    ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
+pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: KvEngine {
+    fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
+    ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     pub fn new(
-        fsm: &'a mut PeerFsm<EK, RocksEngine, EK::Snapshot>,
-        ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
-    ) -> PeerFsmDelegate<'a, EK, T, C> {
+        fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
+        ctx: &'a mut PollContext<EK, ER, T, C>,
+    ) -> PeerFsmDelegate<'a, EK, ER, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, RocksEngine, EK::Snapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER, EK::Snapshot>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -478,7 +478,7 @@ impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: 
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<EK, RocksEngine, EK::Snapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER, EK::Snapshot>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -3393,7 +3393,7 @@ impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: 
     }
 }
 
-impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
@@ -3614,7 +3614,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, EK, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
