@@ -177,7 +177,7 @@ impl Simulator for NodeCluster {
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -382,7 +382,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

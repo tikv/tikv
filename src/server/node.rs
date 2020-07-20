@@ -187,7 +187,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksSnapshot> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine, RocksSnapshot> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.

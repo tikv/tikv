@@ -63,7 +63,7 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksEngine, RocksSnapshot>,
+    RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
     ApplyRouter<RocksEngine>,
     RaftBatchSystem,
 ) {
@@ -117,7 +117,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksSnapshot>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

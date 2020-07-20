@@ -305,7 +305,7 @@ pub enum Notifier<S>
 where
     S: Snapshot,
 {
-    Router(RaftRouter<RocksEngine, S>),
+    Router(RaftRouter<RocksEngine, RocksEngine, S>),
     #[cfg(test)]
     Sender(Sender<PeerMsg<RocksEngine, RocksEngine, S>>),
 }

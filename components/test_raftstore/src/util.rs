@@ -469,7 +469,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RocksSnapshot>>,
+    router: Option<RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>>,
     cfg: &TiKvConfig,
 ) -> (
     KvEngines<RocksEngine, RocksEngine>,

@@ -48,7 +48,7 @@ struct Runner<T: PdClient, S: Snapshot> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<RocksEngine, S>>,
+    router: Option<RaftRouter<RocksEngine, RocksEngine, S>>,
 }
 
 impl<T: PdClient, S: Snapshot> Runner<T, S> {
@@ -127,7 +127,7 @@ impl PdStoreAddrResolver {
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, S>(
     pd_client: Arc<T>,
-    router: RaftRouter<RocksEngine, S>,
+    router: RaftRouter<RocksEngine, RocksEngine, S>,
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,

@@ -151,13 +151,14 @@ impl StoreMeta {
     }
 }
 
-pub struct RaftRouter<EK, S> where EK: KvEngine, S: Snapshot {
-    pub router: BatchRouter<PeerFsm<EK, RocksEngine, S>, StoreFsm>,
+pub struct RaftRouter<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+    pub router: BatchRouter<PeerFsm<EK, ER, S>, StoreFsm>,
 }
 
-impl<EK, S> Clone for RaftRouter<EK, S>
+impl<EK, ER, S> Clone for RaftRouter<EK, ER, S>
 where
     EK: KvEngine,
+    ER: KvEngine,
     S: Snapshot,
 {
     fn clone(&self) -> Self {
@@ -167,15 +168,15 @@ where
     }
 }
 
-impl<EK, S> Deref for RaftRouter<EK, S> where EK: KvEngine, S: Snapshot {
-    type Target = BatchRouter<PeerFsm<EK, RocksEngine, S>, StoreFsm>;
+impl<EK, ER, S> Deref for RaftRouter<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+    type Target = BatchRouter<PeerFsm<EK, ER, S>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, RocksEngine, S>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER, S>, StoreFsm> {
         &self.router
     }
 }
 
-impl<EK, S> RaftRouter<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> RaftRouter<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     pub fn send_raft_message(
         &self,
         mut msg: RaftMessage,
@@ -247,7 +248,7 @@ pub struct PollContext<EK, ER, T, C: 'static> where EK: KvEngine, ER: KvEngine {
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
-    pub router: RaftRouter<EK, EK::Snapshot>,
+    pub router: RaftRouter<EK, ER, EK::Snapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
@@ -775,7 +776,7 @@ pub struct RaftPollerBuilder<T, C> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     apply_router: ApplyRouter<RocksEngine>,
-    pub router: RaftRouter<RocksEngine, RocksSnapshot>,
+    pub router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
@@ -1031,12 +1032,12 @@ pub struct RaftBatchSystem {
     system: BatchSystem<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>, StoreFsm>,
     apply_router: ApplyRouter<RocksEngine>,
     apply_system: ApplyBatchSystem,
-    router: RaftRouter<RocksEngine, RocksSnapshot>,
+    router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
     workers: Option<Workers>,
 }
 
 impl RaftBatchSystem {
-    pub fn router(&self) -> RaftRouter<RocksEngine, RocksSnapshot> {
+    pub fn router(&self) -> RaftRouter<RocksEngine, RocksEngine, RocksSnapshot> {
         self.router.clone()
     }
 
@@ -1265,7 +1266,7 @@ impl RaftBatchSystem {
     }
 }
 
-pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine, RocksSnapshot>, RaftBatchSystem) {
+pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -2182,7 +2183,7 @@ fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(ch: RaftRouter<RocksEngine, RocksSnapshot>) -> CompactionListener {
+pub fn new_compaction_listener(ch: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();

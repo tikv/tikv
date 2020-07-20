@@ -177,11 +177,11 @@ where
     tag: String,
 }
 
-impl<E: KvEngine> LocalReader<RaftRouter<RocksEngine, E::Snapshot>, E> {
+impl<E: KvEngine> LocalReader<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E> {
     pub fn new(
         kv_engine: E,
         store_meta: Arc<Mutex<StoreMeta>>,
-        router: RaftRouter<RocksEngine, E::Snapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine, E::Snapshot>,
     ) -> Self {
         LocalReader {
             store_meta,
