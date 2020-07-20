@@ -246,7 +246,10 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
                 .unwrap()
                 .cmd
                 .sync_lock(&self.concurrency_manager);
-            // Safety: TODO
+            // It's hard to associate concurrency manager's lifetime with the task context, so
+            // we just erase the lifetime.
+            // Safety: The task context does not outlive the scheduler, so it does not live longer
+            // than the concurrency manager.
             unsafe {
                 let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> = mem::transmute(guards);
                 tctx.lock_guards = guards;
