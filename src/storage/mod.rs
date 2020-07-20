@@ -29,7 +29,7 @@ pub use self::{
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, StorageCallback, TxnStatus},
+    types::{PessimisticLockRes, PrewriteResult, StorageCallback, TxnStatus},
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
@@ -48,6 +48,7 @@ use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use pd_client::{DummyPdClient, PdClient};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
@@ -77,11 +78,11 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager> {
+pub struct Storage<E: Engine, L: LockManager, P: PdClient + 'static> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    sched: TxnScheduler<E, L>,
+    sched: TxnScheduler<E, L, P>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPoolHandle,
@@ -97,7 +98,7 @@ pub struct Storage<E: Engine, L: LockManager> {
     max_key_size: usize,
 }
 
-impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Storage<E, L, P> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -117,7 +118,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
     }
 }
 
-impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Drop for Storage<E, L, P> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -149,7 +150,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager> Storage<E, L> {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -157,11 +158,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
+        pd_client: Arc<P>,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
+            pd_client,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -1344,7 +1347,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L>> {
+    pub fn build(self) -> Result<Storage<E, L, DummyPdClient>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -1356,6 +1359,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
+            Arc::new(DummyPdClient::new()),
             self.pipelined_pessimistic_lock,
         )
     }
@@ -1467,8 +1471,8 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, P: PdClient + 'static>(
+        storage: &Storage<E, L, P>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -3329,9 +3333,11 @@ mod tests {
         expect_multi_values(
             results.clone().collect(),
             block_on(async {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
-                <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
+                let snapshot = <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::snapshot(
+                    &engine, &ctx,
+                )
+                .await?;
+                <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
                     &Key::from_encoded(b"c1".to_vec()),
@@ -3345,9 +3351,11 @@ mod tests {
         expect_multi_values(
             results.rev().collect(),
             block_on(async move {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, &ctx).await?;
-                <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
+                let snapshot = <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::snapshot(
+                    &engine, &ctx,
+                )
+                .await?;
+                <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),
                     &Key::from_encoded(b"d3".to_vec()),
@@ -3382,7 +3390,9 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, false
+            ),
             true
         );
 
@@ -3392,7 +3402,9 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, false
+            ),
             true
         );
 
@@ -3402,7 +3414,9 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, false
+            ),
             false
         );
 
@@ -3413,7 +3427,9 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, false
+            ),
             false
         );
 
@@ -3423,7 +3439,9 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, true
+            ),
             true
         );
 
@@ -3433,7 +3451,9 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, true
+            ),
             true
         );
 
@@ -3443,7 +3463,9 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, true
+            ),
             false
         );
 
@@ -3453,7 +3475,9 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
+                &ranges, true
+            ),
             false
         );
     }
@@ -3740,6 +3764,7 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    None,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),

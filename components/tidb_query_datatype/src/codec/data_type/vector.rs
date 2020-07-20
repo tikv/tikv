@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{EvalType, FieldTypeAccessor};
-use tipb::FieldType;
 
 use super::scalar::ScalarValueRef;
 use super::*;
@@ -269,7 +268,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
@@ -283,7 +282,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
-                        let is_unsigned = field_type.as_accessor().is_unsigned();
+                        let is_unsigned = field_type.is_unsigned();
                         output.write_evaluable_datum_int(*val, is_unsigned)?;
                     }
                 }
@@ -361,7 +360,7 @@ impl VectorValue {
     pub fn encode_sort_key(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {

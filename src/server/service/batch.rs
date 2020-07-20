@@ -12,6 +12,7 @@ use crate::server::service::kv::{
 };
 use crate::storage::{kv::Engine, lock_manager::LockManager, PointGetCommand, Storage};
 use kvproto::kvrpcpb::*;
+use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::Sender;
@@ -57,7 +58,7 @@ impl ReadId {
 }
 
 /// Batcher buffers specific requests in one stream of `batch_commands` in a batch for bulk submit.
-trait Batcher<E: Engine, L: LockManager> {
+trait Batcher<E: Engine, L: LockManager, P: PdClient + 'static> {
     /// Try to batch single batch_command request, returns whether the request is stashed.
     /// One batcher must only process requests from one unique command stream.
     fn filter(
@@ -71,7 +72,7 @@ trait Batcher<E: Engine, L: LockManager> {
     fn submit(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, P>,
     ) -> usize;
 
     /// Whether this batcher is empty of buffered requests.
@@ -274,7 +275,7 @@ impl ReadBatcher {
     }
 }
 
-impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> Batcher<E, L, P> for ReadBatcher {
     fn filter(
         &mut self,
         request_id: u64,
@@ -300,7 +301,7 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
     fn submit(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, P>,
     ) -> usize {
         let mut output = 0;
         for (id, (reqs, commands)) in self.router.drain() {
@@ -325,23 +326,23 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
     }
 }
 
-type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
+type ReqBatcherInner<E, L, P> = (BatchLimiter, Box<dyn Batcher<E, L, P> + Send>);
 
 /// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
 // and controls the submit timing of those batchers based on respective `BatchLimiter`.
-pub struct ReqBatcher<E: Engine, L: LockManager> {
-    inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
+pub struct ReqBatcher<E: Engine, L: LockManager, P: PdClient + 'static> {
+    inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L, P>>,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
-impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
+impl<E: Engine, L: LockManager, P: PdClient + 'static> ReqBatcher<E, L, P> {
     /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
     pub fn new(
         tx: Sender<(u64, batch_commands_response::Response)>,
         timeout: Option<Duration>,
         readpool_thread_load: Arc<ThreadLoad>,
     ) -> Self {
-        let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
+        let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L, P>>::default();
         inners.insert(
             BatchableRequestKind::PointGet,
             (
@@ -392,7 +393,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
     /// Check all batchers and submit if their limiters see fit.
     /// Called by anyone with a suitable timeslice for executing commands.
     #[inline]
-    pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
+    pub fn maybe_submit(&mut self, storage: &Storage<E, L, P>) {
         let mut now = None;
         for (limiter, batcher) in self.inners.values_mut() {
             if limiter.disabled() || !limiter.needs_more() {
@@ -407,7 +408,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
     /// Check all batchers and submit if their wait duration has exceeded the max limit.
     /// Called repeatedly every `request-batch-wait-duration` interval after the batcher starts working.
     #[inline]
-    pub fn should_submit(&mut self, storage: &Storage<E, L>) {
+    pub fn should_submit(&mut self, storage: &Storage<E, L, P>) {
         let now = Instant::now();
         for (limiter, batcher) in self.inners.values_mut() {
             limiter.observe_tick();

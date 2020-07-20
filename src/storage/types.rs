@@ -108,6 +108,12 @@ impl TxnStatus {
     }
 }
 
+#[derive(Debug)]
+pub struct PrewriteResult {
+    pub locks: Vec<Result<()>>,
+    pub min_commit_ts: TimeStamp,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PessimisticLockRes {
     Values(Vec<Option<Value>>),
@@ -164,6 +170,7 @@ storage_callback! {
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
 }
 

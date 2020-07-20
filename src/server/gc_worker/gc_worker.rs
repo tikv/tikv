@@ -24,7 +24,7 @@ use crate::storage::kv::{
 use crate::storage::mvcc::{
     check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
 };
-use pd_client::{ClusterVersion, PdClient};
+use pd_client::{ClusterVersion, DummyPdClient, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -321,6 +321,8 @@ impl<E: Engine> GcRunner<E> {
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
+            // TODO txn only used for GC, but this is hacky, maybe need an Option?
+            Arc::new(DummyPdClient::new()),
         );
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
@@ -1007,7 +1009,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockManager>,
+        storage: &Storage<E, DummyLockManager, DummyPdClient>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
@@ -1264,6 +1266,7 @@ mod tests {
             rx.recv()
                 .unwrap()
                 .unwrap()
+                .locks
                 .into_iter()
                 .for_each(|r| r.unwrap());
         }
