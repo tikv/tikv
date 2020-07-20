@@ -2490,6 +2490,18 @@ mod tests {
         // The initial min_commit_ts is start_ts + 1.
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 1), false);
 
+        // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
+        // information of the lock without changing it.
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            0,
+            0,
+            r,
+            uncommitted(100, ts(5, 1), false, vec![]),
+        );
+
         // Update min_commit_ts to current_ts.
         must_check_txn_status(
             &engine,
@@ -3265,5 +3277,58 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
         assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+    }
+
+    #[test]
+    fn test_check_async_commit_txn_status() {
+        // The preparation work is the same as test_async_prewrite_primary.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+
+        let mut pd_client = DummyPdClient::new();
+        pd_client.next_ts = TimeStamp::new(42);
+        let pd_client = Arc::new(pd_client);
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        txn.prewrite(
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            false,
+            0,
+            4,
+            TimeStamp::zero(),
+        )
+        .unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
+
+        let do_check_txn_status = |rollback_if_not_exist| {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let (txn_status, released_lock) = txn
+                .check_txn_status(
+                    Key::from_raw(b"key"),
+                    0.into(),
+                    0.into(),
+                    rollback_if_not_exist,
+                )
+                .unwrap();
+            assert_eq!(
+                txn_status,
+                TxnStatus::uncommitted(
+                    0,
+                    42.into(), // min_commit_ts got from PD
+                    true,
+                    vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+                )
+            );
+            assert!(released_lock.is_none());
+        };
+        do_check_txn_status(true);
+        do_check_txn_status(false);
     }
 }

@@ -4316,11 +4316,16 @@ mod tests {
 
         storage
             .sched_txn_command(
-                commands::Prewrite::with_lock_ttl(
+                commands::Prewrite::new(
                     vec![Mutation::Put((k.clone(), v.clone()))],
-                    k.as_encoded().to_vec(),
+                    b"k".to_vec(),
                     ts(10, 0),
                     100,
+                    false,
+                    3,
+                    TimeStamp::zero(),
+                    Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -4341,7 +4346,12 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    uncommitted(100, TimeStamp::zero(), false, vec![]),
+                    uncommitted(
+                        100,
+                        TimeStamp::zero(),
+                        true,
+                        vec![b"k1".to_vec(), b"k2".to_vec()],
+                    ),
                 ),
             )
             .unwrap();
