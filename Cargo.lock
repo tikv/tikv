@@ -1091,6 +1091,7 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4246,6 +4247,7 @@ version = "0.0.1"
 dependencies = [
  "futures 0.1.29",
  "kvproto",
+ "pd_client",
  "raftstore",
  "test_raftstore",
  "tikv",
@@ -4805,7 +4807,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#85b2ef9503b5c69709871403bb8378139e4bb47f"
+source = "git+https://github.com/pingcap/tipb.git#dcfcea0b59654004a89d5c25d6d22c113a13b848"
 dependencies = [
  "lazy_static",
  "prost",
