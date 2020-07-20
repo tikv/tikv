@@ -437,6 +437,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     fn finish_with_err(&self, cid: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
+        drop(tctx.lock_guards);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
@@ -457,6 +458,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
+        drop(tctx.lock_guards);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb.unwrap());
@@ -487,6 +489,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
         let tctx = self.inner.dequeue_task_context(cid);
+        drop(tctx.lock_guards);
 
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
         if let Some(cb) = tctx.cb {
@@ -521,6 +524,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
+        drop(tctx.lock_guards);
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
         self.inner.lock_mgr.wait_for(
             start_ts,
