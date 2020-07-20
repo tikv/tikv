@@ -3,7 +3,6 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::{RocksEngine};
 use engine_traits::{Snapshot, KvEngine};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -348,7 +347,7 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK, S> where EK: KvEngine, S: Snapshot {
+pub enum PeerMsg<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -370,14 +369,14 @@ pub enum PeerMsg<EK, S> where EK: KvEngine, S: Snapshot {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK, RocksEngine, S>),
+    CasualMessage(CasualMessage<EK, ER, S>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
 }
 
-impl<EK, S> fmt::Debug for PeerMsg<EK, S> where EK: KvEngine, S: Snapshot {
+impl<EK, ER, S> fmt::Debug for PeerMsg<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
