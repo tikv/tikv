@@ -71,6 +71,8 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
+        assert_eq!(root_expr.get_tp(), T::tp());
+
         // bit operation outputs one column.
         out_schema.push(root_expr.take_field_type());
 
