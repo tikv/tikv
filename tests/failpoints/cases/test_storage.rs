@@ -49,6 +49,7 @@ fn test_scheduler_leader_change_twice() {
                 false,
                 0,
                 TimeStamp::default(),
+                None,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
