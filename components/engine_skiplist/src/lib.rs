@@ -37,3 +37,5 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod range_properties;
+pub use crate::range_properties::*;
