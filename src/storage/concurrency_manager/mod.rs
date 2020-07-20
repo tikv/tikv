@@ -51,7 +51,7 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store LockInfo in the lock table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key<'a>(&'a self, key: &Key) -> TxnMutexGuard<'a, OrderedLockMap> {
+    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, OrderedLockMap> {
         self.lock_table.lock_key(key).await
     }
 
@@ -60,10 +60,10 @@ impl ConcurrencyManager {
     ///
     /// The guards can be used to store LockInfo in the lock table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_keys<'a>(
-        &'a self,
+    pub async fn lock_keys(
+        &self,
         keys: impl IntoIterator<Item = &Key>,
-    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>> {
+    ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
         let mut keys_with_index: Vec<_> = keys.into_iter().enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);

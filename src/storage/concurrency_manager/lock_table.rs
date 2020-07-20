@@ -17,7 +17,7 @@ impl<M: OrderedLockMap> Clone for LockTable<M> {
 }
 
 impl<M: OrderedLockMap> LockTable<M> {
-    pub async fn lock_key<'a>(&'a self, key: &Key) -> TxnMutexGuard<'a, M> {
+    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, M> {
         loop {
             if let Some(lock) = self.0.get(key) {
                 return lock.mutex_lock().await;
