@@ -13,7 +13,7 @@ impl ImportExt for SkiplistEngine {
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
@@ -23,7 +23,7 @@ impl ImportExt for SkiplistEngine {
         expected_size: u64,
         expected_checksum: u32,
     ) -> Result<()> {
-        panic!()
+        Ok(())
     }
 }
 
@@ -31,9 +31,7 @@ pub struct SkiplistIngestExternalFileOptions;
 
 impl IngestExternalFileOptions for SkiplistIngestExternalFileOptions {
     fn new() -> Self {
-        panic!()
+        Self
     }
-    fn move_files(&mut self, f: bool) {
-        panic!()
-    }
+    fn move_files(&mut self, f: bool) {}
 }

@@ -8,10 +8,10 @@ impl DBOptionsExt for SkiplistEngine {
     type DBOptions = SkiplistDBOptions;
 
     fn get_db_options(&self) -> Self::DBOptions {
-        panic!()
+        SkiplistDBOptions
     }
     fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()> {
-        panic!()
+        Ok(())
     }
 }
 
@@ -21,33 +21,29 @@ impl DBOptions for SkiplistDBOptions {
     type TitanDBOptions = SkiplistTitanDBOptions;
 
     fn new() -> Self {
-        panic!()
+        Self
     }
 
     fn get_max_background_jobs(&self) -> i32 {
-        panic!()
+        std::i32::MIN
     }
 
     fn get_rate_bytes_per_sec(&self) -> Option<i64> {
-        panic!()
+        None
     }
 
     fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
-        panic!()
-    }
+    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {}
 }
 
 pub struct SkiplistTitanDBOptions;
 
 impl TitanDBOptions for SkiplistTitanDBOptions {
     fn new() -> Self {
-        panic!()
+        Self
     }
-    fn set_min_blob_size(&mut self, size: u64) {
-        panic!()
-    }
+    fn set_min_blob_size(&mut self, size: u64) {}
 }

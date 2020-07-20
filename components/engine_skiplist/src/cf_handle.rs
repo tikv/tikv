@@ -1,19 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::{CFHandle, CFHandleExt, CfName, Error, Result};
+use std::hash::{Hash, Hasher};
+
 use crate::cf_options::SkiplistColumnFamilyOptions;
 use crate::engine::SkiplistEngine;
-use engine_traits::{CFHandle, CFHandleExt, Error, Result};
 
 impl CFHandleExt for SkiplistEngine {
     type CFHandle = SkiplistCFHandle;
     type ColumnFamilyOptions = SkiplistColumnFamilyOptions;
 
     fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
-        for handle in &self.cf_handles {
-            if handle.cf_name == name {
-                return Ok(handle);
-            }
-        }
         Err(Error::CFName(name.to_owned()))
     }
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions {
@@ -26,7 +23,22 @@ impl CFHandleExt for SkiplistEngine {
 
 #[derive(Clone, Debug)]
 pub struct SkiplistCFHandle {
-    cf_name: &'static str,
+    pub seq_no: usize,
+    pub cf_name: CfName,
 }
 
 impl CFHandle for SkiplistCFHandle {}
+
+impl Hash for SkiplistCFHandle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.seq_no.hash(state);
+    }
+}
+
+impl PartialEq for SkiplistCFHandle {
+    fn eq(&self, other: &SkiplistCFHandle) -> bool {
+        self.seq_no == other.seq_no
+    }
+}
+
+impl Eq for SkiplistCFHandle {}

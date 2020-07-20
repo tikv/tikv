@@ -4,7 +4,7 @@ use engine_traits::DBVector;
 use std::ops::Deref;
 
 #[derive(Debug)]
-pub struct SkiplistDBVector(Vec<u8>);
+pub struct SkiplistDBVector(pub Vec<u8>);
 
 impl DBVector for SkiplistDBVector {}
 

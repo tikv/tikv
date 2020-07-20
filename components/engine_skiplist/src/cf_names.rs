@@ -5,6 +5,6 @@ use engine_traits::CFNamesExt;
 
 impl CFNamesExt for SkiplistEngine {
     fn cf_names(&self) -> Vec<&str> {
-        panic!()
+        self.cf_handles.keys().copied().collect()
     }
 }

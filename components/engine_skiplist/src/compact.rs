@@ -5,7 +5,7 @@ use engine_traits::{CompactExt, Result};
 
 impl CompactExt for SkiplistEngine {
     fn auto_compactions_is_disabled(&self) -> Result<bool> {
-        panic!()
+        Ok(true)
     }
 
     fn compact_range(
@@ -16,7 +16,7 @@ impl CompactExt for SkiplistEngine {
         exclusive_manual: bool,
         max_subcompactions: u32,
     ) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn compact_files_in_range(
@@ -25,7 +25,7 @@ impl CompactExt for SkiplistEngine {
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn compact_files_in_range_cf(
@@ -35,6 +35,6 @@ impl CompactExt for SkiplistEngine {
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
-        panic!()
+        Ok(())
     }
 }
