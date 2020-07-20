@@ -11,7 +11,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-use pd_client::{ClusterVersion, PdClient};
+use pd_client::{ClusterVersion, DummyPdClient, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -183,7 +183,7 @@ impl<E: Engine> GcRunner<E> {
         safe_point: TimeStamp,
         key: &Key,
         gc_info: &mut GcInfo,
-        txn: &mut MvccTxn<E::Snap>,
+        txn: &mut MvccTxn<E::Snap, DummyPdClient>,
     ) {
         let next_gc_info = txn.gc(key.clone(), safe_point).unwrap();
         gc_info.found_versions += next_gc_info.found_versions;
@@ -216,12 +216,20 @@ impl<E: Engine> GcRunner<E> {
                 break;
             }
 
-            fn new_txn<S: Snapshot>(snap: S) -> MvccTxn<S> {
-                MvccTxn::for_scan(snap, Some(ScanMode::Forward), TimeStamp::zero(), false)
+            fn new_txn<S: Snapshot>(snap: S) -> MvccTxn<S, DummyPdClient> {
+                // TODO txn only used for GC, but this is hacky, maybe need an Option?
+                let pd_client = Arc::new(DummyPdClient::new());
+                MvccTxn::for_scan(
+                    snap,
+                    Some(ScanMode::Forward),
+                    TimeStamp::zero(),
+                    false,
+                    pd_client,
+                )
             }
 
             fn flush_txn<E: Engine>(
-                txn: MvccTxn<E::Snap>,
+                txn: MvccTxn<E::Snap, DummyPdClient>,
                 limiter: &Limiter,
                 engine: &E,
             ) -> Result<()> {
@@ -892,7 +900,9 @@ mod tests {
                     callback((
                         cb_ctx,
                         r.map(|snap| {
-                            let region = metapb::Region::default();
+                            let mut region = metapb::Region::default();
+                            // Add a peer to pass initialized check.
+                            region.mut_peers().push(metapb::Peer::default());
                             RegionSnapshot::from_snapshot(snap, region)
                         }),
                     ))
@@ -904,7 +914,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockManager>,
+        storage: &Storage<E, DummyLockManager, DummyPdClient>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
@@ -1155,6 +1165,7 @@ mod tests {
             rx.recv()
                 .unwrap()
                 .unwrap()
+                .locks
                 .into_iter()
                 .for_each(|r| r.unwrap());
         }
