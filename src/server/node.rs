@@ -33,17 +33,25 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
+pub fn create_raft_storage<S, P: PdClient + 'static>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
+    pd_client: Arc<P>,
     pipelined_pessimistic_lock: bool,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
     S: RaftStoreRouter<RocksSnapshot> + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
+    let store = Storage::from_engine(
+        engine,
+        cfg,
+        read_pool,
+        lock_mgr,
+        pd_client,
+        pipelined_pessimistic_lock,
+    )?;
     Ok(store)
 }
 
@@ -308,7 +316,7 @@ where
                 Ok(_) => {
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
-                        "injected error: node_after_prepare_bootstrap_cluster"
+                        "injected error: node_after_bootstrap_cluster"
                     )));
                     store::clear_prepare_bootstrap_key(&engines)?;
                     return Ok(());
