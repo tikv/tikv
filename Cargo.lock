@@ -3043,6 +3043,7 @@ dependencies = [
  "crossbeam",
  "encryption",
  "engine_rocks",
+ "engine_skiplist",
  "engine_traits",
  "fail",
  "fs2",

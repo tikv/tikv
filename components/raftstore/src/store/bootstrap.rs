@@ -5,8 +5,7 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::Result;
-use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{KvEngine, KvEngines, Mutable};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -24,8 +23,8 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(
-    engine: &RocksEngine,
+fn is_range_empty<E: KvEngine>(
+    engine: &E,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
@@ -40,8 +39,8 @@ fn is_range_empty(
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+pub fn bootstrap_store<EK: KvEngine, ER: KvEngine>(
+    engines: &KvEngines<EK, ER>,
     cluster_id: u64,
     store_id: u64,
 ) -> Result<()> {
@@ -68,8 +67,8 @@ pub fn bootstrap_store(
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+pub fn prepare_bootstrap_cluster<EK: KvEngine, ER: KvEngine>(
+    engines: &KvEngines<EK, ER>,
     region: &metapb::Region,
 ) -> Result<()> {
     let mut state = RegionLocalState::default();
@@ -90,8 +89,8 @@ pub fn prepare_bootstrap_cluster(
 }
 
 // Clear first region meta and prepare key.
-pub fn clear_prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
+pub fn clear_prepare_bootstrap_cluster<EK: KvEngine, ER: KvEngine>(
+    engines: &KvEngines<EK, ER>,
     region_id: u64,
 ) -> Result<()> {
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
@@ -108,7 +107,9 @@ pub fn clear_prepare_bootstrap_cluster(
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<()> {
+pub fn clear_prepare_bootstrap_key<EK: KvEngine, ER: KvEngine>(
+    engines: &KvEngines<EK, ER>,
+) -> Result<()> {
     box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
     engines.sync_kv()?;
     Ok(())

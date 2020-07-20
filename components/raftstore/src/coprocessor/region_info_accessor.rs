@@ -11,7 +11,7 @@ use super::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -142,8 +142,8 @@ impl RoleObserver for RegionEventListener {
 }
 
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
-fn register_region_event_listener(
-    host: &mut CoprocessorHost<RocksEngine>,
+fn register_region_event_listener<E: KvEngine>(
+    host: &mut CoprocessorHost<E>,
     scheduler: Scheduler<RegionInfoQuery>,
 ) {
     let listener = RegionEventListener { scheduler };
@@ -458,7 +458,7 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<RocksEngine>) -> Self {
+    pub fn new<E: KvEngine>(host: &mut CoprocessorHost<E>) -> Self {
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.scheduler();
 

@@ -41,6 +41,7 @@ configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 engine_rocks = { path = "../engine_rocks" }
+engine_skiplist = { path = "../engine_skiplist" }
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.3"
