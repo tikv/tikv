@@ -47,7 +47,9 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics;
 use crate::storage::txn::latch::{self, Latches};
-use crate::storage::types::{MvccInfo, PessimisticLockRes, StorageCallbackType, TxnStatus};
+use crate::storage::types::{
+    MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
+};
 use crate::storage::Result;
 use tikv_util::collections::HashMap;
 
@@ -98,7 +100,7 @@ impl<T> From<TypedCommand<T>> for Command {
     }
 }
 
-impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
         if for_update_ts == 0 {
@@ -110,6 +112,11 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                if req.get_use_async_commit() {
+                    Some(req.get_secondaries().into())
+                } else {
+                    None
+                },
                 req.take_context(),
             )
         } else {

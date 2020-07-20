@@ -23,7 +23,7 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::RpcClient;
+pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::util::validate_endpoints;
