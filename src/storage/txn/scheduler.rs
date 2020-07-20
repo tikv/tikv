@@ -49,7 +49,7 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner, ErrorInner,
+    ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -452,7 +452,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     for _ in 0..joinee_count {
                         if let Err(_e) = rx.recv() {
                             return cb.unwrap().execute(ProcessResult::Failed {
-                                err: StorageError::from(ErrorInner::Closed),
+                                err: StorageError::from(StorageErrorInner::Closed),
                             });
                         }
                     }
@@ -519,7 +519,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                         for _ in 0..joinee_count {
                             if let Err(_e) = rx.recv() {
                                 return cb.execute(ProcessResult::Failed {
-                                    err: StorageError::from(ErrorInner::Closed),
+                                    err: StorageError::from(StorageErrorInner::Closed),
                                 });
                             }
                         }

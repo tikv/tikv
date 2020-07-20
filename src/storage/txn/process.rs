@@ -144,15 +144,9 @@ pub(super) fn process_read_impl<E: Engine>(
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
             } else {
-                let next_scan_key = if has_remain {
-                    // There might be more locks.
-                    kv_pairs.pop().map(|(k, _lock)| k)
-                } else {
-                    // All locks are scanned
-                    None
-                };
                 let mut cmds = Vec::with_capacity(2);
-                if next_scan_key.is_some() {
+                if has_remain {
+                    let next_scan_key = kv_pairs.pop().map(|(k, _lock)| k);
                     cmds.push(
                         ResolveLockReadPhase::new(txn_status.clone(), next_scan_key, ctx.clone())
                             .into(),
