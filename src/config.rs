@@ -1598,6 +1598,7 @@ macro_rules! readpool_config {
                 self.use_unified_pool
                     .unwrap_or_else(|| *self == Default::default())
             }
+
             pub fn adjust_use_unified_pool(&mut self) {
                 if self.use_unified_pool.is_none() {
                     // The unified pool is used by default unless the corresponding module has customized configurations.
