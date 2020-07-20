@@ -688,7 +688,7 @@ mod tests {
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
             commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
-            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()).into(),
+            commands::ResolveLockReadPhase::new(temp_map.clone(), None, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
             commands::MvccByStartTs::new(25.into(), Context::default()).into(),
         ];
