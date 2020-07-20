@@ -7,8 +7,8 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_traits::{KvEngine, Snapshot, Iterable, Peekable};
 use engine_traits::CF_RAFT;
+use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -45,7 +45,10 @@ where
     }
 }
 
-pub struct Runner<EK, C: CasualRouter<EK>> where EK: KvEngine {
+pub struct Runner<EK, C: CasualRouter<EK>>
+where
+    EK: KvEngine,
+{
     _s: PhantomData<EK>,
     router: C,
 }

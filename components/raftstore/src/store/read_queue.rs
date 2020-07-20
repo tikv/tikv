@@ -17,7 +17,10 @@ use uuid::Uuid;
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
-pub struct ReadIndexRequest<S> where S: Snapshot {
+pub struct ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
     pub id: Uuid,
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
     pub renew_lease_time: Timespec,
@@ -26,13 +29,11 @@ pub struct ReadIndexRequest<S> where S: Snapshot {
     in_contexts: bool,
 }
 
-impl<S> ReadIndexRequest<S> where S: Snapshot {
-    pub fn push_command(
-        &mut self,
-        req: RaftCmdRequest,
-        cb: Callback<S>,
-        read_index: u64,
-    ) {
+impl<S> ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<S>, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb, Some(read_index)));
     }
@@ -56,7 +57,10 @@ impl<S> ReadIndexRequest<S> where S: Snapshot {
     }
 }
 
-impl<S> Drop for ReadIndexRequest<S> where S: Snapshot {
+impl<S> Drop for ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
     fn drop(&mut self) {
         let dur = (monotonic_raw_now() - self.renew_lease_time)
             .to_std()
@@ -65,7 +69,10 @@ impl<S> Drop for ReadIndexRequest<S> where S: Snapshot {
     }
 }
 
-pub struct ReadIndexQueue<S> where S: Snapshot {
+pub struct ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
     reads: VecDeque<ReadIndexRequest<S>>,
     ready_cnt: usize,
     // How many requests are handled.
@@ -76,7 +83,10 @@ pub struct ReadIndexQueue<S> where S: Snapshot {
     retry_countdown: usize,
 }
 
-impl<S> Default for ReadIndexQueue<S> where S: Snapshot {
+impl<S> Default for ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
     fn default() -> ReadIndexQueue<S> {
         ReadIndexQueue {
             reads: VecDeque::new(),
@@ -88,7 +98,10 @@ impl<S> Default for ReadIndexQueue<S> where S: Snapshot {
     }
 }
 
-impl<S> ReadIndexQueue<S> where S: Snapshot {
+impl<S> ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
     /// 1. more than an election timeout elapsed from the last request push;

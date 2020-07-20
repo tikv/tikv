@@ -1119,7 +1119,10 @@ where
 }
 
 impl<E: KvEngine> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>>) -> Self {
+    pub fn new<T: Into<String>>(
+        path: T,
+        router: Option<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>>,
+    ) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 

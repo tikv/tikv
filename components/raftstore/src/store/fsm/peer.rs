@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Snapshot, WriteBatchExt, KvEngine};
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -84,7 +84,12 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+pub struct PeerFsm<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
@@ -109,7 +114,10 @@ pub struct PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
 }
 
-pub struct BatchRaftCmdRequestBuilder<S> where S: Snapshot {
+pub struct BatchRaftCmdRequestBuilder<S>
+where
+    S: Snapshot,
+{
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
@@ -117,7 +125,12 @@ pub struct BatchRaftCmdRequestBuilder<S> where S: Snapshot {
     txn_extra: TxnExtra,
 }
 
-impl<EK, ER, S> Drop for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+impl<EK, ER, S> Drop for PeerFsm<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -137,9 +150,17 @@ impl<EK, ER, S> Drop for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S:
     }
 }
 
-pub type SenderFsmPair<EK, ER, S> = (LooseBoundedSender<PeerMsg<EK, ER, S>>, Box<PeerFsm<EK, ER, S>>);
+pub type SenderFsmPair<EK, ER, S> = (
+    LooseBoundedSender<PeerMsg<EK, ER, S>>,
+    Box<PeerFsm<EK, ER, S>>,
+);
 
-impl<EK, ER, S> PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+impl<EK, ER, S> PeerFsm<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
@@ -258,7 +279,10 @@ impl<EK, ER, S> PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot
     }
 }
 
-impl<S> BatchRaftCmdRequestBuilder<S> where S: Snapshot {
+impl<S> BatchRaftCmdRequestBuilder<S>
+where
+    S: Snapshot,
+{
     fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
@@ -367,7 +391,12 @@ impl<S> BatchRaftCmdRequestBuilder<S> where S: Snapshot {
     }
 }
 
-impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     type Message = PeerMsg<EK, ER, S>;
 
     #[inline]
@@ -395,12 +424,20 @@ impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: 
     }
 }
 
-pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: KvEngine {
+pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub fn new(
         fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
         ctx: &'a mut PollContext<EK, ER, T, C>,
@@ -3393,7 +3430,11 @@ impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> wh
     }
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
@@ -3614,7 +3655,11 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
@@ -3669,6 +3714,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, RaftCommand};
 
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3676,7 +3722,6 @@ mod tests {
     use protobuf::Message;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use engine_rocks::RocksSnapshot;
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {

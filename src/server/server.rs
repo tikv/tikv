@@ -347,12 +347,20 @@ mod tests {
             Ok(())
         }
 
-        fn significant_send(&self, _: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
         }
 
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>) -> RaftStoreResult<()> {
+        fn casual_send(
+            &self,
+            _: u64,
+            _: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -362,7 +370,11 @@ mod tests {
         }
     }
 
-    fn is_unreachable_to(msg: &SignificantMsg<RocksSnapshot>, region_id: u64, to_peer_id: u64) -> bool {
+    fn is_unreachable_to(
+        msg: &SignificantMsg<RocksSnapshot>,
+        region_id: u64,
+        to_peer_id: u64,
+    ) -> bool {
         if let SignificantMsg::Unreachable {
             region_id: r_id,
             to_peer_id: p_id,

@@ -2635,7 +2635,9 @@ impl<E> ApplyFsm<E>
 where
     E: KvEngine,
 {
-    fn from_peer(peer: &Peer<RocksEngine, RocksEngine>) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_peer(
+        peer: &Peer<RocksEngine, RocksEngine>,
+    ) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
@@ -3249,11 +3251,17 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter<E> where E: KvEngine {
+pub struct ApplyRouter<E>
+where
+    E: KvEngine,
+{
     pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
 }
 
-impl<E> Deref for ApplyRouter<E> where E: KvEngine {
+impl<E> Deref for ApplyRouter<E>
+where
+    E: KvEngine,
+{
     type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
 
     fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
@@ -3261,13 +3269,19 @@ impl<E> Deref for ApplyRouter<E> where E: KvEngine {
     }
 }
 
-impl<E> DerefMut for ApplyRouter<E> where E: KvEngine {
+impl<E> DerefMut for ApplyRouter<E>
+where
+    E: KvEngine,
+{
     fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl<E> ApplyRouter<E> where E: KvEngine {
+impl<E> ApplyRouter<E>
+where
+    E: KvEngine,
+{
     pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
@@ -3362,7 +3376,10 @@ impl DerefMut for ApplyBatchSystem {
 }
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>) {
+    pub fn schedule_all<'a>(
+        &self,
+        peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>,
+    ) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3392,9 +3409,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{
-        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch,
-    };
+    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3501,7 +3516,11 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(router: &ApplyRouter<RocksEngine>, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
+    fn batch_messages(
+        router: &ApplyRouter<RocksEngine>,
+        region_id: u64,
+        msgs: Vec<Msg<RocksEngine>>,
+    ) {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_traits::{Snapshot, KvEngine};
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -189,7 +189,10 @@ pub enum MergeResultKind {
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
-pub enum SignificantMsg<SK> where SK: Snapshot {
+pub enum SignificantMsg<SK>
+where
+    SK: Snapshot,
+{
     /// Reports whether the snapshot sending is successful or not.
     SnapshotStatus {
         region_id: u64,
@@ -228,7 +231,12 @@ pub enum SignificantMsg<SK> where SK: Snapshot {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+pub enum CasualMessage<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -276,7 +284,12 @@ pub enum CasualMessage<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot 
     AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER, S>) + Send + 'static>),
 }
 
-impl<EK, ER, S> fmt::Debug for CasualMessage<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+impl<EK, ER, S> fmt::Debug for CasualMessage<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -347,7 +360,12 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+pub enum PeerMsg<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -376,7 +394,12 @@ pub enum PeerMsg<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
     UpdateReplicationMode,
 }
 
-impl<EK, ER, S> fmt::Debug for PeerMsg<EK, ER, S> where EK: KvEngine, ER: KvEngine, S: Snapshot {
+impl<EK, ER, S> fmt::Debug for PeerMsg<EK, ER, S>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+    S: Snapshot,
+{
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),

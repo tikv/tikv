@@ -178,7 +178,11 @@ pub struct CheckTickResult {
     up_to_date: bool,
 }
 
-pub struct Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
+pub struct Peer<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
     // TODO: remove it once panic!() support slog fields.
@@ -283,7 +287,11 @@ pub struct Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
-impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER> Peer<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub fn new(
         store_id: u64,
         cfg: &Config,
@@ -542,7 +550,11 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>, keep_data: bool) -> Result<()> {
+    pub fn destroy<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+        keep_data: bool,
+    ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
@@ -907,7 +919,10 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T, C>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T, C>,
+    ) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -2633,7 +2648,11 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
     }
 }
 
-impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER> Peer<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
@@ -2825,7 +2844,10 @@ impl<EK, ER> Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
         }
     }
 
-    pub fn bcast_check_stale_peer_message<T: Transport, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) {
+    pub fn bcast_check_stale_peer_message<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T, C>,
+    ) {
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
@@ -2986,7 +3008,11 @@ pub trait RequestInspector {
     }
 }
 
-impl<EK, ER> RequestInspector for Peer<EK, ER> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER> RequestInspector for Peer<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
     }

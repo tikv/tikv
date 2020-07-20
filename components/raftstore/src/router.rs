@@ -36,7 +36,11 @@ where
     ) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()>;
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<RocksSnapshot>,
+    ) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -68,7 +72,11 @@ where
         )
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine, RocksEngine, S>) -> RaftStoreResult<()>;
+    fn casual_send(
+        &self,
+        region_id: u64,
+        msg: CasualMessage<RocksEngine, RocksEngine, S>,
+    ) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
@@ -100,7 +108,11 @@ where
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine, RocksEngine, S>) -> RaftStoreResult<()> {
+    fn casual_send(
+        &self,
+        _: u64,
+        _: CasualMessage<RocksEngine, RocksEngine, S>,
+    ) -> RaftStoreResult<()> {
         Ok(())
     }
 }
@@ -177,7 +189,9 @@ where
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
-        if LocalReader::<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>::acceptable(
+            &cmd.request,
+        ) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
@@ -188,7 +202,11 @@ where
         }
     }
 
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<RocksSnapshot>,
+    ) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))
@@ -201,7 +219,11 @@ where
         Ok(())
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine, RocksEngine, E::Snapshot>) -> RaftStoreResult<()> {
+    fn casual_send(
+        &self,
+        region_id: u64,
+        msg: CasualMessage<RocksEngine, RocksEngine, E::Snapshot>,
+    ) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))

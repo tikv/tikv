@@ -205,7 +205,11 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.send_command_txn_extra(req, txn_extra, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>) -> Result<()> {
+    fn casual_send(
+        &self,
+        region_id: u64,
+        msg: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>,
+    ) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 
