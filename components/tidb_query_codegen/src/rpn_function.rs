@@ -229,7 +229,7 @@ struct RpnFnAttr {
     is_raw_varg: bool,
 
     /// Whether or not the function needs extra logic on `None` value.
-    is_nonnull: bool,
+    non_null: bool,
 
     /// The maximum accepted arguments, which will be checked by the validator.
     ///
@@ -257,7 +257,7 @@ impl parse::Parse for RpnFnAttr {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let mut is_varg = false;
         let mut is_raw_varg = false;
-        let mut is_nonnull = false;
+        let mut non_null = false;
         let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
@@ -320,7 +320,7 @@ impl parse::Parse for RpnFnAttr {
                             is_raw_varg = true;
                         }
                         "nonnull" => {
-                            is_nonnull = true;
+                            non_null = true;
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -350,19 +350,19 @@ impl parse::Parse for RpnFnAttr {
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
-        if is_nonnull && is_raw_varg {
+        if non_null && is_raw_varg {
             return Err(Error::new_spanned(
                 config_items,
                 "`raw_varg` function can't be nonnull",
             ));
         }
-        if is_nonnull && is_varg {
+        if non_null && is_varg {
             return Err(Error::new_spanned(
                 config_items,
                 "`varg` doesn't support nonnull for now",
             ));
         }
-        if is_nonnull && metadata_type.is_some() {
+        if non_null && metadata_type.is_some() {
             return Err(Error::new_spanned(
                 config_items,
                 "cannot use metadata with nonnull",
@@ -372,7 +372,7 @@ impl parse::Parse for RpnFnAttr {
         Ok(Self {
             is_varg,
             is_raw_varg,
-            is_nonnull,
+            non_null,
             max_args,
             min_args,
             extra_validator,
@@ -1070,7 +1070,7 @@ struct NormalRpnFn {
     extra_validator: Option<TokenStream>,
     metadata_type: Option<TokenStream>,
     metadata_mapper: Option<TokenStream>,
-    is_nonnull: bool,
+    non_null: bool,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -1082,7 +1082,7 @@ struct NormalRpnFn {
 
 impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
-        if attr.is_nonnull {
+        if attr.non_null {
             if let FnArg::Typed(mut fn_arg) = fn_arg.clone() {
                 let ty = fn_arg.ty.clone();
                 fn_arg.ty = parse_quote! { Option<#ty> };
@@ -1129,7 +1129,7 @@ impl NormalRpnFn {
             extra_validator: attr.extra_validator,
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
-            is_nonnull: attr.is_nonnull,
+            non_null: attr.non_null,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -1226,7 +1226,7 @@ impl NormalRpnFn {
         let call_arg2 = extract.clone();
         let extract2 = extract.clone();
 
-        let nonnull_unwrap = if self.is_nonnull {
+        let nonnull_unwrap = if self.non_null {
             quote! {
                 #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
             }
@@ -1731,7 +1731,7 @@ mod tests_normal {
                 metadata_mapper: None,
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
-                is_nonnull: false,
+                non_null: false,
             },
             item_fn,
         )
