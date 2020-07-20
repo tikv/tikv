@@ -7,7 +7,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures03::compat::Compat01As03;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use pd_client::PdClient;
-use std::{fmt, mem, sync::Arc};
+use std::{fmt, sync::Arc};
 use txn_types::{
     is_short_value, Key, Lock, LockType, Mutation, MutationType, OldValue, TimeStamp, TxnExtra,
     Value, Write, WriteType,
@@ -979,12 +979,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         .into()));
 
         match self.reader.load_lock(&primary_key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
-                    let released = self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
+                    let released = self.rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
                 }
@@ -1006,7 +1006,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         lock.min_commit_ts = current_ts;
                     }
 
-                    self.put_lock(primary_key, lock);
+                    self.put_lock(primary_key, &lock);
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
@@ -1015,7 +1015,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         lock.ttl,
                         lock.min_commit_ts,
                         lock.use_async_commit,
-                        mem::take(&mut lock.secondaries),
+                        lock.secondaries,
                     ),
                     None,
                 ))
