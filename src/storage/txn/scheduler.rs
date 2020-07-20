@@ -24,7 +24,7 @@ use futures::future;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::u64;
+use std::{mem, u64};
 
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use pd_client::PdClient;
@@ -48,7 +48,9 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    concurrency_manager::ConcurrencyManager, get_priority_tag, types::StorageCallback,
+    concurrency_manager::{ConcurrencyManager, OrderedLockMap, TxnMutexGuard},
+    get_priority_tag,
+    types::StorageCallback,
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
@@ -90,6 +92,8 @@ struct TaskContext {
     task: Option<Task>,
 
     lock: Lock,
+    // These guards are only safe when the concurrency manager is alive
+    lock_guards: Vec<TxnMutexGuard<'static, OrderedLockMap>>,
     cb: Option<StorageCallback>,
     write_bytes: usize,
     tag: metrics::CommandKind,
@@ -117,6 +121,7 @@ impl TaskContext {
         TaskContext {
             task: Some(task),
             lock,
+            lock_guards: vec![],
             cb: Some(cb),
             write_bytes,
             tag,
@@ -241,7 +246,11 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
                 .unwrap()
                 .cmd
                 .sync_lock(&self.concurrency_manager);
-
+            // Safety: TODO
+            unsafe {
+                let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> = mem::transmute(guards);
+                tctx.lock_guards = guards;
+            }
             tctx.on_schedule();
             return true;
         }
