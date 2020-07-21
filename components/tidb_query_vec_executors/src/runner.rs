@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use protobuf::Message;
 use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use super::*;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -53,6 +54,13 @@ pub struct BatchExecutorsRunner<SS> {
     collect_exec_summary: bool,
 
     exec_stats: ExecuteStats,
+
+    /// Minimum rows to return in batch stream mode.
+    stream_min_rows_each_iter: usize,
+
+    /// `batch_size` in stream mode. When calling `next_batch(batch_size)`,
+    /// Scanner will fetch `batch_size` physical rows. This variable will be initialized as `BATCH_INITIAL_SIZE`.
+    stream_batch_size: usize,
 
     /// The encoding method for the response.
     /// Possible encoding methods are:
@@ -344,6 +352,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
+            stream_batch_size: 100, //TODO pass by parameter
+            stream_min_rows_each_iter: 100,
         })
     }
 
@@ -482,7 +492,38 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-        unimplemented!()
+        let mut warnings = self.config.new_eval_warnings();
+
+        let (mut record_len, mut is_drained) = (0, false);
+        let mut chunk = Chunk::default();
+        let mut ctx = EvalContext::new(self.config.clone());
+        // record count less than batch size and is not drained
+        while record_len < self.stream_min_rows_each_iter && !is_drained {
+            let mut current_chunk = Chunk::default();
+            let (drained, len) = self.internal_handle_request(
+                true,
+                self.stream_batch_size,
+                &mut current_chunk,
+                &mut warnings,
+                &mut ctx,
+            )?;
+            chunk
+                .mut_rows_data()
+                .extend_from_slice(current_chunk.get_rows_data());
+            record_len += len;
+            is_drained = drained;
+
+            // Grow batch size
+            grow_batch_size(&mut self.stream_batch_size)
+        }
+
+        if !is_drained || record_len > 0 {
+            let range = self.out_most_executor.take_scanned_range();
+            return self
+                .make_stream_response(chunk, warnings)
+                .map(|r| (Some((r, range)), is_drained));
+        }
+        Ok((None, true))
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
@@ -491,5 +532,102 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn can_be_cached(&self) -> bool {
         self.out_most_executor.can_be_cached()
+    }
+
+    fn internal_handle_request(
+        &mut self,
+        is_streaming: bool,
+        batch_size: usize,
+        chunk: &mut Chunk,
+        warnings: &mut EvalWarnings,
+        ctx: &mut EvalContext,
+    ) -> Result<(bool, usize)> {
+        let mut record_len = 0;
+
+        self.deadline.check()?;
+
+        let mut result = self.out_most_executor.next_batch(batch_size);
+
+        let is_drained = result.is_drained?;
+
+        if !result.logical_rows.is_empty() {
+            assert_eq!(
+                result.physical_columns.columns_len(),
+                self.out_most_executor.schema().len()
+            );
+            {
+                let data = chunk.mut_rows_data();
+                // Although `schema()` can be deeply nested, it is ok since we process data in
+                // batch.
+                if is_streaming || self.encode_type == EncodeType::TypeDefault {
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
+                    );
+                    result.physical_columns.encode(
+                        &result.logical_rows,
+                        &self.output_offsets,
+                        self.out_most_executor.schema(),
+                        data,
+                        ctx,
+                    )?;
+                } else {
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
+                    );
+                    result.physical_columns.encode_chunk(
+                        &result.logical_rows,
+                        &self.output_offsets,
+                        self.out_most_executor.schema(),
+                        data,
+                        ctx,
+                    )?;
+                }
+            }
+            record_len += result.logical_rows.len();
+        }
+
+        warnings.merge(&mut result.warnings);
+        Ok((is_drained, record_len))
+    }
+
+    fn make_stream_response(
+        &mut self,
+        chunk: Chunk,
+        warnings: EvalWarnings,
+    ) -> Result<StreamResponse> {
+        self.out_most_executor
+            .collect_exec_stats(&mut self.exec_stats);
+
+        let mut s_resp = StreamResponse::default();
+        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+
+        s_resp.set_output_counts(
+            self.exec_stats
+                .scanned_rows_per_range
+                .iter()
+                .map(|v| *v as i64)
+                .collect(),
+        );
+
+        s_resp.set_warnings(warnings.warnings.into());
+        s_resp.set_warning_count(warnings.warning_cnt as i64);
+
+        self.exec_stats.clear();
+
+        Ok(s_resp)
+    }
+}
+
+#[inline]
+fn grow_batch_size(batch_size: &mut usize) {
+    if *batch_size < BATCH_MAX_SIZE {
+        *batch_size *= BATCH_GROW_FACTOR;
+        if *batch_size > BATCH_MAX_SIZE {
+            *batch_size = BATCH_MAX_SIZE
+        }
     }
 }
