@@ -170,12 +170,7 @@ impl Diagnostics for Service {
         let f = self
             .pool
             .spawn(collect)
-            .and_then(|res| {
-                info!("server info start to sink -");
-                let re = sink.success(res).map_err(Error::from);
-                info!("server info finish to sink ----");
-                re
-            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
             .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
         ctx.spawn(f);
     }
