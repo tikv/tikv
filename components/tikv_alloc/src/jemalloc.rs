@@ -20,8 +20,7 @@ lazy_static! {
 
 struct MemoryStatsAccessor {
     allocated: jemalloc_ctl::thread::AllocatedP,
-    deallocated: jemalloc_ctl::thread::DeallocatedP,
-    num_arenas: jemalloc_ctl::arenas::NArenas,
+    deallocated: jemalloc_ctl::thread::DeallocatedP
 }
 
 pub fn add_thread_memory_accessor() {
@@ -31,7 +30,6 @@ pub fn add_thread_memory_accessor() {
         MemoryStatsAccessor {
             allocated: jemalloc_ctl::thread::AllocatedP::new().unwrap(),
             deallocated: jemalloc_ctl::thread::DeallocatedP::new().unwrap(),
-            num_arenas: jemalloc_ctl::arenas::NArenas::new().unwrap(),
         },
     );
 }
@@ -71,15 +69,8 @@ pub fn dump_stats() -> String {
         );
         memory_stats.push_str(
             format!(
-                "deallocated: {}, ",
+                "deallocated: {}.\n",
                 value.deallocated.get().unwrap().get().to_string()
-            )
-            .as_str(),
-        );
-        memory_stats.push_str(
-            format!(
-                "arena limit: {}.\n",
-                value.num_arenas.get().unwrap().to_string()
             )
             .as_str(),
         );
@@ -130,12 +121,6 @@ mod tests {
     #[test]
     fn test_add_and_remove_thread_pointer() {
         super::add_thread_memory_accessor();
-    //    let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
-    //    assert_eq!(1, thread_memory_map.len());
-
-    //    super::remove_thread_memory_accessor();
-    //    let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
-    //    assert_eq!(0, thread_memory_map.len());
     }
 }
 
