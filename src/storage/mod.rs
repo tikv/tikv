@@ -287,9 +287,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
-        let priority = CommandPri::Normal;
+        let priority = requests[0].get_context().get_priority();
         let res = self.read_pool.spawn_handle(
             async move {
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(requests.len() as f64);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
@@ -688,6 +692,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
+                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(gets.len() as f64);
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut results = Vec::default();
@@ -700,9 +707,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now_coarse();
-                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe(snaps.len() as f64);
                 for (mut req, snap) in snaps {
                     let ctx = req.take_context();
                     let cf = req.take_cf();

@@ -102,6 +102,13 @@ pub trait Engine: Send + Clone + 'static {
     /// Write modifications into internal kv engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
+    fn async_snapshot(
+        &self,
+        ctx: &Context,
+        read_id: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()>;
+
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {

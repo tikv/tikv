@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, DummyPdClient, PdClient};
@@ -806,6 +806,7 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use engine_rocks::RocksSnapshot;
+    use engine_traits::KvEngine;
     use futures::Future;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::store::RegionSnapshot;

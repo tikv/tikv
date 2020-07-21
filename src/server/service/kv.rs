@@ -868,7 +868,6 @@ impl<
         });
         ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
 
-
         let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
