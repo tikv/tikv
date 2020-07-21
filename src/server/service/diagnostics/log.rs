@@ -299,6 +299,7 @@ pub fn search<P: AsRef<Path>>(
     mut req: SearchLogRequest,
 ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
     if !log_file.as_ref().exists() {
+        info!("log files  not exists----");
         return Ok(bacth_log_item(LogIterator::default()));
     }
     let begin_time = req.get_start_time();
@@ -306,14 +307,18 @@ pub fn search<P: AsRef<Path>>(
     let levels = req.take_levels();
     let mut patterns = vec![];
     for pattern in req.take_patterns().iter() {
+        info!("log search: build patterns: {:?}", pattern);
         let pattern = regex::Regex::new(pattern)
             .map_err(|e| Error::InvalidRequest(format!("illegal regular expression: {:?}", e)))?;
         patterns.push(pattern);
     }
+
+    info!("log search: start");
     let level_flag = levels
         .into_iter()
         .fold(0, |acc, x| acc | (1 << (x as usize)));
     let item = LogIterator::new(log_file, begin_time, end_time, level_flag, patterns)?;
+    info!("log search: finish");
     Ok(bacth_log_item(item))
 }
 

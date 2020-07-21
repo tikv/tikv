@@ -65,6 +65,7 @@ impl Diagnostics for Service {
         } else {
             self.slow_log_file.to_owned()
         };
+        info!("log files: {:?} ----", log_file);
         let stream = self
             .pool
             .spawn_fn(move || log::search(log_file, req))
