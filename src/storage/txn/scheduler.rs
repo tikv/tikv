@@ -48,7 +48,7 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    concurrency_manager::{ConcurrencyManager, OrderedLockMap, TxnMutexGuard},
+    concurrency_manager::{ConcurrencyManager, KeyHandleMutexGuard, OrderedMap},
     get_priority_tag,
     types::StorageCallback,
     Error as StorageError, ErrorInner as StorageErrorInner,
@@ -93,7 +93,7 @@ struct TaskContext {
 
     lock: Lock,
     // These guards are only safe when the concurrency manager is alive
-    lock_guards: Vec<TxnMutexGuard<'static, OrderedLockMap>>,
+    lock_guards: Vec<KeyHandleMutexGuard<'static, OrderedMap>>,
     cb: Option<StorageCallback>,
     write_bytes: usize,
     tag: metrics::CommandKind,
@@ -364,7 +364,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                         // Safety: The task context does not outlive the scheduler, so it does not live longer
                         // than the concurrency manager.
                         unsafe {
-                            let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> =
+                            let guards: Vec<KeyHandleMutexGuard<'static, OrderedMap>> =
                                 mem::transmute(guards);
                             tctx.lock_guards = guards;
                         }

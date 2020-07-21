@@ -3,15 +3,15 @@
 //! The concurrency manager is responsible for concurrency control of
 //! transactions.
 //!
-//! The concurrency manager can be considered as a lock table in memory.
+//! The concurrency manager contains a key table in memory.
 //! Transactional commands can acquire key mutexes from the concurrency manager
 //! to ensure serializability. Lock information can be also stored in the
 //! manager and reading requests can check if these locks block the read.
 
-mod lock_table;
-mod memory_lock;
+mod handle_table;
+mod key_handle;
 
-pub use self::memory_lock::{MemoryLock, TxnMutexGuard};
+pub use self::key_handle::{KeyHandle, KeyHandleMutexGuard};
 
 use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
@@ -25,20 +25,24 @@ use std::{
 };
 use txn_types::{Key, TimeStamp};
 
-pub type OrderedLockMap = Mutex<BTreeMap<Key, Arc<MemoryLock>>>;
-pub type LockTable = self::lock_table::LockTable<OrderedLockMap>;
+// TODO: Currently we are using a Mutex<BTreeMap> to implement the handle table.
+// In the future we should replace it with a concurrent ordered map.
+// Pay attention that the async functions of ConcurrencyManager should not hold
+// the mutex.
+pub type OrderedMap = Mutex<BTreeMap<Key, Arc<KeyHandle>>>;
+pub type HandleTable = self::handle_table::HandleTable<OrderedMap>;
 
 #[derive(Clone)]
 pub struct ConcurrencyManager {
     max_read_ts: Arc<AtomicU64>,
-    lock_table: LockTable,
+    handle_table: HandleTable,
 }
 
 impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
         ConcurrencyManager {
             max_read_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
-            lock_table: LockTable::default(),
+            handle_table: HandleTable::default(),
         }
     }
 
@@ -49,28 +53,28 @@ impl ConcurrencyManager {
     /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
     /// out of scope, the mutex will be unlocked.
     ///
-    /// The guard can be used to store LockInfo in the lock table. The stored lock
+    /// The guard can be used to store LockInfo in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, OrderedLockMap> {
-        self.lock_table.lock_key(key).await
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, OrderedMap> {
+        self.handle_table.lock_key(key).await
     }
 
     /// Acquires mutexes of the keys and returns the RAII guards. The order of the
     /// guards is the same with the given keys.
     ///
-    /// The guards can be used to store LockInfo in the lock table. The stored lock
+    /// The guards can be used to store LockInfo in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
     pub async fn lock_keys(
         &self,
         keys: impl IntoIterator<Item = &Key>,
-    ) -> Vec<TxnMutexGuard<'_, OrderedLockMap>> {
+    ) -> Vec<KeyHandleMutexGuard<'_, OrderedMap>> {
         let mut keys_with_index: Vec<_> = keys.into_iter().enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
-        let mut result: Vec<MaybeUninit<TxnMutexGuard<'_, OrderedLockMap>>> = Vec::new();
+        let mut result: Vec<MaybeUninit<KeyHandleMutexGuard<'_, OrderedMap>>> = Vec::new();
         result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
         for (index, key) in keys_with_index {
-            result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
+            result[index] = MaybeUninit::new(self.handle_table.lock_key(key).await);
         }
         #[allow(clippy::unsound_collection_transmute)]
         unsafe {
@@ -91,7 +95,7 @@ impl ConcurrencyManager {
     ) -> Result<(), LockInfo> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.lock_table.check_key(key, check_fn)
+        self.handle_table.check_key(key, check_fn)
     }
 
     /// Checks if there is a memory lock in the range which blocks the read.
@@ -108,7 +112,7 @@ impl ConcurrencyManager {
     ) -> Result<(), LockInfo> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.lock_table.check_range(start_key, end_key, check_fn)
+        self.handle_table.check_range(start_key, end_key, check_fn)
     }
 }
 

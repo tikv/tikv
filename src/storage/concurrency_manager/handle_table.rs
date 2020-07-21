@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::memory_lock::{MemoryLock, MemoryLockRef, TxnMutexGuard};
+use super::key_handle::{KeyHandle, KeyHandleMutexGuard, KeyHandleRef};
 
 use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
@@ -8,29 +8,29 @@ use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use txn_types::Key;
 
 #[derive(Default)]
-pub struct LockTable<M>(Arc<M>);
+pub struct HandleTable<M>(Arc<M>);
 
-impl<M: OrderedLockMap> Clone for LockTable<M> {
+impl<M: OrderedMap> Clone for HandleTable<M> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<M: OrderedLockMap> LockTable<M> {
-    pub async fn lock_key(&self, key: &Key) -> TxnMutexGuard<'_, M> {
+impl<M: OrderedMap> HandleTable<M> {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, M> {
         loop {
-            if let Some(lock) = self.0.get(key) {
-                return lock.mutex_lock().await;
+            if let Some(handle) = self.0.get(key) {
+                return handle.mutex_lock().await;
             } else {
-                let lock = Arc::new(MemoryLock::new(key.clone()));
-                let lock_ref = lock.clone().get_ref(&*self.0).unwrap();
-                let guard = lock_ref.mutex_lock().await;
-                if self.0.insert_if_not_exist(key.clone(), lock) {
+                let handle = Arc::new(KeyHandle::new(key.clone()));
+                let handle_ref = handle.clone().get_ref(&*self.0).unwrap();
+                let guard = handle_ref.mutex_lock().await;
+                if self.0.insert_if_not_exist(key.clone(), handle) {
                     return guard;
                 }
             }
-            // If the program goes here, the lock is about to be removed from the map.
-            // We should retry and get or insert the new lock.
+            // If the program goes here, the handle is about to be removed from the map.
+            // We should retry and get or insert the new handle.
             // Question: should we yield here?
         }
     }
@@ -78,58 +78,58 @@ impl<M: OrderedLockMap> LockTable<M> {
     }
 }
 
-/// A concurrent ordered map which maps encoded keys to memory locks.
-pub trait OrderedLockMap: Default + Send + Sync + 'static {
-    /// Inserts a key lock to the map if the key does not exists in the map.
-    /// Returns whether the lock is successfully inserted into the map.
-    fn insert_if_not_exist(&self, key: Key, lock: Arc<MemoryLock>) -> bool;
+/// A concurrent ordered map which maps encoded keys to key handle.
+pub trait OrderedMap: Default + Send + Sync + 'static {
+    /// Inserts a key handle to the map if the key does not exists in the map.
+    /// Returns whether the handle is successfully inserted into the map.
+    fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool;
 
-    /// Gets the lock of the key.
-    fn get<'m>(&'m self, key: &Key) -> Option<MemoryLockRef<'m, Self>>;
+    /// Gets the handle of the key.
+    fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m, Self>>;
 
-    /// Finds the first lock in the given range that `pred` returns `Some`.
+    /// Finds the first handle in the given range that `pred` returns `Some`.
     /// The `Some` return value of `pred` will be returned by `find_first`.
     fn find_first<'m, T>(
         &'m self,
         start_key: &Key,
         end_key: &Key,
-        pred: impl FnMut(MemoryLockRef<'m, Self>) -> Option<T>,
+        pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
     ) -> Option<T>;
 
-    /// Removes the key and its lock from the map.
+    /// Removes the key and its key handle from the map.
     fn remove(&self, key: &Key);
 }
 
-impl OrderedLockMap for Mutex<BTreeMap<Key, Arc<MemoryLock>>> {
-    fn insert_if_not_exist(&self, key: Key, lock: Arc<MemoryLock>) -> bool {
+impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
+    fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool {
         use std::collections::btree_map::Entry;
 
         match self.lock().entry(key) {
             Entry::Vacant(entry) => {
-                entry.insert(lock);
+                entry.insert(handle);
                 true
             }
             Entry::Occupied(_) => false,
         }
     }
 
-    fn get<'m>(&'m self, key: &Key) -> Option<MemoryLockRef<'m, Self>> {
+    fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m, Self>> {
         self.lock()
             .get(key)
-            .and_then(|lock| lock.clone().get_ref(self))
+            .and_then(|handle| handle.clone().get_ref(self))
     }
 
     fn find_first<'m, T>(
         &'m self,
         start_key: &Key,
         end_key: &Key,
-        mut pred: impl FnMut(MemoryLockRef<'m, Self>) -> Option<T>,
+        mut pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
     ) -> Option<T> {
-        for (_, memory_lock) in self
+        for (_, handle) in self
             .lock()
             .range::<Key, _>((Bound::Included(start_key), Bound::Excluded(end_key)))
         {
-            if let Some(v) = memory_lock.clone().get_ref(self).and_then(&mut pred) {
+            if let Some(v) = handle.clone().get_ref(self).and_then(&mut pred) {
                 return Some(v);
             }
         }
@@ -152,7 +152,7 @@ mod test {
 
     #[tokio::test]
     async fn test_lock_key() {
-        let lock_table = LockTable::<Mutex<BTreeMap<Key, Arc<MemoryLock>>>>::default();
+        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -177,7 +177,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_key() {
-        let lock_table = LockTable::<Mutex<BTreeMap<Key, Arc<MemoryLock>>>>::default();
+        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
         let key_k = Key::from_raw(b"k");
 
         // no lock found
@@ -203,7 +203,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_range() {
-        let lock_table = LockTable::<Mutex<BTreeMap<Key, Arc<MemoryLock>>>>::default();
+        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
 
         let mut lock_k = LockInfo::default();
         lock_k.set_lock_version(10);

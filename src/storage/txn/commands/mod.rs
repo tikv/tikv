@@ -51,7 +51,7 @@ use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
 };
 use crate::storage::{
-    concurrency_manager::{ConcurrencyManager, OrderedLockMap, TxnMutexGuard},
+    concurrency_manager::{ConcurrencyManager, KeyHandleMutexGuard, OrderedMap},
     Result,
 };
 use futures03::Future;
@@ -338,7 +338,7 @@ pub trait CommandExt: Display {
     fn async_lock<'a>(
         &'a self,
         cm: &'a ConcurrencyManager,
-    ) -> Pin<Box<dyn Future<Output = Vec<TxnMutexGuard<'a, OrderedLockMap>>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Vec<KeyHandleMutexGuard<'a, OrderedMap>>> + Send + 'a>>;
 }
 
 impl Command {
@@ -424,7 +424,7 @@ impl Command {
     pub fn async_lock<'a>(
         &'a self,
         cm: &'a ConcurrencyManager,
-    ) -> Pin<Box<dyn Future<Output = Vec<TxnMutexGuard<'a, OrderedLockMap>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Vec<KeyHandleMutexGuard<'a, OrderedMap>>> + Send + 'a>> {
         self.command_ext().async_lock(cm)
     }
 

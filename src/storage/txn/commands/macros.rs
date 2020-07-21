@@ -110,9 +110,9 @@ macro_rules! gen_lock {
             Box<
                 dyn std::future::Future<
                         Output = Vec<
-                            crate::storage::concurrency_manager::TxnMutexGuard<
+                            crate::storage::concurrency_manager::KeyHandleMutexGuard<
                                 'a,
-                                crate::storage::concurrency_manager::OrderedLockMap,
+                                crate::storage::concurrency_manager::OrderedMap,
                             >,
                         >,
                     > + Send
@@ -137,9 +137,9 @@ macro_rules! gen_lock {
             Box<
                 dyn std::future::Future<
                         Output = Vec<
-                            crate::storage::concurrency_manager::TxnMutexGuard<
+                            crate::storage::concurrency_manager::KeyHandleMutexGuard<
                                 'a,
-                                crate::storage::concurrency_manager::OrderedLockMap,
+                                crate::storage::concurrency_manager::OrderedMap,
                             >,
                         >,
                     > + Send
@@ -164,9 +164,9 @@ macro_rules! gen_lock {
             Box<
                 dyn std::future::Future<
                         Output = Vec<
-                            crate::storage::concurrency_manager::TxnMutexGuard<
+                            crate::storage::concurrency_manager::KeyHandleMutexGuard<
                                 'a,
-                                crate::storage::concurrency_manager::OrderedLockMap,
+                                crate::storage::concurrency_manager::OrderedMap,
                             >,
                         >,
                     > + Send
@@ -193,9 +193,9 @@ macro_rules! gen_lock {
             Box<
                 dyn std::future::Future<
                         Output = Vec<
-                            crate::storage::concurrency_manager::TxnMutexGuard<
+                            crate::storage::concurrency_manager::KeyHandleMutexGuard<
                                 'a,
-                                crate::storage::concurrency_manager::OrderedLockMap,
+                                crate::storage::concurrency_manager::OrderedMap,
                             >,
                         >,
                     > + Send
