@@ -84,14 +84,12 @@ impl Diagnostics for Service {
                     Some(format!("{:?}", e)),
                 ))
             });
-        let future = self.pool.spawn(
-            stream
-                .and_then(|stream| sink.send_all(stream))
-                .map(|_| ())
-                .map_err(|e| {
-                    error!("search log RPC error"; "error" => ?e);
-                }),
-        );
+        let future = stream
+            .and_then(|stream| sink.send_all(stream))
+            .map(|_| ())
+            .map_err(|e| {
+                error!("search log RPC error"; "error" => ?e);
+            });
         ctx.spawn(future);
     }
 
@@ -154,9 +152,7 @@ impl Diagnostics for Service {
                 resp.set_items(server_infos.into());
                 Ok(resp)
             });
-        let f = self
-            .pool
-            .spawn(collect)
+        let f = collect
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
         ctx.spawn(f);
