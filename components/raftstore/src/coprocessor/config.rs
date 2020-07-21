@@ -39,9 +39,9 @@ pub struct Config {
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsistencyCheckMethod {
-    /// Do consistency check for regions based on MVCC.
+    /// Does consistency check for regions based on MVCC.
     Mvcc,
-    /// Do consistency check for regions based on raw data. Only used when
+    /// Does consistency check for regions based on raw data. Only used when
     /// raw APIs are enabled and MVCC-GC is disabled.
     Raw,
 }
