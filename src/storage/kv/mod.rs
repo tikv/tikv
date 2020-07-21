@@ -104,12 +104,6 @@ pub trait Engine: Send + Clone + 'static {
 
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
 
-    fn async_snapshot(
-        &self,
-        ctx: &Context,
-        read_id: Option<ThreadReadId>,
-        callback: Callback<Self::Snap>,
-    ) -> Result<()>;
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {

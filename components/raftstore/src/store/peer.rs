@@ -2607,6 +2607,7 @@ impl Peer {
             }
         }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }

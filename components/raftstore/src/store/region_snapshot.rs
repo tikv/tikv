@@ -151,6 +151,12 @@ where
     }
 }
 
+impl RegionSnapshot<RocksSnapshot> {
+    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region)
+    }
+}
+
 impl<S> Clone for RegionSnapshot<S>
 where
     S: Snapshot,
