@@ -444,7 +444,15 @@ impl RpnFnRefEvaluableType {
     fn get_type_with_lifetime(&self, lifetime: TokenStream) -> TokenStream {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
-            RpnFnRefEvaluableType::Type(x) => quote! { #x <#lifetime> },
+            RpnFnRefEvaluableType::Type(x) => {
+                if is_json(x) || is_bytes(x) {
+                    quote! {
+                        #x <#lifetime>
+                    }
+                } else {
+                    quote! { &#lifetime #x }
+                }
+            }
         }
     }
 }
@@ -1096,13 +1104,21 @@ impl NormalRpnFn {
         } else {
             if let FnArg::Typed(mut fn_arg) = fn_arg.clone() {
                 let ty = fn_arg.ty.clone();
-                fn_arg.ty = parse_quote! { Option<#ty> };
-                parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).map_err(|_| {
-                    Error::new_spanned(
+                if parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).is_ok() {
+                    // Developer has supplied Option<T>
+                    Err(Error::new_spanned(
                         fn_arg,
                         "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
-                    )
-                })
+                    ))
+                } else {
+                    fn_arg.ty = parse_quote! { Option<#ty> };
+                    parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).map_err(|_| {
+                        Error::new_spanned(
+                            fn_arg,
+                            "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                        )
+                    })
+                }
             } else {
                 Err(Error::new_spanned(fn_arg, "Expect a type"))
             }
