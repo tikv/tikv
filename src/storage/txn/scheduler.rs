@@ -240,20 +240,6 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid) {
-            let guards = tctx
-                .task
-                .as_ref()
-                .unwrap()
-                .cmd
-                .sync_lock(&self.concurrency_manager);
-            // It's hard to associate concurrency manager's lifetime with the task context, so
-            // we just erase the lifetime.
-            // Safety: The task context does not outlive the scheduler, so it does not live longer
-            // than the concurrency manager.
-            unsafe {
-                let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> = mem::transmute(guards);
-                tctx.lock_guards = guards;
-            }
             tctx.on_schedule();
             return true;
         }
@@ -355,7 +341,37 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
-            self.get_snapshot(cid);
+            let sched = self.clone();
+            self.inner
+                .worker_pool
+                .pool
+                .spawn(async move {
+                    let cm = sched.inner.concurrency_manager.clone();
+                    // Take the task out first to avoid the MutexGuard acrossing the await point.
+                    let task = {
+                        let mut task_contexts = sched.inner.task_contexts[id_index(cid)].lock();
+                        let tctx = task_contexts.get_mut(&cid).unwrap();
+                        tctx.task.take().unwrap()
+                    };
+
+                    let guards = task.cmd.async_lock(&cm).await;
+
+                    let mut task_contexts = sched.inner.task_contexts[id_index(cid)].lock();
+                    let tctx = task_contexts.get_mut(&cid).unwrap();
+                    // It's hard to associate concurrency manager's lifetime with the task context, so
+                    // we just erase the lifetime.
+                    // Safety: The task context does not outlive the scheduler, so it does not live longer
+                    // than the concurrency manager.
+                    unsafe {
+                        let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> =
+                            mem::transmute(guards);
+                        tctx.lock_guards = guards;
+                    }
+                    tctx.task = Some(task);
+
+                    sched.get_snapshot(cid);
+                })
+                .unwrap();
         }
     }
 

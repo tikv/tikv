@@ -39,7 +39,7 @@ pub use txn_heart_beat::TxnHeartBeat;
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, pin::Pin};
 
 use kvproto::kvrpcpb::*;
 use txn_types::{Key, TimeStamp};
@@ -54,6 +54,7 @@ use crate::storage::{
     concurrency_manager::{ConcurrencyManager, OrderedLockMap, TxnMutexGuard},
     Result,
 };
+use futures03::Future;
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -334,10 +335,10 @@ pub trait CommandExt: Display {
 
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
 
-    fn sync_lock<'a>(
+    fn async_lock<'a>(
         &'a self,
         cm: &'a ConcurrencyManager,
-    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>>;
+    ) -> Pin<Box<dyn Future<Output = Vec<TxnMutexGuard<'a, OrderedLockMap>>> + Send + 'a>>;
 }
 
 impl Command {
@@ -420,11 +421,11 @@ impl Command {
         self.command_ext().gen_lock(latches)
     }
 
-    pub fn sync_lock<'a>(
+    pub fn async_lock<'a>(
         &'a self,
         cm: &'a ConcurrencyManager,
-    ) -> Vec<TxnMutexGuard<'a, OrderedLockMap>> {
-        self.command_ext().sync_lock(cm)
+    ) -> Pin<Box<dyn Future<Output = Vec<TxnMutexGuard<'a, OrderedLockMap>>> + Send + 'a>> {
+        self.command_ext().async_lock(cm)
     }
 
     pub fn requires_pessimistic_txn(&self) -> bool {

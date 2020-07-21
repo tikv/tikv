@@ -103,16 +103,23 @@ macro_rules! gen_lock {
             crate::storage::txn::latch::Lock::new(vec![])
         }
 
-        fn sync_lock<'a>(
+        fn async_lock<'a>(
             &'a self,
             _cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
-        ) -> Vec<
-            crate::storage::concurrency_manager::TxnMutexGuard<
-                'a,
-                crate::storage::concurrency_manager::OrderedLockMap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Vec<
+                            crate::storage::concurrency_manager::TxnMutexGuard<
+                                'a,
+                                crate::storage::concurrency_manager::OrderedLockMap,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
             >,
         > {
-            vec![]
+            Box::pin(async { vec![] })
         }
     };
     ($field: ident) => {
@@ -123,16 +130,23 @@ macro_rules! gen_lock {
             latches.gen_lock(std::iter::once(&self.$field))
         }
 
-        fn sync_lock<'a>(
+        fn async_lock<'a>(
             &'a self,
             cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
-        ) -> Vec<
-            crate::storage::concurrency_manager::TxnMutexGuard<
-                'a,
-                crate::storage::concurrency_manager::OrderedLockMap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Vec<
+                            crate::storage::concurrency_manager::TxnMutexGuard<
+                                'a,
+                                crate::storage::concurrency_manager::OrderedLockMap,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
             >,
         > {
-            vec![futures_executor::block_on(cm.lock_key(&self.$field))]
+            Box::pin(async move { vec![cm.lock_key(&self.$field).await] })
         }
     };
     ($field: ident: multiple) => {
@@ -143,16 +157,23 @@ macro_rules! gen_lock {
             latches.gen_lock(&self.$field)
         }
 
-        fn sync_lock<'a>(
+        fn async_lock<'a>(
             &'a self,
             cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
-        ) -> Vec<
-            crate::storage::concurrency_manager::TxnMutexGuard<
-                'a,
-                crate::storage::concurrency_manager::OrderedLockMap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Vec<
+                            crate::storage::concurrency_manager::TxnMutexGuard<
+                                'a,
+                                crate::storage::concurrency_manager::OrderedLockMap,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
             >,
         > {
-            futures_executor::block_on(cm.lock_keys(&self.$field))
+            Box::pin(async move { cm.lock_keys(&self.$field).await })
         }
     };
     ($field: ident: multiple$transform: tt) => {
@@ -165,18 +186,25 @@ macro_rules! gen_lock {
             latches.gen_lock(keys)
         }
 
-        fn sync_lock<'a>(
+        fn async_lock<'a>(
             &'a self,
             cm: &'a crate::storage::concurrency_manager::ConcurrencyManager,
-        ) -> Vec<
-            crate::storage::concurrency_manager::TxnMutexGuard<
-                'a,
-                crate::storage::concurrency_manager::OrderedLockMap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Vec<
+                            crate::storage::concurrency_manager::TxnMutexGuard<
+                                'a,
+                                crate::storage::concurrency_manager::OrderedLockMap,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
             >,
         > {
             #![allow(unused_parens)]
             let keys = self.$field.iter().map($transform);
-            futures_executor::block_on(cm.lock_keys(keys))
+            Box::pin(async move { cm.lock_keys(keys).await })
         }
     };
 }
