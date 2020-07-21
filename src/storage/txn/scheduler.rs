@@ -356,18 +356,20 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
                     let guards = task.cmd.async_lock(&cm).await;
 
-                    let mut task_contexts = sched.inner.task_contexts[id_index(cid)].lock();
-                    let tctx = task_contexts.get_mut(&cid).unwrap();
-                    // It's hard to associate concurrency manager's lifetime with the task context, so
-                    // we just erase the lifetime.
-                    // Safety: The task context does not outlive the scheduler, so it does not live longer
-                    // than the concurrency manager.
-                    unsafe {
-                        let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> =
-                            mem::transmute(guards);
-                        tctx.lock_guards = guards;
+                    {
+                        let mut task_contexts = sched.inner.task_contexts[id_index(cid)].lock();
+                        let tctx = task_contexts.get_mut(&cid).unwrap();
+                        // It's hard to associate concurrency manager's lifetime with the task context, so
+                        // we just erase the lifetime.
+                        // Safety: The task context does not outlive the scheduler, so it does not live longer
+                        // than the concurrency manager.
+                        unsafe {
+                            let guards: Vec<TxnMutexGuard<'static, OrderedLockMap>> =
+                                mem::transmute(guards);
+                            tctx.lock_guards = guards;
+                        }
+                        tctx.task = Some(task);
                     }
-                    tctx.task = Some(task);
 
                     sched.get_snapshot(cid);
                 })
