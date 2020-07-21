@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::deadline::Deadline;
+use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 use yatp::task::future::reschedule;
@@ -14,7 +15,7 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 use tidb_query_common::metrics::*;
-use tidb_query_common::storage::Storage;
+use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
@@ -476,6 +477,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 }
             }
         }
+    }
+
+    pub fn handle_streaming_request(
+        &mut self,
+    ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+        unimplemented!()
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
