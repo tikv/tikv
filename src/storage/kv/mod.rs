@@ -11,7 +11,7 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::RocksTablePropertiesCollection;
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
@@ -22,7 +22,7 @@ use txn_types::{Key, TxnExtra, Value};
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
@@ -92,6 +92,14 @@ impl WriteData {
 
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
+
+    /// Key/value storage engine.
+    fn kv_engine(&self) -> BaseRocksEngine;
+
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+
+    /// Write modifications into internal kv engine directly.
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
