@@ -639,7 +639,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero()),
+                txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero(), false, vec![]),
             };
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
