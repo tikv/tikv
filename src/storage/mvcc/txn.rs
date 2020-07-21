@@ -19,6 +19,16 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
+fn make_rollback(start_ts: TimeStamp, protected: bool, overlay_write: Option<Write>) -> Write {
+    match overlay_write {
+        Some(write) => {
+            assert_eq!(start_ts, write.start_ts);
+            write.set_overlay_rollback(protected)
+        }
+        None => Write::new_rollback(start_ts, protected),
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum MissingLockAction {
     Rollback,
@@ -43,10 +53,12 @@ impl MissingLockAction {
         }
     }
 
+    // This function should only be invoked when it's sure that there are no overlapping commit
+    // record whose commit_ts equals to `ts`, the current transaction's start_ts.
     fn construct_write(&self, ts: TimeStamp) -> Write {
         match self {
-            MissingLockAction::Rollback => Write::new_rollback(ts, false),
-            MissingLockAction::ProtectedRollback => Write::new_rollback(ts, true),
+            MissingLockAction::Rollback => make_rollback(ts, false, None),
+            MissingLockAction::ProtectedRollback => make_rollback(ts, true, None),
             _ => unreachable!(),
         }
     }
@@ -231,6 +243,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
+        overlay_write: Option<Write>,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -239,7 +252,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        let write = Write::new_rollback(self.start_ts, protected);
+        let write = make_rollback(self.start_ts, protected, overlay_write);
         self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key.clone())?;
@@ -692,7 +705,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 )
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                return match self.reader.get_txn_commit_record(&key, self.start_ts)?.info() {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -750,7 +763,7 @@ impl<S: Snapshot> MvccTxn<S> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
             .reader
-            .get_txn_commit_info(&primary_key, self.start_ts)?
+            .get_txn_commit_record(&primary_key, self.start_ts)?.info()
         {
             Some((ts, write_type)) => {
                 if write_type == WriteType::Rollback {

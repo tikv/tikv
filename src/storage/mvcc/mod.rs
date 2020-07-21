@@ -1220,8 +1220,9 @@ pub mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
             .unwrap()
+            .info()
             .unwrap();
         assert_ne!(write_type, WriteType::Rollback);
         assert_eq!(ts, commit_ts.into());
@@ -1235,9 +1236,9 @@ pub mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
-        let ret = reader.get_txn_commit_info(&Key::from_raw(key), start_ts.into());
+        let ret = reader.get_txn_commit_record(&Key::from_raw(key), start_ts.into());
         assert!(ret.is_ok());
-        match ret.unwrap() {
+        match ret.unwrap().info() {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);
@@ -1251,8 +1252,9 @@ pub mod tests {
 
         let start_ts = start_ts.into();
         let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
+            .get_txn_commit_record(&Key::from_raw(key), start_ts)
             .unwrap()
+            .info()
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write_type, WriteType::Rollback);
@@ -1267,8 +1269,9 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
 
         let ret = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts.into())
-            .unwrap();
+            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
+            .unwrap()
+            .info();
         assert_eq!(ret, None);
     }
 

@@ -11,6 +11,46 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
+#[derive(Debug)]
+pub enum TxnCommitRecord {
+    None { overlay_write: Option<Write> },
+    SingleRecord { commit_ts: TimeStamp, write: Write },
+    OverlayRollback { commit_ts: TimeStamp },
+}
+
+impl TxnCommitRecord {
+    pub fn exist(&self) -> bool {
+        match self {
+            Self::None { .. } => false,
+            Self::SingleRecord { .. } | Self::OverlayRollback => true,
+        }
+    }
+
+    pub fn info(&self) -> Option<(TimeStamp, WriteType)> {
+        match self {
+            Self::None { .. } => None,
+            Self::SingleRecord { commit_ts, write } => Some((commit_ts, write.write_type)),
+            Self::OverlayRollback { commit_ts } => Some((commit_ts, WriteType::Rollback)),
+        }
+    }
+
+    #[test]
+    pub fn unwrap_single_record(&self) -> (TimeStamp, WriteType) {
+        match self {
+            Self::SingleRecord { commit_ts, write } => (commit_ts, write.write_type),
+            _ => panic!("not a single record: {:?}", self),
+        }
+    }
+
+    #[test]
+    pub fn unwrap_overlay_rollback(&self) -> TimeStamp {
+        match self {
+            Self::OverlayRollback { commit_ts } => commit_ts,
+            _ => panic!("not an overlay rollback record: {:?}", self),
+        }
+    }
+}
+
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
     pub statistics: Statistics,
@@ -207,11 +247,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn get_txn_commit_info(
+    pub fn get_txn_commit_record(
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
-    ) -> Result<Option<(TimeStamp, WriteType)>> {
+    ) -> Result<TxnCommitRecord> {
         // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a txn with
         // a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
@@ -220,14 +260,26 @@ impl<S: Snapshot> MvccReader<S> {
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
-                return Ok(Some((commit_ts, write.write_type)));
+                return Ok(TxnCommitRecord::Record { commit_ts, write });
+            }
+            if commit_ts == start_ts {
+                if write.has_overlay_rollback {
+                    return Ok(TxnCommitRecord::OverlayRollback { commit_ts });
+                }
+                if find_overlapping_commit {
+                    return Ok(TxnCommitRecord::None {
+                        overlay_write: write,
+                    });
+                }
             }
             if commit_ts <= start_ts {
                 break;
             }
             seek_ts = commit_ts.prev();
         }
-        Ok(None)
+        Ok(TxnCommitRecord::None {
+            overlay_write: None,
+        })
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
@@ -925,9 +977,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_txn_commit_info() {
+    fn test_get_txn_commit_record() {
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_txn_commit_info")
+            .prefix("_test_storage_mvcc_reader_get_txn_commit_record")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -964,56 +1016,62 @@ mod tests {
         // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 45.into())
+            .get_txn_commit_record(&key, 45.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 50.into());
         assert_eq!(write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 35.into())
+            .get_txn_commit_record(&key, 35.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 40.into());
         assert_eq!(write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 25.into())
+            .get_txn_commit_record(&key, 25.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 30.into());
         assert_eq!(write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
-            .get_txn_commit_info(&key, 20.into())
+            .get_txn_commit_record(&key, 20.into())
             .unwrap()
-            .unwrap();
+            .unwrap_single_record();
         assert_eq!(commit_ts, 20.into());
         assert_eq!(write_type, WriteType::Rollback);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 10.into());
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 5.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 5.into());
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_old = reader.get_statistics().write.seek;
-        assert!(reader
-            .get_txn_commit_info(&key, 30.into())
+        assert!(!reader
+            .get_txn_commit_record(&key, 30.into())
             .unwrap()
-            .is_none());
+            .exist());
         let seek_new = reader.get_statistics().write.seek;
 
-        // `get_txn_commit_info(&key, 30)` stopped at `30_25 PUT`.
+        // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
         assert_eq!(seek_new - seek_old, 3);
     }
 
     #[test]
-    fn test_get_txn_commit_info_of_pessimistic_txn() {
+    fn test_get_txn_commit_record_of_pessimistic_txn() {
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_txn_commit_info_of_pessimistic_txn")
+            .prefix("_test_storage_mvcc_reader_get_txn_commit_record_of_pessimistic_txn")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -1036,11 +1094,17 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 2.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 3.into());
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1.into()).unwrap().unwrap();
+        let (commit_ts, write_type) = reader
+            .get_txn_commit_record(&key, 1.into())
+            .unwrap()
+            .unwrap_single_record();
         assert_eq!(commit_ts, 4.into());
         assert_eq!(write_type, WriteType::Put);
     }
