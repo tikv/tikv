@@ -375,12 +375,6 @@ impl parse::Parse for RpnFnAttr {
         if !nullable && is_varg {
             return Err(Error::new_spanned(config_items, "`varg` must be nullable"));
         }
-        if !nullable && metadata_type.is_some() {
-            return Err(Error::new_spanned(
-                config_items,
-                "rpn_fn with metadata must be nullable",
-            ));
-        }
 
         Ok(Self {
             is_varg,
@@ -1253,10 +1247,18 @@ impl NormalRpnFn {
             &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            quote! {
+            if self.nullable {
+                quote! {
+                    let arg: &#tp = unsafe { &*std::ptr::null() };
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                }
+            } else {
+                quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
-                #(let (#extract2, arg) = arg.extract(0));*;
-                #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2.unwrap()),* ).ok();
+                }
             },
         );
 
