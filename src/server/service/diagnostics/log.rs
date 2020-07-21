@@ -298,6 +298,7 @@ pub fn search<P: AsRef<Path>>(
     log_file: P,
     mut req: SearchLogRequest,
 ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
+    info!("into search func----");
     if !log_file.as_ref().exists() {
         info!("log files  not exists----");
         return Ok(bacth_log_item(LogIterator::default()));
