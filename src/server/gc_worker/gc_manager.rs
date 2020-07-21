@@ -555,10 +555,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         Ok(next_key)
     }
 
-    /// Gets the next region with end_key greater than given key, and the current TiKV is its
-    /// leader, so we can do GC on it.
-    /// Returns context to call GC and end_key of the region. The returned end_key will be none if
-    /// the region's end_key is empty.
+    /// Gets the next region with end_key greater than given key.
+    /// Returns a tuple with 2 fields:
+    /// the first is the next region can be sent to GC worker;
+    /// the second is the next key which can be passed into this method later.
     #[allow(clippy::type_complexity)]
     fn get_next_gc_context(&mut self, key: Key) -> (Option<(u64, Vec<u8>, Vec<u8>)>, Option<Key>) {
         let (tx, rx) = mpsc::channel();

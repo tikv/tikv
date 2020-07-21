@@ -24,7 +24,7 @@ use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
-use crate::storage::kv::{Engine, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Engine, ScanMode, Statistics};
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
@@ -184,12 +184,39 @@ impl<E: Engine> GcRunner<E> {
         key: &Key,
         gc_info: &mut GcInfo,
         txn: &mut MvccTxn<E::Snap, DummyPdClient>,
-    ) {
-        let next_gc_info = txn.gc(key.clone(), safe_point).unwrap();
+    ) -> Result<()> {
+        let next_gc_info = txn.gc(key.clone(), safe_point)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
         self.stats.add(&txn.take_statistics());
+        Ok(())
+    }
+
+    fn new_txn(snap: E::Snap) -> MvccTxn<E::Snap, DummyPdClient> {
+        // TODO txn only used for GC, but this is hacky, maybe need an Option?
+        let pd_client = Arc::new(DummyPdClient::new());
+        MvccTxn::for_scan(
+            snap,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            false,
+            pd_client,
+        )
+    }
+
+    fn flush_txn(
+        txn: MvccTxn<E::Snap, DummyPdClient>,
+        limiter: &Limiter,
+        engine: &E,
+    ) -> Result<()> {
+        let write_size = txn.write_size();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            limiter.blocking_consume(write_size);
+            engine.modify_on_kv_engine(modifies)?;
+        }
+        Ok(())
     }
 
     fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
@@ -216,60 +243,38 @@ impl<E: Engine> GcRunner<E> {
                 break;
             }
 
-            fn new_txn<S: Snapshot>(snap: S) -> MvccTxn<S, DummyPdClient> {
-                // TODO txn only used for GC, but this is hacky, maybe need an Option?
-                let pd_client = Arc::new(DummyPdClient::new());
-                MvccTxn::for_scan(
-                    snap,
-                    Some(ScanMode::Forward),
-                    TimeStamp::zero(),
-                    false,
-                    pd_client,
-                )
-            }
-
-            fn flush_txn<E: Engine>(
-                txn: MvccTxn<E::Snap, DummyPdClient>,
-                limiter: &Limiter,
-                engine: &E,
-            ) -> Result<()> {
-                let write_size = txn.write_size();
-                let modifies = txn.into_modifies();
-                if !modifies.is_empty() {
-                    limiter.blocking_consume(write_size);
-                    engine.modify_on_kv_engine(modifies)?;
-                }
-                Ok(())
-            }
-
             let mut keys = keys.into_iter();
-            let mut txn = new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
+            let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
             let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
             while let Some(ref key) = next_gc_key {
-                self.gc_key(safe_point, key, &mut gc_info, &mut txn);
+                if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
+                    error!("GC meets failure"; "key" => %key, "err" => ?e);
+                    // Switch to the next key if meets failure.
+                    gc_info.is_completed = true;
+                }
                 if gc_info.is_completed {
                     if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                         debug!(
-                        "GC found plenty versions for a key";
-                        "key" => %key,
-                        "versions" => gc_info.found_versions,
+                            "GC found plenty versions for a key";
+                            "key" => %key,
+                            "versions" => gc_info.found_versions,
                         );
                     }
                     if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
                         debug!(
-                        "GC deleted plenty versions for a key";
-                        "key" => %key,
-                        "versions" => gc_info.deleted_versions,
+                            "GC deleted plenty versions for a key";
+                            "key" => %key,
+                            "versions" => gc_info.deleted_versions,
                         );
                     }
                     next_gc_key = keys.next();
                     gc_info = GcInfo::default();
                 } else {
-                    flush_txn(txn, &self.limiter, &self.engine)?;
-                    txn = new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
+                    Self::flush_txn(txn, &self.limiter, &self.engine)?;
+                    txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
                 }
             }
-            flush_txn(txn, &self.limiter, &self.engine)?;
+            Self::flush_txn(txn, &self.limiter, &self.engine)?;
         }
 
         self.stats.add(reader.get_statistics());
