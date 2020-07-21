@@ -1,7 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::Result;
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand};
+use crate::storage::txn::process::{ReleasedLocks, WriteResult};
+use crate::storage::txn::Result;
+use crate::storage::{ProcessResult, Result as StorageResult, Snapshot, Statistics};
+use kvproto::kvrpcpb::ExtraOp;
+use pd_client::PdClient;
+use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -9,7 +17,7 @@ command! {
     ///
     /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
-        cmd_ty => Vec<Result<()>>,
+        cmd_ty => Vec<StorageResult<()>>,
         display => "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
         content => {
             /// The keys to be rolled back.
@@ -27,4 +35,42 @@ impl CommandExt for PessimisticRollback {
     command_method!(requires_pessimistic_txn, bool, true);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
+}
+
+impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
+    for PessimisticRollback
+{
+    fn process_write(
+        &mut self,
+        snapshot: S,
+        lock_mgr: &L,
+        pd_client: Arc<P>,
+        _extra_op: ExtraOp,
+        statistics: &mut Statistics,
+        _pipelined_pessimistic_lock: bool,
+    ) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            pd_client,
+        );
+
+        let rows = self.keys.len();
+        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        for k in &self.keys {
+            released_locks.push(txn.pessimistic_rollback(k.clone(), self.for_update_ts)?);
+        }
+        released_locks.wake_up(lock_mgr);
+
+        statistics.add(&txn.take_statistics());
+        let write_data = WriteData::from_modifies(txn.into_modifies());
+        Ok(WriteResult {
+            ctx: self.ctx.clone(),
+            to_be_write: write_data,
+            rows,
+            pr: ProcessResult::MultiRes { results: vec![] },
+            lock_info: None,
+        })
+    }
 }

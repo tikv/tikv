@@ -44,13 +44,17 @@ use std::marker::PhantomData;
 use kvproto::kvrpcpb::*;
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics;
+use crate::storage::kv::Engine;
+use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::process::WriteResult;
+use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
 };
-use crate::storage::Result;
+use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use pd_client::PdClient;
+use std::sync::Arc;
 use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
@@ -141,7 +145,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<Result<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -201,7 +205,7 @@ impl From<BatchRollbackRequest> for TypedCommand<()> {
     }
 }
 
-impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PessimisticRollbackRequest> for TypedCommand<Vec<StorageResult<()>>> {
     fn from(mut req: PessimisticRollbackRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
@@ -377,6 +381,36 @@ impl Command {
         }
     }
 
+    pub fn read_command_mut<E: Engine>(&mut self) -> &mut dyn ReadCommand<E> {
+        match self {
+            Command::ScanLock(t) => t,
+            Command::ResolveLockReadPhase(t) => t,
+            Command::MvccByKey(t) => t,
+            Command::MvccByStartTs(t) => t,
+            _ => panic!("unsupported read command"),
+        }
+    }
+
+    pub fn write_command_mut<S: Snapshot, L: LockManager, P: PdClient + 'static>(
+        &mut self,
+    ) -> &mut dyn WriteCommand<S, L, P> {
+        match self {
+            Command::Prewrite(t) => t,
+            Command::PrewritePessimistic(t) => t,
+            Command::AcquirePessimisticLock(t) => t,
+            Command::Commit(t) => t,
+            Command::Cleanup(t) => t,
+            Command::Rollback(t) => t,
+            Command::PessimisticRollback(t) => t,
+            Command::ResolveLock(t) => t,
+            Command::ResolveLockLite(t) => t,
+            Command::TxnHeartBeat(t) => t,
+            Command::CheckTxnStatus(t) => t,
+            Command::Pause(t) => t,
+            _ => panic!("unsupported write command"),
+        }
+    }
+
     pub fn readonly(&self) -> bool {
         self.command_ext().readonly()
     }
@@ -439,4 +473,24 @@ impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.command_ext().fmt(f)
     }
+}
+
+pub trait ReadCommand<E: Engine>: CommandExt {
+    fn process_read(
+        &mut self,
+        snapshot: E::Snap,
+        statistics: &mut Statistics,
+    ) -> Result<ProcessResult>;
+}
+
+pub trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static>: CommandExt {
+    fn process_write(
+        &mut self,
+        snapshot: S,
+        lock_mgr: &L,
+        pd_client: Arc<P>,
+        extra_op: ExtraOp,
+        statistics: &mut Statistics,
+        pipelined_pessimistic_lock: bool,
+    ) -> Result<WriteResult>;
 }

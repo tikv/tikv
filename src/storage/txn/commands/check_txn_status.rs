@@ -1,7 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::TxnStatus;
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand};
+use crate::storage::txn::process::{ReleasedLocks, WriteResult};
+use crate::storage::txn::Result;
+use crate::storage::{ProcessResult, Snapshot, Statistics, TxnStatus};
+use kvproto::kvrpcpb::ExtraOp;
+use pd_client::PdClient;
+use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -37,4 +45,47 @@ impl CommandExt for CheckTxnStatus {
     ts!(lock_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
+}
+
+impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for CheckTxnStatus {
+    fn process_write(
+        &mut self,
+        snapshot: S,
+        lock_mgr: &L,
+        pd_client: Arc<P>,
+        _extra_op: ExtraOp,
+        statistics: &mut Statistics,
+        _pipelined_pessimistic_lock: bool,
+    ) -> Result<WriteResult> {
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.lock_ts,
+            !self.ctx.get_not_fill_cache(),
+            pd_client,
+        );
+
+        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
+        let (txn_status, released) = txn.check_txn_status(
+            self.primary_key.clone(),
+            self.caller_start_ts,
+            self.current_ts,
+            self.rollback_if_not_exist,
+        )?;
+        released_locks.push(released);
+        // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
+        if let TxnStatus::TtlExpire = txn_status {
+            released_locks.wake_up(lock_mgr);
+        }
+
+        statistics.add(&txn.take_statistics());
+        let pr = ProcessResult::TxnStatus { txn_status };
+        let write_data = WriteData::from_modifies(txn.into_modifies());
+        Ok(WriteResult {
+            ctx: self.ctx.clone(),
+            to_be_write: write_data,
+            rows: 1,
+            pr,
+            lock_info: None,
+        })
+    }
 }
