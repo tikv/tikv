@@ -1677,9 +1677,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         peer.peer.init_replication_mode(&mut *replication_state);
         drop(replication_state);
 
-        if is_local_first {
-            peer.peer.local_first_replicate = true;
-        }
+        peer.peer.local_first_replicate = is_local_first;
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
