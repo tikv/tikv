@@ -648,7 +648,7 @@ impl TiKVServer {
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
+            .pool_size(2)
             .create();
 
         // Debug service.
