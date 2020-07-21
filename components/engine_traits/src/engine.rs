@@ -22,6 +22,7 @@ pub trait KvEngine:
     + SstExt
     + TablePropertiesExt
     + CompactExt
+    + RangePropertiesExt
     + MiscExt
     + Send
     + Sync

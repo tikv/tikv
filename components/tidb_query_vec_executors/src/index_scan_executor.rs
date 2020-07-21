@@ -254,22 +254,23 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn process_kv_pair(
         &mut self,
-        key: &[u8],
+        mut key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
+        key = &key[table::PREFIX_LEN + table::ID_LEN..];
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             if value[0] <= 1 && value[1] == table::INDEX_VALUE_COMMON_HANDLE_FLAG {
                 if self.decode_handle_strategy != DecodeCommonHandle {
                     return Err(other_err!("Expect to decode index values with common handles in `DecodeCommonHandle` mode."));
                 }
-                self.process_unique_common_handle_value(key, value, columns)
+                self.process_unique_common_handle_kv(key, value, columns)
             } else {
-                self.process_new_collation_value(key, value, columns)
+                self.process_new_collation_kv(key, value, columns)
             }
         } else {
-            self.process_old_collation_value(key, value, columns)
+            self.process_old_collation_kv(key, value, columns)
         }
     }
 }
@@ -350,16 +351,16 @@ impl IndexScanExecutorImpl {
     // 2. Unique common handle in old collation
     // |  Layout: 0x00 | CHandle Flag | CHandle Len | CHandle       |
     // |  Length: 1    | 1            | 2           | size(CHandle) |
-    fn process_unique_common_handle_value(
+    fn process_unique_common_handle_kv(
         &mut self,
-        key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         let handle_len = (&value[2..]).read_u16().map_err(|_| {
             other_err!(
-                "Fail to read common handle's length from value: {:X?}",
-                value
+                "Fail to read common handle's length from value: {}",
+                hex::encode_upper(value)
             )
         })? as usize;
         let handle_end_offset = 4 + handle_len;
@@ -374,7 +375,6 @@ impl IndexScanExecutorImpl {
             self.extract_columns_from_row_format(restore_values, columns)?;
         } else {
             // Otherwise, the index value is in old collation, we should extract the index columns from the key.
-            let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
             Self::extract_columns_from_datum_format(
                 &mut key_payload,
                 &mut columns[..self.columns_id_without_handle.len()],
@@ -392,15 +392,16 @@ impl IndexScanExecutorImpl {
     }
 
     // Process index values that are in new collation but don't contain common handle.
+    // NOTE: We should extract the index columns from the key if there are common handles in the key or the tail length of the value is less than 8.
     // These index values have 2 types.
     // 1. Non-unique index
     //      * Key contains a int handle.
     //      * Key contains a common handle.
     // 2. Unique index
     //      * Value contains a int handle.
-    fn process_new_collation_value(
+    fn process_new_collation_kv(
         &mut self,
-        mut key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
@@ -417,9 +418,8 @@ impl IndexScanExecutorImpl {
             NoDecode => {}
             // This is a non-unique index value, we should extract the int handle from the key.
             DecodeIntHandle if tail_len < 8 => {
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
-                let handle = self.decode_handle_from_key(key)?;
+                datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                let handle = self.decode_handle_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle));
@@ -433,10 +433,9 @@ impl IndexScanExecutorImpl {
             }
             // This is a non-unique index value, we should extract the common handle from the key.
             DecodeCommonHandle => {
-                key = &key[table::PREFIX_LEN + table::ID_LEN..];
-                datum::skip_n(&mut key, self.columns_id_without_handle.len())?;
+                datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
                 Self::extract_columns_from_datum_format(
-                    &mut key,
+                    &mut key_payload,
                     &mut columns[self.columns_id_without_handle.len()..],
                 )?;
             }
@@ -445,15 +444,14 @@ impl IndexScanExecutorImpl {
     }
 
     // Process index values that are in old collation but don't contain common handles.
-    fn process_old_collation_value(
+    // NOTE: We should extract the index columns from the key first, and extract the handles from value if there is no handle in the key.
+    // Otherwise, extract the handles from the key.
+    fn process_old_collation_kv(
         &mut self,
-        key: &[u8],
+        mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        // The payload part of the key
-        let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
-
         Self::extract_columns_from_datum_format(
             &mut key_payload,
             &mut columns[..self.columns_id_without_handle.len()],
@@ -998,10 +996,13 @@ mod tests {
 
         let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
-        let common_handle =
-            datum::encode_key(&mut EvalContext::default(), &[Datum::F64(4.0)]).unwrap();
+        let common_handle = datum::encode_key(
+            &mut EvalContext::default(),
+            &[Datum::U64(3), Datum::F64(4.0)],
+        )
+        .unwrap();
 
-        let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..2]).unwrap();
+        let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..1]).unwrap();
         let mut key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
         key.extend(common_handle);
 
@@ -1020,7 +1021,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             key_ranges,
-            1,
+            2,
             false,
             false,
         )
