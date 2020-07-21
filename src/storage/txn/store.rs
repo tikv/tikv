@@ -585,6 +585,7 @@ mod tests {
     use engine_traits::CfName;
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
+    use pd_client::DummyPdClient;
     use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -623,12 +624,18 @@ mod tests {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
+                let mut txn = MvccTxn::new(
+                    self.snapshot.clone(),
+                    START_TS,
+                    true,
+                    Arc::new(DummyPdClient::new()),
+                );
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
+                        &None,
                         false,
                         0,
                         0,
@@ -642,7 +649,12 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
+                let mut txn = MvccTxn::new(
+                    self.snapshot.clone(),
+                    START_TS,
+                    true,
+                    Arc::new(DummyPdClient::new()),
+                );
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();

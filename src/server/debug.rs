@@ -11,13 +11,14 @@ use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable, SeekKey,
-    TableProperties, TablePropertiesCollection, TablePropertiesExt, WriteBatch, WriteOptions,
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable,
+    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
+    WriteBatch, WriteOptions,
 };
-use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -26,8 +27,7 @@ use raft::{self, RawNode};
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use engine_rocks::properties::MvccProperties;
-use engine_rocks::RangeProperties;
-use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
+use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
@@ -1380,78 +1380,13 @@ fn set_region_tombstone(
 
 fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
-    let mut region = Region::default();
-    region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(
-        db.c(),
-        CF_DEFAULT,
-        &region,
-        0
-    ));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region, 0));
-
-    let cf = if default_cf_size >= write_cf_size {
-        CF_DEFAULT
-    } else {
-        CF_WRITE
-    };
-
-    divide_db_cf(db, parts, cf)
-}
-
-fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let collection = db.c().get_range_properties_cf(cf, &start, &end)?;
-
-    let mut keys = Vec::new();
-    let mut found_keys_count = 0;
-    for (_, v) in collection.iter() {
-        let props = RangeProperties::decode(&v.user_collected_properties())?;
-        keys.extend(
-            props
-                .take_excluded_range(start.as_slice(), end.as_slice())
-                .into_iter()
-                .filter(|_| {
-                    found_keys_count += 1;
-                    found_keys_count % 100 == 0
-                })
-                .map(|(k, _)| k),
-        );
-    }
-
-    v1!(
-        "({} points found, {} points selected for dividing)",
-        found_keys_count,
-        keys.len()
-    );
-
-    if keys.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // If there are too many keys, reduce its amount before sorting, or it may take too much
-    // time to sort the keys.
-    if keys.len() > 20000 {
-        let len = keys.len();
-        keys = keys.into_iter().step_by(len / 10000).collect();
-    }
-
-    keys.sort();
-    keys.dedup();
-
-    // If the keys are too few, return them directly.
-    if keys.len() < parts {
-        return Ok(keys);
-    }
-
-    // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
-    let mut res = Vec::with_capacity(parts - 1);
-    let section_len = (keys.len() as f64) / (parts as f64);
-    for i in 1..parts {
-        res.push(keys[(section_len * (i as f64)) as usize].clone())
-    }
-    Ok(res)
+    let range = Range::new(&start, &end);
+    let region_id = 0;
+    Ok(box_try!(
+        RocksEngine::from_db(db.clone()).divide_range(range, region_id, parts)
+    ))
 }
 
 #[cfg(test)]

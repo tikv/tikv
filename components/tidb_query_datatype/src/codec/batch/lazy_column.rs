@@ -224,7 +224,7 @@ impl LazyBatchColumn {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &FieldType,
+        field_type: &impl FieldTypeAccessor,
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
