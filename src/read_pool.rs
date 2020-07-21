@@ -5,6 +5,7 @@ use futures::{future, Future};
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
+use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
 use tikv_util::time::Instant;
@@ -17,6 +18,8 @@ use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use prometheus::IntGauge;
+
+type Callback = dyn Fn() + Send + Sync + 'static;
 
 pub enum ReadPool {
     FuturePools {
@@ -154,6 +157,7 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
+    after_start: Option<Arc<Callback>>,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
@@ -161,7 +165,10 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
         set_tls_engine(self.engine.take().unwrap());
-        self.inner.start(local)
+        self.inner.start(local);
+        if let Some(after_start) = &self.after_start {
+            after_start();
+        }
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
@@ -188,11 +195,17 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
 }
 
 impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
-    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
+    pub fn new(
+        engine: E,
+        inner: FutureRunner,
+        reporter: R,
+        after_start: Option<Arc<Callback>>,
+    ) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
             reporter,
             inner,
+            after_start,
         }
     }
 
@@ -251,7 +264,14 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .max_thread_count(config.max_thread_count);
     let multilevel_builder =
         multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
-    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
+    // Register the failpoint registry so that the generated thread and the current thread share the same registry.
+    let local_registry = fail::FailPointRegistry::current_registry();
+    let read_pool_runner = ReadPoolRunner::new(
+        engine,
+        Default::default(),
+        reporter,
+        Some(Arc::new(move || local_registry.register_current())),
+    );
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
         .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);

@@ -359,7 +359,9 @@ fn test_shutdown_when_snap_gc() {
     }
 
     fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
-    std::thread::spawn(|| {
+    let fail_registry = fail::FailPointRegistry::current_registry();
+    std::thread::spawn(move || {
+        fail_registry.register_current();
         // Sleep a while to wait snap_gc event to reach batch system.
         sleep_ms(500);
         fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();

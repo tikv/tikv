@@ -310,12 +310,14 @@ impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
     ) -> Runner<R> {
+        let local_registry = fail::FailPointRegistry::current_registry();
         Runner {
             env,
             snap_mgr,
             pool: CpuPoolBuilder::new()
                 .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
+                .after_start(move || local_registry.register_current())
                 .create(),
             raft_router: r,
             security_mgr,

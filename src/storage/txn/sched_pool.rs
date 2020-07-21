@@ -37,6 +37,7 @@ pub struct SchedPool {
 
 impl SchedPool {
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
+        let local_registry = fail::FailPointRegistry::current_registry();
         let engine = Arc::new(Mutex::new(engine));
         let pool = FuturePoolBuilder::new()
             .pool_size(pool_size)
@@ -44,7 +45,10 @@ impl SchedPool {
             .on_tick(tls_flush)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
-            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .after_start(move || {
+                local_registry.register_current();
+                set_tls_engine(engine.lock().unwrap().clone());
+            })
             .before_stop(move || {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 unsafe {

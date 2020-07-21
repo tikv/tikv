@@ -227,7 +227,12 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
     ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
+        let local_registry = fail::FailPointRegistry::current_registry();
+        let workers = Builder::new()
+            .name_prefix("cdcwkr")
+            .pool_size(4)
+            .after_start(move || local_registry.register_current())
+            .build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
             capture_regions: HashMap::default(),

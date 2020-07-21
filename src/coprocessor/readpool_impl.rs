@@ -25,10 +25,14 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
+            let local_registry = fail::FailPointRegistry::current_registry();
             Builder::from_config(config)
                 .name_prefix(name)
                 .on_tick(move || tls_flush(&reporter))
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .after_start(move || {
+                    local_registry.register_current();
+                    set_tls_engine(engine.lock().unwrap().clone());
+                })
                 .before_stop(move || {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     unsafe {
@@ -52,8 +56,12 @@ pub fn build_read_pool_for_test<E: Engine>(
         .into_iter()
         .map(|config| {
             let engine = Arc::new(Mutex::new(engine.clone()));
+            let local_registry = fail::FailPointRegistry::current_registry();
             Builder::from_config(config)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .after_start(move || {
+                    local_registry.register_current();
+                    set_tls_engine(engine.lock().unwrap().clone());
+                })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| unsafe { destroy_tls_engine::<E>() })
                 .build()

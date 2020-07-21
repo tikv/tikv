@@ -88,10 +88,12 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Ser
         req_batch_wait_duration: Option<Duration>,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
+        let local_registry = fail::FailPointRegistry::current_registry();
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
                 .pool_size(1)
                 .name_prefix("req_batch_timer_guard")
+                .after_start(move || local_registry.register_current())
                 .build(),
         ));
         Service {

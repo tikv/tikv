@@ -16,6 +16,9 @@ use test_raftstore::sleep_ms;
 
 #[test]
 fn test_stale_resolver() {
+    let local_registry = fail::FailPointRegistry::new();
+    local_registry.register_current();
+
     let mut suite = TestSuite::new(3);
 
     let fp = "before_schedule_resolver_ready";

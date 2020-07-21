@@ -1067,6 +1067,7 @@ impl RaftBatchSystem {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let local_registry = fail::FailPointRegistry::current_registry();
         let workers = Workers {
             split_check_worker,
             region_worker: Worker::new("snapshot-worker"),
@@ -1078,6 +1079,7 @@ impl RaftBatchSystem {
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
+                .after_start(move || local_registry.register_current())
                 .build(),
         };
         let mut builder = RaftPollerBuilder {

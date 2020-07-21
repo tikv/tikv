@@ -57,9 +57,11 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
+        let local_registry = fail::FailPointRegistry::current_registry();
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
+            .after_start(move || local_registry.register_current())
             .create();
         let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
         ImportSSTService {

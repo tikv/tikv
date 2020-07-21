@@ -645,7 +645,9 @@ where
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
 
+                let local_registry = fail::FailPointRegistry::current_registry();
                 self.pool.spawn(async move {
+                    local_registry.register_current();
                     ctx.handle_gen(
                         region_id,
                         last_applied_index_term,
