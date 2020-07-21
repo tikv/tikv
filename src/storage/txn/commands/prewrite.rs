@@ -20,7 +20,7 @@ use pd_client::PdClient;
 use std::sync::Arc;
 use txn_types::{Key, Mutation, TimeStamp};
 
-const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
+pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 command! {
     /// The prewrite phase of a transaction. The first phase of 2PC.

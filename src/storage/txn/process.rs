@@ -135,7 +135,11 @@ pub fn find_mvcc_infos_by_key<S: Snapshot>(
 mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
-    use crate::storage::{mvcc::Mutation, DummyLockManager};
+    use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
+    use crate::storage::txn::commands::{Commit, Prewrite};
+    use crate::storage::txn::LockInfo;
+    use crate::storage::{mvcc::Mutation, DummyLockManager, PrewriteResult};
+    use engine_traits::CF_WRITE;
     use pd_client::DummyPdClient;
 
     #[test]

@@ -37,6 +37,9 @@ pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
+#[cfg(test)]
+pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
+
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
