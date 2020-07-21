@@ -3,7 +3,7 @@
 use protobuf::Message;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
@@ -11,7 +11,6 @@ use tikv_util::deadline::Deadline;
 use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
-use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
@@ -363,81 +362,22 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
-        let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.elapsed();
-            // Check whether we should yield from the execution
-            if time_slice_len > MAX_TIME_SLICE {
-                reschedule().await;
-                time_slice_start = Instant::now();
+            let mut chunk = Chunk::default();
+
+            let (drained, record_len) = self.internal_handle_request(
+                false,
+                batch_size,
+                &mut chunk,
+                &mut warnings,
+                &mut ctx,
+            )?;
+
+            if record_len > 0 {
+                chunks.push(chunk);
             }
 
-            self.deadline.check()?;
-
-            let mut result = self.out_most_executor.next_batch(batch_size);
-
-            let is_drained;
-
-            // Check error first, because it means that we should directly respond error.
-            match result.is_drained {
-                Err(e) => return Err(e),
-                Ok(f) => is_drained = f,
-            }
-
-            // We will only get warnings limited by max_warning_count. Note that in future we
-            // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
-            // field.
-            warnings.merge(&mut result.warnings);
-
-            // Notice that logical rows len == 0 doesn't mean that it is drained.
-            if !result.logical_rows.is_empty() {
-                assert_eq!(
-                    result.physical_columns.columns_len(),
-                    self.out_most_executor.schema().len()
-                );
-                let mut chunk = Chunk::default();
-                {
-                    let data = chunk.mut_rows_data();
-                    // Although `schema()` can be deeply nested, it is ok since we process data in
-                    // batch.
-                    match self.encode_type {
-                        EncodeType::TypeChunk => {
-                            self.encode_type = EncodeType::TypeChunk;
-                            data.reserve(result.physical_columns.maximum_encoded_size_chunk(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            ));
-                            result.physical_columns.encode_chunk(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                                self.out_most_executor.schema(),
-                                data,
-                                &mut ctx,
-                            )?;
-                        }
-                        _ => {
-                            // For the default or unsupported encode type, use datum format.
-                            self.encode_type = EncodeType::TypeDefault;
-                            data.reserve(
-                                result.physical_columns.maximum_encoded_size(
-                                    &result.logical_rows,
-                                    &self.output_offsets,
-                                ),
-                            );
-                            result.physical_columns.encode(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                                self.out_most_executor.schema(),
-                                data,
-                                &mut ctx,
-                            )?;
-                        }
-                    }
-                    chunks.push(chunk);
-                }
-            }
-
-            if is_drained {
+            if drained {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
 
@@ -480,12 +420,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
 
             // Grow batch size
-            if batch_size < BATCH_MAX_SIZE {
-                batch_size *= BATCH_GROW_FACTOR;
-                if batch_size > BATCH_MAX_SIZE {
-                    batch_size = BATCH_MAX_SIZE
-                }
-            }
+            grow_batch_size(&mut batch_size);
         }
     }
 
