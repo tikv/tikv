@@ -53,10 +53,26 @@ impl ChunkedVecJson {
         self.length += 1;
     }
 
+    pub fn push_data_ref(&mut self, value: JsonRef) {
+        self.bitmap.push(true);
+        self.data.push(value.get_type() as u8);
+        self.data.extend_from_slice(value.value());
+        self.var_offset.push(self.data.len());
+        self.length += 1;
+    }
+
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
         self.var_offset.push(self.data.len());
         self.length += 1;
+    }
+
+    pub fn push_ref(&mut self, value: Option<JsonRef>) {
+        if let Some(x) = value {
+            self.push_data_ref(x);
+        } else {
+            self.push_null();
+        }
     }
 
     pub fn truncate(&mut self, len: usize) {
