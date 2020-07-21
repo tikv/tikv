@@ -38,10 +38,6 @@ where
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), ps.region().clone())
     }
 
-    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region)
-    }
-
     pub fn from_snapshot(snap: Arc<S>, region: Region) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
@@ -143,6 +139,12 @@ where
     #[inline]
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
+    }
+}
+
+impl RegionSnapshot<RocksSnapshot> {
+    pub fn from_raw(db: RocksEngine, region: Region) -> RegionSnapshot<RocksSnapshot> {
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), region)
     }
 }
 
