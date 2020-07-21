@@ -52,7 +52,9 @@ struct Runner(KvEngines<BaseRocksEngine, BaseRocksEngine>);
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
+            Task::Write(modifies, cb) => {
+                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
+            }
             Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
@@ -127,6 +129,10 @@ impl RocksEngine {
 
     pub fn pause(&self, dur: Duration) {
         self.sched.schedule(Task::Pause(dur)).unwrap();
+    }
+
+    pub fn engines(&self) -> KvEngines<BaseRocksEngine, BaseRocksEngine> {
+        self.engines.clone()
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
@@ -213,13 +219,11 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(
-    engine: &KvEngines<BaseRocksEngine, BaseRocksEngine>,
-    modifies: Vec<Modify>,
-) -> Result<()> {
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Result<()> {
     fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
 
-    let mut wb = engine.kv.write_batch();
+    let mut wb = kv_engine.write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -260,12 +264,24 @@ fn write_modifies(
             return Err(box_err!("{}", msg));
         }
     }
-    engine.kv.write(&wb)?;
+    kv_engine.write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
+
+    fn kv_engine(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
+        self.snapshot(&Context::default())
+    }
+
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+        write_modifies(&self.engines.kv, modifies)
+    }
 
     fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
