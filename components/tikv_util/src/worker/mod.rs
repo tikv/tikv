@@ -246,7 +246,6 @@ fn poll<R, T, U>(
     U: Send + 'static,
 {
     tikv_alloc::add_thread_memory_accessor();
-
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
     let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
@@ -281,7 +280,6 @@ fn poll<R, T, U>(
         runner.on_tick();
     }
     runner.shutdown();
-
     tikv_alloc::remove_thread_memory_accessor();
 }
 
