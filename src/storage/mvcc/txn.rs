@@ -980,12 +980,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         .into()));
 
         match self.reader.load_lock(&primary_key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
-                    let released = self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
+                    let released = self.rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
                 }
@@ -1007,11 +1007,19 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                         lock.min_commit_ts = current_ts;
                     }
 
-                    self.put_lock(primary_key, lock);
+                    self.put_lock(primary_key, &lock);
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
-                Ok((TxnStatus::uncommitted(lock.ttl, lock.min_commit_ts), None))
+                Ok((
+                    TxnStatus::uncommitted(
+                        lock.ttl,
+                        lock.min_commit_ts,
+                        lock.use_async_commit,
+                        lock.secondaries,
+                    ),
+                    None,
+                ))
             }
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
@@ -1604,7 +1612,7 @@ mod tests {
             ts(20, 0),
             ts(20, 0),
             true,
-            uncommitted(100, ts(20, 1)),
+            uncommitted(100, ts(20, 1), false, vec![]),
         );
         // The the min_commit_ts should be ts(20, 1)
         must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
@@ -1619,7 +1627,7 @@ mod tests {
             ts(40, 0),
             ts(40, 0),
             true,
-            uncommitted(100, ts(40, 1)),
+            uncommitted(100, ts(40, 1), false, vec![]),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
 
@@ -1632,7 +1640,7 @@ mod tests {
             ts(70, 0),
             ts(70, 0),
             true,
-            uncommitted(100, ts(70, 1)),
+            uncommitted(100, ts(70, 1), false, vec![]),
         );
         must_prewrite_put_impl(
             &engine,
@@ -2483,6 +2491,18 @@ mod tests {
         // The initial min_commit_ts is start_ts + 1.
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 1), false);
 
+        // CheckTxnStatus with caller_start_ts = 0 and current_ts = 0 should just return the
+        // information of the lock without changing it.
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            0,
+            0,
+            r,
+            uncommitted(100, ts(5, 1), false, vec![]),
+        );
+
         // Update min_commit_ts to current_ts.
         must_check_txn_status(
             &engine,
@@ -2491,7 +2511,7 @@ mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
-            uncommitted(100, ts(7, 0)),
+            uncommitted(100, ts(7, 0), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
@@ -2504,7 +2524,7 @@ mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2517,7 +2537,7 @@ mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100, ts(9, 1)),
+            uncommitted(100, ts(9, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2529,7 +2549,7 @@ mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
-            uncommitted(100, ts(11, 1)),
+            uncommitted(100, ts(11, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
@@ -2541,7 +2561,7 @@ mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
-            uncommitted(100, ts(12, 1)),
+            uncommitted(100, ts(12, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
@@ -2553,7 +2573,7 @@ mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
-            uncommitted(100, ts(13, 3)),
+            uncommitted(100, ts(13, 3), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
@@ -2611,7 +2631,7 @@ mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
-            uncommitted(100, ts(21, 106)),
+            uncommitted(100, ts(21, 106), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
@@ -2637,7 +2657,7 @@ mod tests {
             ts(135, 0),
             ts(135, 0),
             r,
-            uncommitted(200, ts(135, 1)),
+            uncommitted(200, ts(135, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
 
@@ -2680,7 +2700,7 @@ mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100, ts(160, 1)),
+            uncommitted(100, ts(160, 1), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, ts(160, 1), true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
@@ -2747,7 +2767,7 @@ mod tests {
             ts(300, 0),
             ts(300, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
         must_pessimistic_rollback(&engine, k, ts(290, 0), ts(290, 0));
@@ -2772,7 +2792,7 @@ mod tests {
             ts(310, 0),
             ts(310, 0),
             r,
-            uncommitted(100, TimeStamp::zero()),
+            uncommitted(100, TimeStamp::zero(), false, vec![]),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
         must_rollback(&engine, k, ts(300, 0));
@@ -2787,7 +2807,7 @@ mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
-            uncommitted(100, ts(310, 1)),
+            uncommitted(100, ts(310, 1), false, vec![]),
         );
         must_commit(&engine, k, ts(310, 0), ts(315, 0));
         must_check_txn_status(
@@ -3258,5 +3278,58 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
         assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+    }
+
+    #[test]
+    fn test_check_async_commit_txn_status() {
+        // The preparation work is the same as test_async_prewrite_primary.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+
+        let mut pd_client = DummyPdClient::new();
+        pd_client.next_ts = TimeStamp::new(42);
+        let pd_client = Arc::new(pd_client);
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        txn.prewrite(
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            false,
+            0,
+            4,
+            TimeStamp::zero(),
+        )
+        .unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
+
+        let do_check_txn_status = |rollback_if_not_exist| {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let (txn_status, released_lock) = txn
+                .check_txn_status(
+                    Key::from_raw(b"key"),
+                    0.into(),
+                    0.into(),
+                    rollback_if_not_exist,
+                )
+                .unwrap();
+            assert_eq!(
+                txn_status,
+                TxnStatus::uncommitted(
+                    0,
+                    42.into(), // min_commit_ts got from PD
+                    true,
+                    vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+                )
+            );
+            assert!(released_lock.is_none());
+        };
+        do_check_txn_status(true);
+        do_check_txn_status(false);
     }
 }

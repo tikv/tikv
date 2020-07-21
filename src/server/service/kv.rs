@@ -1735,8 +1735,12 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Uncommitted {
                     lock_ttl,
                     min_commit_ts,
+                    use_async_commit,
+                    secondaries,
                 } => {
                     resp.set_lock_ttl(lock_ttl);
+                    resp.set_use_async_commit(use_async_commit);
+                    resp.set_secondaries(secondaries.into());
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                     // Even though the min_commit_ts is not pushed, the point get can ingore the lock
                     // next time because it's not committed. So we pretend it has been pushed.
