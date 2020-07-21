@@ -145,14 +145,10 @@ impl Diagnostics for Service {
                 Ok(s)
             })
             .and_then(|(load, when)| {
-                info!("start collect server info and then1 ----");
                 let timer = GLOBAL_TIMER_HANDLE.clone();
-                let re = timer.delay(when).then(|_| Ok(load));
-                info!("finish collect server info and then1 ----");
-                re
+                timer.delay(when).then(|_| Ok(load))
             })
             .and_then(move |load| -> Result<ServerInfoResponse> {
-                info!("start collect server info and then2 ----");
                 let mut server_infos = Vec::new();
                 match req.get_tp() {
                     ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
@@ -169,7 +165,6 @@ impl Diagnostics for Service {
                     .sort_by(|a, b| (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name())));
                 let mut resp = ServerInfoResponse::default();
                 resp.set_items(server_infos.into());
-                info!("finish collect server info and then2 ----");
                 Ok(resp)
             });
         let f = self
