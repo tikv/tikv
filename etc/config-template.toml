@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Log format, one of json, text. Default to text.
+# log-format = "text"
+
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -348,6 +351,9 @@
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
+## Currently only "raw" is supported, which means the check is based raw data.
+# consistency-check-method = "raw"
+
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
@@ -471,7 +477,7 @@
 ## Time for the RocksDB info log file to roll (in seconds).
 ## If the log file has been active longer than this config, it will be rolled.
 ## If it is set to 0, rolling will be disabled.
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 
 ## Maximal RocksDB info log files to be kept.
 # info-log-keep-log-file-num = 10
@@ -743,7 +749,7 @@
 # wal-bytes-per-sync = "512KB"
 
 # info-log-max-size = "1GB"
-# info-log-roll-time = "0"
+# info-log-roll-time = "0s"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
 # info-log-level = "info"
@@ -843,6 +849,11 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+
+[backup]
+## Number of threads to perform backup tasks.
+## The default value is set to min(CPU_NUM * 0.75, 32).
+# num-threads = 24
 
 [pessimistic-txn]
 ## Enable pessimistic transaction

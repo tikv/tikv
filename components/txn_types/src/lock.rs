@@ -1,13 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::timestamp::{TimeStamp, TsSet};
-use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
-use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
+use std::mem::size_of;
 use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -25,6 +25,7 @@ const FLAG_PESSIMISTIC: u8 = b'S';
 const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
+const ASYNC_COMMIT_PREFIX: u8 = b'a';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -56,7 +57,7 @@ impl LockType {
     }
 }
 
-#[derive(new, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,
@@ -67,13 +68,45 @@ pub struct Lock {
     pub for_update_ts: TimeStamp,
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
+    pub use_async_commit: bool,
+    // Only valid when `use_async_commit` is true, and the lock is primary. Do not set
+    // `secondaries` for secondaries.
+    pub secondaries: Vec<Vec<u8>>,
 }
 
 impl Lock {
+    pub fn new(
+        lock_type: LockType,
+        primary: Vec<u8>,
+        ts: TimeStamp,
+        ttl: u64,
+        short_value: Option<Value>,
+        for_update_ts: TimeStamp,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
+    ) -> Self {
+        Self {
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
+            for_update_ts,
+            txn_size,
+            min_commit_ts,
+            use_async_commit: false,
+            secondaries: Vec::default(),
+        }
+    }
+
+    pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
+        self.use_async_commit = true;
+        self.secondaries = secondaries;
+        self
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(
-            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2,
-        );
+        let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts.into_inner()).unwrap();
@@ -95,7 +128,40 @@ impl Lock {
             b.push(MIN_COMMIT_TS_PREFIX);
             b.encode_u64(self.min_commit_ts.into_inner()).unwrap();
         }
+        if self.use_async_commit {
+            b.push(ASYNC_COMMIT_PREFIX);
+            b.encode_var_u64(self.secondaries.len() as _).unwrap();
+            for k in &self.secondaries {
+                b.encode_compact_bytes(k).unwrap();
+            }
+        }
         b
+    }
+
+    fn pre_allocate_size(&self) -> usize {
+        let mut size = 1 + MAX_VAR_I64_LEN + self.primary.len() + MAX_VAR_U64_LEN * 2;
+        if let Some(v) = &self.short_value {
+            size += 2 + v.len();
+        }
+        if !self.for_update_ts.is_zero() {
+            size += 1 + size_of::<u64>();
+        }
+        if self.txn_size > 0 {
+            size += 1 + size_of::<u64>();
+        }
+        if !self.min_commit_ts.is_zero() {
+            size += 1 + size_of::<u64>();
+        }
+        if self.use_async_commit {
+            size += 1
+                + MAX_VAR_U64_LEN
+                + self
+                    .secondaries
+                    .iter()
+                    .map(|k| MAX_VAR_I64_LEN + k.len())
+                    .sum::<usize>();
+        }
+        size
     }
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
@@ -128,6 +194,8 @@ impl Lock {
         let mut for_update_ts = TimeStamp::zero();
         let mut txn_size: u64 = 0;
         let mut min_commit_ts = TimeStamp::zero();
+        let mut use_async_commit = false;
+        let mut secondaries = Vec::new();
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -145,10 +213,17 @@ impl Lock {
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
                 MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
+                ASYNC_COMMIT_PREFIX => {
+                    use_async_commit = true;
+                    let len = number::decode_var_u64(&mut b)? as _;
+                    secondaries = (0..len)
+                        .map(|_| bytes::decode_compact_bytes(&mut b).map_err(Into::into))
+                        .collect::<Result<_>>()?;
+                }
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
-        Ok(Lock::new(
+        let mut lock = Lock::new(
             lock_type,
             primary,
             ts,
@@ -157,7 +232,11 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
-        ))
+        );
+        if use_async_commit {
+            lock = lock.use_async_commit(secondaries);
+        }
+        Ok(lock)
     }
 
     pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
@@ -175,6 +254,9 @@ impl Lock {
         };
         info.set_lock_type(lock_type);
         info.set_lock_for_update_ts(self.for_update_ts.into_inner());
+        info.set_use_async_commit(self.use_async_commit);
+        info.set_min_commit_ts(self.min_commit_ts.into_inner());
+        info.set_secondaries(self.secondaries.into());
         info
     }
 
@@ -352,11 +434,50 @@ mod tests {
                 444,
                 555.into(),
             ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+            )
+            .use_async_commit(vec![]),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+            )
+            .use_async_commit(vec![b"k".to_vec()]),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                111.into(),
+                222,
+                Some(b"short_value".to_vec()),
+                333.into(),
+                444,
+                555.into(),
+            )
+            .use_async_commit(vec![
+                b"k1".to_vec(),
+                b"kkkkk2".to_vec(),
+                b"k3k3k3k3k3k3".to_vec(),
+                b"k".to_vec(),
+            ]),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
             let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
+            assert!(lock.pre_allocate_size() >= v.len());
         }
 
         // Test `Lock::parse()` handles incorrect input.

@@ -5,22 +5,22 @@ use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Peekable, TablePropertiesExt};
-use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
+use kvproto::{errorpb, metapb};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
-use txn_types::{Key, Value};
+use txn_types::{Key, TxnExtra, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
+    write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
+    ErrorInner as KvErrorInner, Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -207,6 +207,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
@@ -238,8 +239,9 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_txn_extra(
                 cmd,
+                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -270,6 +272,41 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
 
 impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
+
+    fn kv_engine(&self) -> RocksEngine {
+        self.engine.clone()
+    }
+
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
+        let mut region = metapb::Region::default();
+        region.set_start_key(start_key.to_owned());
+        region.set_end_key(end_key.to_owned());
+        // Use a fake peer to avoid panic.
+        region.mut_peers().push(Default::default());
+        Ok(RegionSnapshot::from_raw(self.engine.clone(), region))
+    }
+
+    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+        for modify in &mut modifies {
+            match modify {
+                Modify::Delete(_, ref mut key) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                    let bytes = keys::data_key(key1.as_encoded());
+                    *key1 = Key::from_encoded(bytes);
+                    let bytes = keys::data_end_key(key2.as_encoded());
+                    *key2 = Key::from_encoded(bytes);
+                }
+            }
+        }
+        write_modifies(&self.engine, modifies)
+    }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
@@ -316,10 +353,10 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        // TODO(5kbpers): send WriteData::TxnExtra to raftstore here.
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

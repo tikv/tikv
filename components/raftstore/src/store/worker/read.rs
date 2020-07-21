@@ -6,8 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use time::Timespec;
@@ -39,6 +41,7 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl ReadDelegate {
@@ -55,6 +58,7 @@ impl ReadDelegate {
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
+            txn_extra_op: peer.txn_extra_op.clone(),
         }
     }
 
@@ -220,6 +224,7 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
         };
 
         cmd.callback.invoke_read(read_resp);
@@ -311,9 +316,10 @@ where
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
                     let mut metrics = self.metrics.borrow_mut();
-                    if let Some(resp) =
+                    if let Some(mut resp) =
                         delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
                     {
+                        resp.txn_extra_op = delegate.txn_extra_op.load();
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -348,6 +354,7 @@ where
                     cmd.callback.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
                     });
                     self.delegates.borrow_mut().remove(&region_id);
                     return;
@@ -576,15 +583,14 @@ mod tests {
         Receiver<RaftCommand<RocksSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db =
-            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-                .unwrap();
+        let db = engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,
             store_id: Cell::new(Some(store_id)),
             router: ch,
-            kv_engine: RocksEngine::from_db(Arc::new(db)),
+            kv_engine: db,
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
             tag: "foo".to_owned(),
@@ -691,6 +697,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
                 invalid: Arc::new(AtomicBool::new(false)),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             };
             meta.readers.insert(1, read_delegate);
         }

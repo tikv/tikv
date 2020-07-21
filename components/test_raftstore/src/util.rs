@@ -9,6 +9,7 @@ use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
 use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::kvrpcpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{
     ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
@@ -16,6 +17,7 @@ use kvproto::pdpb::{
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
+use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
 
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
@@ -377,7 +379,7 @@ pub fn async_read_on_peer<T: Simulator>(
     read_quorum: bool,
     replica_read: bool,
 ) -> mpsc::Receiver<RaftCmdResponse> {
-    let node_id = peer.get_id();
+    let node_id = peer.get_store_id();
     let mut request = new_request(
         region.get_id(),
         region.get_region_epoch().clone(),
@@ -668,4 +670,179 @@ pub fn put_cf_till_size<T: Simulator>(
     // we flush it to SST so we can use the size properties instead.
     cluster.must_flush_cf(cf, true);
     key
+}
+
+pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
+    let mut mutation = Mutation::default();
+    mutation.set_op(op);
+    mutation.set_key(k.to_vec());
+    mutation.set_value(v.to_vec());
+    mutation
+}
+
+pub fn must_kv_prewrite(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) {
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    prewrite_req.set_mutations(muts.into_iter().collect());
+    prewrite_req.primary_lock = pk;
+    prewrite_req.start_version = ts;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(
+        !prewrite_resp.has_region_error(),
+        "{:?}",
+        prewrite_resp.get_region_error()
+    );
+    assert!(
+        prewrite_resp.errors.is_empty(),
+        "{:?}",
+        prewrite_resp.get_errors()
+    );
+}
+
+pub fn must_kv_commit(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    start_ts: u64,
+    commit_ts: u64,
+    expect_commit_ts: u64,
+) {
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx);
+    commit_req.start_version = start_ts;
+    commit_req.set_keys(keys.into_iter().collect());
+    commit_req.commit_version = commit_ts;
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    assert!(
+        !commit_resp.has_region_error(),
+        "{:?}",
+        commit_resp.get_region_error()
+    );
+    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
+}
+
+pub fn kv_pessimistic_lock(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    return_values: bool,
+) -> PessimisticLockResponse {
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx);
+    let primary = keys[0].clone();
+    let mut mutations = vec![];
+    for key in keys {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::PessimisticLock);
+        mutation.set_key(key);
+        mutations.push(mutation);
+    }
+    req.set_mutations(mutations.into());
+    req.primary_lock = primary;
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    req.lock_ttl = 20;
+    req.is_first_lock = false;
+    req.return_values = return_values;
+    client.kv_pessimistic_lock(&req).unwrap()
+}
+
+pub fn must_kv_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let resp = kv_pessimistic_lock(client, ctx, vec![key], ts, ts, false);
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+pub fn must_kv_pessimistic_rollback(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![key].into_iter().collect());
+    req.start_version = ts;
+    req.for_update_ts = ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
+pub fn must_check_txn_status(
+    client: &TikvClient,
+    ctx: Context,
+    key: &[u8],
+    lock_ts: u64,
+    caller_start_ts: u64,
+    current_ts: u64,
+) -> CheckTxnStatusResponse {
+    let mut req = CheckTxnStatusRequest::default();
+    req.set_context(ctx);
+    req.set_primary_key(key.to_vec());
+    req.set_lock_ts(lock_ts);
+    req.set_caller_start_ts(caller_start_ts);
+    req.set_current_ts(current_ts);
+
+    let resp = client.kv_check_txn_status(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.error.is_none(), "{:?}", resp.get_error());
+    resp
+}
+
+pub fn must_physical_scan_lock(
+    client: &TikvClient,
+    ctx: Context,
+    max_ts: u64,
+    start_key: &[u8],
+    limit: usize,
+) -> Vec<LockInfo> {
+    let mut req = PhysicalScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_max_ts(max_ts);
+    req.set_start_key(start_key.to_owned());
+    req.set_limit(limit as _);
+    let mut resp = client.physical_scan_lock(&req).unwrap();
+    resp.take_locks().into()
+}
+
+pub fn register_lock_observer(client: &TikvClient, max_ts: u64) -> RegisterLockObserverResponse {
+    let mut req = RegisterLockObserverRequest::default();
+    req.set_max_ts(max_ts);
+    client.register_lock_observer(&req).unwrap()
+}
+
+pub fn must_register_lock_observer(client: &TikvClient, max_ts: u64) {
+    let resp = register_lock_observer(client, max_ts);
+    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+}
+
+pub fn check_lock_observer(client: &TikvClient, max_ts: u64) -> CheckLockObserverResponse {
+    let mut req = CheckLockObserverRequest::default();
+    req.set_max_ts(max_ts);
+    client.check_lock_observer(&req).unwrap()
+}
+
+pub fn must_check_lock_observer(client: &TikvClient, max_ts: u64, clean: bool) -> Vec<LockInfo> {
+    let mut resp = check_lock_observer(client, max_ts);
+    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+    assert_eq!(resp.get_is_clean(), clean);
+    resp.take_locks().into()
+}
+
+pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObserverResponse {
+    let mut req = RemoveLockObserverRequest::default();
+    req.set_max_ts(max_ts);
+    client.remove_lock_observer(&req).unwrap()
+}
+
+pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
+    let resp = remove_lock_observer(client, max_ts);
+    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
 }

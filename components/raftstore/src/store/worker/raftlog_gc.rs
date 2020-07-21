@@ -126,10 +126,9 @@ impl<E: KvEngine> Runnable<Task<E>> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::raw_util::new_engine;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::util::new_engine;
     use engine_traits::{KvEngine, WriteBatchExt, CF_DEFAULT};
-    use std::sync::{mpsc, Arc};
+    use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
 
@@ -137,8 +136,6 @@ mod tests {
     fn test_gc_raft_log() {
         let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let raft_db = Arc::new(raft_db);
-        let raft_db = RocksEngine::from_db(raft_db);
 
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(Some(tx));

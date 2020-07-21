@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+log-format = "json"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -164,6 +165,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
+consistency-check-method = "mvcc"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -550,6 +552,9 @@ path = "/master/key/path"
 
 [security.encryption.previous-master-key]
 type = "plaintext"
+
+[backup]
+num-threads = 456
 
 [import]
 num-threads = 123
