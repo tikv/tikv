@@ -1051,6 +1051,7 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
