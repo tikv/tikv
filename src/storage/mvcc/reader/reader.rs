@@ -34,7 +34,6 @@ impl TxnCommitRecord {
         }
     }
 
-    #[test]
     pub fn unwrap_single_record(self) -> (TimeStamp, WriteType) {
         match self {
             Self::SingleRecord { commit_ts, write } => (commit_ts, write.write_type),
@@ -42,7 +41,6 @@ impl TxnCommitRecord {
         }
     }
 
-    #[test]
     pub fn unwrap_overlay_rollback(self) -> TimeStamp {
         match self {
             Self::OverlayRollback { commit_ts } => commit_ts,
@@ -1008,6 +1006,9 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        // Overlay rollback on the commit record at 40.
+        engine.rollback(k, 40);
+
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
         engine.prewrite_pessimistic_lock(m, k, 45);
@@ -1020,12 +1021,34 @@ mod tests {
         // is 50.
         // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
+        let overlay_write = reader
+            .get_txn_commit_record(&key, 55.into())
+            .unwrap()
+            .unwrap_none();
+        assert!(overlay_write.is_none());
+
+        // When no such record is found but a record of another txn has a write record with
+        // its commit_ts equals to current start_ts, it
+        let overlay_write = reader
+            .get_txn_commit_record(&key, 50.into())
+            .unwrap()
+            .unwrap_none()
+            .unwrap();
+        assert_eq!(overlay_write.start_ts, 45.into());
+        assert_eq!(overlay_write.write_type, WriteType::Put);
+
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())
             .unwrap()
             .unwrap_single_record();
         assert_eq!(commit_ts, 50.into());
         assert_eq!(write_type, WriteType::Put);
+
+        let commit_ts = reader
+            .get_txn_commit_record(&key, 40.into())
+            .unwrap()
+            .unwrap_overlay_rollback();
+        assert_eq!(commit_ts, 40.into());
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 35.into())

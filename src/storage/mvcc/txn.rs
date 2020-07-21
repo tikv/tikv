@@ -1476,6 +1476,35 @@ mod tests {
     }
 
     #[test]
+    fn test_rollback_overlay() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+
+        must_prewrite_put(&engine, k1, v1, k1, 10);
+        must_prewrite_put(&engine, k2, v2, k2, 11);
+        must_commit(&engine, k1, 10, 20);
+        must_commit(&engine, k2, 11, 20);
+        let w1 = must_written(&engine, k1, 10, 20, WriteType::Put);
+        let w2 = must_written(&engine, k2, 11, 20, WriteType::Put);
+        assert!(!w1.has_overlay_rollback);
+        assert!(!w2.has_overlay_rollback);
+
+        must_cleanup(&engine, k2, 20, 30);
+        must_rollback(&engine, k1, 20);
+
+        let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
+        assert!(w1r.has_overlay_rollback);
+        // The only difference between w1r and w1 is the overlay_rollback flag.
+        assert_eq!(w1r.set_overlay_rollback(false), w1);
+
+        let w2r = must_written(&engine, k2, 11, 20, WriteType::Put);
+        // Rollback is invoked on secondaries, so the rollback is not protected and overlay_rollback
+        // won't be set.
+        assert_eq!(w2r, w2);
+    }
+
+    #[test]
     fn test_cleanup() {
         // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
         // related to TTL check should be covered by other test cases.

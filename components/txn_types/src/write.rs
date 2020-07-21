@@ -272,7 +272,7 @@ mod tests {
             Write::new_rollback((1 << 40).into(), true),
             Write::new(WriteType::Rollback, (1 << 41).into(), None),
             Write::new(WriteType::Put, 123.into(), None).set_overlay_rollback(true),
-            Write::new(WriteType::Put, 456.into(), Some(b"short_value")).set_overlay_rollback(true),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec())).set_overlay_rollback(true),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();

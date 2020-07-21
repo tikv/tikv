@@ -1174,13 +1174,14 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
         tp: WriteType,
-    ) {
+    ) -> Write {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts.into());
         let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
         let write = WriteRef::parse(&v).unwrap();
         assert_eq!(write.start_ts, start_ts.into());
         assert_eq!(write.write_type, tp);
+        write.to_owned()
     }
 
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
