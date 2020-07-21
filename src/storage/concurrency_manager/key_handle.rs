@@ -83,7 +83,7 @@ impl<'m, M: OrderedMap> KeyHandleRef<'m, M> {
 
     pub async fn mutex_lock(self) -> KeyHandleMutexGuard<'m, M> {
         self.key_mutex.mutex_lock().await;
-        return KeyHandleMutexGuard(self);
+        KeyHandleMutexGuard(self)
     }
 
     pub fn with_lock_info<T>(&self, f: impl FnOnce(&Option<LockInfo>) -> T) -> T {
@@ -119,6 +119,7 @@ impl<'m, M: OrderedMap> KeyHandleMutexGuard<'m, M> {
         self.0.lock_store.write(f, &self.0.ref_count)
     }
 
+    /// Returns a future that completes when the lock stored in is released.
     pub fn lock_released(&self) -> impl Future<Output = ()> {
         // FIXME: register this wait operation to the deadlock detector
         self.0.lock_store.lock_released()

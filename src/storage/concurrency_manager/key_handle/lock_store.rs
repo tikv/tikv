@@ -54,6 +54,7 @@ impl LockStore {
     }
 
     pub fn lock_released(&self) -> impl Future<Output = ()> {
+        debug_assert!(self.lock_info.lock().is_some());
         self.lock_cleaned_event.listen()
     }
 }
