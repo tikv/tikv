@@ -10,6 +10,7 @@ use crate::storage::{
 };
 use futures::Future;
 use kvproto::kvrpcpb::*;
+use pd_client::PdClient;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
@@ -48,9 +49,9 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager>(
+    pub fn maybe_commit<E: Engine, L: LockManager, P: PdClient + 'static>(
         &mut self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, P>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if self.gets.len() > 10 {
@@ -65,9 +66,9 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager>(
+    pub fn commit<E: Engine, L: LockManager, P: PdClient + 'static>(
         &mut self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, P>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if !self.gets.is_empty() {
@@ -83,8 +84,8 @@ impl ReqBatcher {
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_get_command<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -135,8 +136,8 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_raw_get_command<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,

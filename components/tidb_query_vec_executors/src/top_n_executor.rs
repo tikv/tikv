@@ -258,16 +258,33 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                     }
                 }
                 LazyBatchColumn::Decoded(dest_vector_value) => {
-                    match_template_evaluable! {
-                        TT, match dest_vector_value {
+                    match_template::match_template! {
+                        TT = [Int, Real, Duration, Decimal, DateTime],
+                        match dest_vector_value {
                             VectorValue::TT(dest_column) => {
                                 for item in &sorted_items {
-                                    let src = item.source_data.physical_columns[column_index].decoded();
-                                    let src: &[Option<TT>] = src.as_ref();
+                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
+                                    let src_ref: &ChunkedVecSized<TT> = TT::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
-                                    dest_column.push(src[item.source_data.logical_rows[item.logical_row_index]].clone());
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }
                             },
+                            VectorValue::Json(dest_column) => {
+                                for item in &sorted_items {
+                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
+                                    let src_ref: &ChunkedVecJson = JsonRef::borrow_vector_value(src);
+                                    // TODO: This clone is not necessary.
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
+                                }
+                            },
+                            VectorValue::Bytes(dest_column) => {
+                                for item in &sorted_items {
+                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
+                                    let src_ref: &ChunkedVecBytes = BytesRef::borrow_vector_value(src);
+                                    // TODO: This clone is not necessary.
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
+                                }
+                            }
                         }
                     }
                 }
@@ -473,12 +490,9 @@ mod tests {
         let src_exec = MockExecutor::new(
             vec![FieldTypeTp::Double.into()],
             vec![BatchExecuteResult {
-                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Real(vec![
-                    None,
-                    Real::new(7.0).ok(),
-                    None,
-                    None,
-                ])]),
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Real(
+                    vec![None, Real::new(7.0).ok(), None, None].into(),
+                )]),
                 logical_rows: (0..1).collect(),
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
@@ -505,9 +519,9 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
-                        5,
-                    )])]),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(
+                        vec![Some(5)].into(),
+                    )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
@@ -564,14 +578,17 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None, None, Some(5), None]),
-                        VectorValue::Int(vec![None, Some(1), None, Some(-1)]),
-                        VectorValue::Real(vec![
-                            Real::new(2.0).ok(),
-                            Real::new(4.0).ok(),
-                            None,
-                            Real::new(-1.0).ok(),
-                        ]),
+                        VectorValue::Int(vec![None, None, Some(5), None].into()),
+                        VectorValue::Int(vec![None, Some(1), None, Some(-1)].into()),
+                        VectorValue::Real(
+                            vec![
+                                Real::new(2.0).ok(),
+                                Real::new(4.0).ok(),
+                                None,
+                                Real::new(-1.0).ok(),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![3, 0, 1],
                     warnings: EvalWarnings::default(),
@@ -579,9 +596,9 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(0)]),
-                        VectorValue::Int(vec![Some(10)]),
-                        VectorValue::Real(vec![Real::new(10.0).ok()]),
+                        VectorValue::Int(vec![Some(0)].into()),
+                        VectorValue::Int(vec![Some(10)].into()),
+                        VectorValue::Real(vec![Real::new(10.0).ok()].into()),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
@@ -589,23 +606,23 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![
-                            Some(-10),
-                            Some(-1),
-                            Some(-10),
-                            None,
-                            Some(-10),
-                            None,
-                        ]),
-                        VectorValue::Int(vec![None, None, Some(10), Some(-9), Some(-10), None]),
-                        VectorValue::Real(vec![
-                            Real::new(-5.0).ok(),
-                            None,
-                            Real::new(3.0).ok(),
-                            None,
-                            Real::new(0.0).ok(),
-                            Real::new(9.9).ok(),
-                        ]),
+                        VectorValue::Int(
+                            vec![Some(-10), Some(-1), Some(-10), None, Some(-10), None].into(),
+                        ),
+                        VectorValue::Int(
+                            vec![None, None, Some(10), Some(-9), Some(-10), None].into(),
+                        ),
+                        VectorValue::Real(
+                            vec![
+                                Real::new(-5.0).ok(),
+                                None,
+                                Real::new(3.0).ok(),
+                                None,
+                                Real::new(0.0).ok(),
+                                Real::new(9.9).ok(),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![1, 2, 0, 4],
                     warnings: EvalWarnings::default(),
@@ -661,15 +678,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().to_int_vec(),
             &[Some(-1), Some(-10), None, Some(-10), None, Some(-10), None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().to_int_vec(),
             &[None, None, Some(-1), Some(-10), None, Some(10), Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -731,15 +748,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 7);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().to_int_vec(),
             &[Some(-1), Some(-10), Some(-10), Some(-10), None, None, None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().to_int_vec(),
             &[None, None, Some(-10), Some(10), None, Some(-1), Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -812,15 +829,15 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().to_int_vec(),
             &[Some(-10), Some(-10), Some(-10), Some(-1), None]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().to_int_vec(),
             &[Some(10), Some(-10), None, None, Some(1)]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().to_real_vec(),
             &[
                 Real::new(3.0).ok(),
                 Real::new(0.0).ok(),
@@ -866,13 +883,16 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aa".to_vec())]),
-                        VectorValue::Bytes(vec![Some(b"aa".to_vec()), None, Some(b"aaa".to_vec())]),
-                        VectorValue::Bytes(vec![
-                            None,
-                            Some(b"Aa".to_vec()),
-                            Some("áaA".as_bytes().to_vec()),
-                        ]),
+                        VectorValue::Bytes(
+                            vec![Some(b"aa".to_vec()), None, Some(b"aa".to_vec())].into(),
+                        ),
+                        VectorValue::Bytes(
+                            vec![Some(b"aa".to_vec()), None, Some(b"aaa".to_vec())].into(),
+                        ),
+                        VectorValue::Bytes(
+                            vec![None, Some(b"Aa".to_vec()), Some("áaA".as_bytes().to_vec())]
+                                .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 1, 0],
                     warnings: EvalWarnings::default(),
@@ -886,24 +906,33 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![
-                            Some("áaA".as_bytes().to_vec()),
-                            Some("áa".as_bytes().to_vec()),
-                            Some(b"Aa".to_vec()),
-                            Some(b"aaa".to_vec()),
-                        ]),
-                        VectorValue::Bytes(vec![
-                            Some("áa".as_bytes().to_vec()),
-                            Some("áaA".as_bytes().to_vec()),
-                            None,
-                            Some(b"Aa".to_vec()),
-                        ]),
-                        VectorValue::Bytes(vec![
-                            None,
-                            Some(b"aa".to_vec()),
-                            Some(b"aaa".to_vec()),
-                            Some("áa".as_bytes().to_vec()),
-                        ]),
+                        VectorValue::Bytes(
+                            vec![
+                                Some("áaA".as_bytes().to_vec()),
+                                Some("áa".as_bytes().to_vec()),
+                                Some(b"Aa".to_vec()),
+                                Some(b"aaa".to_vec()),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Bytes(
+                            vec![
+                                Some("áa".as_bytes().to_vec()),
+                                Some("áaA".as_bytes().to_vec()),
+                                None,
+                                Some(b"Aa".to_vec()),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Bytes(
+                            vec![
+                                None,
+                                Some(b"aa".to_vec()),
+                                Some(b"aaa".to_vec()),
+                                Some("áa".as_bytes().to_vec()),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![0, 1, 2, 3],
                     warnings: EvalWarnings::default(),
@@ -962,7 +991,7 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[
                 Some(b"aaa".to_vec()),
                 Some("áaA".as_bytes().to_vec()),
@@ -972,7 +1001,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_bytes_slice(),
+            r.physical_columns[1].decoded().to_bytes_vec(),
             &[
                 Some(b"Aa".to_vec()),
                 Some("áa".as_bytes().to_vec()),
@@ -982,7 +1011,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_bytes_slice(),
+            r.physical_columns[2].decoded().to_bytes_vec(),
             &[
                 Some("áa".as_bytes().to_vec()),
                 None,
@@ -1043,7 +1072,7 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.physical_columns[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().to_bytes_vec(),
             &[
                 None,
                 Some(b"Aa".to_vec()),
@@ -1053,7 +1082,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[1].decoded().as_bytes_slice(),
+            r.physical_columns[1].decoded().to_bytes_vec(),
             &[
                 None,
                 None,
@@ -1063,7 +1092,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[2].decoded().as_bytes_slice(),
+            r.physical_columns[2].decoded().to_bytes_vec(),
             &[
                 Some(b"Aa".to_vec()),
                 Some(b"aaa".to_vec()),
@@ -1106,17 +1135,23 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![
-                            Some(18_446_744_073_709_551_613_u64 as i64),
-                            None,
-                            Some(18_446_744_073_709_551_615_u64 as i64),
-                        ]),
-                        VectorValue::Int(vec![Some(-1), None, Some(-3)]),
-                        VectorValue::Int(vec![
-                            Some(4_294_967_295_u32 as i64),
-                            None,
-                            Some(4_294_967_295_u32 as i64),
-                        ]),
+                        VectorValue::Int(
+                            vec![
+                                Some(18_446_744_073_709_551_613_u64 as i64),
+                                None,
+                                Some(18_446_744_073_709_551_615_u64 as i64),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(vec![Some(-1), None, Some(-3)].into()),
+                        VectorValue::Int(
+                            vec![
+                                Some(4_294_967_295_u32 as i64),
+                                None,
+                                Some(4_294_967_295_u32 as i64),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 1, 0],
                     warnings: EvalWarnings::default(),
@@ -1130,24 +1165,33 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![
-                            Some(300_u64 as i64),
-                            Some(9_223_372_036_854_775_807_u64 as i64),
-                            Some(2000_u64 as i64),
-                            Some(9_223_372_036_854_775_808_u64 as i64),
-                        ]),
-                        VectorValue::Int(vec![
-                            Some(300),
-                            Some(9_223_372_036_854_775_807),
-                            Some(2000),
-                            Some(-9_223_372_036_854_775_808),
-                        ]),
-                        VectorValue::Int(vec![
-                            Some(300_u32 as i64),
-                            Some(2_147_483_647_u32 as i64),
-                            Some(2000_u32 as i64),
-                            Some(2_147_483_648_u32 as i64),
-                        ]),
+                        VectorValue::Int(
+                            vec![
+                                Some(300_u64 as i64),
+                                Some(9_223_372_036_854_775_807_u64 as i64),
+                                Some(2000_u64 as i64),
+                                Some(9_223_372_036_854_775_808_u64 as i64),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![
+                                Some(300),
+                                Some(9_223_372_036_854_775_807),
+                                Some(2000),
+                                Some(-9_223_372_036_854_775_808),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Int(
+                            vec![
+                                Some(300_u32 as i64),
+                                Some(2_147_483_647_u32 as i64),
+                                Some(2000_u32 as i64),
+                                Some(2_147_483_648_u32 as i64),
+                            ]
+                            .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 1, 0, 3],
                     warnings: EvalWarnings::default(),
@@ -1185,7 +1229,7 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 5);
             assert_eq!(r.physical_columns.columns_len(), 3);
             assert_eq!(
-                r.physical_columns[col_index].decoded().as_int_slice(),
+                r.physical_columns[col_index].decoded().to_int_vec(),
                 expected
             );
             assert!(r.is_drained.unwrap());

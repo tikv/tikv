@@ -7,13 +7,12 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(const_loop)]
-#![feature(const_if_match)]
 #![feature(ptr_offset_from)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -246,12 +245,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::MultiplyInt => map_int_sig(value, children, multiply_mapper)?,
         ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<UintUintMultiply>(),
         ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
-        ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_fn_meta::<DecimalDivide>(),
-        ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
+        ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_nonnull_fn_meta::<DecimalDivide>(),
+        ScalarFuncSig::DivideReal => arithmetic_with_ctx_nonnull_fn_meta::<RealDivide>(),
         ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
         ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
-        ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
+        ScalarFuncSig::ModDecimal => arithmetic_with_ctx_nonnull_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
@@ -522,6 +521,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
@@ -541,6 +541,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
+        ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),

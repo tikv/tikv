@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                     group,
                                     &mut self.states,
                                     &mut self.states_offset_each_logical_row,
-                                    |val| Ok(val)
+                                    |val| Ok(val.map(|x| x.to_owned_value()))
                                 )?;
                             } else {
                                 panic!();
@@ -309,7 +309,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                                 group,
                                                 &mut self.states,
                                                 &mut self.states_offset_each_logical_row,
-                                                |val| Ok(SortKey::map_option(val)?)
+                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.to_owned_value()))?)
                                             )?;
                                         }
                                     }
@@ -381,8 +381,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T, S, F>(
-    physical_column: &[Option<T>],
+fn calc_groups_each_row<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>, S, F>(
+    physical_column: T,
     logical_rows: &[usize],
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<S>, usize>,
@@ -392,13 +392,13 @@ fn calc_groups_each_row<T, S, F>(
 ) -> Result<()>
 where
     S: Hash + Eq + Clone,
-    F: Fn(&Option<T>) -> Result<&Option<S>>,
+    F: Fn(Option<TT>) -> Result<Option<S>>,
 {
     for physical_idx in logical_rows {
-        let val = map_to_sort_key(&physical_column[*physical_idx])?;
+        let val = map_to_sort_key(physical_column.get_option_ref(*physical_idx))?;
 
         // Not using the entry API so that when entry exists there is no clone.
-        match group.get(val) {
+        match group.get(&val) {
             Some(offset) => {
                 // Group exists, use the offset of existing group.
                 states_offset_each_logical_row.push(*offset);
@@ -407,7 +407,7 @@ where
                 // Group does not exist, prepare groups.
                 let offset = states.len();
                 states_offset_each_logical_row.push(offset);
-                group.insert(val.clone(), offset);
+                group.insert(val, offset);
                 for aggr_fn in aggr_fns {
                     states.push(aggr_fn.create_state());
                 }
@@ -548,7 +548,7 @@ mod tests {
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[4]
                 .decoded()
-                .as_real_slice()
+                .to_real_vec()
                 .iter()
                 .map(|v| {
                     use std::hash::Hasher;
@@ -563,7 +563,7 @@ mod tests {
             // Use the order of the sorted column to sort other columns
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[4].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[4].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -571,22 +571,22 @@ mod tests {
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(3)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[1].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[2].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[2].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(0)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[3].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[3].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -676,13 +676,13 @@ mod tests {
                 .unwrap();
 
             // Group by a constant, So should be only one group.
-            assert_eq!(r.physical_columns[4].decoded().as_int_slice().len(), 1);
+            assert_eq!(r.physical_columns[4].decoded().to_int_vec().len(), 1);
 
-            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
-            assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(4)]);
-            assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(2)]);
+            assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
+            assert_eq!(r.physical_columns[1].decoded().to_int_vec(), &[Some(4)]);
+            assert_eq!(r.physical_columns[2].decoded().to_int_vec(), &[Some(2)]);
             assert_eq!(
-                r.physical_columns[3].decoded().as_real_slice(),
+                r.physical_columns[3].decoded().to_real_vec(),
                 &[Real::new(8.5).ok()]
             );
         }
@@ -764,8 +764,8 @@ mod tests {
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
                 .decoded()
-                .as_bytes_slice()
-                .iter()
+                .to_bytes_vec()
+                .into_iter()
                 .enumerate()
                 .collect();
             sort_column.sort_by(|a, b| a.1.cmp(&b.1));
@@ -773,7 +773,7 @@ mod tests {
             // Use the order of the sorted column to sort other columns
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+                .map(|(idx, _)| r.physical_columns[3].decoded().to_bytes_vec()[*idx].clone())
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -781,17 +781,17 @@ mod tests {
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(0), Some(0), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[1].decoded().to_int_vec()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[2].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -984,7 +984,7 @@ mod tests {
                 .unwrap();
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[0]
                 .decoded()
-                .as_real_slice()
+                .to_real_vec()
                 .iter()
                 .map(|v| {
                     use std::hash::{Hash, Hasher};
@@ -997,7 +997,7 @@ mod tests {
             sort_column.sort_by(|a, b| a.1.cmp(&b.1));
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.physical_columns[0].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().to_real_vec()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -1051,7 +1051,7 @@ mod tests {
             r.physical_columns[0]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[0])
                 .unwrap();
-            assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(1)]);
+            assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(1)]);
         }
     }
 }

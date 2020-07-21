@@ -18,6 +18,7 @@ use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TxnExtra;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -203,6 +204,15 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
         self.ch.read(read_id, req, cb)
+    }
+
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.ch.send_command_txn_extra(req, txn_extra, cb)
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksSnapshot>) -> Result<()> {

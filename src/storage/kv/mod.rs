@@ -11,18 +11,18 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::RocksTablePropertiesCollection;
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::Context;
-use txn_types::{Key, Value};
+use kvproto::kvrpcpb::{Context, ExtraOp};
+use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
@@ -38,11 +38,15 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
+    pub extra_op: ExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
-        CbContext { term: None }
+        CbContext {
+            term: None,
+            extra_op: ExtraOp::Noop,
+        }
     }
 }
 
@@ -71,18 +75,42 @@ impl Modify {
     }
 }
 
+#[derive(Default)]
+pub struct WriteData {
+    pub modifies: Vec<Modify>,
+    pub extra: TxnExtra,
+}
+
+impl WriteData {
+    pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
+        Self { modifies, extra }
+    }
+
+    pub fn from_modifies(modifies: Vec<Modify>) -> Self {
+        Self::new(modifies, TxnExtra::default())
+    }
+}
+
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
 
-    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
+    /// Key/value storage engine.
+    fn kv_engine(&self) -> BaseRocksEngine;
+
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+
+    /// Write modifications into internal kv engine directly.
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+
+    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
+
     fn async_snapshot(
         &self,
         ctx: &Context,
         read_id: Option<ThreadReadId>,
         callback: Callback<Self::Snap>,
     ) -> Result<()>;
-
-    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
@@ -105,7 +133,10 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put(cf, key, value)])
+        self.write(
+            ctx,
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
+        )
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
@@ -113,7 +144,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(cf, key)])
+        self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
     }
 
     fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
@@ -477,10 +508,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
-                ],
+                ]),
             )
             .unwrap();
         assert_has(engine, b"x", b"1");
@@ -489,10 +520,10 @@ pub mod tests {
         engine
             .write(
                 &Context::default(),
-                vec![
+                WriteData::from_modifies(vec![
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
-                ],
+                ]),
             )
             .unwrap();
         assert_none(engine, b"y");
@@ -740,7 +771,9 @@ pub mod tests {
     }
 
     fn test_empty_write<E: Engine>(engine: &E) {
-        engine.write(&Context::default(), vec![]).unwrap_err();
+        engine
+            .write(&Context::default(), WriteData::default())
+            .unwrap_err();
     }
 
     pub fn test_cfs_statistics<E: Engine>(engine: &E) {

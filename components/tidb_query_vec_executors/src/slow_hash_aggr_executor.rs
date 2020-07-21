@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     RpnStackNode::Vector { value, field_type } => {
                         value.as_ref().encode_sort_key(
                             value.logical_rows()[logical_row_idx],
-                            field_type,
+                            *field_type,
                             context,
                             &mut self.group_key_buffer,
                         )?;
@@ -328,7 +328,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                         debug_assert!(value.as_ref().eval_type() == EvalType::Bytes);
                         value.as_ref().encode(
                             value.logical_rows()[logical_row_idx],
-                            field_type,
+                            *field_type,
                             context,
                             &mut self.group_key_buffer,
                         )?;
@@ -588,8 +588,8 @@ mod tests {
         // The row order is not defined. Let's sort it by the group by column before asserting.
         let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
             .decoded()
-            .as_bytes_slice()
-            .iter()
+            .to_bytes_vec()
+            .into_iter()
             .enumerate()
             .collect();
         sort_column.sort_by(|a, b| a.1.cmp(&b.1));
@@ -597,7 +597,7 @@ mod tests {
         // Use the order of the sorted column to sort other columns
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[3].decoded().as_bytes_slice()[*idx].clone())
+            .map(|(idx, _)| r.physical_columns[3].decoded().to_bytes_vec()[*idx].clone())
             .collect();
         assert_eq!(
             &ordered_column,
@@ -609,12 +609,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.physical_columns[4].decoded().as_int_slice(),
+            r.physical_columns[4].decoded().to_int_vec(),
             &[Some(1), Some(1), Some(1), Some(1)]
         );
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[5].decoded().as_real_slice()[*idx])
+            .map(|(idx, _)| r.physical_columns[5].decoded().to_real_vec()[*idx])
             .collect();
         assert_eq!(
             &ordered_column,
@@ -623,17 +623,17 @@ mod tests {
 
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
+            .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
             .collect();
         assert_eq!(&ordered_column, &[Some(1), Some(2), Some(1), Some(1)]);
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
+            .map(|(idx, _)| r.physical_columns[1].decoded().to_int_vec()[*idx])
             .collect();
         assert_eq!(&ordered_column, &[Some(0), Some(0), Some(1), Some(1)]);
         let ordered_column: Vec<_> = sort_column
             .iter()
-            .map(|(idx, _)| r.physical_columns[2].decoded().as_real_slice()[*idx])
+            .map(|(idx, _)| r.physical_columns[2].decoded().to_real_vec()[*idx])
             .collect();
         assert_eq!(
             &ordered_column,

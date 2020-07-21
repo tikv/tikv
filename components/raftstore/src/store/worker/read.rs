@@ -6,8 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
@@ -80,6 +82,7 @@ pub trait ReadExecutor<E: KvEngine> {
         let mut response = ReadResponse {
             response: RaftCmdResponse::default(),
             snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
         };
         let mut responses = Vec::with_capacity(requests.len());
         for req in requests {
@@ -141,6 +144,7 @@ pub struct ReadDelegate {
 
     tag: String,
     invalid: Arc<AtomicBool>,
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl ReadDelegate {
@@ -157,6 +161,7 @@ impl ReadDelegate {
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
+            txn_extra_op: peer.txn_extra_op.clone(),
         }
     }
 
@@ -169,21 +174,18 @@ impl ReadDelegate {
     }
 
     pub fn update(&mut self, progress: Progress) {
+        self.fresh_valid_ts();
         match progress {
             Progress::Region(region) => {
-                self.fresh_valid_ts();
                 self.region = Arc::new(region);
             }
             Progress::Term(term) => {
-                self.fresh_valid_ts();
                 self.term = term;
             }
             Progress::AppliedIndexTerm(applied_index_term) => {
-                self.fresh_valid_ts();
                 self.applied_index_term = applied_index_term;
             }
             Progress::LeaderLease(leader_lease) => {
-                self.fresh_valid_ts();
                 self.leader_lease = Some(leader_lease);
             }
         }
@@ -339,6 +341,7 @@ where
         let read_resp = ReadResponse {
             response: resp,
             snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
         };
 
         cmd.callback.invoke_read(read_resp);
@@ -443,6 +446,7 @@ where
                         let mut response = self.execute(&req, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut response.response, delegate.term);
+                        response.txn_extra_op = delegate.txn_extra_op.load();
                         cb.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
                         return;
@@ -474,6 +478,7 @@ where
                     cb.invoke_read(ReadResponse {
                         response,
                         snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
                     });
                     self.delegates.remove(&region_id);
                     return;
@@ -702,11 +707,10 @@ mod tests {
         Receiver<RaftCommand<RocksSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db =
-            engine_rocks::raw_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-                .unwrap();
+        let db = engine_rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap();
         let (ch, rx) = sync_channel(1);
-        let mut reader = LocalReader::new(RocksEngine::from_db(Arc::new(db)), store_meta, ch);
+        let mut reader = LocalReader::new(db, store_meta, ch);
         reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
@@ -810,6 +814,7 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 invalid: Arc::new(AtomicBool::new(false)),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             };
             meta.readers.insert(1, read_delegate);
         }

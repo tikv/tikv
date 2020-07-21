@@ -56,9 +56,6 @@ quick_error! {
         InvalidCf (cf_name: String) {
             display("invalid cf name: {}", cf_name)
         }
-        PessimisticTxnNotEnabled {
-            display("pessimistic transaction is not enabled")
-        }
     }
 }
 
