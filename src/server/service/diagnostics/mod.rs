@@ -65,10 +65,15 @@ impl Diagnostics for Service {
         } else {
             self.slow_log_file.to_owned()
         };
-        info!("log files: {:?} ----", log_file);
+        info!("log files: {:?},{:?} ----", log_file, self.pool);
         let stream = self
             .pool
-            .spawn_fn(move || log::search(log_file, req))
+            .spawn_fn(move || {
+                info!("start search log--");
+                let re = log::search(log_file, req);
+                info!("finish search log ----");
+                re
+            })
             .map(|stream| {
                 stream
                     .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
@@ -89,7 +94,9 @@ impl Diagnostics for Service {
             stream
                 .and_then(|stream| {
                     info!("search log start and_then ----");
-                    sink.send_all(stream)
+                    let re = sink.send_all(stream);
+                    info!("search log finish and_then ----");
+                    re
                 })
                 .map(|_| ())
                 .map_err(|e| {
@@ -112,6 +119,7 @@ impl Diagnostics for Service {
         let collect = self
             .pool
             .spawn_fn(move || {
+                info!("start collect server info ----");
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
                         let mut system = sysinfo::System::new();
@@ -133,6 +141,7 @@ impl Diagnostics for Service {
                     }
                     _ => (None, Instant::now()),
                 };
+                info!("finish collect server info ----");
                 Ok(s)
             })
             .and_then(|(load, when)| {
