@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
+use crate::storage::mvcc::{
+    metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
+};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -55,10 +57,10 @@ impl MissingLockAction {
 
     // This function should only be invoked when it's sure that there are no overlapping commit
     // record whose commit_ts equals to `ts`, the current transaction's start_ts.
-    fn construct_write(&self, ts: TimeStamp) -> Write {
+    fn construct_write(&self, ts: TimeStamp, overlay_write: Option<Write>) -> Write {
         match self {
-            MissingLockAction::Rollback => make_rollback(ts, false, None),
-            MissingLockAction::ProtectedRollback => make_rollback(ts, true, None),
+            MissingLockAction::Rollback => make_rollback(ts, false, overlay_write),
+            MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlay_write),
             _ => unreachable!(),
         }
     }
@@ -236,6 +238,19 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         self.put_lock(key, &lock);
+    }
+
+    fn check_write_and_rollback_lock(
+        &mut self,
+        key: Key,
+        lock: &Lock,
+        is_pessimistic_txn: bool,
+    ) -> Result<Option<ReleasedLock>> {
+        let overlay_write = self
+            .reader
+            .get_txn_commit_record(&key, self.start_ts)?
+            .unwrap_none();
+        self.rollback_lock(key, lock, is_pessimistic_txn, overlay_write)
     }
 
     fn rollback_lock(
@@ -705,7 +720,11 @@ impl<S: Snapshot> MvccTxn<S> {
                 )
             }
             _ => {
-                return match self.reader.get_txn_commit_record(&key, self.start_ts)?.info() {
+                return match self
+                    .reader
+                    .get_txn_commit_record(&key, self.start_ts)?
+                    .info()
+                {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -763,16 +782,17 @@ impl<S: Snapshot> MvccTxn<S> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
             .reader
-            .get_txn_commit_record(&primary_key, self.start_ts)?.info()
+            .get_txn_commit_record(&primary_key, self.start_ts)?
         {
-            Some((ts, write_type)) => {
-                if write_type == WriteType::Rollback {
+            TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                if write.write_type == WriteType::Rollback {
                     Ok(TxnStatus::RolledBack)
                 } else {
-                    Ok(TxnStatus::committed(ts))
+                    Ok(TxnStatus::committed(commit_ts))
                 }
             }
-            None => {
+            TxnCommitRecord::OverlayRollback { .. } => Ok(TxnStatus::RolledBack),
+            TxnCommitRecord::None { overlay_write } => {
                 if MissingLockAction::ReturnError == action {
                     return Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
@@ -790,7 +810,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                let write = action.construct_write(ts);
+                let write = action.construct_write(ts, overlay_write);
                 self.put_write(primary_key, ts, write.as_ref().to_bytes());
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
@@ -830,7 +850,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
 
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-                self.rollback_lock(key, lock, is_pessimistic_txn)
+                self.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
             }
             _ => match self.check_txn_status_missing_lock(
                 key,
@@ -962,7 +982,8 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
-                    let released = self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
+                    let released =
+                        self.check_write_and_rollback_lock(primary_key, lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((TxnStatus::TtlExpire, released));
                 }

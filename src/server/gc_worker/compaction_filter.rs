@@ -247,6 +247,7 @@ impl CompactionFilter for WriteCompactionFilter {
             write_type,
             start_ts,
             short_value,
+            ..
         } = WriteRef::parse(value).unwrap();
         if !self.remove_older {
             // here `filtered` must be false.

@@ -22,20 +22,20 @@ impl TxnCommitRecord {
     pub fn exist(&self) -> bool {
         match self {
             Self::None { .. } => false,
-            Self::SingleRecord { .. } | Self::OverlayRollback => true,
+            Self::SingleRecord { .. } | Self::OverlayRollback { .. } => true,
         }
     }
 
     pub fn info(&self) -> Option<(TimeStamp, WriteType)> {
         match self {
             Self::None { .. } => None,
-            Self::SingleRecord { commit_ts, write } => Some((commit_ts, write.write_type)),
-            Self::OverlayRollback { commit_ts } => Some((commit_ts, WriteType::Rollback)),
+            Self::SingleRecord { commit_ts, write } => Some((*commit_ts, write.write_type)),
+            Self::OverlayRollback { commit_ts } => Some((*commit_ts, WriteType::Rollback)),
         }
     }
 
     #[test]
-    pub fn unwrap_single_record(&self) -> (TimeStamp, WriteType) {
+    pub fn unwrap_single_record(self) -> (TimeStamp, WriteType) {
         match self {
             Self::SingleRecord { commit_ts, write } => (commit_ts, write.write_type),
             _ => panic!("not a single record: {:?}", self),
@@ -43,10 +43,17 @@ impl TxnCommitRecord {
     }
 
     #[test]
-    pub fn unwrap_overlay_rollback(&self) -> TimeStamp {
+    pub fn unwrap_overlay_rollback(self) -> TimeStamp {
         match self {
             Self::OverlayRollback { commit_ts } => commit_ts,
             _ => panic!("not an overlay rollback record: {:?}", self),
+        }
+    }
+
+    pub fn unwrap_none(self) -> Option<Write> {
+        match self {
+            Self::None { overlay_write } => overlay_write,
+            _ => panic!("txn record found but not expected: {:?}", self),
         }
     }
 }
@@ -260,17 +267,15 @@ impl<S: Snapshot> MvccReader<S> {
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
-                return Ok(TxnCommitRecord::Record { commit_ts, write });
+                return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
             }
             if commit_ts == start_ts {
                 if write.has_overlay_rollback {
                     return Ok(TxnCommitRecord::OverlayRollback { commit_ts });
                 }
-                if find_overlapping_commit {
-                    return Ok(TxnCommitRecord::None {
-                        overlay_write: write,
-                    });
-                }
+                return Ok(TxnCommitRecord::None {
+                    overlay_write: Some(write),
+                });
             }
             if commit_ts <= start_ts {
                 break;
