@@ -87,10 +87,7 @@ impl Diagnostics for Service {
             });
         let future = self.pool.spawn(
             stream
-                .and_then(|stream| {
-                    info!("search log start and_then ----");
-                    sink.send_all(stream)
-                })
+                .and_then(|stream| sink.send_all(stream))
                 .map(|_| ())
                 .map_err(|e| {
                     error!("search log RPC error"; "error" => ?e);
