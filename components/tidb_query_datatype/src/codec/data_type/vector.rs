@@ -32,8 +32,8 @@ impl VectorValue {
             TT = [Int, Real, Duration, Decimal, DateTime],
             match eval_tp {
                 EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                EvalType::Json => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
-                EvalType::Bytes => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
+                EvalType::Json => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
+                EvalType::Bytes => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
             }
         }
     }
@@ -45,8 +45,8 @@ impl VectorValue {
             TT = [Int, Real, Duration, Decimal, DateTime],
             match self {
                 VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                VectorValue::Json(_) => VectorValue::Json(NotChunkedVec::with_capacity(capacity)),
-                VectorValue::Bytes(_) => VectorValue::Bytes(NotChunkedVec::with_capacity(capacity))
+                VectorValue::Json(_) => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
+                VectorValue::Bytes(_) => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
             }
         }
     }
