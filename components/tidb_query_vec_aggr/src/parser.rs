@@ -7,7 +7,7 @@ use crate::impl_max_min::*;
 use crate::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::RpnExpression;
+use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
 
 /// Parse a specific aggregate function definition from protobuf.
 ///
@@ -33,12 +33,33 @@ pub trait AggrDefinitionParser {
     /// May panic if the aggregate function definition is not supported by this parser.
     fn parse(
         &self,
-        aggr_def: Expr,
+        mut aggr_def: Expr,
         ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn AggrFunction>>;
+    ) -> Result<Box<dyn AggrFunction>> {
+        // Rewrite expression to insert CAST() if needed.
+        let child = aggr_def.take_children().into_iter().next().unwrap();
+        let exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
+
+        Self::parse_rpn(&self, aggr_def, exp, ctx, src_schema, out_schema, out_exp)
+    }
+
+    #[inline]
+    fn parse_rpn(
+        &self,
+        _root_expr: Expr,
+        _exp: RpnExpression,
+        _ctx: &mut EvalContext,
+        _src_schema: &[FieldType],
+        _out_schema: &mut Vec<FieldType>,
+        _out_exp: &mut Vec<RpnExpression>,
+    ) -> Result<Box<dyn AggrFunction>> {
+        unimplemented!(
+            "This struct neither implemented parse nor parse_rpn, which is not expected."
+        )
+    }
 }
 
 #[inline]

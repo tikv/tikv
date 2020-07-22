@@ -9,7 +9,7 @@ use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// The parser for COUNT aggregate function.
 pub struct AggrFnDefinitionParserCount;
@@ -20,17 +20,17 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
-        // We use the same structure for all data types, so this parameter is not needed.
-        src_schema: &[FieldType],
+        root_expr: Expr,
+        exp: RpnExpression,
+        _ctx: &mut EvalContext,
+        _src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
-        assert_eq!(aggr_def.get_tp(), ExprType::Count);
-        let child = aggr_def.take_children().into_iter().next().unwrap();
+    ) -> Result<Box<dyn AggrFunction>> {
+        assert_eq!(root_expr.get_tp(), ExprType::Count);
 
         // COUNT outputs one column.
         out_schema.push(
@@ -40,12 +40,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
                 .build(),
         );
 
-        // COUNT doesn't need to cast, so using the expression directly.
-        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
-            child,
-            ctx,
-            src_schema.len(),
-        )?);
+        out_exp.push(exp);
 
         Ok(Box::new(AggrFnCount))
     }
