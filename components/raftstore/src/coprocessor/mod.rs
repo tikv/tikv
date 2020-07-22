@@ -12,6 +12,7 @@ use raft::StateRole;
 use txn_types::TxnExtra;
 
 pub mod config;
+mod consistency_check;
 pub mod dispatcher;
 mod error;
 mod metrics;
@@ -20,6 +21,9 @@ mod split_check;
 pub mod split_observer;
 
 pub use self::config::{Config, ConsistencyCheckMethod};
+pub use self::consistency_check::{
+    ConsistencyCheckHost, ConsistencyChecker, RawConsistencyChecker,
+};
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,
     BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,

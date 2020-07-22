@@ -1074,7 +1074,7 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
-            coprocessor_host,
+            coprocessor_host: coprocessor_host.clone(),
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
@@ -1094,7 +1094,7 @@ impl RaftBatchSystem {
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
-            coprocessor_host: workers.coprocessor_host.clone(),
+            coprocessor_host: coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
             global_replication_state,
@@ -1111,6 +1111,7 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
             )?;
         } else {
             self.start_system::<T, C, RocksWriteBatch>(
@@ -1118,6 +1119,7 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
+                coprocessor_host,
             )?;
         }
         Ok(())
@@ -1133,6 +1135,7 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksSnapshot>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
+        coprocessor_host: CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1226,7 +1229,8 @@ impl RaftBatchSystem {
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner = ConsistencyCheckRunner::new(self.router.clone());
+        let consistency_check_runner =
+            ConsistencyCheckRunner::new(self.router.clone(), coprocessor_host);
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -2074,6 +2078,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let mut request = new_admin_request(target_region_id, target_peer);
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::ComputeHash);
+        admin.mut_compute_hash().safe_point = self
+            .ctx
+            .coprocessor_host
+            .get_consistency_checker_host()
+            .gen_safe_point();
         request.set_admin_request(admin);
 
         let _ = self.ctx.router.send(

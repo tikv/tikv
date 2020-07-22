@@ -242,6 +242,7 @@ pub enum CasualMessage<S: Snapshot> {
     /// Hash result of ComputeHash command.
     ComputeHashResult {
         index: u64,
+        safe_point: u64,
         hash: Vec<u8>,
     },
 
@@ -280,10 +281,15 @@ pub enum CasualMessage<S: Snapshot> {
 impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult { index, ref hash } => write!(
-                fmt,
-                "ComputeHashResult [index: {}, hash: {}]",
+            CasualMessage::ComputeHashResult {
                 index,
+                safe_point,
+                ref hash,
+            } => write!(
+                fmt,
+                "ComputeHashResult [index: {}, safe_point: {}, hash: {}]",
+                index,
+                safe_point,
                 escape(hash)
             ),
             CasualMessage::SplitRegion { ref split_keys, .. } => write!(

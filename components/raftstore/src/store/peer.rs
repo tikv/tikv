@@ -160,6 +160,7 @@ pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
+    pub safe_point: u64,
     pub hash: Vec<u8>,
 }
 
@@ -349,6 +350,7 @@ impl Peer {
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
+                safe_point: 0,
                 hash: vec![],
             },
             raft_log_size_hint: 0,

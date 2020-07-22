@@ -270,29 +270,31 @@ macro_rules! loop_ob {
 
 /// Admin and invoke all coprocessors.
 #[derive(Clone)]
-pub struct CoprocessorHost<E>
+pub struct CoprocessorHost<E: KvEngine>
 where
     E: 'static,
 {
     pub registry: Registry<E>,
+    consistency_check_host: ConsistencyCheckHost<E>,
 }
 
-impl<E> Default for CoprocessorHost<E>
+impl<E: KvEngine> Default for CoprocessorHost<E>
 where
     E: 'static,
 {
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
+            consistency_check_host: ConsistencyCheckHost::<E>::new(),
         }
     }
 }
 
-impl<E> CoprocessorHost<E>
-where
-    E: KvEngine,
-{
-    pub fn new<C: CasualRouter<E::Snapshot> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+impl<E: KvEngine> CoprocessorHost<E> {
+    pub fn new<C>(ch: C) -> CoprocessorHost<E>
+    where
+        C: CasualRouter<E::Snapshot> + Clone + Send + 'static,
+    {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -308,7 +310,11 @@ where
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry }
+        let consistency_check_host = ConsistencyCheckHost::new();
+        CoprocessorHost {
+            registry,
+            consistency_check_host,
+        }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -421,6 +427,10 @@ where
             policy
         );
         host
+    }
+
+    pub fn get_consistency_checker_host(&self) -> &ConsistencyCheckHost<E> {
+        &self.consistency_check_host
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {
