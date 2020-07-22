@@ -15,7 +15,7 @@ const SHA256: i64 = 256;
 const SHA384: i64 = 384;
 const SHA512: i64 = 512;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn md5(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
@@ -24,7 +24,7 @@ pub fn md5(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn sha1(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
@@ -33,7 +33,7 @@ pub fn sha1(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn sha2(
     ctx: &mut EvalContext,
@@ -60,7 +60,7 @@ pub fn sha2(
 }
 
 // https://dev.mysql.com/doc/refman/5.7/en/password-hashing.html
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn password(ctx: &mut EvalContext, input: Option<BytesRef>) -> Result<Option<Bytes>> {
     ctx.warnings.append_warning(Error::Other(box_err!(
@@ -88,7 +88,7 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
         .map_err(|e| box_err!("OpenSSL error: {:?}", e))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn uncompressed_length(ctx: &mut EvalContext, arg: Option<BytesRef>) -> Result<Option<Int>> {
     use byteorder::{ByteOrder, LittleEndian};
@@ -104,7 +104,7 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: Option<BytesRef>) -> Resu
     }))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Bytes>> {
     match arg {
