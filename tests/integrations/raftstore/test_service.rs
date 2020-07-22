@@ -22,6 +22,7 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
+use tikv::server::gc_worker::sync_gc;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
@@ -264,7 +265,7 @@ fn test_mvcc_rollback_and_cleanup() {
 fn test_mvcc_resolve_lock_gc_and_delete() {
     use kvproto::kvrpcpb::*;
 
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
@@ -345,13 +346,9 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // GC `k` at the latest ts.
     ts += 1;
-    let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
-    gc_req.set_context(ctx.clone());
-    gc_req.safe_point = gc_safe_ponit;
-    let gc_resp = client.kv_gc(&gc_req).unwrap();
-    assert!(!gc_resp.has_region_error());
-    assert!(!gc_resp.has_error());
+    let gc_safe_ponit = TimeStamp::from(ts);
+    let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
+    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;

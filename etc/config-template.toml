@@ -351,6 +351,9 @@
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
+## Currently only "raw" is supported, which means the check is based raw data.
+# consistency-check-method = "raw"
+
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to

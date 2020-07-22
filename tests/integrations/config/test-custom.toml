@@ -165,6 +165,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
+consistency-check-method = "mvcc"
 
 [rocksdb]
 wal-recovery-mode = 1
