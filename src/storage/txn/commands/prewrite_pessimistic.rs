@@ -43,7 +43,6 @@ impl CommandExt for PrewritePessimistic {
     ctx!();
     tag!(prewrite);
     ts!(start_ts);
-    command_method!(requires_pessimistic_txn, bool, true);
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;
