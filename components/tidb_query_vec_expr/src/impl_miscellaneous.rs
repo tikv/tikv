@@ -18,7 +18,7 @@ const PREFIX_MAPPED: [u8; 12] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
 ];
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn any_value<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Option<T>> {
     if let Some(arg) = args.first() {
@@ -28,7 +28,7 @@ pub fn any_value<T: Evaluable + EvaluableRet>(args: &[Option<&T>]) -> Result<Opt
     }
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn any_value_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     if let Some(arg) = args.first() {
@@ -38,7 +38,7 @@ pub fn any_value_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(nullable, varg)]
 #[inline]
 pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(arg) = args.first() {
@@ -48,7 +48,7 @@ pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn inet_aton(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(addr
@@ -57,7 +57,7 @@ pub fn inet_aton(addr: Option<BytesRef>) -> Result<Option<Int>> {
         .and_then(miscellaneous::inet_aton))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn inet_ntoa(arg: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(arg
@@ -66,7 +66,7 @@ pub fn inet_ntoa(arg: Option<&Int>) -> Result<Option<Bytes>> {
         .map(|arg| format!("{}", Ipv4Addr::from(arg)).into_bytes()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn inet6_aton(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     let input = match input {
@@ -82,7 +82,7 @@ pub fn inet6_aton(input: Option<BytesRef>) -> Result<Option<Bytes>> {
         .or(Ok(None))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn inet6_ntoa(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.and_then(|s| {
@@ -98,7 +98,7 @@ pub fn inet6_ntoa(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_ipv4(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match addr {
@@ -116,7 +116,7 @@ pub fn is_ipv4(addr: Option<BytesRef>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_ipv4_compat(addr: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(addr.as_ref().map_or(Some(0), |addr| {
@@ -128,7 +128,7 @@ pub fn is_ipv4_compat(addr: Option<BytesRef>) -> Result<Option<i64>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_ipv4_mapped(addr: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(addr.as_ref().map_or(Some(0), |addr| {
@@ -140,7 +140,7 @@ pub fn is_ipv4_mapped(addr: Option<BytesRef>) -> Result<Option<i64>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match addr {
@@ -158,7 +158,7 @@ pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn uuid() -> Result<Option<Bytes>> {
     let result = Uuid::new_v4();
