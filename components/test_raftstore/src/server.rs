@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use futures::Future;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
@@ -20,8 +21,9 @@ use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
-use pd_client::DummyPdClient;
+use pd_client::{DummyPdClient, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
@@ -45,8 +47,10 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
@@ -195,12 +199,19 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host)
             .unwrap();
 
+        let latest_ts = self
+            .pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new();
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
+            concurrency_manager,
             Arc::new(DummyPdClient::new()),
             false,
         )?;
@@ -398,6 +409,26 @@ impl Simulator for ServerCluster {
             Some(meta) => meta.sim_router.clone(),
         };
         router.send_command(request, cb)
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) {
+        match self.metas.get(&node_id) {
+            None => {
+                let e: RaftError = box_err!("missing sender for store {}", node_id);
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(e.into());
+                cb.invoke_with_response(resp);
+            }
+            Some(meta) => {
+                meta.sim_router.read(batch_id, request, cb).unwrap();
+            }
+        };
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

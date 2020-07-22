@@ -1109,6 +1109,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "event-listener"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05b148ad9bf80edb24098fd1ab4883c7c381e7900c1a38e512fb0586c4501505"
+
+[[package]]
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
@@ -4272,6 +4278,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio 0.2.13",
@@ -4526,6 +4533,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "event-listener",
  "fail",
  "failure",
  "fs2",
