@@ -265,6 +265,7 @@ pub enum Task {
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
+        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
     },
     /// The detect request of other nodes.
     DetectRpc {
@@ -288,7 +289,9 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Detect { tp, txn_ts, lock } => write!(
+            Task::Detect {
+                tp, txn_ts, lock, ..
+            } => write!(
                 f,
                 "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
                 tp, txn_ts, lock
@@ -327,6 +330,21 @@ impl Scheduler {
             tp: DetectType::Detect,
             txn_ts,
             lock,
+            cb: None,
+        });
+    }
+
+    pub fn detect_callback(
+        &self,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        cb: impl FnOnce(Lock, /* deadlock key hash */ u64) + Send + 'static,
+    ) {
+        self.notify_scheduler(Task::Detect {
+            tp: DetectType::Detect,
+            txn_ts,
+            lock,
+            cb: Some(Box::new(cb)),
         });
     }
 
@@ -335,6 +353,7 @@ impl Scheduler {
             tp: DetectType::CleanUpWaitFor,
             txn_ts,
             lock,
+            cb: None,
         });
     }
 
@@ -343,6 +362,7 @@ impl Scheduler {
             tp: DetectType::CleanUp,
             txn_ts,
             lock: Lock::default(),
+            cb: None,
         });
     }
 
@@ -460,6 +480,9 @@ struct Inner {
     role: Role,
 
     detect_table: DetectTable,
+
+    /// Callbacks of a deadlock response
+    callbacks: HashMap<TimeStamp, Box<dyn FnOnce(Lock, u64) + Send>>,
 }
 
 /// Detector is used to detect deadlocks between transactions. There is a leader
@@ -522,6 +545,7 @@ where
             inner: Rc::new(RefCell::new(Inner {
                 role: Role::Follower,
                 detect_table: DetectTable::new(cfg.wait_for_lock_timeout.into()),
+                callbacks: HashMap::default(),
             })),
         }
     }
@@ -536,6 +560,7 @@ where
         let mut inner = self.inner.borrow_mut();
         inner.detect_table.clear();
         inner.role = role;
+        inner.callbacks.clear();
         self.leader_client.take();
         self.leader_info.take();
     }
@@ -639,6 +664,7 @@ where
             leader_addr,
         );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
+        let inner = self.inner.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let WaitForEntry {
                 txn,
@@ -646,14 +672,15 @@ where
                 key_hash,
                 ..
             } = resp.take_entry();
-            waiter_mgr_scheduler.deadlock(
-                txn.into(),
-                Lock {
-                    ts: wait_for_txn.into(),
-                    hash: key_hash,
-                },
-                resp.get_deadlock_key_hash(),
-            )
+            let lock = Lock {
+                ts: wait_for_txn.into(),
+                hash: key_hash,
+            };
+            let deadlock_key_hash = resp.get_deadlock_key_hash();
+            if let Some(cb) = inner.borrow_mut().callbacks.remove(&txn.into()) {
+                cb(lock, deadlock_key_hash);
+            }
+            waiter_mgr_scheduler.deadlock(txn.into(), lock, deadlock_key_hash)
         }));
         handle.spawn(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
@@ -701,11 +728,20 @@ where
         false
     }
 
-    fn handle_detect_locally(&self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect_locally(
+        &self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
+    ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
                 if let Some(deadlock_key_hash) = detect_table.detect(txn_ts, lock.ts, lock.hash) {
+                    if let Some(cb) = cb {
+                        cb(lock, deadlock_key_hash);
+                    }
                     self.waiter_mgr_scheduler
                         .deadlock(txn_ts, lock, deadlock_key_hash);
                 }
@@ -718,9 +754,16 @@ where
     }
 
     /// Handles detect requests of itself.
-    fn handle_detect(&mut self, handle: &Handle, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect(
+        &mut self,
+        handle: &Handle,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
+    ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock);
+            self.handle_detect_locally(tp, txn_ts, lock, cb);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -731,6 +774,9 @@ where
                     break;
                 }
                 if self.send_request_to_leader(handle, tp, txn_ts, lock) {
+                    if let Some(cb) = cb {
+                        self.inner.borrow_mut().callbacks.insert(txn_ts, cb);
+                    }
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a
@@ -833,8 +879,13 @@ where
 {
     fn run(&mut self, task: Task, handle: &Handle) {
         match task {
-            Task::Detect { tp, txn_ts, lock } => {
-                self.handle_detect(handle, tp, txn_ts, lock);
+            Task::Detect {
+                tp,
+                txn_ts,
+                lock,
+                cb,
+            } => {
+                self.handle_detect(handle, tp, txn_ts, lock, cb);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(handle, stream, sink);
