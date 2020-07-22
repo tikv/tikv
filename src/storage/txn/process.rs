@@ -240,7 +240,6 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             secondary_keys,
             ..
         }) => {
-            let mut scan_mode = None;
             let rows = mutations.len();
             if rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -262,21 +261,9 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     // Because in most instances, there won't be more than one transaction write the same key. Seek
                     // operation could skip nonexistent key in CF_LOCK.
                     skip_constraint_check = true;
-                    scan_mode = Some(ScanMode::Forward)
                 }
             }
-            let mut txn = if scan_mode.is_some() {
-                MvccTxn::for_scan(
-                    snapshot,
-                    scan_mode,
-                    start_ts,
-                    !ctx.get_not_fill_cache(),
-                    pd_client,
-                )
-            } else {
-                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client)
-            };
-
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
             // Set extra op here for getting the write record when check write conflict in prewrite.
             txn.extra_op = extra_op;
 
