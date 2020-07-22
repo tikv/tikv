@@ -443,6 +443,7 @@ impl<E: Engine> AssertionStorage<E> {
             )
             .unwrap();
         let locks: Vec<(&[u8], &[u8], TimeStamp)> = res
+            .locks
             .iter()
             .filter_map(|x| {
                 if let Err(StorageError(box StorageErrorInner::Txn(TxnError(
