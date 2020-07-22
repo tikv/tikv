@@ -2,7 +2,7 @@
 
 use futures::Future;
 
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use pd_client::DummyPdClient;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
@@ -63,8 +63,6 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         let mut gc_worker = GcWorker::new(
             self.engine,
             None,
-            None,
-            None,
             self.gc_config.unwrap_or_default(),
             Default::default(),
         );
@@ -121,6 +119,32 @@ impl<E: Engine> SyncTestStorage<E> {
         self.store
             .batch_get(ctx, keys.to_owned(), start_ts.into())
             .wait()
+    }
+
+    pub fn batch_get_command(
+        &self,
+        ctx: Context,
+        keys: &[&[u8]],
+        start_ts: u64,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let requests: Vec<GetRequest> = keys
+            .to_owned()
+            .into_iter()
+            .map(|key| {
+                let mut req = GetRequest::default();
+                req.set_context(ctx.clone());
+                req.set_key(key.to_owned());
+                req.set_version(start_ts);
+                req
+            })
+            .collect();
+        let resp = self.store.batch_get_command(requests).wait()?;
+        let mut values = vec![];
+
+        for value in resp.into_iter() {
+            values.push(value?);
+        }
+        Ok(values)
     }
 
     pub fn scan(
@@ -267,8 +291,8 @@ impl<E: Engine> SyncTestStorage<E> {
         .unwrap()
     }
 
-    pub fn gc(&self, ctx: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(ctx, safe_point.into(), cb)).unwrap()
+    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
