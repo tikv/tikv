@@ -122,6 +122,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
+            // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), region);
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key| {
