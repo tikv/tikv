@@ -123,7 +123,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
             // Create a snapshot here for preventing the old value was GC-ed.
-            let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), region);
+            let snapshot =
+                RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {

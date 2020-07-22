@@ -220,13 +220,16 @@ mod kw {
 }
 
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RpnFnAttr {
     /// Whether or not the function is a varg function. Varg function accepts `&[&Option<T>]`.
     is_varg: bool,
 
     /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
     is_raw_varg: bool,
+
+    /// Whether or not the function needs extra logic on `None` value.
+    nullable: bool,
 
     /// The maximum accepted arguments, which will be checked by the validator.
     ///
@@ -250,10 +253,27 @@ struct RpnFnAttr {
     captures: Vec<Expr>,
 }
 
+impl Default for RpnFnAttr {
+    fn default() -> Self {
+        Self {
+            is_varg: false,
+            is_raw_varg: false,
+            nullable: true,
+            max_args: None,
+            min_args: None,
+            extra_validator: None,
+            metadata_type: None,
+            metadata_mapper: None,
+            captures: vec![],
+        }
+    }
+}
+
 impl parse::Parse for RpnFnAttr {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let mut is_varg = false;
         let mut is_raw_varg = false;
+        let mut nullable = false;
         let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
@@ -315,6 +335,9 @@ impl parse::Parse for RpnFnAttr {
                         "raw_varg" => {
                             is_raw_varg = true;
                         }
+                        "nullable" => {
+                            nullable = true;
+                        }
                         _ => {
                             return Err(Error::new_spanned(
                                 path,
@@ -343,10 +366,20 @@ impl parse::Parse for RpnFnAttr {
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
+        if !nullable && is_raw_varg {
+            return Err(Error::new_spanned(
+                config_items,
+                "`raw_varg` function must be nullable",
+            ));
+        }
+        if !nullable && is_varg {
+            return Err(Error::new_spanned(config_items, "`varg` must be nullable"));
+        }
 
         Ok(Self {
             is_varg,
             is_raw_varg,
+            nullable,
             max_args,
             min_args,
             extra_validator,
@@ -411,7 +444,15 @@ impl RpnFnRefEvaluableType {
     fn get_type_with_lifetime(&self, lifetime: TokenStream) -> TokenStream {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
-            RpnFnRefEvaluableType::Type(x) => quote! { #x <#lifetime> },
+            RpnFnRefEvaluableType::Type(x) => {
+                if is_json(x) || is_bytes(x) {
+                    quote! {
+                        #x <#lifetime>
+                    }
+                } else {
+                    quote! { &#lifetime #x }
+                }
+            }
         }
     }
 }
@@ -675,7 +716,7 @@ fn generate_metadata_type_checker(
 /// Checks if parameter type is Json
 fn is_json(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => *x == "JsonRef",
+        Some(x) => *x == "JsonRef" || *x == "Json",
         None => false,
     }
 }
@@ -683,7 +724,7 @@ fn is_json(ty: &TypePath) -> bool {
 /// Checks if parameter type is Bytes
 fn is_bytes(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
-        Some(x) => *x == "BytesRef",
+        Some(x) => *x == "BytesRef" || *x == "Bytes",
         None => false,
     }
 }
@@ -837,8 +878,11 @@ impl VargsRpnFn {
         } else {
             quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
         };
+
         let varg_buf = get_vargs_buf(arg_type);
         let vectorized_type = get_vectoried_type(arg_type);
+
+        let vec_type = &self.ret_type;
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
@@ -860,7 +904,7 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, Default::default());
-                        let mut result = NotChunkedVec::with_capacity(output_rows);
+                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
@@ -868,10 +912,10 @@ impl VargsRpnFn {
                                 #transmute_ref
                                 vargs_buf[arg_index] = arg;
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)*
+                            result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)*
                                 unsafe{ &* (vargs_buf.as_slice() as * const _ as * const [Option<#vectorized_type>]) })?);
                         }
-                        Ok(EvaluableRet::into_vector_value(result))
+                        Ok(#vec_type::into_vector_value(result))
                     })
                 }
 
@@ -980,6 +1024,8 @@ impl RawVargsRpnFn {
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
 
+        let vec_type = &self.ret_type;
+
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> crate::RpnFnMeta
@@ -997,7 +1043,7 @@ impl RawVargsRpnFn {
                     crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        let mut result = NotChunkedVec::with_capacity(output_rows);
+                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             vargs_buf.clear();
                             for arg_index in 0..args_len {
@@ -1009,9 +1055,9 @@ impl RawVargsRpnFn {
                                 };
                                 vargs_buf.push(scalar_arg);
                             }
-                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
+                            result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(EvaluableRet::into_vector_value(result))
+                        Ok(#vec_type::into_vector_value(result))
                     })
                 }
 
@@ -1039,6 +1085,7 @@ struct NormalRpnFn {
     extra_validator: Option<TokenStream>,
     metadata_type: Option<TokenStream>,
     metadata_mapper: Option<TokenStream>,
+    nullable: bool,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -1049,15 +1096,41 @@ struct NormalRpnFn {
 }
 
 impl NormalRpnFn {
+    fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
+        if attr.nullable {
+            parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
+                Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`")
+            })
+        } else {
+            if let FnArg::Typed(mut fn_arg) = fn_arg.clone() {
+                let ty = fn_arg.ty.clone();
+                if parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).is_ok() {
+                    // Developer has supplied Option<T>
+                    Err(Error::new_spanned(
+                        fn_arg,
+                        "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                    ))
+                } else {
+                    fn_arg.ty = parse_quote! { Option<#ty> };
+                    parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).map_err(|_| {
+                        Error::new_spanned(
+                            fn_arg,
+                            "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                        )
+                    })
+                }
+            } else {
+                Err(Error::new_spanned(fn_arg, "Expect a type"))
+            }
+        }
+    }
+
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
         let mut arg_types_no_ref = Vec::new();
         for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
-            let arg_type =
-                parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
-                    Error::new_spanned(fn_arg, "Expect parameter type to be like Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>")
-                })?;
+            let arg_type = Self::get_arg_type(&attr, &fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
             arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
@@ -1079,6 +1152,7 @@ impl NormalRpnFn {
             extra_validator: attr.extra_validator,
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
+            nullable: attr.nullable,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -1172,19 +1246,39 @@ impl NormalRpnFn {
         let downcast_metadata = generate_downcast_metadata(
             self.metadata_type.is_some() || self.metadata_mapper.is_some(),
         );
-        let extract2 = extract.clone();
         let call_arg2 = extract.clone();
+        let extract2 = extract.clone();
+
+        let nonnull_unwrap = if !self.nullable {
+            quote! {
+                #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
+            }
+        } else {
+            quote! {}
+        };
+
+        let extract2 = extract.clone();
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            quote! {
+            if self.nullable {
+                quote! {
+                    let arg: &#tp = unsafe { &*std::ptr::null() };
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                }
+            } else {
+                quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
-                #(let (#extract2, arg) = arg.extract(0));*;
-                #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2.unwrap()),* ).ok();
+                }
             },
         );
+
+        let vec_type = &self.ret_type;
 
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
@@ -1198,12 +1292,13 @@ impl NormalRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
-                        result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
+                        #nonnull_unwrap
+                        result.chunked_push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(#vec_type::into_vector_value(result))
                 }
             }
 
@@ -1368,10 +1463,10 @@ mod tests_normal {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<
-                    'arg_,
-                    Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
-                    Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
-                > Foo_Fn for crate::function::Arg<Arg0_, crate::function::Arg<Arg1_, crate::function::Null> >
+                'arg_,
+                Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
+                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
+            > Foo_Fn for crate::function::Arg<Arg0_, crate::function::Arg<Arg1_, crate::function::Null> >
             {
                 default fn eval(
                     self,
@@ -1382,13 +1477,13 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
-                        result.push(foo(arg0, arg1)?);
+                        result.chunked_push(foo(arg0, arg1)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(Decimal::into_vector_value(result))
                 }
             }
         };
@@ -1535,15 +1630,11 @@ mod tests_normal {
     fn test_generic_generate_real_fn_trait_impl() {
         let gen = generic_fn();
         let expected: TokenStream = quote! {
-            impl<
-                'arg_,
-                A: M,
-                B,
-                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ A::X> >
-            > Foo_Fn<A, B> for crate::function::Arg<
-                Arg0_,
-                crate::function::Null
-            > where B: N<A> {
+            impl<'arg_, A: M, B, Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ A::X> > > Foo_Fn<A, B>
+                for crate::function::Arg<Arg0_, crate::function::Null>
+            where
+                B: N<A>
+            {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
@@ -1553,12 +1644,12 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <B as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
-                        result.push(foo :: <A, B> (arg0)?);
+                        result.chunked_push(foo::<A, B>(arg0)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(B::into_vector_value(result))
                 }
             }
         };
@@ -1671,6 +1762,7 @@ mod tests_normal {
                 metadata_mapper: None,
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
+                nullable: true,
             },
             item_fn,
         )
@@ -1682,20 +1774,16 @@ mod tests_normal {
         let gen = no_generic_fn_with_extras();
         let expected: TokenStream = quote! {
             impl<
-                'arg_,
-                Arg2_: crate::function::RpnFnArg<Type = Option<JsonRef<'arg_> > > ,
-                Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> > ,
-                Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
-            > Foo_Fn for crate::function::Arg<
-                Arg0_,
-                crate::function::Arg<
-                    Arg1_,
-                    crate::function::Arg<
-                        Arg2_,
-                        crate::function::Null
-                    >
+                    'arg_,
+                    Arg2_: crate::function::RpnFnArg<Type = Option<JsonRef<'arg_> > >,
+                    Arg1_: crate::function::RpnFnArg<Type = Option<&'arg_ Real> >,
+                    Arg0_: crate::function::RpnFnArg<Type = Option<&'arg_ Int> >
+                > Foo_Fn
+                for crate::function::Arg<
+                    Arg0_,
+                    crate::function::Arg<Arg1_, crate::function::Arg<Arg2_, crate::function::Null> >
                 >
-            > {
+            {
                 default fn eval(
                     self,
                     ctx: &mut tidb_query_datatype::expr::EvalContext,
@@ -1705,14 +1793,14 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = NotChunkedVec::with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
                         let (arg2, arg) = arg.extract(row_index);
-                        result.push(foo(ctx, arg0, arg1, arg2)?);
+                        result.chunked_push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(tidb_query_datatype::codec::data_type::EvaluableRet::into_vector_value(result))
+                    Ok(Decimal::into_vector_value(result))
                 }
             }
         };

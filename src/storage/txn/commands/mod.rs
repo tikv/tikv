@@ -15,6 +15,7 @@ mod prewrite;
 mod prewrite_pessimistic;
 mod resolve_lock;
 mod resolve_lock_lite;
+mod resolve_lock_readphase;
 mod rollback;
 mod scan_lock;
 mod txn_heart_beat;
@@ -31,6 +32,7 @@ pub use prewrite::Prewrite;
 pub use prewrite_pessimistic::PrewritePessimistic;
 pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
+pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
@@ -45,7 +47,9 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics;
 use crate::storage::txn::latch::{self, Latches};
-use crate::storage::types::{MvccInfo, PessimisticLockRes, StorageCallbackType, TxnStatus};
+use crate::storage::types::{
+    MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
+};
 use crate::storage::Result;
 use tikv_util::collections::HashMap;
 
@@ -68,6 +72,7 @@ pub enum Command {
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
     ScanLock(ScanLock),
+    ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
     Pause(Pause),
@@ -95,7 +100,7 @@ impl<T> From<TypedCommand<T>> for Command {
     }
 }
 
-impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
+impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
         if for_update_ts == 0 {
@@ -107,6 +112,11 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_skip_constraint_check(),
                 req.get_txn_size(),
                 req.get_min_commit_ts().into(),
+                if req.get_use_async_commit() {
+                    Some(req.get_secondaries().into())
+                } else {
+                    None
+                },
                 req.take_context(),
             )
         } else {
@@ -266,7 +276,7 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLock::new(txn_status, None, vec![], req.take_context())
+            ResolveLockReadPhase::new(txn_status, None, req.take_context())
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());
@@ -337,6 +347,7 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::ScanLock(t) => t,
+            Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
@@ -357,6 +368,7 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::ScanLock(t) => t,
+            Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,

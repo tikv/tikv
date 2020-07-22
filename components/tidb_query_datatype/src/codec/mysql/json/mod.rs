@@ -235,6 +235,11 @@ impl Json {
         }
     }
 
+    /// Returns the JSON type
+    pub fn get_type(&self) -> JsonType {
+        self.type_code
+    }
+
     /// Creates a `string` JSON from a `String`
     pub fn from_string(s: String) -> Result<Self> {
         let mut value = vec![];

@@ -17,6 +17,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
 use raftstore::store::fsm::store::StoreMeta;
@@ -30,6 +31,7 @@ use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
@@ -352,6 +354,32 @@ impl Simulator for NodeCluster {
             .cloned()
             .unwrap();
         router.send_command(request, cb)
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) {
+        if !self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .contains_key(&node_id)
+        {
+            let mut resp = RaftCmdResponse::default();
+            let e: RaftError = box_err!("missing sender for store {}", node_id);
+            resp.mut_header().set_error(e.into());
+            cb.invoke_with_response(resp);
+            return;
+        }
+        let mut guard = self.trans.core.lock().unwrap();
+        let router = guard.routers.get_mut(&node_id).unwrap();
+        router.read(batch_id, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

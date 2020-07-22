@@ -1,82 +1,10 @@
-use std::sync::{mpsc::channel, Arc};
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::*;
-use test_storage::new_raft_engine;
-use tikv::server::gc_worker::{GcWorker, GC_MAX_EXECUTING_TASKS};
-use tikv::storage;
 use tikv_util::{collections::HashMap, HandyRwLock};
-
-#[test]
-fn test_gcworker_busy() {
-    let snapshot_fp = "raftkv_async_snapshot";
-    let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let mut gc_worker = GcWorker::new(
-        engine,
-        None,
-        None,
-        None,
-        Default::default(),
-        Default::default(),
-    );
-    gc_worker.start().unwrap();
-
-    fail::cfg(snapshot_fp, "pause").unwrap();
-    let (tx1, rx1) = channel();
-    // Schedule `GC_MAX_EXECUTING_TASKS - 1` GC requests.
-    for _i in 1..GC_MAX_EXECUTING_TASKS {
-        let tx1 = tx1.clone();
-        gc_worker
-            .gc(
-                ctx.clone(),
-                1.into(),
-                Box::new(move |res: storage::Result<()>| {
-                    assert!(res.is_ok());
-                    tx1.send(1).unwrap();
-                }),
-            )
-            .unwrap();
-    }
-    // Sleep to make sure the failpoint is triggered.
-    thread::sleep(Duration::from_millis(2000));
-    // Schedule one more request. So that there is a request being processed and
-    // `GC_MAX_EXECUTING_TASKS` requests in queue.
-    gc_worker
-        .gc(
-            ctx,
-            1.into(),
-            Box::new(move |res: storage::Result<()>| {
-                assert!(res.is_ok());
-                tx1.send(1).unwrap();
-            }),
-        )
-        .unwrap();
-
-    // Old GC commands are blocked, the new one will get GcWorkerTooBusy error.
-    let (tx2, rx2) = channel();
-    gc_worker
-        .gc(
-            Context::default(),
-            1.into(),
-            Box::new(move |res: storage::Result<()>| {
-                match res {
-                    Err(storage::Error(box storage::ErrorInner::GcWorkerTooBusy)) => {}
-                    res => panic!("expect too busy, got {:?}", res),
-                }
-                tx2.send(1).unwrap();
-            }),
-        )
-        .unwrap();
-
-    rx2.recv().unwrap();
-    fail::remove(snapshot_fp);
-    for _ in 0..GC_MAX_EXECUTING_TASKS {
-        rx1.recv().unwrap();
-    }
-}
 
 // In theory, raft can propose conf change as long as there is no pending one. Replicas
 // don't apply logs synchronously, so it's possible the old leader is removed before the new
