@@ -123,6 +123,33 @@ impl Column {
 
     pub fn from_vector_value(
         field_type: &FieldType,
+        v: VectorValue,
+        logical_rows: &[usize],
+    ) -> Result<Self> {
+        use crate::codec::data_type::*;
+        match v {
+            VectorValue::Bytes(vec) => Ok(Self {
+                length: vec.len(),
+                null_cnt: vec.bitmap.null_cnt(),
+                null_bitmap: vec.bitmap.data,
+                var_offsets: vec.var_offset,
+                fixed_len: 0,
+                data: vec.data,
+            }),
+            VectorValue::Json(vec) => Ok(Self {
+                length: vec.len(),
+                null_cnt: vec.bitmap.null_cnt(),
+                null_bitmap: vec.bitmap.data,
+                var_offsets: vec.var_offset,
+                fixed_len: 0,
+                data: vec.data,
+            }),
+            _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows),
+        }
+    }
+
+    pub fn from_vector_value_slowpath(
+        field_type: &FieldType,
         v: &VectorValue,
         logical_rows: &[usize],
     ) -> Result<Self> {

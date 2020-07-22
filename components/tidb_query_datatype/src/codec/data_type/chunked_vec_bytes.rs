@@ -7,10 +7,10 @@ use crate::impl_chunked_vec_common;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecBytes {
-    data: Vec<u8>,
-    bitmap: BitVec,
-    length: usize,
-    var_offset: Vec<usize>,
+    pub(crate) data: Vec<u8>,
+    pub(crate) bitmap: BitVec,
+    pub(crate) length: usize,
+    pub(crate) var_offset: Vec<usize>,
 }
 
 /// A vector storing `Option<Bytes>` with a compact layout.
