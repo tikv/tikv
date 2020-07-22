@@ -220,7 +220,7 @@ mod kw {
 }
 
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RpnFnAttr {
     /// Whether or not the function is a varg function. Varg function accepts `&[&Option<T>]`.
     is_varg: bool,
@@ -229,7 +229,7 @@ struct RpnFnAttr {
     is_raw_varg: bool,
 
     /// Whether or not the function needs extra logic on `None` value.
-    non_null: bool,
+    nullable: bool,
 
     /// The maximum accepted arguments, which will be checked by the validator.
     ///
@@ -253,11 +253,27 @@ struct RpnFnAttr {
     captures: Vec<Expr>,
 }
 
+impl Default for RpnFnAttr {
+    fn default() -> Self {
+        Self {
+            is_varg: false,
+            is_raw_varg: false,
+            nullable: true,
+            max_args: None,
+            min_args: None,
+            extra_validator: None,
+            metadata_type: None,
+            metadata_mapper: None,
+            captures: vec![],
+        }
+    }
+}
+
 impl parse::Parse for RpnFnAttr {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let mut is_varg = false;
         let mut is_raw_varg = false;
-        let mut non_null = false;
+        let mut nullable = false;
         let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
@@ -319,8 +335,8 @@ impl parse::Parse for RpnFnAttr {
                         "raw_varg" => {
                             is_raw_varg = true;
                         }
-                        "nonnull" => {
-                            non_null = true;
+                        "nullable" => {
+                            nullable = true;
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -350,29 +366,20 @@ impl parse::Parse for RpnFnAttr {
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
-        if non_null && is_raw_varg {
+        if !nullable && is_raw_varg {
             return Err(Error::new_spanned(
                 config_items,
-                "`raw_varg` function can't be nonnull",
+                "`raw_varg` function must be nullable",
             ));
         }
-        if non_null && is_varg {
-            return Err(Error::new_spanned(
-                config_items,
-                "`varg` doesn't support nonnull for now",
-            ));
-        }
-        if non_null && metadata_type.is_some() {
-            return Err(Error::new_spanned(
-                config_items,
-                "cannot use metadata with nonnull",
-            ));
+        if !nullable && is_varg {
+            return Err(Error::new_spanned(config_items, "`varg` must be nullable"));
         }
 
         Ok(Self {
             is_varg,
             is_raw_varg,
-            non_null,
+            nullable,
             max_args,
             min_args,
             extra_validator,
@@ -437,7 +444,15 @@ impl RpnFnRefEvaluableType {
     fn get_type_with_lifetime(&self, lifetime: TokenStream) -> TokenStream {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
-            RpnFnRefEvaluableType::Type(x) => quote! { #x <#lifetime> },
+            RpnFnRefEvaluableType::Type(x) => {
+                if is_json(x) || is_bytes(x) {
+                    quote! {
+                        #x <#lifetime>
+                    }
+                } else {
+                    quote! { &#lifetime #x }
+                }
+            }
         }
     }
 }
@@ -1070,7 +1085,7 @@ struct NormalRpnFn {
     extra_validator: Option<TokenStream>,
     metadata_type: Option<TokenStream>,
     metadata_mapper: Option<TokenStream>,
-    non_null: bool,
+    nullable: bool,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -1082,23 +1097,31 @@ struct NormalRpnFn {
 
 impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
-        if attr.non_null {
-            if let FnArg::Typed(mut fn_arg) = fn_arg.clone() {
-                let ty = fn_arg.ty.clone();
-                fn_arg.ty = parse_quote! { Option<#ty> };
-                parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).map_err(|_| {
-                    Error::new_spanned(
-                        fn_arg,
-                        "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
-                    )
-                })
-            } else {
-                Err(Error::new_spanned(fn_arg, "Expect a type"))
-            }
-        } else {
+        if attr.nullable {
             parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
                 Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`")
             })
+        } else {
+            if let FnArg::Typed(mut fn_arg) = fn_arg.clone() {
+                let ty = fn_arg.ty.clone();
+                if parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).is_ok() {
+                    // Developer has supplied Option<T>
+                    Err(Error::new_spanned(
+                        fn_arg,
+                        "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                    ))
+                } else {
+                    fn_arg.ty = parse_quote! { Option<#ty> };
+                    parse2::<RpnFnSignatureParam>((&fn_arg).into_token_stream()).map_err(|_| {
+                        Error::new_spanned(
+                            fn_arg,
+                            "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                        )
+                    })
+                }
+            } else {
+                Err(Error::new_spanned(fn_arg, "Expect a type"))
+            }
         }
     }
 
@@ -1129,7 +1152,7 @@ impl NormalRpnFn {
             extra_validator: attr.extra_validator,
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
-            non_null: attr.non_null,
+            nullable: attr.nullable,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -1226,7 +1249,7 @@ impl NormalRpnFn {
         let call_arg2 = extract.clone();
         let extract2 = extract.clone();
 
-        let nonnull_unwrap = if self.non_null {
+        let nonnull_unwrap = if !self.nullable {
             quote! {
                 #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
             }
@@ -1240,10 +1263,18 @@ impl NormalRpnFn {
             &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            quote! {
+            if self.nullable {
+                quote! {
+                    let arg: &#tp = unsafe { &*std::ptr::null() };
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                }
+            } else {
+                quote! {
                 let arg: &#tp = unsafe { &*std::ptr::null() };
-                #(let (#extract2, arg) = arg.extract(0));*;
-                #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2.unwrap()),* ).ok();
+                }
             },
         );
 
@@ -1731,7 +1762,7 @@ mod tests_normal {
                 metadata_mapper: None,
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
-                non_null: false,
+                nullable: true,
             },
             item_fn,
         )
