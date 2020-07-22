@@ -7,7 +7,7 @@ use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// A trait for all bit operations
 pub trait BitOp: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -61,23 +61,21 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         Ok(())
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
-        // We use the same structure for all data types, so this parameter is not needed.
+        mut root_expr: Expr,
+        mut exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
-        assert_eq!(aggr_def.get_tp(), T::tp());
+        assert_eq!(root_expr.get_tp(), T::tp());
 
         // bit operation outputs one column.
-        out_schema.push(aggr_def.take_field_type());
+        out_schema.push(root_expr.take_field_type());
 
-        // Rewrite expression to insert CAST() if needed.
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         super::util::rewrite_exp_for_bit_op(src_schema, &mut exp).unwrap();
         out_exp.push(exp);
 
