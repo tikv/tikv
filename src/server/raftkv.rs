@@ -28,6 +28,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
+use tikv_util::time::ThreadReadId;
 
 quick_error! {
     #[derive(Debug)]
@@ -180,23 +181,23 @@ impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
         header
     }
 
-    fn exec_read_requests(
+    fn exec_snapshot(
         &self,
+        read_id: Option<ThreadReadId>,
         ctx: &Context,
-        reqs: Vec<Request>,
+        req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(reqs.into());
-
+        cmd.set_requests(vec![req].into());
         self.router
-            .send_command(
+            .read(
+                read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp, len);
+                    let (cb_ctx, res) = on_read_result(resp, 1);
                     cb((cb_ctx, res.map_err(Error::into)));
                 })),
             )
@@ -283,7 +284,10 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::from_raw(self.engine.clone(), region))
+        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
+            self.engine.clone(),
+            region,
+        ))
     }
 
     fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
@@ -384,17 +388,20 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
-        fail_point!("raftkv_async_snapshot");
+    fn async_snapshot(
+        &self,
+        ctx: &Context,
+        read_id: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
-
-        self.exec_read_requests(
+        self.exec_snapshot(
+            read_id,
             ctx,
-            vec![req],
+            req,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(r)) => cb((
                     cb_ctx,
@@ -419,6 +426,10 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()
         })
+    }
+
+    fn release_snapshot(&self) {
+        self.router.release_snapshot_cache();
     }
 
     fn get_properties_cf(

@@ -11,6 +11,8 @@ use crate::store::{
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_traits::{KvEngine, Snapshot};
 use raft::SnapshotStatus;
+use std::cell::RefCell;
+use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
@@ -33,6 +35,18 @@ where
         txn_extra: TxnExtra,
         cb: Callback<S>,
     ) -> RaftStoreResult<()>;
+
+    /// Sends Snapshot to local store.
+    fn read(
+        &self,
+        _read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<S>,
+    ) -> RaftStoreResult<()> {
+        self.send_command(req, cb)
+    }
+
+    fn release_snapshot_cache(&self) {}
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -110,7 +124,7 @@ where
     E: KvEngine,
 {
     router: RaftRouter<E::Snapshot>,
-    local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+    local_reader: RefCell<LocalReader<RaftRouter<E::Snapshot>, E>>,
 }
 
 impl<E> Clone for ServerRaftStoreRouter<E>
@@ -132,8 +146,9 @@ where
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<E::Snapshot>,
-        local_reader: LocalReader<RaftRouter<E::Snapshot>, E>,
+        reader: LocalReader<RaftRouter<E::Snapshot>, E>,
     ) -> ServerRaftStoreRouter<E> {
+        let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -169,6 +184,30 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
+        let cmd = RaftCommand::new(req, cb);
+        let region_id = cmd.request.get_header().get_region_id();
+        self.router
+            .send_raft_command(cmd)
+            .map_err(|e| handle_send_error(region_id, e))
+    }
+
+    fn read(
+        &self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        let mut local_reader = self.local_reader.borrow_mut();
+        local_reader.read(read_id, req, cb);
+        Ok(())
+    }
+
+    fn release_snapshot_cache(&self) {
+        let mut local_reader = self.local_reader.borrow_mut();
+        local_reader.release_snapshot_cache();
+    }
+
     fn send_command_txn_extra(
         &self,
         req: RaftCmdRequest,
@@ -176,15 +215,10 @@ where
         cb: Callback<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
-        if LocalReader::<RaftRouter<E::Snapshot>, E>::acceptable(&cmd.request) {
-            self.local_reader.execute_raft_command(cmd);
-            Ok(())
-        } else {
-            let region_id = cmd.request.get_header().get_region_id();
-            self.router
-                .send_raft_command(cmd)
-                .map_err(|e| handle_send_error(region_id, e))
-        }
+        let region_id = cmd.request.get_header().get_region_id();
+        self.router
+            .send_raft_command(cmd)
+            .map_err(|e| handle_send_error(region_id, e))
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {

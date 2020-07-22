@@ -22,6 +22,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
 use pd_client::DummyPdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
@@ -47,6 +48,7 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 use tikv_util::HandyRwLock;
 
@@ -398,6 +400,26 @@ impl Simulator for ServerCluster {
             Some(meta) => meta.sim_router.clone(),
         };
         router.send_command(request, cb)
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) {
+        match self.metas.get(&node_id) {
+            None => {
+                let e: RaftError = box_err!("missing sender for store {}", node_id);
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(e.into());
+                cb.invoke_with_response(resp);
+            }
+            Some(meta) => {
+                meta.sim_router.read(batch_id, request, cb).unwrap();
+            }
+        };
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
