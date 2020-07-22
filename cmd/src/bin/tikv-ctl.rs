@@ -2370,7 +2370,7 @@ fn compact_whole_cluster(
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
-                    Somcomponents/backup/src/endpoint.rse(&addr),
+                    Some(&addr),
                     db_type,
                     cf.as_str(),
                     from.clone(),

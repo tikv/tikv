@@ -435,7 +435,7 @@ impl Debugger {
                         hex::encode_upper(&end_key)
                     );
 
-                    recover_mvcc_for_range(
+                    let result = recover_mvcc_for_range(
                         db.as_inner(),
                         &start_key,
                         &end_key,
@@ -443,6 +443,7 @@ impl Debugger {
                         thread_index,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
+                    result
                 })
                 .unwrap();
 

@@ -94,7 +94,6 @@ fn start_global_timer() -> Handle {
             loop {
                 timer.turn(None).unwrap();
             }
-            tikv_alloc::remove_thread_memory_accessor();
         })
         .unwrap();
     rx.recv().unwrap()

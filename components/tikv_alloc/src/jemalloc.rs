@@ -117,17 +117,6 @@ mod tests {
     fn dump_stats() {
         assert_ne!(super::dump_stats().len(), 0);
     }
-
-    #[test]
-    fn test_add_and_remove_thread_pointer() {
-        super::add_thread_memory_accessor();
-        let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
-        assert_eq!(1, thread_memory_map.len());
-
-        super::remove_thread_memory_accessor();
-        let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
-        assert_eq!(0, thread_memory_map.len());
-    }
 }
 
 #[cfg(feature = "mem-profiling")]

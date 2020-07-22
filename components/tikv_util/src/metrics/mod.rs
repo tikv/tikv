@@ -65,7 +65,6 @@ pub fn run_prometheus(
 
                 thread::sleep(interval);
             }
-            tikv_alloc::remove_thread_memory_accessor();
         })
         .unwrap();
 

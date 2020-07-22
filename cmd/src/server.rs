@@ -648,8 +648,8 @@ impl TiKVServer {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
-            .after_start( move || tikv_alloc::add_thread_memory_accessor())
-            .before_stop(move || tikv_alloc::remove_thread_memory_accessor())
+            .after_start(|| tikv_alloc::add_thread_memory_accessor())
+            .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
             .create();
 
         // Debug service.

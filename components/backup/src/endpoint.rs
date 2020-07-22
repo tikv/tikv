@@ -588,21 +588,33 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let db = self.db.clone();
         let store_id = self.store_id;
         // TODO: make it async.
-        self.pool.borrow_mut().spawn(move || {
+        self.pool.borrow_mut().spawn(move || loop {
+            let (branges, is_raw_kv, cf) = {
+                // Release lock as soon as possible.
+                // It is critical to speed up backup, otherwise workers are
+                // blocked by each other.
+                let mut progress = prs.lock().unwrap();
+                (
+                    progress.forward(WORKER_TAKE_RANGE),
+                    progress.is_raw_kv,
+                    progress.cf,
+                )
+            };
+            if branges.is_empty() {
+                return;
+            }
+
             tikv_alloc::add_thread_memory_accessor();
-            loop {
-                let (branges, is_raw_kv, cf) = {
-                    // Release lock as soon as possible.
-                    // It is critical to speed up backup, otherwise workers are
-                    // blocked by each other.
-                    let mut progress = prs.lock().unwrap();
-                    (
-                        progress.forward(WORKER_TAKE_RANGE),
-                        progress.is_raw_kv,
-                        progress.cf,
-                    )
-                };
-                if branges.is_empty() {
+
+            // Storage backend has been checked in `Task::new()`.
+            let backend = create_storage(&request.backend).unwrap();
+            let storage = LimitedStorage {
+                limiter: request.limiter.clone(),
+                storage: backend,
+            };
+            for brange in branges {
+                if request.cancel.load(Ordering::SeqCst) {
+                    warn!("backup task has canceled"; "range" => ?brange);
                     return;
                 }
                 // TODO: make file_name unique and short
@@ -680,6 +692,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return;
                 }
             }
+
             tikv_alloc::remove_thread_memory_accessor();
         });
     }
