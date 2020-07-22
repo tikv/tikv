@@ -7,7 +7,6 @@ use std::time::Duration;
 
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    change_data_request::{NotifyTxnStatus as RequestNotifyTxnStatus, Register as RequestRegister},
     error::DuplicateRequest as ErrorDuplicateRequest,
     event::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,

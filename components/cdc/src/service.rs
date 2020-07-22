@@ -6,6 +6,10 @@ use std::sync::Arc;
 
 use futures::{stream, Future, Sink, Stream};
 use grpcio::*;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::change_data_request::NotifyTxnStatus;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::ChangeDataRequestNotifyTxnStatus as NotifyTxnStatus;
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Event};
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
@@ -104,6 +108,24 @@ impl Service {
             security_mgr,
         }
     }
+
+    #[cfg(feature = "prost-codec")]
+    fn get_notify_txn_status_req(req: &mut ChangeDataRequest) -> Option<NotifyTxnStatus> {
+        use kvproto::cdcpb::change_data_request::Request;
+        match req.request.take() {
+            Some(Request::NotifyTxnStatus(res)) => Some(res),
+            _ => None,
+        }
+    }
+
+    #[cfg(not(feature = "prost-codec"))]
+    fn get_notify_txn_status_req(req: &mut ChangeDataRequest) -> Option<NotifyTxnStatus> {
+        if req.has_notify_txn_status() {
+            Some(req.take_notify_txn_status())
+        } else {
+            None
+        }
+    }
 }
 
 impl ChangeData for Service {
@@ -140,8 +162,7 @@ impl ChangeData for Service {
             let req_id = request.get_request_id();
             let region_id = request.get_region_id();
 
-            let task = if request.has_notify_txn_status() {
-                let mut s = request.take_notify_txn_status();
+            let task = if let Some(mut s) = Self::get_notify_txn_status_req(&mut request) {
                 Task::NotifyTxnStatus {
                     region_id,
                     txn_status: s.take_txn_status().into(),

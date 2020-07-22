@@ -13,8 +13,12 @@ use grpcio::WriteFlags;
 use kvproto::cdcpb::*;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
+    change_data_request::{
+        NotifyTxnStatus as ChangeDataRequestNotifyTxnStatus,
+        Request as ChangeDataRequest_oneof_Request,
+    },
     event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataRequest,
+    ChangeDataRequest, TxnStatus,
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
@@ -914,7 +918,7 @@ fn test_cdc_long_txn() {
     txn_status.set_min_commit_ts(min_commit_ts2.into_inner());
     let mut notify = ChangeDataRequestNotifyTxnStatus::default();
     notify.set_txn_status(vec![txn_status].into());
-    req.set_notify_txn_status(notify);
+    req.request = Some(ChangeDataRequest_oneof_Request::NotifyTxnStatus(notify));
 
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
 
