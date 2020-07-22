@@ -77,7 +77,7 @@ impl BitVec {
     pub fn null_cnt(&self) -> usize {
         let mut cnt = 0;
         for i in 0..self.length {
-            if self.get(i) == false {
+            if !self.get(i) {
                 cnt += 1;
             }
         }
