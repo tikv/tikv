@@ -265,7 +265,7 @@ pub enum Task {
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
+        cb: Option<Box<dyn FnOnce(u64) + Send>>,
     },
     /// The detect request of other nodes.
     DetectRpc {
@@ -338,7 +338,7 @@ impl Scheduler {
         &self,
         txn_ts: TimeStamp,
         lock: Lock,
-        cb: impl FnOnce(Lock, /* deadlock key hash */ u64) + Send + 'static,
+        cb: impl FnOnce(/* deadlock key hash */ u64) + Send + 'static,
     ) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
@@ -482,7 +482,7 @@ struct Inner {
     detect_table: DetectTable,
 
     /// Callbacks of a deadlock response
-    callbacks: HashMap<TimeStamp, Box<dyn FnOnce(Lock, u64) + Send>>,
+    callbacks: HashMap<TimeStamp, Box<dyn FnOnce(u64) + Send>>,
 }
 
 /// Detector is used to detect deadlocks between transactions. There is a leader
@@ -678,7 +678,7 @@ where
             };
             let deadlock_key_hash = resp.get_deadlock_key_hash();
             if let Some(cb) = inner.borrow_mut().callbacks.remove(&txn.into()) {
-                cb(lock, deadlock_key_hash);
+                cb(deadlock_key_hash);
             }
             waiter_mgr_scheduler.deadlock(txn.into(), lock, deadlock_key_hash)
         }));
@@ -733,14 +733,14 @@ where
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
+        cb: Option<Box<dyn FnOnce(u64) + Send>>,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
                 if let Some(deadlock_key_hash) = detect_table.detect(txn_ts, lock.ts, lock.hash) {
                     if let Some(cb) = cb {
-                        cb(lock, deadlock_key_hash);
+                        cb(deadlock_key_hash);
                     }
                     self.waiter_mgr_scheduler
                         .deadlock(txn_ts, lock, deadlock_key_hash);
@@ -760,7 +760,7 @@ where
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        cb: Option<Box<dyn FnOnce(Lock, u64) + Send>>,
+        cb: Option<Box<dyn FnOnce(u64) + Send>>,
     ) {
         if self.is_leader() {
             self.handle_detect_locally(tp, txn_ts, lock, cb);

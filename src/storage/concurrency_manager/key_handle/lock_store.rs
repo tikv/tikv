@@ -46,6 +46,7 @@ impl LockStore {
             Less => {
                 // The lock stored inside is released, notify all other tasks that are
                 // blocked by this lock.
+                // FIXME: support advanced wake strategy like the waiter manager does.
                 self.lock_cleaned_event.notify(usize::MAX);
             }
             Equal => {}

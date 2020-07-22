@@ -11,6 +11,7 @@
 mod handle_table;
 mod key_handle;
 
+pub use self::handle_table::{HandleTable, OrderedMap};
 pub use self::key_handle::{KeyHandle, KeyHandleMutexGuard};
 
 use kvproto::kvrpcpb::LockInfo;
@@ -29,16 +30,23 @@ use txn_types::{Key, TimeStamp};
 // In the future we should replace it with a concurrent ordered map.
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
-type OrderedMap = Mutex<BTreeMap<Key, Arc<KeyHandle>>>;
-pub type HandleTable = self::handle_table::HandleTable<OrderedMap>;
+pub type DefaultConcurrencyManager = ConcurrencyManager<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>;
 
-#[derive(Clone)]
-pub struct ConcurrencyManager {
+pub struct ConcurrencyManager<M: OrderedMap> {
     max_read_ts: Arc<AtomicU64>,
-    handle_table: HandleTable,
+    handle_table: HandleTable<M>,
 }
 
-impl ConcurrencyManager {
+impl<M: OrderedMap> Clone for ConcurrencyManager<M> {
+    fn clone(&self) -> Self {
+        ConcurrencyManager {
+            max_read_ts: self.max_read_ts.clone(),
+            handle_table: self.handle_table.clone(),
+        }
+    }
+}
+
+impl<M: OrderedMap> ConcurrencyManager<M> {
     pub fn new(latest_ts: TimeStamp) -> Self {
         ConcurrencyManager {
             max_read_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
@@ -55,7 +63,7 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store LockInfo in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, OrderedMap> {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, M> {
         self.handle_table.lock_key(key).await
     }
 
@@ -67,11 +75,11 @@ impl ConcurrencyManager {
     pub async fn lock_keys(
         &self,
         keys: impl Iterator<Item = &Key>,
-    ) -> Vec<KeyHandleMutexGuard<'_, OrderedMap>> {
+    ) -> Vec<KeyHandleMutexGuard<'_, M>> {
         let mut keys_with_index: Vec<_> = keys.enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
-        let mut result: Vec<MaybeUninit<KeyHandleMutexGuard<'_, OrderedMap>>> = Vec::new();
+        let mut result: Vec<MaybeUninit<KeyHandleMutexGuard<'_, M>>> = Vec::new();
         result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.handle_table.lock_key(key).await);
@@ -122,7 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_keys_order() {
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = DefaultConcurrencyManager::new(1.into());
         let keys: Vec<_> = [b"c", b"a", b"b"]
             .iter()
             .map(|k| Key::from_raw(*k))
@@ -135,7 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_max_read_ts() {
-        let concurrency_manager = ConcurrencyManager::new(10.into());
+        let concurrency_manager = DefaultConcurrencyManager::new(10.into());
         let key_k = Key::from_raw(b"k");
         let key_a = Key::from_raw(b"a");
         let key_b = Key::from_raw(b"b");

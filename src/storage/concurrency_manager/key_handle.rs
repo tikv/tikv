@@ -1,22 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod deadlock;
 mod key_mutex;
 mod lock_store;
 
-use self::key_mutex::KeyMutex;
-use self::lock_store::LockStore;
+use self::{deadlock::DeadlockDetector, key_mutex::KeyMutex, lock_store::LockStore};
 use super::handle_table::OrderedMap;
 
+use futures03::future::{self, Either, Future};
 use kvproto::kvrpcpb::LockInfo;
 use std::{
-    future::Future,
     ops::Deref,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
 };
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 const INIT_REF_COUNT: usize = usize::MAX;
 
@@ -120,9 +120,44 @@ impl<'m, M: OrderedMap> KeyHandleMutexGuard<'m, M> {
     }
 
     /// Returns a future that completes when the lock stored in is released.
-    pub fn lock_released(&self) -> impl Future<Output = ()> {
-        // FIXME: register this wait operation to the deadlock detector
-        self.0.lock_store.lock_released()
+    ///
+    /// There can be deadlocks caused by waiting. So a deadlock detector should
+    /// be passed in. If a deadlock is detected, the deadlock key hash will be
+    /// returned as the Err variant.
+    pub fn wait_for_released<D: DeadlockDetector>(
+        &self,
+        deadlock_detector: D,
+        txn_ts: TimeStamp,
+    ) -> impl Future<Output = Result<(), u64>> {
+        use crate::storage::lock_manager::Lock;
+        let lock: Option<Lock> = self.0.lock_store.read(|lock| {
+            lock.as_ref().map(|lock| Lock {
+                ts: lock.get_lock_version().into(),
+                hash: self.key().gen_hash(),
+            })
+        });
+        let lock_released_fut = self.0.lock_store.lock_released();
+        async move {
+            if let Some(lock) = lock {
+                let res =
+                    match future::select(deadlock_detector.detect(txn_ts, lock), lock_released_fut)
+                        .await
+                    {
+                        Either::Left((deadlock_key_hash, _)) => {
+                            if let Some(deadlock_key_hash) = deadlock_key_hash {
+                                Err(deadlock_key_hash)
+                            } else {
+                                // Deadlock may not be detected. We just abort waiting.
+                                Ok(())
+                            }
+                        }
+                        Either::Right(_) => Ok(()),
+                    };
+                deadlock_detector.clean_up(txn_ts);
+                return res;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -135,9 +170,24 @@ impl<'m, M: OrderedMap> Drop for KeyHandleMutexGuard<'m, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::lock_manager::Lock;
     use parking_lot::Mutex;
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{collections::BTreeMap, pin::Pin, time::Duration};
     use tokio::time::delay_for;
+
+    struct MockDeadlockDetector;
+
+    impl DeadlockDetector for MockDeadlockDetector {
+        fn detect(
+            &self,
+            _txn_ts: TimeStamp,
+            _lock: Lock,
+        ) -> Pin<Box<dyn Future<Output = Option<u64>> + Send>> {
+            Box::pin(future::pending())
+        }
+
+        fn clean_up(&self, _txn_ts: TimeStamp) {}
+    }
 
     #[tokio::test]
     async fn test_key_mutex() {
@@ -193,10 +243,10 @@ mod tests {
             let guard = lock_ref.mutex_lock().await;
             guard.with_lock_info(|lock_info| assert!(lock_info.is_some()));
 
-            let wait_future = guard.lock_released();
+            let wait_future = guard.wait_for_released(MockDeadlockDetector, 1.into());
             let counter = counter.clone();
             handles.push(tokio::spawn(async move {
-                wait_future.await;
+                let _ = wait_future.await;
                 counter.fetch_add(1, Ordering::SeqCst);
             }));
         }

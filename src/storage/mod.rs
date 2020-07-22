@@ -35,7 +35,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
+    concurrency_manager::DefaultConcurrencyManager,
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
@@ -89,7 +89,7 @@ pub struct Storage<E: Engine, L: LockManager, P: PdClient + 'static> {
     /// The thread pool used to run most read operations.
     read_pool: ReadPoolHandle,
 
-    concurrency_manager: ConcurrencyManager,
+    concurrency_manager: DefaultConcurrencyManager,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -159,7 +159,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: L,
-        concurrency_manager: ConcurrencyManager,
+        concurrency_manager: DefaultConcurrencyManager,
         pd_client: Arc<P>,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
@@ -1331,7 +1331,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
-            ConcurrencyManager::new(1.into()),
+            DefaultConcurrencyManager::new(1.into()),
             Arc::new(DummyPdClient::new()),
             self.pipelined_pessimistic_lock,
         )
