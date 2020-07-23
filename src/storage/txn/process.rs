@@ -557,7 +557,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             // Map txn's start_ts to ReleasedLocks
             let mut released_locks = HashMap::default();
             while !key_locks.is_empty() {
-                let (current_key, current_lock) = key_locks.pop_front().unwrap();
+                let (current_key, current_lock) = key_locks.pop().unwrap();
                 txn.set_start_ts(current_lock.ts);
                 let commit_ts = *txn_status
                     .get(&current_lock.ts)
