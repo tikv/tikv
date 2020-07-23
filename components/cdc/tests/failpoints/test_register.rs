@@ -22,9 +22,6 @@ use test_raftstore::sleep_ms;
 
 #[test]
 fn test_failed_pending_batch() {
-    let local_registry = fail::FailPointRegistry::new();
-    local_registry.register_current();
-
     // For test that a pending cmd batch contains a error like epoch not match.
     let mut suite = TestSuite::new(3);
 
@@ -84,9 +81,6 @@ fn test_failed_pending_batch() {
 
 #[test]
 fn test_region_ready_after_deregister() {
-    let local_registry = fail::FailPointRegistry::new();
-    local_registry.register_current();
-
     let mut suite = TestSuite::new(1);
 
     let fp = "cdc_incremental_scan_start";
@@ -120,9 +114,6 @@ fn test_region_ready_after_deregister() {
 
 #[test]
 fn test_connections_register() {
-    let local_registry = fail::FailPointRegistry::new();
-    local_registry.register_current();
-
     let mut suite = TestSuite::new(3);
 
     let fp = "cdc_incremental_scan_start";
@@ -205,9 +196,6 @@ fn test_connections_register() {
 
 #[test]
 fn test_merge() {
-    let local_registry = fail::FailPointRegistry::new();
-    local_registry.register_current();
-
     let mut suite = TestSuite::new(1);
     // Split region
     let region = suite.cluster.get_region(&[]);
@@ -317,9 +305,6 @@ fn test_merge() {
 
 #[test]
 fn test_deregister_pending_downstream() {
-    let local_registry = fail::FailPointRegistry::new();
-    local_registry.register_current();
-
     let mut suite = TestSuite::new(1);
 
     let build_resolver_fp = "before_schedule_resolver_ready";

@@ -157,7 +157,7 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
-    after_start: Option<Arc<Callback>>,
+    fail_registry: fail::FailPointRegistry,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
@@ -166,9 +166,7 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
         set_tls_engine(self.engine.take().unwrap());
         self.inner.start(local);
-        if let Some(after_start) = &self.after_start {
-            after_start();
-        }
+        fail_registry.register_current();
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
@@ -199,13 +197,13 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
         engine: E,
         inner: FutureRunner,
         reporter: R,
-        after_start: Option<Arc<Callback>>,
+        fail_registry: fail::FailPointRegistry,
     ) -> Self {
         ReadPoolRunner {
             engine: Some(engine),
             reporter,
             inner,
-            after_start,
+            fail_registry,
         }
     }
 
@@ -265,12 +263,11 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     let multilevel_builder =
         multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
     // Register the failpoint registry so that the generated thread and the current thread share the same registry.
-    let local_registry = fail::FailPointRegistry::current_registry();
     let read_pool_runner = ReadPoolRunner::new(
         engine,
         Default::default(),
         reporter,
-        Some(Arc::new(move || local_registry.register_current())),
+        fail::FailPointRegistry::current_registry(),
     );
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
