@@ -4,16 +4,6 @@
 //!
 //! The module encapsulates the TiKV's MVCC operations.
 //!
-//! # Structure
-//!
-//! There are 3 submodules:
-//!
-//! `reader` module implements read operations, including scanning.
-//!
-//! `metrics` module includes Prometheus metrics.
-//!
-//! `txn` module implements MVCC transaction operations, e.g. commit and rollback.
-//!
 //! # Boundaries of this module
 //!
 //! TiKV can be viewed as a layered architecture: Service, Transaction, MVCC, Storage Engine.
