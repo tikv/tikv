@@ -50,6 +50,6 @@ fn test_encode_f64_to_comparable_u64() {
 
 #[test]
 fn test_decode_comparable_u64_to_f64() {
-    assert_eq!(decode_comparable_u64_to_f64(1 << 63), 0.0);
+    assert!(decode_comparable_u64_to_f64(1 << 63).abs() < f64::EPSILON);
     assert_ne!(decode_comparable_u64_to_f64(0), 0.0);
 }
