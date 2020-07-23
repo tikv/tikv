@@ -330,6 +330,7 @@ mod test {
                     .to_vec(),
             ),
             Some("🐮🐮🐮🐮🐮".as_bytes().to_vec()),
+            Some("我成功了".as_bytes().to_vec()),
             None,
             Some("💩💩💩".as_bytes().to_vec()),
             None,
