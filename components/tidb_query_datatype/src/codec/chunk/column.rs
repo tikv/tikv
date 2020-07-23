@@ -123,7 +123,7 @@ impl Column {
 
     pub fn from_vector_value(
         field_type: &FieldType,
-        v: VectorValue,
+        v: &VectorValue,
         logical_rows: &[usize],
     ) -> Result<Self> {
         use crate::codec::data_type::*;
@@ -131,18 +131,18 @@ impl Column {
             VectorValue::Bytes(vec) => Ok(Self {
                 length: vec.len(),
                 null_cnt: vec.bitmap.null_cnt(),
-                null_bitmap: vec.bitmap.data,
-                var_offsets: vec.var_offset,
+                null_bitmap: vec.bitmap.data.clone(),
+                var_offsets: vec.var_offset.clone(),
                 fixed_len: 0,
-                data: vec.data,
+                data: vec.data.clone(),
             }),
             VectorValue::Json(vec) => Ok(Self {
                 length: vec.len(),
                 null_cnt: vec.bitmap.null_cnt(),
-                null_bitmap: vec.bitmap.data,
-                var_offsets: vec.var_offset,
+                null_bitmap: vec.bitmap.data.clone(),
+                var_offsets: vec.var_offset.clone(),
                 fixed_len: 0,
-                data: vec.data,
+                data: vec.data.clone(),
             }),
             _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows),
         }
