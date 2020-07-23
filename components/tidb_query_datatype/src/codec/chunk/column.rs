@@ -957,8 +957,7 @@ mod tests {
             let vec_value = VectorValue::from($data_chunked);
             for field in &$fields {
                 let column =
-                    Column::from_vector_value(field, vec_value.clone(), logical_rows.as_slice())
-                        .unwrap();
+                    Column::from_vector_value(field, &vec_value, logical_rows.as_slice()).unwrap();
                 let column_slowpath =
                     Column::from_vector_value_slowpath(field, &vec_value, logical_rows.as_slice())
                         .unwrap();
