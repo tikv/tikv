@@ -797,9 +797,6 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-
-/*
-
 #[rpn_fn(writer)]
 #[inline]
 pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
@@ -808,27 +805,11 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
     } else {
         *cnt
     };
-    let mut result = vec![];
+    let mut writer = writer.to_partial_writer();
     for _i in 0..cnt {
-        result.append(&mut input.to_owned_value())
+        writer.partial_write(input);
     }
-    Ok(Some(result))
-}
-*/
-
-#[rpn_fn]
-#[inline]
-pub fn repeat(input: BytesRef, cnt: &Int) -> Result<Option<Bytes>> {
-    let cnt = if *cnt > std::i32::MAX.into() {
-        std::i32::MAX.into()
-    } else {
-        *cnt
-    };
-    let mut result = vec![];
-    for i in 0..cnt {
-        result.append(&mut input.to_owned_value())
-    }
-    Ok(Some(result))
+    Ok(writer.finish())
 }
 
 #[cfg(test)]
