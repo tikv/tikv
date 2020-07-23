@@ -156,6 +156,9 @@ impl Latches {
     /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
     /// considered acquired if the command ID is the first one of elements in the queue which have
     /// the same hash value. Returns true if all the Latches are acquired, false otherwise.
+    ///
+    /// Hash values are sorted, which guarantees the order of acquiring latches.
+    /// It breaks the circular dependency condition for deadlocks to happen.
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for &key_hash in &lock.required_hashes[lock.owned_count..] {

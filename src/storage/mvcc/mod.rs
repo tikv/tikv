@@ -1,6 +1,111 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Multi-version concurrency control functionality.
+//!
+//! The module encapsulates the TiKV's MVCC operations.
+//!
+//! # Structure
+//!
+//! There are 3 submodules:
+//!
+//! [reader](reader) module implements read operations, including scanning.
+//!
+//! [metrics](metrics) module includes Prometheus metrics.
+//!
+//! [txn](txn) module implements MVCC transaction operations, e.g. commit and rollback.
+//!
+//! # Boundaries of this module
+//!
+//! TiKV can be viewed as a layered architecture: Service, Transaction, MVCC, Storage Engine.
+//!
+//! MVCC provides actual read and write operations for the [Transaction layer](super::txn).
+//!
+//! Read operations are implemented in [reader].
+//! Write operations are part of the transactional operations and processed in in [txn].
+//!
+//! All read and write operations will be sent to the underlying storage engine to execute.
+//! In production, the storage engine is a raft store. There are other engines that are only used for test.
+//!
+//! # MVCC Transaction Model
+//!
+//! TiKV 4.0 provides two transaction models: Optimistic and Pessimistic.
+//! Pessimistic transaction is built upon the optimistic model.
+//!
+//! ## Optimistic Transaction
+//!
+//! This is the basis of TiKV's transaction model, which is similar to Google's Percolator's transaction.
+//!
+//! ### Behavior
+//!
+//! It provides the Snapshot Isolation level. Sometimes it is also called Repeatable Read.
+//! **Note**: this is different from ANSI Repeatable Read.
+//! The [official doc](https://docs.pingcap.com/tidb/dev/transaction-isolation-levels) specifies the difference.
+//!
+//! Read operations are processed by TiKV server, and it can be cached in the client as well.
+//!
+//! Write operations are all buffered in the client until commit.
+//!
+//! ### 2 Phase Commit
+//!
+//! TiKV uses 2PC to implement distributed transaction: `prewrite` + `commit`.
+//!
+//! In general, the `prewrite` phase writes all modifications an lock them.
+//! If all `prewrite` requests succeed, the client can send `commit` requests.
+//! After `commit`, all locks are released and data are visible to other transactions.
+//!
+//!
+//! ### Concurrency
+//!
+//! TiKV distributes data in regions, so write operations will only be processed by one TiKV instance (the leader of the region replicas).
+//! Before executing operations in the mvcc module,
+//! a request must have acquired all latches of keys that it wants to modify. So there is no data race here.
+//!
+//! However, because each transaction contains multiple requests to complete (at least there should be a prewrite and a commit),
+//! interleaving requests of concurrent transactions could cause complicated situations that are worth consideration.
+//!
+//! ## Pessimistic Transaction
+//!
+//! Pessimistic transaction aims to work in situations with intense contention or where interactive transaction are required.
+//!
+//! It introduces 3 operations:
+//! - acquire pessimistic lock
+//! - pessimistic prewrite
+//! - pessimistic rollback
+//!
+//! In general, pessimistic locks are acquired during the execution of transactions for Data Manipulation Language (DML) statements.
+//! Then the pessimistic locks are converted to optimistic locks during the prewrite phase,
+//! so that the commit phase don't have to change.
+//!
+//! The implementation is adding extra operations based on the optimistic model.
+//! Therefore optimistic and pessimistic transactions can co-exist.
+//!
+//! The rollback operation is different from an optimistic one, since it requires releasing pessimistic locks.
+//!
+//! ## Other features
+//!
+//! The main idea of implementing MVCC transaction is straightforward, however code might seems confusing
+//! because we added support for extra features.
+//!
+//! ### Large Transaction
+//!
+//! TiKV has limit on the size of transactions,
+//! because large transactions are more likely to block others and fail due to system limit.
+//!
+//! Large transactions are treated separately.
+//!
+//! 1. Large transactions may live long. Storing `TTL` in the lock and allowing the heartbeat message update its `TTL` solves it.
+//!
+//! 2. Large transactions will block others. A new concept `min_commit_ts` was introduced,
+//! which is the minimum time at which the transaction can be committed.
+//! If the transaction is committed with commit_ts < min_commit_ts, the commit will fail and the client should retry.
+//!
+//! It helps because a normal transaction A is allowed to update a large
+//! transaction B's `min_commit_ts` if otherwise A will be blocked by B's reading operations.
+//! Such operation is implemented in the CheckTxnStatus request.
+//!
+//! ### Async Commit
+//!
+//! TBD
 
 mod metrics;
 mod reader;

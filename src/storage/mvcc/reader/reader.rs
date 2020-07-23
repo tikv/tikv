@@ -89,6 +89,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// Finds the lock with given key.
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOptions::new(None, None, true);

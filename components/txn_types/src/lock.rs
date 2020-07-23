@@ -67,6 +67,9 @@ pub struct Lock {
     // If for_update_ts != 0, this lock belongs to a pessimistic transaction
     pub for_update_ts: TimeStamp,
     pub txn_size: u64,
+    // The minimum time at which the transaction can be committed, used for large transactions.
+    // Incrementing min_commit_ts for large txns will allow other txns to read old values instead of
+    // being blocked by the large txn, i.e. make commit_ts(large) > start_ts(small)
     pub min_commit_ts: TimeStamp,
     pub use_async_commit: bool,
     // Only valid when `use_async_commit` is true, and the lock is primary. Do not set

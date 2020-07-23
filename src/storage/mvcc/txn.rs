@@ -73,6 +73,29 @@ impl ReleasedLock {
     }
 }
 
+/// `MvccTxn` encapsulates TiKV's transaction algorithm and is used for handling a single transactional request.
+///
+/// Modifications during the prewrite phase are buffered in memory. When persisting to the storage engine,
+/// [`into_modifies`](MvccTxn::into_modifies) gives the actual modifications.
+///
+/// The transaction model is a variant of Percolator. It uses 3 column families in the underlying storage engine:
+/// - [`Default`](CF_DEFAULT): maps `(key, start_ts)` to data; stores the real data
+/// - [`Write`](CF_WRITE):     maps `(key, ts)` to write record; write records are like commit/rollback operations and corresponding timestamps
+/// - [`Lock`](CF_LOCK):       maps `key` to `lock`
+///
+/// The struct provides several functionalities:
+/// - 2 phase commit
+///     - [prewrite](MvccTxn::prewrite)
+///     - [commit](MvccTxn::commit)
+/// - [rollback](MvccTxn::rollback)
+/// - [cleanup](MvccTxn::cleanup)
+/// - pessimistic transaction
+///     - [acquire lock](MvccTxn::acquire_pessimistic_lock)
+///     - [prewrite](MvccTxn::pessimistic_prewrite)
+///     - [rollback](MvccTxn::pessimistic_rollback)
+/// - [gc](MvccTxn::gc)
+/// - [check status](MvccTxn::check_txn_status)
+/// - [heartbeat](MvccTxn::txn_heart_beat)
 pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
@@ -85,6 +108,13 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
 }
 
 impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
+    /// Creates a transaction.
+    ///
+    /// ScanMode is set to `None`, since in prewrite and other operations, keys are not given in
+    /// order and we use prefix seek for each key. An exception is GC, which uses forward
+    /// scan only.
+    ///
+    /// The isolation level is `Si`, though the methods in [MvccTxn] does not rely on the isolation level.
     pub fn new(
         snapshot: S,
         start_ts: TimeStamp,
@@ -92,12 +122,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         pd_client: Arc<P>,
     ) -> MvccTxn<S, P> {
         // FIXME: use session variable to indicate fill cache or not.
-
-        // ScanMode is `None`, since in prewrite and other operations, keys are not given in
-        // order and we use prefix seek for each key. An exception is GC, which uses forward
-        // scan only.
-        // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
-        // isolation level, so it can be any value.
         Self::from_reader(
             MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
             start_ts,
@@ -105,10 +129,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
     }
 
-    // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
-    // which would seek less times.
-    // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be written by
-    // in ascending order.
+    /// Creates a transaction with a given `scan_mode`.
+    ///
+    /// Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
+    /// which would seek less times.
+    ///
+    /// When `scan_mode` is `Some(ScanMode::Forward)`, keys must be in ascending order.
     pub fn for_scan(
         snapshot: S,
         scan_mode: Option<ScanMode>,
@@ -203,6 +229,15 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
+    /// The first phase for 2PC.
+    ///
+    /// The phase tries to lock the given key by writing to the [Lock] column family.
+    ///
+    /// There wouldn't be write conflict or data race here because the caller
+    /// ([prewrite] or [pessimistic_prewrite](MvccTxn::pessimistic_prewrite)) should have checked the lock.
+    /// And since the region is only handled by this TiKV instance, latches protect us from data race.
+    ///
+    /// Returns the async commit ts which is used for the async commit feature.
     fn prewrite_key_value(
         &mut self,
         key: Key,
@@ -259,13 +294,18 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(async_commit_ts)
     }
 
+    /// Rolls back a lock.
+    ///
+    /// 1. delete value
+    /// 2. add a rollback write record
+    /// 3. unlock
     fn rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
     ) -> Result<Option<ReleasedLock>> {
-        // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
+        // If prewrite type is DEL or LOCK or PESSIMISTIC, there is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
         }
@@ -304,8 +344,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     }
 
     // Pessimistic transactions only acquire pessimistic locks on row keys.
-    // The corrsponding index keys are not locked until pessimistic prewrite.
-    // It's possible that lock conflict occours on them, but the isolation is
+    // The corresponding index keys are not locked until pessimistic prewrite.
+    // It's possible that lock conflict occurs on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
     fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
@@ -320,6 +360,23 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Err(ErrorInner::KeyIsLocked(info).into())
     }
 
+    /// Acquires a pessimistic lock.
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// - ...
+    /// - `for_update_ts`: The timestamp used to get **latest** data.
+    /// - `min_commit_ts`: The minimum acceptable commit timestamp, which is used to support large transactions.
+    ///
+    /// # In TiDB
+    ///
+    /// In TiDB, this is called for each `SELECT FOR UPDATE`, `UPDATE`, `INSERT` or `DELETE` statement
+    /// in a pessimistic transaction.
+    ///
+    /// `for_update_ts` is acquired for `SELECT FOR UPDATE` and `UPDATE` statements and passed to this function to get **latest** data.
+    /// If there is a commit that happens after `for_update_ts`, the transaction should retry to get the latest data.
+    ///
     pub fn acquire_pessimistic_lock(
         &mut self,
         key: Key,
@@ -372,7 +429,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             if need_value {
                 val = self.reader.get(&key, for_update_ts, true)?;
             }
-            // Overwrite the lock with small for_update_ts
+            // Overwrite the lock with small for_update_ts to support pessimistic rollback
             if for_update_ts > lock.for_update_ts {
                 let lock = pessimistic_lock(
                     primary,
@@ -392,7 +449,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
             // The isolation level of pessimistic transactions is RC. `for_update_ts` is
-            // the commit_ts of the data this transaction read. If exists a commit version
+            // the commit_ts of the data this transaction read. If there exists a commit version
             // whose commit timestamp is larger than current `for_update_ts`, the
             // transaction should retry to get the latest data.
             if commit_ts > for_update_ts {
@@ -409,11 +466,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 .into());
             }
 
-            // Handle rollback.
+            // Handles rollback.
             // If the start timestamp of write is equal to transaction's start timestamp
-            // as well as commit timestamp, the lock is already rollbacked.
+            // as well as commit timestamp, the lock is already rolled back.
             if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                assert!(write.write_type == WriteType::Rollback);
+                assert_eq!(write.write_type, WriteType::Rollback);
                 return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
@@ -463,6 +520,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(val)
     }
 
+    /// The prewrite phase for a pessimistic transaction.
+    ///
+    /// The pessimistic lock will be converted to optimistic locks.
+    /// Then the commit phase can process it as an optimistic transaction.
+    ///
+    /// Due to pipeline optimization for pessimistic locks, pessimistic lock acquisition could fail.
+    /// But there is still a chance for us to successfully prewrite under some conditions.
+    /// [amend_pessimistic_lock](MvccTxn::amend_pessimistic_lock) does this.
     pub fn pessimistic_prewrite(
         &mut self,
         mutation: Mutation,
@@ -539,7 +604,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(())
     }
 
-    // TiKV may fails to write pessimistic locks due to pipelined process.
+    // TiKV may fail to write pessimistic locks due to pipelined process.
     // If the data is not changed after acquiring the lock, we can still prewrite the key.
     fn amend_pessimistic_lock(
         &mut self,
@@ -594,6 +659,25 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(())
     }
 
+    /// The prewrite phase of the optimistic transaction.
+    ///
+    /// Write requests to one region will be processed by only one TiKV instance (the Raft leader).
+    /// TiKV uses latches to prevent data race, but the interleaving of pessimistic lock, prewrite
+    /// and commit phases could cause some conflicts.
+    ///
+    /// First, "write conflict" can happen. Consider
+    /// 1. Transaction A gets start timestamp T_A
+    /// 2. Transaction B commits with commit timestamp T_B
+    /// 3. Transaction A prewrites with T_A
+    ///
+    /// where T_A < T_B. If both transactions write to same key(s), A should abort.
+    ///
+    /// Second,
+    /// 1. Transaction A prewrites or acquires pessimistic locks
+    /// 2. Transaction B prewrites
+    ///
+    /// If both transactions write to same key(s), lock(s) acquired by A may not have been released.
+    ///
     pub fn prewrite(
         &mut self,
         mutation: Mutation,
@@ -677,6 +761,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
     }
 
+    /// The commit phase of the transaction, whether it is optimistic or pessimistic
+    ///
+    /// At the time of commit, the state of the row can be any one of the following:
+    /// 1. already committed by concurrent transactions
+    /// 2. rolled back by concurrent transactions
+    /// 3. locked by itself
+    ///
+    /// Note: it cannot be locked by others.
     pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
         fail_point!("commit", |err| Err(make_txn_error(
             err,
@@ -688,6 +780,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
+                // This is used to support large transaction
                 if commit_ts < lock.min_commit_ts {
                     info!(
                         "trying to commit with smaller commit_ts than min_commit_ts";
@@ -708,7 +801,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 // It's an abnormal routine since pessimistic locks shouldn't be committed in our
                 // transaction model. But a pessimistic lock will be left if the pessimistic
                 // rollback request fails to send and the transaction need not to acquire
-                // this lock again(due to WriteConflict). If the transaction is committed, we
+                // this lock again (due to WriteConflict). If the transaction is committed, we
                 // should commit this pessimistic lock too.
                 if lock.lock_type == LockType::Pessimistic {
                     warn!(
@@ -764,6 +857,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(self.unlock_key(key, is_pessimistic_txn))
     }
 
+    /// Rollbacks a transaction.
+    ///
+    /// Rollback is called only if the transaction is known to fail. Under the circumstances,
+    /// the rollback record needn't be protected.
     pub fn rollback(&mut self, key: Key) -> Result<Option<ReleasedLock>> {
         fail_point!("rollback", |err| Err(make_txn_error(
             err,
@@ -772,11 +869,13 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
         .into()));
 
-        // Rollback is called only if the transaction is known to fail. Under the circumstances,
-        // the rollback record needn't be protected.
         self.cleanup(key, TimeStamp::zero(), false)
     }
 
+    /// Checks the status of a txn without a lock
+    ///
+    /// 1. have write records (committed or rolled back) => return
+    /// 2. no write records => rollback it
     fn check_txn_status_missing_lock(
         &mut self,
         primary_key: Key,
@@ -873,7 +972,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         }
     }
 
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
+    /// Releases any pessimistic lock belonging to this transaction with a smaller for_update_ts
     pub fn pessimistic_rollback(
         &mut self,
         key: Key,
@@ -906,7 +1005,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(())
     }
 
-    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
+    /// Update a primary key's TTL if `advise_ttl` > `lock.ttl`.
     ///
     /// Returns the new TTL.
     pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
@@ -994,7 +1093,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 // during rolling update.
                 if !lock.min_commit_ts.is_zero()
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                    // We don't push forward lock's min_commit_ts and the point get can ingore the lock
+                    // We don't push forward lock's min_commit_ts and the point get can ignore the lock
                     // next time because it's not committed.
                     && !caller_start_ts.is_max()
                     // Push forward the min_commit_ts so that reading won't be blocked by locks.
@@ -1031,6 +1130,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         }
     }
 
+    /// Garbage collection of useless versions.
     pub fn gc(&mut self, key: Key, safe_point: TimeStamp) -> Result<GcInfo> {
         let mut remove_older = false;
         let mut ts = TimeStamp::max();
