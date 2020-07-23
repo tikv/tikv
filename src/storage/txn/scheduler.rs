@@ -437,34 +437,26 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
-        if let ProcessResult::NextCommands { mut cmds } = pr {
-            // joiner reuse the finished command's context, and responsible for joining the other commands' result
-            let joiner = cmds.pop().unwrap();
-            // the rest commands (joinees) should run on their own and notify the joiner their result by using the channel
-            let joinee_count = cmds.len();
+        if let ProcessResult::NextCommands { cmds } = pr {
+            let cmd_count = cmds.len();
             let mut tctx = self.inner.dequeue_task_context(cid);
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             let cb = tctx.cb.take();
             let (tx, rx) = std::sync::mpsc::channel();
-            self.schedule_command(
-                joiner,
-                StorageCallback::Boolean(Box::new(move |pr| {
-                    for _ in 0..joinee_count {
+            self.inner
+                .worker_pool
+                .pool
+                .spawn(async move {
+                    for _ in 0..cmd_count {
                         if let Err(_e) = rx.recv() {
                             return cb.unwrap().execute(ProcessResult::Failed {
                                 err: StorageError::from(StorageErrorInner::Closed),
                             });
                         }
                     }
-                    if let Ok(_pr) = pr {
-                        cb.unwrap().execute(ProcessResult::Res)
-                    } else {
-                        cb.unwrap().execute(ProcessResult::Failed {
-                            err: pr.unwrap_err(),
-                        })
-                    }
-                })),
-            );
+                    cb.unwrap().execute(ProcessResult::Res)
+                })
+                .unwrap();
             for cmd in cmds {
                 let tx = tx.clone();
                 let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
@@ -504,35 +496,28 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 err: StorageError::from(e),
             },
         };
-        if let ProcessResult::NextCommands { mut cmds } = pr {
-            // joiner reuse the finished command's context, and responsible for joining the other commands' result
-            let joiner = cmds.pop().unwrap();
-            let joinee_count = cmds.len();
+        if let ProcessResult::NextCommands { cmds } = pr {
+            let cmd_count = cmds.len();
             let tctx = self.inner.dequeue_task_context(cid);
             let cb = tctx.cb;
             let lock = tctx.lock;
             if let Some(cb) = cb {
                 let (tx, rx) = std::sync::mpsc::channel();
-                self.schedule_command(
-                    joiner,
-                    StorageCallback::Boolean(Box::new(move |pr| {
-                        for _ in 0..joinee_count {
+                self.inner
+                    .worker_pool
+                    .pool
+                    .spawn(async move {
+                        for _ in 0..cmd_count {
                             if let Err(_e) = rx.recv() {
                                 return cb.execute(ProcessResult::Failed {
                                     err: StorageError::from(StorageErrorInner::Closed),
                                 });
                             }
                         }
-                        if let Ok(_pr) = pr {
-                            cb.execute(ProcessResult::Res)
-                        } else {
-                            cb.execute(ProcessResult::Failed {
-                                err: pr.unwrap_err(),
-                            })
-                        }
-                    })),
-                );
-                // the rest commands (joinees) should run on their own and notify the joiner their result by using the channel
+                        cb.execute(ProcessResult::Res)
+                    })
+                    .unwrap();
+
                 for cmd in cmds {
                     let tx = tx.clone();
                     let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
