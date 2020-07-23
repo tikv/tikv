@@ -301,18 +301,18 @@ where
     }
 }
 
-pub enum Notifier<S>
+pub enum Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    Router(RaftRouter<RocksEngine, RocksEngine, S>),
+    Router(RaftRouter<EK, RocksEngine, EK::Snapshot>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<RocksEngine, RocksEngine, S>>),
+    Sender(Sender<PeerMsg<EK, RocksEngine, EK::Snapshot>>),
 }
 
-impl<S> Clone for Notifier<S>
+impl<EK> Clone for Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -323,11 +323,11 @@ where
     }
 }
 
-impl<S> Notifier<S>
+impl<EK> Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<RocksEngine, RocksEngine, S>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<EK, RocksEngine, EK::Snapshot>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -349,7 +349,7 @@ where
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter<RocksEngine>,
-    notifier: Notifier<E::Snapshot>,
+    notifier: Notifier<E>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
@@ -389,7 +389,7 @@ where
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
         router: ApplyRouter<RocksEngine>,
-        notifier: Notifier<E::Snapshot>,
+        notifier: Notifier<E>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
@@ -3200,7 +3200,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksSnapshot>,
+    sender: Notifier<RocksEngine>,
     router: ApplyRouter<RocksEngine>,
     _phantom: PhantomData<W>,
 }
@@ -3208,7 +3208,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksSnapshot>,
+        sender: Notifier<RocksEngine>,
         router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {
         Builder::<W> {
