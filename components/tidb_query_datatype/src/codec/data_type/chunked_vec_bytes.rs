@@ -47,14 +47,31 @@ impl ChunkedVecBytes {
     pub fn push_data(&mut self, mut value: Bytes) {
         self.bitmap.push(true);
         self.data.append(&mut value);
+        self.finish_append();
+    }
+
+    pub fn push_data_ref(&mut self, value: BytesRef) {
+        self.bitmap.push(true);
+        self.data.extend_from_slice(value);
+        self.finish_append();
+    }
+
+    fn finish_append(&mut self) {
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
 
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
-        self.var_offset.push(self.data.len());
-        self.length += 1;
+        self.finish_append();
+    }
+
+    pub fn push_ref(&mut self, value: Option<BytesRef>) {
+        if let Some(x) = value {
+            self.push_data_ref(x);
+        } else {
+            self.push_null();
+        }
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -90,12 +107,71 @@ impl ChunkedVecBytes {
             None
         }
     }
+
+    pub fn into_writer(self) -> BytesWriter {
+        BytesWriter { chunked_vec: self }
+    }
+}
+
+pub struct BytesWriter {
+    chunked_vec: ChunkedVecBytes,
+}
+
+pub struct PartialBytesWriter {
+    chunked_vec: ChunkedVecBytes,
+}
+
+pub struct BytesGuard {
+    chunked_vec: ChunkedVecBytes,
+}
+
+impl BytesGuard {
+    pub fn into_inner(self) -> ChunkedVecBytes {
+        self.chunked_vec
+    }
+}
+
+impl BytesWriter {
+    pub fn begin(self) -> PartialBytesWriter {
+        PartialBytesWriter {
+            chunked_vec: self.chunked_vec,
+        }
+    }
+
+    pub fn write(mut self, data: Option<Bytes>) -> BytesGuard {
+        self.chunked_vec.push(data);
+        BytesGuard {
+            chunked_vec: self.chunked_vec,
+        }
+    }
+
+    pub fn write_ref(mut self, data: Option<BytesRef>) -> BytesGuard {
+        self.chunked_vec.push_ref(data);
+        BytesGuard {
+            chunked_vec: self.chunked_vec,
+        }
+    }
+}
+
+impl<'a> PartialBytesWriter {
+    pub fn partial_write(&mut self, data: BytesRef) {
+        self.chunked_vec.data.extend_from_slice(data);
+    }
+
+    pub fn finish(mut self) -> BytesGuard {
+        self.chunked_vec.bitmap.push(true);
+        self.chunked_vec.finish_append();
+        BytesGuard {
+            chunked_vec: self.chunked_vec,
+        }
+    }
 }
 
 impl ChunkedVec<Bytes> for ChunkedVecBytes {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
+
     fn chunked_push(&mut self, value: Option<Bytes>) {
         self.push(value)
     }
@@ -226,6 +302,80 @@ mod test {
                 Some("💩".as_bytes().to_vec()),
                 None,
             ]
+        );
+    }
+
+    fn repeat(data: Bytes, cnt: usize) -> Bytes {
+        let mut x = vec![];
+        for _ in 0..cnt {
+            x.append(&mut data.clone())
+        }
+        x
+    }
+
+    #[test]
+    fn test_writer() {
+        let test_bytes: &[Option<Bytes>] = &[
+            None,
+            None,
+            Some(
+                "TiDB 是PingCAP 公司自主设计、研发的开源分布式关系型数据库，"
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            None,
+            Some(
+                "是一款同时支持在线事务处理与在线分析处理(HTAP)的融合型分布式数据库产品。"
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            Some("🐮🐮🐮🐮🐮".as_bytes().to_vec()),
+            Some("我成功了".as_bytes().to_vec()),
+            None,
+            Some("💩💩💩".as_bytes().to_vec()),
+            None,
+        ];
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.into_writer();
+            let guard = writer.write(test_bytes[i].to_owned());
+            chunked_vec = guard.into_inner();
+        }
+        assert_eq!(chunked_vec.to_vec(), test_bytes);
+
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.into_writer();
+            let guard = writer.write(test_bytes[i].clone());
+            chunked_vec = guard.into_inner();
+        }
+        assert_eq!(chunked_vec.to_vec(), test_bytes);
+
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.into_writer();
+            let guard = match test_bytes[i].clone() {
+                Some(x) => {
+                    let mut writer = writer.begin();
+                    writer.partial_write(x.as_slice());
+                    writer.partial_write(x.as_slice());
+                    writer.partial_write(x.as_slice());
+                    writer.finish()
+                }
+                None => writer.write(None),
+            };
+            chunked_vec = guard.into_inner();
+        }
+        assert_eq!(
+            chunked_vec.to_vec(),
+            test_bytes
+                .iter()
+                .map(|x| if let Some(x) = x {
+                    Some(repeat(x.to_vec(), 3))
+                } else {
+                    None
+                })
+                .collect::<Vec<Option<Bytes>>>()
         );
     }
 }
