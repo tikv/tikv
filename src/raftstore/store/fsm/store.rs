@@ -51,16 +51,9 @@ use crate::raftstore::store::worker::{
     ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
     SplitCheckRunner, SplitCheckTask,
 };
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use crate::raftstore::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, SnapshotDeleter,
-    StoreMsg, StoreTick,
-=======
-use crate::store::PdTask;
-use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
-    SignificantMsg, SnapManager, StoreMsg, StoreTick,
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/fsm/store.rs
+    Callback, CasualMessage, MergeResultKind, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
+    SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::raftstore::Result;
 use crate::report_perf_context;
@@ -68,17 +61,7 @@ use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 
-<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
-use tikv_util::collections::{HashMap, HashSet};
-=======
-use crate::Result;
-use engine_rocks::{CompactedEvent, CompactionListener};
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
-use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
-use tikv_util::config::{Tracker, VersionTrack};
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/fsm/store.rs
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;

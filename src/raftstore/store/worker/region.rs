@@ -607,12 +607,8 @@ where
                     .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
-<<<<<<< HEAD:src/raftstore/store/worker/region.rs
-                // to makes sure appling snapshots in order.
-=======
                 fail_point!("on_region_worker_apply", true, |_| {});
                 // to makes sure applying snapshots in order.
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/worker/region.rs
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {

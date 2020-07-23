@@ -899,14 +899,9 @@ impl PeerStorage {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
         kv_wb: &WriteBatch,
         raft_wb: &WriteBatch,
-=======
-        kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::WriteBatch,
         destroy_regions: &[metapb::Region],
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -932,16 +927,11 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(kv_wb, raft_wb)?;
         }
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
-
-        write_peer_state(&self.engines.kv, kv_wb, &region, PeerState::Applying, None)?;
-=======
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
-            write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
+            write_peer_state(&self.engines.kv, kv_wb, r, PeerState::Tombstone, None)?;
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
+        write_peer_state(&self.engines.kv, kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -1146,17 +1136,13 @@ impl PeerStorage {
             0
         } else {
             fail_point!("raft_before_apply_snap");
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
             self.apply_snapshot(
                 &mut ctx,
                 &ready.snapshot,
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
+                &destroy_regions,
             )?;
-=======
-            let (kv_wb, raft_wb) = ready_ctx.wb_mut();
-            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb, &destroy_regions)?;
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
             fail_point!("raft_after_apply_snap");
 
             ctx.destroyed_regions = destroy_regions;
@@ -1180,12 +1166,8 @@ impl PeerStorage {
             }
         }
 
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
-        if ctx.raft_state != self.raft_state {
-=======
         // Save raft state if it has changed or peer has applied a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
             if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
@@ -1201,13 +1183,8 @@ impl PeerStorage {
         }
 
         // only when apply snapshot
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
-        if ctx.apply_state != self.apply_state {
-            ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
-=======
         if snapshot_index > 0 {
-            ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
+            ctx.save_apply_state_to(&self.engines.kv, ready_ctx.kv_wb_mut())?;
         }
 
         Ok(ctx)
@@ -2357,15 +2334,9 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
-=======
-        let mut kv_wb = s2.engines.kv.write_batch();
-        let mut raft_wb = s2.engines.raft.write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
+        s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2381,15 +2352,9 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-<<<<<<< HEAD:src/raftstore/store/peer_storage.rs
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
-=======
-        let mut kv_wb = s3.engines.kv.write_batch();
-        let mut raft_wb = s3.engines.raft.write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer_storage.rs
+        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb, &[])
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
@@ -8,16 +7,8 @@ use std::time::*;
 
 use fail;
 
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-=======
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::*;
-use std::thread;
-use std::time::*;
-
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
 use raft::eraftpb::MessageType;
 
 use engine::*;
@@ -871,8 +862,6 @@ fn test_node_mutiple_rollback_merge() {
         assert_eq!(pd_client.get_region(b"k1").unwrap().get_id(), left.get_id());
     }
 }
-<<<<<<< HEAD
-=======
 
 // In the previous implementation, the source peer will propose rollback merge
 // after the local target peer's epoch is larger than recorded previously.
@@ -1218,4 +1207,3 @@ fn test_node_merge_crash_when_snapshot() {
         }
     }
 }
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)

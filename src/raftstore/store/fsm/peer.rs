@@ -51,16 +51,9 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
-<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
 use crate::raftstore::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
-    SnapshotDeleter, StoreMsg,
-=======
-use crate::store::PdTask;
-use crate::store::{
     util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand, SignificantMsg,
-    SnapKey, StoreMsg,
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/fsm/peer.rs
+    SnapKey, SnapshotDeleter, StoreMsg,
 };
 use crate::raftstore::{Error, Result};
 
@@ -1361,13 +1354,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
 
-<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
-        // Clear merge related structures.
-=======
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/fsm/peer.rs
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         // Destroy read delegates.

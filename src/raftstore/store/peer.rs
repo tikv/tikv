@@ -34,15 +34,9 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
-<<<<<<< HEAD:src/raftstore/store/peer.rs
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
-=======
-use crate::{Error, Result};
-use pd_client::INVALID_ID;
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer.rs
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -1133,22 +1127,6 @@ impl Peer {
                 return None;
             }
 
-<<<<<<< HEAD:src/raftstore/store/peer.rs
-            let mut snap_data = RaftSnapshotData::new();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to parse snap data";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
-            let region = snap_data.take_region();
-
-=======
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer.rs
             let meta = ctx.store_meta.lock().unwrap();
             // For merge process, the stale source peer is destroyed asynchronously when applying
             // snapshot or creating new peer. So here checks whether there is any overlap, if so,
@@ -1404,16 +1382,8 @@ impl Peer {
 
         self.apply_reads(ctx, &ready);
 
-<<<<<<< HEAD:src/raftstore/store/peer.rs
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
-=======
-    pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
-        if !raft::is_empty_snap(ready.snapshot()) {
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
-            self.raft_group.advance_append(ready);
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027):components/raftstore/src/store/peer.rs
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_applying_idx);

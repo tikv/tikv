@@ -337,11 +337,7 @@ impl Filter for RegionPacketFilter {
                 && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
                 && !self.skip_type.contains(&msg_type)
             {
-<<<<<<< HEAD
-                return match self.block {
-=======
                 let res = match self.block {
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
                         if left == 0 {
