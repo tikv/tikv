@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::RocksEngine;
+use engine_skiplist::SkiplistEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -223,7 +223,7 @@ where
     mgr: SnapManager<EK>,
     use_delete_range: bool,
     pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    coprocessor_host: CoprocessorHost<SkiplistEngine>,
     router: R,
 }
 
@@ -576,7 +576,7 @@ where
         mgr: SnapManager<EK>,
         batch_size: usize,
         use_delete_range: bool,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<SkiplistEngine>,
         router: R,
     ) -> Runner<EK, ER, R> {
         Runner {

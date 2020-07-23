@@ -476,7 +476,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         }
         self.workers.spawn(fut.then(move |res| {
             match res {
-                Ok(resp) => init.on_change_cmd(resp),
+                Ok(resp) => {
+                    /* init.on_change_cmd(resp) */
+                    ()
+                }
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
             };
             Ok(())
@@ -645,7 +648,7 @@ impl Initializer {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
-            self.async_incremental_scan(region_snapshot, region);
+        // self.async_incremental_scan(region_snapshot, region);
         } else {
             assert!(
                 resp.response.get_header().has_error(),

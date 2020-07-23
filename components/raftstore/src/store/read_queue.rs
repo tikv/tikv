@@ -7,7 +7,7 @@ use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
 
-use engine_rocks::RocksSnapshot;
+use engine_skiplist::SkiplistSnapshot;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -19,7 +19,7 @@ const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
 pub struct ReadIndexRequest {
     pub id: Uuid,
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksSnapshot>, Option<u64>)>,
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<SkiplistSnapshot>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
     // `true` means it's in `ReadIndexQueue::reads`.
@@ -30,7 +30,7 @@ impl ReadIndexRequest {
     pub fn push_command(
         &mut self,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
         read_index: u64,
     ) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
@@ -40,7 +40,7 @@ impl ReadIndexRequest {
     pub fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
         renew_lease_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();

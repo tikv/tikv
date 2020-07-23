@@ -9,7 +9,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use engine_traits::{MiscExt, TablePropertiesExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -138,8 +138,8 @@ impl Display for GcTask {
 /// Used to perform GC operations on the engine.
 struct GcRunner<E: Engine> {
     engine: E,
-    local_storage: Option<RocksEngine>,
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    local_storage: Option<SkiplistEngine>,
+    raft_store_router: Option<ServerRaftStoreRouter<SkiplistEngine>>,
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
@@ -154,8 +154,8 @@ struct GcRunner<E: Engine> {
 impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        local_storage: Option<SkiplistEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<SkiplistEngine>>,
         cfg_tracker: Tracker<GcConfig>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
@@ -505,7 +505,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<SkiplistSnapshot>::from_raw(db, fake_region);
 
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
         let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
@@ -660,9 +660,9 @@ pub fn sync_gc(
 pub struct GcWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
-    local_storage: Option<RocksEngine>,
+    local_storage: Option<SkiplistEngine>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    raft_store_router: Option<ServerRaftStoreRouter<SkiplistEngine>>,
     /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
     /// This is useful to do the `need_gc` check without waking hibernatin regions up.
     /// This is not set for tests.
@@ -726,8 +726,8 @@ impl<E: Engine> Drop for GcWorker<E> {
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        local_storage: Option<RocksEngine>,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        local_storage: Option<SkiplistEngine>,
+        raft_store_router: Option<ServerRaftStoreRouter<SkiplistEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
@@ -755,12 +755,12 @@ impl<E: Engine> GcWorker<E> {
         cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
-        if let Some(db) = self.local_storage.clone() {
-            let safe_point = Arc::clone(&safe_point);
-            let cfg_mgr = self.config_manager.clone();
-            let cluster_version = self.cluster_version.clone();
-            init_compaction_filter(db, safe_point, cfg_mgr, cluster_version);
-        }
+        // if let Some(db) = self.local_storage.clone() {
+        //     let safe_point = Arc::clone(&safe_point);
+        //     let cfg_mgr = self.config_manager.clone();
+        //     let cluster_version = self.cluster_version.clone();
+        //     init_compaction_filter(db, safe_point, cfg_mgr, cluster_version);
+        // }
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
@@ -794,7 +794,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        coprocessor_host: &mut CoprocessorHost<SkiplistEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);

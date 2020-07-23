@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
-use engine_rocks::RocksEngine;
+use engine_skiplist::SkiplistEngine;
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
@@ -121,7 +121,7 @@ impl LockObserver {
         Self { state, sender }
     }
 
-    pub fn register(self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register(self, coprocessor_host: &mut CoprocessorHost<SkiplistEngine>) {
         coprocessor_host
             .registry
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(self.clone()));
@@ -383,7 +383,7 @@ pub struct AppliedLockCollector {
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
+    pub fn new(coprocessor_host: &mut CoprocessorHost<SkiplistEngine>) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let scheduler = worker.lock().unwrap().scheduler();
@@ -508,7 +508,7 @@ mod tests {
         res
     }
 
-    fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
+    fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<SkiplistEngine>) {
         let mut coprocessor_host = CoprocessorHost::default();
         let collector = AppliedLockCollector::new(&mut coprocessor_host).unwrap();
         (collector, coprocessor_host)

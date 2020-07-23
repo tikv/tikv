@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
@@ -103,7 +103,7 @@ struct SendStat {
 /// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(
     env: Arc<Environment>,
-    mgr: SnapManager<RocksEngine>,
+    mgr: SnapManager<SkiplistEngine>,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
     addr: &str,
@@ -182,7 +182,10 @@ struct RecvSnapContext {
 }
 
 impl RecvSnapContext {
-    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager<RocksEngine>) -> Result<Self> {
+    fn new(
+        head_chunk: Option<SnapshotChunk>,
+        snap_mgr: &SnapManager<SkiplistEngine>,
+    ) -> Result<Self> {
         // head_chunk is None means the stream is empty.
         let mut head = head_chunk.ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
         if !head.has_message() {
@@ -218,7 +221,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksSnapshot>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<SkiplistSnapshot>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -235,10 +238,10 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksSnapshot> + 'static>(
+fn recv_snap<R: RaftStoreRouter<SkiplistSnapshot> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager<SkiplistEngine>,
     raft_router: R,
 ) -> impl Future<Item = (), Error = Error> {
     let stream = stream.map_err(Error::from);
@@ -291,9 +294,9 @@ fn recv_snap<R: RaftStoreRouter<RocksSnapshot> + 'static>(
     .map_err(Error::from)
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksSnapshot> + 'static> {
+pub struct Runner<R: RaftStoreRouter<SkiplistSnapshot> + 'static> {
     env: Arc<Environment>,
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager<SkiplistEngine>,
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
@@ -302,10 +305,10 @@ pub struct Runner<R: RaftStoreRouter<RocksSnapshot> + 'static> {
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
+impl<R: RaftStoreRouter<SkiplistSnapshot> + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager<SkiplistEngine>,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
@@ -326,7 +329,7 @@ impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<SkiplistSnapshot> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {

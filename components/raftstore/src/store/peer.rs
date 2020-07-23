@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -189,13 +189,13 @@ pub struct Peer {
     pub peer: metapb::Peer,
 
     /// The Raft state machine of this Peer.
-    pub raft_group: RawNode<PeerStorage<RocksEngine, RocksEngine>>,
+    pub raft_group: RawNode<PeerStorage<SkiplistEngine, SkiplistEngine>>,
     /// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    proposals: ProposalQueue<RocksSnapshot>,
+    proposals: ProposalQueue<SkiplistSnapshot>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
@@ -288,8 +288,8 @@ impl Peer {
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<SkiplistSnapshot>>,
+        engines: KvEngines<SkiplistEngine, SkiplistEngine>,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer> {
@@ -324,7 +324,7 @@ impl Peer {
             peer,
             region_id: region.get_id(),
             raft_group,
-            proposals: ProposalQueue::<RocksSnapshot>::new(),
+            proposals: ProposalQueue::<SkiplistSnapshot>::new(),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
@@ -684,7 +684,7 @@ impl Peer {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost<RocksEngine>,
+        host: &CoprocessorHost<SkiplistEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
@@ -725,12 +725,12 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_store(&self) -> &PeerStorage<RocksEngine, RocksEngine> {
+    pub fn get_store(&self) -> &PeerStorage<SkiplistEngine, SkiplistEngine> {
         self.raft_group.store()
     }
 
     #[inline]
-    pub fn mut_store(&mut self) -> &mut PeerStorage<RocksEngine, RocksEngine> {
+    pub fn mut_store(&mut self) -> &mut PeerStorage<SkiplistEngine, SkiplistEngine> {
         self.raft_group.mut_store()
     }
 
@@ -1805,7 +1805,7 @@ impl Peer {
     pub fn propose<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         txn_extra: TxnExtra,
@@ -1868,7 +1868,7 @@ impl Peer {
     fn post_propose<T, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
-        mut p: Proposal<RocksSnapshot>,
+        mut p: Proposal<SkiplistSnapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -2062,7 +2062,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
     ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
@@ -2126,7 +2126,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2510,7 +2510,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 
@@ -2595,7 +2595,7 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse<RocksSnapshot> {
+    ) -> ReadResponse<SkiplistSnapshot> {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,

@@ -11,7 +11,8 @@
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngines, MetricsFlusher};
+use engine_skiplist::{SkiplistEngine, SkiplistEngineBuilder, SkiplistSnapshot};
+use engine_traits::{KvEngines, MetricsFlusher, ALL_CFS};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
@@ -112,7 +113,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksSnapshot>,
+    router: RaftRouter<SkiplistSnapshot>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -121,21 +122,21 @@ struct TiKVServer {
     engines: Option<Engines>,
     servers: Option<Servers>,
     region_info_accessor: RegionInfoAccessor,
-    coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
+    coprocessor_host: Option<CoprocessorHost<SkiplistEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
 }
 
 struct Engines {
-    engines: KvEngines<RocksEngine, RocksEngine>,
+    engines: KvEngines<SkiplistEngine, SkiplistEngine>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<SkiplistEngine>>,
+    raft_router: ServerRaftStoreRouter<SkiplistEngine>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
+    server: Server<ServerRaftStoreRouter<SkiplistEngine>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
 }
@@ -329,70 +330,15 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
-        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
-
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
-        let mut raft_db_opts = self.config.raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = self.config.raftdb.build_cf_opts(&block_cache);
-        let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
-
-        // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(new_compaction_listener(self.router.clone()));
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
-        let db_path = self
-            .store_path
-            .join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
         let engines = KvEngines::new(
-            RocksEngine::from_db(Arc::new(kv_engine)),
-            RocksEngine::from_db(Arc::new(raft_engine)),
-            block_cache.is_some(),
+            SkiplistEngineBuilder::new().cf_names(ALL_CFS).build(),
+            SkiplistEngineBuilder::new().build(),
+            false,
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
-
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                engines.kv.clone(),
-                self.config.storage.block_cache.shared,
-            )),
-        );
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                engines.kv.clone(),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(
-                engines.raft.clone(),
-                DBType::Raft,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-
         let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
 
         self.engines = Some(Engines {
@@ -403,7 +349,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine>>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -425,7 +371,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<SkiplistEngine>>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -607,43 +553,11 @@ impl TiKVServer {
         let servers = self.servers.as_mut().unwrap();
         let engines = self.engines.as_ref().unwrap();
 
-        // Import SST service.
-        let import_service = ImportSSTService::new(
-            self.config.import.clone(),
-            engines.raft_router.clone(),
-            engines.engines.kv.clone(),
-            servers.importer.clone(),
-            self.security_mgr.clone(),
-        );
-        if servers
-            .server
-            .register_service(create_import_sst(import_service))
-            .is_some()
-        {
-            fatal!("failed to register import service");
-        }
-
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
-
-        // Debug service.
-        let debug_service = DebugService::new(
-            engines.engines.clone(),
-            pool.clone(),
-            engines.raft_router.clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
-            self.security_mgr.clone(),
-        );
-        if servers
-            .server
-            .register_service(create_debug(debug_service))
-            .is_some()
-        {
-            fatal!("failed to register debug service");
-        }
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -872,6 +786,12 @@ where
 }
 
 impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
+    fn stop(mut self: Box<Self>) {
+        (*self).stop()
+    }
+}
+
+impl Stop for MetricsFlusher<SkiplistEngine, SkiplistEngine> {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }

@@ -21,7 +21,7 @@ use crate::storage::{
     lock_manager::LockManager,
     PointGetCommand, Storage, TxnStatus,
 };
-use engine_rocks::RocksSnapshot;
+use engine_skiplist::SkiplistSnapshot;
 use futures::executor::{self, Notify, Spawn};
 use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};
@@ -50,7 +50,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<
-    T: RaftStoreRouter<RocksSnapshot> + 'static,
+    T: RaftStoreRouter<SkiplistSnapshot> + 'static,
     E: Engine,
     L: LockManager,
     P: PdClient + 'static,
@@ -80,7 +80,7 @@ pub struct Service<
 }
 
 impl<
-        T: RaftStoreRouter<RocksSnapshot> + Clone + 'static,
+        T: RaftStoreRouter<SkiplistSnapshot> + Clone + 'static,
         E: Engine + Clone,
         L: LockManager + Clone,
         P: PdClient + 'static,
@@ -104,7 +104,7 @@ impl<
 }
 
 impl<
-        T: RaftStoreRouter<RocksSnapshot> + 'static,
+        T: RaftStoreRouter<SkiplistSnapshot> + 'static,
         E: Engine,
         L: LockManager,
         P: PdClient + 'static,
@@ -180,7 +180,7 @@ macro_rules! handle_request {
 }
 
 impl<
-        T: RaftStoreRouter<RocksSnapshot> + 'static,
+        T: RaftStoreRouter<SkiplistSnapshot> + 'static,
         E: Engine,
         L: LockManager,
         P: PdClient + 'static,

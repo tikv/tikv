@@ -16,7 +16,7 @@ use std::{error, result, str, thread, time, u64};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
-use engine_rocks::RocksEngine;
+use engine_skiplist::SkiplistEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
@@ -169,7 +169,7 @@ where
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    pub coprocessor_host: CoprocessorHost<SkiplistEngine>,
 }
 
 /// `Snapshot` is a trait for snapshot.

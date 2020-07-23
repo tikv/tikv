@@ -4,7 +4,7 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
-    use engine_rocks::RocksEngine;
+    use engine_skiplist::SkiplistEngine;
     use engine_traits::{KvEngines, MiscExt};
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
@@ -12,7 +12,7 @@ mod imp {
     use tikv_util::metrics;
 
     #[allow(dead_code)]
-    pub fn wait_for_signal(engines: Option<KvEngines<RocksEngine, RocksEngine>>) {
+    pub fn wait_for_signal(engines: Option<KvEngines<SkiplistEngine, SkiplistEngine>>) {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -37,8 +37,8 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use engine_rocks::RocksEngine;
+    use engine_skiplist::SkiplistEngine;
     use engine_traits::KvEngines;
 
-    pub fn wait_for_signal(_: Option<KvEngines<RocksEngine, RocksEngine>>) {}
+    pub fn wait_for_signal(_: Option<KvEngines<SkiplistEngine, SkiplistEngine>>) {}
 }

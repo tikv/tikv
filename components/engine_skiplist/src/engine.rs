@@ -26,8 +26,8 @@ impl SkiplistEngineBuilder {
         Self { cf_names: vec![] }
     }
 
-    pub fn cf_names(mut self, names: Vec<CfName>) -> Self {
-        self.cf_names = names;
+    pub fn cf_names(mut self, names: &[CfName]) -> Self {
+        self.cf_names = names.to_vec();
         self
     }
 

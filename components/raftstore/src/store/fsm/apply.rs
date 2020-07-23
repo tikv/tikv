@@ -17,7 +17,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -287,7 +287,7 @@ where
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost<RocksEngine>) {
+    fn invoke_all(self, host: &CoprocessorHost<SkiplistEngine>) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -345,7 +345,7 @@ where
 {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost<RocksEngine>,
+    host: CoprocessorHost<SkiplistEngine>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter,
@@ -384,7 +384,7 @@ where
 {
     pub fn new(
         tag: String,
-        host: CoprocessorHost<RocksEngine>,
+        host: CoprocessorHost<SkiplistEngine>,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
@@ -3191,22 +3191,22 @@ where
     }
 }
 
-pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
+pub struct Builder<W: WriteBatch + WriteBatchVecExt<SkiplistEngine>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    coprocessor_host: CoprocessorHost<SkiplistEngine>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    engine: RocksEngine,
-    sender: Notifier<RocksSnapshot>,
+    region_scheduler: Scheduler<RegionTask<SkiplistSnapshot>>,
+    engine: SkiplistEngine,
+    sender: Notifier<SkiplistSnapshot>,
     router: ApplyRouter,
     _phantom: PhantomData<W>,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
+impl<W: WriteBatch + WriteBatchVecExt<SkiplistEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksSnapshot>,
+        sender: Notifier<SkiplistSnapshot>,
         router: ApplyRouter,
     ) -> Builder<W> {
         Builder::<W> {
@@ -3223,14 +3223,14 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     }
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
-    HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
+impl<W: WriteBatch + WriteBatchVecExt<SkiplistEngine>>
+    HandlerBuilder<ApplyFsm<SkiplistEngine>, ControlFsm> for Builder<W>
 {
-    type Handler = ApplyPoller<RocksEngine, W>;
+    type Handler = ApplyPoller<SkiplistEngine, W>;
 
-    fn build(&mut self) -> ApplyPoller<RocksEngine, W> {
+    fn build(&mut self) -> ApplyPoller<SkiplistEngine, W> {
         let cfg = self.cfg.value();
-        ApplyPoller::<RocksEngine, W> {
+        ApplyPoller::<SkiplistEngine, W> {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
                 self.tag.clone(),
@@ -3250,25 +3250,25 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 
 #[derive(Clone)]
 pub struct ApplyRouter {
-    pub router: BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>,
+    pub router: BatchRouter<ApplyFsm<SkiplistEngine>, ControlFsm>,
 }
 
 impl Deref for ApplyRouter {
-    type Target = BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>;
+    type Target = BatchRouter<ApplyFsm<SkiplistEngine>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<SkiplistEngine>, ControlFsm> {
         &self.router
     }
 }
 
 impl DerefMut for ApplyRouter {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<SkiplistEngine>, ControlFsm> {
         &mut self.router
     }
 }
 
 impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<RocksEngine>) {
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<SkiplistEngine>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3280,7 +3280,7 @@ impl ApplyRouter {
                     );
                     for p in apply.cbs.drain(..) {
                         let cmd =
-                            PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                            PendingCmd::<SkiplistSnapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3344,19 +3344,19 @@ impl ApplyRouter {
 }
 
 pub struct ApplyBatchSystem {
-    system: BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>,
+    system: BatchSystem<ApplyFsm<SkiplistEngine>, ControlFsm>,
 }
 
 impl Deref for ApplyBatchSystem {
-    type Target = BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>;
+    type Target = BatchSystem<ApplyFsm<SkiplistEngine>, ControlFsm>;
 
-    fn deref(&self) -> &BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchSystem<ApplyFsm<SkiplistEngine>, ControlFsm> {
         &self.system
     }
 }
 
 impl DerefMut for ApplyBatchSystem {
-    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<SkiplistEngine>, ControlFsm> {
         &mut self.system
     }
 }

@@ -3,7 +3,7 @@
 use crate::storage::kv::{Cursor, Engine, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine_rocks::properties::MvccProperties;
-use engine_rocks::RocksTablePropertiesCollection;
+use engine_skiplist::SkiplistTablePropertiesCollection;
 use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -377,7 +377,7 @@ impl<S: Snapshot> MvccReader<S> {
 pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
-    write_properties: &RocksTablePropertiesCollection,
+    write_properties: &SkiplistTablePropertiesCollection,
 ) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
@@ -412,7 +412,7 @@ pub fn check_need_gc(
 
 fn get_mvcc_properties(
     safe_point: TimeStamp,
-    collection: &RocksTablePropertiesCollection,
+    collection: &SkiplistTablePropertiesCollection,
 ) -> Option<MvccProperties> {
     if collection.is_empty() {
         return None;

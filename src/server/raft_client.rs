@@ -10,7 +10,7 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crossbeam::channel::SendError;
-use engine_rocks::RocksSnapshot;
+use engine_skiplist::SkiplistSnapshot;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
@@ -38,7 +38,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter<RocksSnapshot> + 'static>(
+    fn new<T: RaftStoreRouter<SkiplistSnapshot> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -151,7 +151,7 @@ pub struct RaftClient<T: 'static> {
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot>> RaftClient<T> {
+impl<T: RaftStoreRouter<SkiplistSnapshot>> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,

@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
+use engine_rocks::WRITE_BATCH_MAX_KEYS;
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngines, Peekable, Snapshot};
 use futures::Future;
@@ -113,7 +114,7 @@ pub struct BatchRaftCmdRequestBuilder {
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
+    callbacks: Vec<(Callback<SkiplistSnapshot>, usize)>,
     txn_extra: TxnExtra,
 }
 
@@ -146,8 +147,8 @@ impl<S: Snapshot> PeerFsm<S> {
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<SkiplistSnapshot>>,
+        engines: KvEngines<SkiplistEngine, SkiplistEngine>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<S>> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -193,8 +194,8 @@ impl<S: Snapshot> PeerFsm<S> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<SkiplistSnapshot>>,
+        engines: KvEngines<SkiplistEngine, SkiplistEngine>,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<SenderFsmPair<S>> {
@@ -293,7 +294,7 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<RocksSnapshot>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<SkiplistSnapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -328,7 +329,7 @@ impl BatchRaftCmdRequestBuilder {
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<RocksSnapshot>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<SkiplistSnapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
@@ -396,19 +397,19 @@ impl<S: Snapshot> Fsm for PeerFsm<S> {
 }
 
 pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksSnapshot>,
+    fsm: &'a mut PeerFsm<SkiplistSnapshot>,
     ctx: &'a mut PollContext<T, C>,
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksSnapshot>,
+        fsm: &'a mut PeerFsm<SkiplistSnapshot>,
         ctx: &'a mut PollContext<T, C>,
     ) -> PeerFsmDelegate<'a, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksSnapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<SkiplistSnapshot>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -478,7 +479,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<RocksSnapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<SkiplistSnapshot>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -667,7 +668,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
@@ -783,7 +784,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<RocksSnapshot>) {
+    fn on_leader_callback(&mut self, cb: Callback<SkiplistSnapshot>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -1029,7 +1030,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksSnapshot>) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<SkiplistSnapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
@@ -2661,7 +2662,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
+        exec_results: &mut VecDeque<ExecResult<SkiplistSnapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2857,7 +2858,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
         txn_extra: TxnExtra,
     ) {
         match self.pre_propose_raft_command(&msg) {
@@ -3117,7 +3118,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<SkiplistSnapshot>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -3394,7 +3395,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
+    fn on_ready_compute_hash(
+        &mut self,
+        region: metapb::Region,
+        index: u64,
+        snap: SkiplistSnapshot,
+    ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(

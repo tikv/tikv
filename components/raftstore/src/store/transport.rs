@@ -3,7 +3,7 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::RocksSnapshot;
+use engine_skiplist::SkiplistSnapshot;
 use engine_traits::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -55,7 +55,7 @@ impl<S: Snapshot> ProposalRouter<S> for RaftRouter<S> {
     }
 }
 
-impl StoreRouter for RaftRouter<RocksSnapshot> {
+impl StoreRouter for RaftRouter<SkiplistSnapshot> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {
@@ -80,11 +80,11 @@ impl<S: Snapshot> CasualRouter<S> for mpsc::SyncSender<(u64, CasualMessage<S>)> 
     }
 }
 
-impl ProposalRouter<RocksSnapshot> for mpsc::SyncSender<RaftCommand<RocksSnapshot>> {
+impl ProposalRouter<SkiplistSnapshot> for mpsc::SyncSender<RaftCommand<SkiplistSnapshot>> {
     fn send(
         &self,
-        cmd: RaftCommand<RocksSnapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
+        cmd: RaftCommand<SkiplistSnapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<SkiplistSnapshot>>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),

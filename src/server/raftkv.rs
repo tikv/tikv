@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot, SkiplistTablePropertiesCollection};
 use engine_traits::CfName;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
@@ -104,14 +104,14 @@ impl From<RaftServerError> for KvError {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter<RocksSnapshot> + 'static> {
+pub struct RaftKv<S: RaftStoreRouter<SkiplistSnapshot> + 'static> {
     router: S,
-    engine: RocksEngine,
+    engine: SkiplistEngine,
 }
 
 pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<SkiplistSnapshot>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -145,7 +145,7 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
 }
 
 fn on_read_result(
-    mut read_resp: ReadResponse<RocksSnapshot>,
+    mut read_resp: ReadResponse<SkiplistSnapshot>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
     // TODO(5kbpers): set ExtraOp for cb_ctx here.
@@ -161,9 +161,9 @@ fn on_read_result(
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
+impl<S: RaftStoreRouter<SkiplistSnapshot>> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+    pub fn new(router: S, engine: SkiplistEngine) -> RaftKv<S> {
         RaftKv { router, engine }
     }
 
@@ -258,20 +258,20 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Display for RaftKv<S> {
+impl<S: RaftStoreRouter<SkiplistSnapshot>> Display for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
+impl<S: RaftStoreRouter<SkiplistSnapshot>> Debug for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
-    type Snap = RegionSnapshot<RocksSnapshot>;
+impl<S: RaftStoreRouter<SkiplistSnapshot>> Engine for RaftKv<S> {
+    type Snap = RegionSnapshot<SkiplistSnapshot>;
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
@@ -391,7 +391,7 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         cf: CfName,
         start: &[u8],
         end: &[u8],
-    ) -> kv::Result<RocksTablePropertiesCollection> {
+    ) -> kv::Result<SkiplistTablePropertiesCollection> {
         let start = keys::data_key(start);
         let end = keys::data_end_key(end);
         self.engine
@@ -400,8 +400,8 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot<RocksSnapshot> {
-    type Iter = RegionIterator<RocksSnapshot>;
+impl Snapshot for RegionSnapshot<SkiplistSnapshot> {
+    type Iter = RegionIterator<SkiplistSnapshot>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -457,7 +457,7 @@ impl Snapshot for RegionSnapshot<RocksSnapshot> {
     }
 }
 
-impl EngineIterator for RegionIterator<RocksSnapshot> {
+impl EngineIterator for RegionIterator<SkiplistSnapshot> {
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }

@@ -2,10 +2,9 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_rocks::RocksCompactionJobInfo;
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{
-    RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
-};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot, SkiplistWriteBatch};
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngines, MiscExt, Mutable, Peekable, Snapshot,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
@@ -136,7 +135,7 @@ impl StoreMeta {
     #[inline]
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost<RocksEngine>,
+        host: &CoprocessorHost<SkiplistEngine>,
         region: Region,
         peer: &mut crate::store::Peer,
     ) {
@@ -237,31 +236,31 @@ impl<S: Snapshot> RaftRouter<S> {
 pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
+    pub pd_scheduler: FutureScheduler<PdTask<SkiplistEngine>>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<SkiplistSnapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
-    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
+    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<SkiplistEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<SkiplistSnapshot>>,
     pub apply_router: ApplyRouter,
-    pub router: RaftRouter<RocksSnapshot>,
+    pub router: RaftRouter<SkiplistSnapshot>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager<RocksEngine>,
+    pub snap_mgr: SnapManager<SkiplistEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    pub coprocessor_host: CoprocessorHost<SkiplistEngine>,
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: KvEngines<RocksEngine, RocksEngine>,
-    pub kv_wb: RocksWriteBatch,
-    pub raft_wb: RocksWriteBatch,
+    pub engines: KvEngines<SkiplistEngine, SkiplistEngine>,
+    pub kv_wb: SkiplistWriteBatch,
+    pub raft_wb: SkiplistWriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
@@ -272,18 +271,18 @@ pub struct PollContext<T, C: 'static> {
     pub node_start_time: Option<Instant>,
 }
 
-impl<T, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
-    fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
+impl<T, C> HandleRaftReadyContext<SkiplistWriteBatch, SkiplistWriteBatch> for PollContext<T, C> {
+    fn wb_mut(&mut self) -> (&mut SkiplistWriteBatch, &mut SkiplistWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
-    fn kv_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    fn kv_wb_mut(&mut self) -> &mut SkiplistWriteBatch {
         &mut self.kv_wb
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut RocksWriteBatch {
+    fn raft_wb_mut(&mut self) -> &mut SkiplistWriteBatch {
         &mut self.raft_wb
     }
 
@@ -516,7 +515,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 pub struct RaftPoller<T: 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<RocksSnapshot>>,
+    peer_msg_buf: Vec<PeerMsg<SkiplistSnapshot>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<T, C>,
@@ -525,7 +524,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<SkiplistSnapshot>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -645,7 +644,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPoller<T, C> {
+impl<T: Transport, C: PdClient> PollHandler<PeerFsm<SkiplistSnapshot>, StoreFsm>
+    for RaftPoller<T, C>
+{
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
@@ -699,7 +700,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksSnapshot>) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<SkiplistSnapshot>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -742,7 +743,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksSnapshot>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<SkiplistSnapshot>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -766,23 +767,23 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
 pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
+    pd_scheduler: FutureScheduler<PdTask<SkiplistEngine>>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<SkiplistSnapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
+    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<SkiplistEngine>>,
+    pub region_scheduler: Scheduler<RegionTask<SkiplistSnapshot>>,
     apply_router: ApplyRouter,
-    pub router: RaftRouter<RocksSnapshot>,
+    pub router: RaftRouter<SkiplistSnapshot>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager<RocksEngine>,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    snap_mgr: SnapManager<SkiplistEngine>,
+    pub coprocessor_host: CoprocessorHost<SkiplistEngine>,
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: KvEngines<RocksEngine, RocksEngine>,
+    pub engines: KvEngines<SkiplistEngine, SkiplistEngine>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
@@ -791,7 +792,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksSnapshot>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<SkiplistSnapshot>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -910,8 +911,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     fn clear_stale_meta(
         &self,
-        kv_wb: &mut RocksWriteBatch,
-        raft_wb: &mut RocksWriteBatch,
+        kv_wb: &mut SkiplistWriteBatch,
+        raft_wb: &mut SkiplistWriteBatch,
         origin_state: &RegionLocalState,
     ) {
         let region = origin_state.get_region();
@@ -955,7 +956,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksSnapshot>, StoreFsm> for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm<SkiplistSnapshot>, StoreFsm> for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -1014,27 +1015,27 @@ where
 }
 
 struct Workers {
-    pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
+    pd_worker: FutureWorker<PdTask<SkiplistEngine>>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<SkiplistSnapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksSnapshot>>,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    raftlog_gc_worker: Worker<RaftlogGcTask<SkiplistEngine>>,
+    region_worker: Worker<RegionTask<SkiplistSnapshot>>,
+    coprocessor_host: CoprocessorHost<SkiplistEngine>,
     future_poller: ThreadPool,
 }
 
 pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm<RocksSnapshot>, StoreFsm>,
+    system: BatchSystem<PeerFsm<SkiplistSnapshot>, StoreFsm>,
     apply_router: ApplyRouter,
     apply_system: ApplyBatchSystem,
-    router: RaftRouter<RocksSnapshot>,
+    router: RaftRouter<SkiplistSnapshot>,
     workers: Option<Workers>,
 }
 
 impl RaftBatchSystem {
-    pub fn router(&self) -> RaftRouter<RocksSnapshot> {
+    pub fn router(&self) -> RaftRouter<SkiplistSnapshot> {
         self.router.clone()
     }
 
@@ -1047,13 +1048,13 @@ impl RaftBatchSystem {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: KvEngines<SkiplistEngine, SkiplistEngine>,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager<RocksEngine>,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        mgr: SnapManager<SkiplistEngine>,
+        pd_worker: FutureWorker<PdTask<SkiplistEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost<RocksEngine>,
+        mut coprocessor_host: CoprocessorHost<SkiplistEngine>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
@@ -1104,33 +1105,23 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
-        } else {
-            self.start_system::<T, C, RocksWriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
-        }
+        self.start_system::<T, C, SkiplistWriteBatch>(
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+        )?;
         Ok(())
     }
 
     fn start_system<
         T: Transport + 'static,
         C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
+        W: WriteBatch + WriteBatchVecExt<SkiplistEngine> + 'static,
     >(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<SenderFsmPair<RocksSnapshot>>,
+        region_peers: Vec<SenderFsmPair<SkiplistSnapshot>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
@@ -1263,7 +1254,7 @@ impl RaftBatchSystem {
     }
 }
 
-pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<RocksSnapshot>, RaftBatchSystem) {
+pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter<SkiplistSnapshot>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -2180,7 +2171,7 @@ fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(ch: RaftRouter<RocksSnapshot>) -> CompactionListener {
+pub fn new_compaction_listener(ch: RaftRouter<SkiplistSnapshot>) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();

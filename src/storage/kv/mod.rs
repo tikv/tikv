@@ -11,7 +11,7 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_rocks::RocksTablePropertiesCollection;
+use engine_skiplist::SkiplistTablePropertiesCollection;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
@@ -131,7 +131,11 @@ pub trait Engine: Send + Clone + 'static {
         self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
     }
 
-    fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
+    fn get_properties(
+        &self,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<SkiplistTablePropertiesCollection> {
         self.get_properties_cf(CF_DEFAULT, start, end)
     }
 
@@ -140,7 +144,7 @@ pub trait Engine: Send + Clone + 'static {
         _: CfName,
         _start: &[u8],
         _end: &[u8],
-    ) -> Result<RocksTablePropertiesCollection> {
+    ) -> Result<SkiplistTablePropertiesCollection> {
         Err(box_err!("no user properties"))
     }
 }

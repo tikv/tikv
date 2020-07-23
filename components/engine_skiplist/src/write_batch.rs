@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::SkiplistEngine;
-use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions};
 
 impl WriteBatchExt for SkiplistEngine {
     type WriteBatch = SkiplistWriteBatch;
@@ -12,7 +12,7 @@ impl WriteBatchExt for SkiplistEngine {
     }
 
     fn support_write_batch_vec(&self) -> bool {
-        panic!()
+        false
     }
 
     fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
@@ -76,5 +76,15 @@ impl Mutable for SkiplistWriteBatch {
     }
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
+    }
+}
+
+impl WriteBatchVecExt<SkiplistEngine> for SkiplistWriteBatch {
+    fn write_batch_vec(e: &SkiplistEngine, _vec_size: usize, cap: usize) -> SkiplistWriteBatch {
+        e.write_batch_with_cap(cap)
+    }
+
+    fn write_to_engine(&self, e: &SkiplistEngine, opts: &WriteOptions) -> Result<()> {
+        e.write_opt(self, opts)
     }
 }

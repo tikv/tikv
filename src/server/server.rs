@@ -19,7 +19,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_skiplist::{SkiplistEngine, SkiplistSnapshot};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
@@ -46,7 +46,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<SkiplistSnapshot> + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -57,7 +57,7 @@ pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResol
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager<SkiplistEngine>,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -68,7 +68,7 @@ pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResol
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<SkiplistSnapshot>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
@@ -77,7 +77,7 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager<SkiplistEngine>,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
     ) -> Result<Self> {

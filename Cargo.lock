@@ -578,6 +578,7 @@ dependencies = [
  "clap",
  "encryption",
  "engine_rocks",
+ "engine_skiplist",
  "engine_traits",
  "fs2",
  "futures 0.1.29",

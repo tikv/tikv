@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::RocksSnapshot;
+use engine_skiplist::SkiplistSnapshot;
 use engine_traits::Snapshot;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -221,9 +221,9 @@ pub enum SignificantMsg {
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<RocksSnapshot>,
+        callback: Callback<SkiplistSnapshot>,
     },
-    LeaderCallback(Callback<RocksSnapshot>),
+    LeaderCallback(Callback<SkiplistSnapshot>),
 }
 
 /// Message that will be sent to a peer.
