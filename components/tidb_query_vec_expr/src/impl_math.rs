@@ -32,13 +32,13 @@ const I64_TEN_POWS: [i64; 19] = [
     1_000_000_000_000_000_000,
 ];
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn pi() -> Result<Option<Real>> {
     Ok(Some(Real::from(std::f64::consts::PI)))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(arg
@@ -47,13 +47,13 @@ pub fn crc32(arg: Option<BytesRef>) -> Result<Option<Int>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn log_1_arg(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| f64_to_real(n.ln())))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[allow(clippy::float_cmp)]
 pub fn log_2_arg(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
@@ -69,13 +69,13 @@ pub fn log_2_arg(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Real
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn log2(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| f64_to_real(n.log2())))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn log10(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| f64_to_real(n.log10())))
 }
@@ -90,7 +90,7 @@ fn f64_to_real(n: f64) -> Option<Real> {
 }
 
 #[inline]
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: Option<&C::Input>) -> Result<Option<C::Output>> {
     if let Some(arg) = arg {
         C::ceil(ctx, arg)
@@ -170,7 +170,7 @@ impl Ceil for CeilIntToInt {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: Option<&T::Input>) -> Result<Option<T::Output>> {
     if let Some(arg) = arg {
         T::floor(ctx, arg)
@@ -248,7 +248,7 @@ impl Floor for FloorIntToInt {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn abs_int(arg: Option<&Int>) -> Result<Option<Int>> {
     match arg {
@@ -260,13 +260,13 @@ fn abs_int(arg: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn abs_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     Ok(arg.cloned())
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn abs_real(arg: Option<&Real>) -> Result<Option<Real>> {
     match arg {
@@ -275,7 +275,7 @@ fn abs_real(arg: Option<&Real>) -> Result<Option<Real>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
     match arg {
@@ -288,7 +288,7 @@ fn abs_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
     Ok(arg.map(|n| {
         if **n > 0f64 {
@@ -302,7 +302,7 @@ fn sign(arg: Option<&Real>) -> Result<Option<Int>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| {
         if **n < 0f64 {
@@ -319,13 +319,13 @@ fn sqrt(arg: Option<&Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn radians(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| Real::new(**n * std::f64::consts::PI / 180_f64).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn exp(arg: Option<&Real>) -> Result<Option<Real>> {
     match arg {
         Some(x) => {
@@ -341,25 +341,25 @@ pub fn exp(arg: Option<&Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn sin(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.sin()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn cos(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.cos()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn tan(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.tan()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn cot(arg: Option<&Real>) -> Result<Option<Real>> {
     match arg {
         Some(arg) => {
@@ -376,7 +376,7 @@ fn cot(arg: Option<&Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn pow(lhs: Option<&Real>, rhs: Option<&Real>) -> Result<Option<Real>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
@@ -392,14 +392,14 @@ fn pow(lhs: Option<&Real>, rhs: Option<&Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn rand() -> Result<Option<Real>> {
     let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().gen());
     Ok(Real::new(res).ok())
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
     let mut rng = MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
@@ -407,31 +407,31 @@ fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 fn degrees(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn asin(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.asin()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn acos(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.acos()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn atan_1_arg(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|arg| Real::new(arg.atan()).ok()))
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
         (Some(arg0), Some(arg1)) => Real::new(arg0.atan2(arg1.into_inner())).ok(),
@@ -440,7 +440,7 @@ pub fn atan_2_args(arg0: Option<&Real>, arg1: Option<&Real>) -> Result<Option<Re
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn conv(
     n: Option<BytesRef>,
     from_base: Option<&Int>,
@@ -456,7 +456,7 @@ pub fn conv(
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn round_real(arg: Option<&Real>) -> Result<Option<Real>> {
     match arg {
         Some(arg) => Ok(Real::new(arg.round()).ok()),
@@ -465,13 +465,13 @@ pub fn round_real(arg: Option<&Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn round_int(arg: Option<&Int>) -> Result<Option<Int>> {
     Ok(arg.cloned())
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn round_dec(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
     match arg {
         Some(arg) => {
@@ -486,7 +486,7 @@ pub fn round_dec(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn truncate_int_with_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
     match (arg0, arg1) {
         (Some(x), Some(d)) => {
@@ -505,7 +505,7 @@ pub fn truncate_int_with_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<O
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn truncate_int_with_uint(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
     match (arg0, arg1) {
         (Some(x), Some(_)) => Ok(Some(*x)),
@@ -514,7 +514,7 @@ pub fn truncate_int_with_uint(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn truncate_real_with_int(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
     match (arg0, arg1) {
         (Some(x), Some(d)) => {
@@ -530,7 +530,7 @@ pub fn truncate_real_with_int(arg0: Option<&Real>, arg1: Option<&Int>) -> Result
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn truncate_real_with_uint(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
     match (arg0, arg1) {
         (Some(x), Some(d)) => {
@@ -554,7 +554,7 @@ pub fn truncate_real(x: Real, d: i32) -> Real {
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Option<Int>> {
     match (arg0, arg1) {
         (Some(number), Some(digits)) => {
@@ -570,7 +570,7 @@ pub fn round_with_frac_int(arg0: Option<&Int>, arg1: Option<&Int>) -> Result<Opt
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn round_with_frac_dec(arg0: Option<&Decimal>, arg1: Option<&Int>) -> Result<Option<Decimal>> {
     match (arg0, arg1) {
@@ -586,7 +586,7 @@ fn round_with_frac_dec(arg0: Option<&Decimal>, arg1: Option<&Int>) -> Result<Opt
 }
 
 #[inline]
-#[rpn_fn]
+#[rpn_fn(nullable)]
 pub fn round_with_frac_real(arg0: Option<&Real>, arg1: Option<&Int>) -> Result<Option<Real>> {
     match (arg0, arg1) {
         (Some(number), Some(digits)) => {

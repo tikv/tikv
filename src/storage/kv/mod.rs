@@ -27,6 +27,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
+use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -101,8 +102,14 @@ pub trait Engine: Send + Clone + 'static {
     /// Write modifications into internal kv engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
+    fn async_snapshot(
+        &self,
+        ctx: &Context,
+        read_id: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()>;
+
     fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>) -> Result<()>;
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -112,9 +119,11 @@ pub trait Engine: Send + Clone + 'static {
         }
     }
 
+    fn release_snapshot(&self) {}
+
     fn snapshot(&self, ctx: &Context) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
+        match wait_op!(|cb| self.async_snapshot(ctx, None, cb), timeout) {
             Some((_, res)) => res,
             None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
@@ -153,7 +162,7 @@ pub trait Engine: Send + Clone + 'static {
     }
 }
 
-pub trait Snapshot: Send + Clone {
+pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -348,11 +357,12 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 /// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
     engine: &E,
+    read_id: Option<ThreadReadId>,
     ctx: &Context,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_std_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
+    let val = engine.async_snapshot(ctx, read_id, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error
