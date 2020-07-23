@@ -209,14 +209,6 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
     } else if attr.is_raw_varg {
         Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
     } else {
-        /*
-        let writer = attr.writer;
-        let x = Ok(NormalRpnFn::new(attr, item_fn)?.generate());
-        if writer {
-             println!("{}", x.clone().unwrap());
-        }
-        x
-        */
         Ok(NormalRpnFn::new(attr, item_fn)?.generate())
     }
 }
