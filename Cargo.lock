@@ -1498,7 +1498,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.5.3"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#dba0582d8d7acfa0d6903fae3971d8822d0ee726"
+source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#8ea3bf26d768ff3daae83a197e05e81cf5470e3e"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1526,7 +1526,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.5.3"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#dba0582d8d7acfa0d6903fae3971d8822d0ee726"
+source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#8ea3bf26d768ff3daae83a197e05e81cf5470e3e"
 dependencies = [
  "bindgen",
  "cc",
