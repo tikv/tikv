@@ -222,6 +222,9 @@ docker-tag-with-git-tag:
 ## Testing
 ## -------
 
+# FIXME(#4364) test_thread_load_statistic is a flaky test - on CI gets 0 cpu usages, but passes locally.
+SKIPPED_TESTS := --skip test_thread_load_statistic
+
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
@@ -245,7 +248,7 @@ run-test:
 		cargo test --features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv_alloc -- --nocapture --ignored && \
 		cargo test --workspace \
 			--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored; \
+			--features "${ENABLE_FEATURES} mem-profiling" ${EXTRA_CARGO_ARGS} -p tikv --lib -- --nocapture --ignored $(SKIPPED_TESTS); \
 	fi
 
 .PHONY: test
