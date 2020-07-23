@@ -359,11 +359,14 @@ mod test {
         }
         assert_eq!(
             chunked_vec.to_vec(),
-            test_bytes.iter().map(|x| if let Some(x) = x {
-                Some(repeat(x.to_vec(), 3))
-            } else {
-                None
-            }).collect::<Vec<Option<Bytes>>>()
+            test_bytes
+                .iter()
+                .map(|x| if let Some(x) = x {
+                    Some(repeat(x.to_vec(), 3))
+                } else {
+                    None
+                })
+                .collect::<Vec<Option<Bytes>>>()
         );
     }
 }

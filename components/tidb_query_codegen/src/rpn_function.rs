@@ -1399,8 +1399,8 @@ impl NormalRpnFn {
         let vec_type = &self.ret_type;
 
         let chunked_push = if self.writer {
-            quote! { 
-                let writer = result.into_writer(); 
+            quote! {
+                let writer = result.into_writer();
                 let guard = #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* , writer)?;
                 result = guard.into_inner();
             }
