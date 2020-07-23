@@ -47,14 +47,31 @@ impl ChunkedVecBytes {
     pub fn push_data(&mut self, mut value: Bytes) {
         self.bitmap.push(true);
         self.data.append(&mut value);
+        self.finish_append();
+    }
+
+    pub fn push_data_ref(&mut self, value: BytesRef) {
+        self.bitmap.push(true);
+        self.data.extend_from_slice(value);
+        self.finish_append();
+    }
+
+    fn finish_append(&mut self) {
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
 
     pub fn push_null(&mut self) {
         self.bitmap.push(false);
-        self.var_offset.push(self.data.len());
-        self.length += 1;
+        self.finish_append();
+    }
+
+    pub fn push_ref(&mut self, value: Option<BytesRef>) {
+        if let Some(x) = value {
+            self.push_data_ref(x);
+        } else {
+            self.push_null();
+        }
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -90,12 +107,65 @@ impl ChunkedVecBytes {
             None
         }
     }
+
+    pub fn get_writer(&mut self) -> BytesWriter {
+        BytesWriter { chunked_vec: self }
+    }
+}
+
+pub struct BytesWriter<'a> {
+    chunked_vec: &'a mut ChunkedVecBytes,
+}
+
+pub struct PartialBytesWriter<'a> {
+    chunked_vec: &'a mut ChunkedVecBytes,
+}
+
+pub struct BytesGuard<'a> {
+    _chunked_vec: &'a mut ChunkedVecBytes,
+}
+
+impl<'a> BytesWriter<'a> {
+    pub fn to_partial_writer(self) -> PartialBytesWriter<'a> {
+        PartialBytesWriter {
+            chunked_vec: self.chunked_vec,
+        }
+    }
+
+    pub fn finish(self, data: Option<Bytes>) -> BytesGuard<'a> {
+        self.chunked_vec.push(data);
+        BytesGuard {
+            _chunked_vec: self.chunked_vec,
+        }
+    }
+
+    pub fn finish_ref(self, data: Option<BytesRef>) -> BytesGuard<'a> {
+        self.chunked_vec.push_ref(data);
+        BytesGuard {
+            _chunked_vec: self.chunked_vec,
+        }
+    }
+}
+
+impl<'a> PartialBytesWriter<'a> {
+    pub fn partial_write(&mut self, data: BytesRef) {
+        self.chunked_vec.data.extend_from_slice(data);
+    }
+
+    pub fn finish(self) -> BytesGuard<'a> {
+        self.chunked_vec.bitmap.push(true);
+        self.chunked_vec.finish_append();
+        BytesGuard {
+            _chunked_vec: self.chunked_vec,
+        }
+    }
 }
 
 impl ChunkedVec<Bytes> for ChunkedVecBytes {
     fn chunked_with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity)
     }
+
     fn chunked_push(&mut self, value: Option<Bytes>) {
         self.push(value)
     }
@@ -226,6 +296,65 @@ mod test {
                 Some("💩".as_bytes().to_vec()),
                 None,
             ]
+        );
+    }
+
+    fn repeat(data: Bytes, cnt: usize) -> Bytes {
+        let mut x = vec![];
+        for _ in 0..cnt {
+            x.append(&mut data.clone())
+        }
+        x
+    }
+
+    #[test]
+    fn test_writer() {
+        let test_bytes: &[Option<Bytes>] = &[
+            None,
+            None,
+            Some("我好菜啊".as_bytes().to_vec()),
+            None,
+            Some("我菜爆了".as_bytes().to_vec()),
+            Some("我失败了".as_bytes().to_vec()),
+            None,
+            Some("💩".as_bytes().to_vec()),
+            None,
+        ];
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.get_writer();
+            writer.finish(test_bytes[i].to_owned());
+        }
+        assert_eq!(chunked_vec.to_vec(), test_bytes);
+
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.get_writer();
+            writer.finish(test_bytes[i].clone());
+        }
+        assert_eq!(chunked_vec.to_vec(), test_bytes);
+
+        let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
+        for i in 0..test_bytes.len() {
+            let writer = chunked_vec.get_writer();
+            let _guard = match test_bytes[i].clone() {
+                Some(x) => {
+                    let mut writer = writer.to_partial_writer();
+                    writer.partial_write(x.as_slice());
+                    writer.partial_write(x.as_slice());
+                    writer.partial_write(x.as_slice());
+                    writer.finish()
+                }
+                None => writer.finish(None),
+            };
+        }
+        assert_eq!(
+            chunked_vec.to_vec(),
+            test_bytes.iter().map(|x| if let Some(x) = x {
+                Some(repeat(x.to_vec(), 3))
+            } else {
+                None
+            }).collect::<Vec<Option<Bytes>>>()
         );
     }
 }
