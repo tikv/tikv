@@ -3002,14 +3002,14 @@ mod tests {
 
         let output = RpnFnScalarEvaluator::new()
             .push_param(Some(b"hi".to_vec()))
-            .push_param(null_cnt.clone())
+            .push_param(null_cnt)
             .evaluate::<Bytes>(ScalarFuncSig::Repeat)
             .unwrap();
         assert_eq!(output, None);
 
         let output = RpnFnScalarEvaluator::new()
-            .push_param(null_string.clone())
-            .push_param(null_cnt.clone())
+            .push_param(null_string)
+            .push_param(null_cnt)
             .evaluate::<Bytes>(ScalarFuncSig::Repeat)
             .unwrap();
         assert_eq!(output, None);
