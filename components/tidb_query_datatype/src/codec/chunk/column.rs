@@ -26,22 +26,6 @@ use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder,
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 
-macro_rules! impl_vector_value_fastpath {
-    ($vec:ident, $ty:ty) => {
-        let (head, body, tail) = unsafe { $vec.data.align_to::<u8>() };
-        assert!(head.is_empty());
-        assert!(tail.is_empty());
-
-        Ok(Self {
-            length: $vec.len(),
-            null_cnt: $vec.bitmap.null_cnt(),
-            null_bitmap: $vec.bitmap.data.clone(),
-            var_offsets: vec![],
-            fixed_len: std::mem::size_of::<$ty>(),
-            data: body.to_vec(),
-        })
-    };
-}
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
 pub struct Column {
@@ -165,15 +149,6 @@ impl Column {
                 fixed_len: 0,
                 data: vec.data.clone(),
             }),
-            VectorValue::Int(vec) => {
-                impl_vector_value_fastpath! {vec, Int}
-            }
-            VectorValue::Decimal(vec) => {
-                impl_vector_value_fastpath! {vec, Decimal}
-            }
-            VectorValue::DateTime(vec) => {
-                impl_vector_value_fastpath! {vec, DateTime}
-            }
             _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows),
         }
     }
@@ -997,17 +972,22 @@ mod tests {
 
                 // test all rows
                 let column =
-                Column::from_vector_value(field, &vec_value, logical_rows_all.as_slice()).unwrap();
-                let column_slowpath =
-                    Column::from_vector_value_slowpath(field, &vec_value, logical_rows_all.as_slice())
+                    Column::from_vector_value(field, &vec_value, logical_rows_all.as_slice())
                         .unwrap();
+                let column_slowpath = Column::from_vector_value_slowpath(
+                    field,
+                    &vec_value,
+                    logical_rows_all.as_slice(),
+                )
+                .unwrap();
                 test_column_eq(&column, &column_slowpath);
-            
+
                 // test 0-element column
                 let column = Column::new(field.as_accessor().tp(), 0);
                 let mut truncated_vec_value = vec_value.clone();
                 truncated_vec_value.truncate(0);
-                let vec_column = Column::from_vector_value(field, &truncated_vec_value, &[]).unwrap();
+                let vec_column =
+                    Column::from_vector_value(field, &truncated_vec_value, &[]).unwrap();
                 test_column_eq(&column, &vec_column);
             }
         };
