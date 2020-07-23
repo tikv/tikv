@@ -19,7 +19,7 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 
-pub use self::config::Config;
+pub use self::config::{Config, ConsistencyCheckMethod};
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxQueryObserver,
     BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver, CoprocessorHost, Registry,

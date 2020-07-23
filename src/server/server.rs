@@ -11,6 +11,7 @@ use grpcio::{
     ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
 };
 use kvproto::tikvpb::*;
+use pd_client::PdClient;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
@@ -72,7 +73,7 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L>,
+        storage: Storage<E, L, impl PdClient + 'static>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
@@ -112,11 +113,6 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
-                Some(Duration::from(cfg.request_batch_wait_duration))
-            } else {
-                None
-            },
             security_mgr.clone(),
         );
 
@@ -385,8 +381,6 @@ mod tests {
             .unwrap();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
-            None,
-            None,
             None,
             Default::default(),
             Default::default(),

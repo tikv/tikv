@@ -408,9 +408,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
-            Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );
@@ -475,6 +473,7 @@ impl TiKVServer {
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
+            self.pd_client.clone(),
             self.config.pessimistic_txn.pipelined,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
