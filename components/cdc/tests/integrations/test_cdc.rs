@@ -407,7 +407,7 @@ fn test_cdc_scan() {
             assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
-            assert_eq!(e.start_ts, 4, "{:?}", es);
+            assert_eq!(e.start_ts, 5, "{:?}", es);
             assert_eq!(e.commit_ts, 0, "{:?}", es);
             assert_eq!(e.key, k, "{:?}", es);
             assert_eq!(e.value, v, "{:?}", es);

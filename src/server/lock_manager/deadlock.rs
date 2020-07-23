@@ -749,7 +749,10 @@ where
             DetectType::CleanUpWaitFor => {
                 detect_table.clean_up_wait_for(txn_ts, lock.ts, lock.hash)
             }
-            DetectType::CleanUp => detect_table.clean_up(txn_ts),
+            DetectType::CleanUp => {
+                self.inner.borrow_mut().callbacks.remove(&txn_ts);
+                detect_table.clean_up(txn_ts);
+            }
         }
     }
 
