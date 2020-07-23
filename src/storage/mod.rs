@@ -8,6 +8,110 @@
 //! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
+//!
+//! # Transactions in TiKV
+//!
+//! TiKV 4.0 provides two transaction models: Optimistic and Pessimistic.
+//!
+//! ## Optimistic Transaction
+//!
+//! This is the basis of TiKV's transaction model, which is similar to transactions in Google's Percolator.
+//!
+//! ### Behavior
+//!
+//! It provides the Snapshot Isolation level. Sometimes it is also called Repeatable Read.
+//! **Note**: this is different from ANSI Repeatable Read.
+//! The [official doc](https://docs.pingcap.com/tidb/dev/transaction-isolation-levels) specifies the difference.
+//!
+//! Read operations are processed by TiKV server, and it can be cached in the client as well.
+//!
+//! Write operations are all buffered in the client until commit.
+//!
+//! ### 2 Phase Commit
+//!
+//! TiKV uses 2PC to implement distributed transaction: `prewrite` + `commit`.
+//!
+//! In general, the `prewrite` phase writes all modifications and locks them.
+//! If all `prewrite` requests succeed, the client can send `commit` requests.
+//! After `commit`, all locks are released and data become visible to other transactions.
+//!
+//!
+//! ### Concurrency
+//!
+//! TiKV distributes data in regions, so write operations will only be processed by one TiKV instance (the leader of the region replicas).
+//! Before executing operations in the mvcc module,
+//! a request must have acquired all latches of keys that it wants to modify. So there is no data race here.
+//!
+//! However, because each transaction contains multiple requests to complete (at least there should be a prewrite and a commit),
+//! interleaving requests of concurrent transactions could cause complicated situations that are worth consideration.
+//!
+//! ## Pessimistic Transaction
+//!
+//! Pessimistic transaction aims to work in situations with intense contention or where interactive transaction are required.
+//!
+//! The implementation is adding extra operations based on the optimistic model.
+//! Therefore optimistic and pessimistic transactions can co-exist.
+//!
+//! It introduces 3 operations:
+//! - acquire pessimistic lock
+//! - pessimistic prewrite
+//! - pessimistic rollback
+//!
+//! In general, pessimistic locks are acquired during the execution of transactions for Data Manipulation Language (DML) statements.
+//! Then the pessimistic locks are converted to optimistic locks during the prewrite phase,
+//! so that the commit phase don't have to change.
+//!
+//!
+//! The rollback operation is different from an optimistic one, since it requires releasing pessimistic locks.
+//!
+//! ### Behavior
+//!
+//! By default the isolation level is Repeatable Read with same behavior as MySQL.
+//! DML will read the **latest** committed data.
+//!
+//! Check the [official doc](https://docs.pingcap.com/tidb/dev/pessimistic-transaction#isolation-level) for details.
+//!
+//! ### Optimization: pipelining in acquiring pessimistic lock
+//!
+//! Acquiring pessimistic locks is expensive since it requires persistence in the raft-store.
+//!
+//! "Early" returning success when the data meets the requirements for locking can reduce the latency of acquiring locks.
+//! Whereas the penalty is the possibility of commit failure if the lock acquisition fails.
+//!
+//! The optimization is called
+//! [pipelined locking process](https://docs.pingcap.com/tidb/dev/pessimistic-transaction#pipelined-locking-process).
+//!
+//!
+//! ## Other features
+//!
+//! The main idea of implementing MVCC transaction is straightforward, however code might seems confusing
+//! because we added support for extra features.
+//!
+//! ### Large Transaction
+//!
+//! TiKV has limit on the size of transactions,
+//! because large transactions are more likely to block others and fail due to system limit.
+//!
+//! Large transactions are treated separately.
+//!
+//! 1. Large transactions may live long. Storing `TTL` in the lock and allowing the heartbeat message update its `TTL` solves it.
+//!
+//! 2. Large transactions will block others. A new concept `min_commit_ts` was introduced,
+//! which is the minimum time at which the transaction can be committed.
+//! If the transaction is committed with commit_ts < min_commit_ts, the commit will fail and the client should retry.
+//!
+//! It helps because a normal transaction A is allowed to update a large
+//! transaction B's `min_commit_ts` if otherwise A will be blocked by B's reading operations.
+//! Such operation is implemented in the CheckTxnStatus request.
+//!
+//! For more details, check [the blog post](https://pingcap.com/blog/large-transactions-in-tidb/)
+//!
+//! ### Async Commit
+//!
+//! This feature is under development and should be available in TiKV 5.0.
+//!
+//! TBD
+//!
 
 pub mod config;
 pub mod errors;
