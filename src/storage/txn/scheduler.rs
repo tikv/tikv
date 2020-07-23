@@ -448,10 +448,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 .pool
                 .spawn(async move {
                     for _ in 0..cmd_count {
-                        if let Err(_e) = rx.recv() {
+                        let response = rx.recv();
+                        if let Err(_e) = response {
                             return cb.unwrap().execute(ProcessResult::Failed {
                                 err: StorageError::from(StorageErrorInner::Closed),
                             });
+                        } else if let Ok(Err(e)) = response {
+                            return cb.unwrap().execute(ProcessResult::Failed { err: e });
                         }
                     }
                     cb.unwrap().execute(ProcessResult::Res)
@@ -508,7 +511,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     .pool
                     .spawn(async move {
                         for _ in 0..cmd_count {
-                            if let Err(_e) = rx.recv() {
+                            let response = rx.recv();
+                            if let Err(_e) = response {
                                 return cb.execute(ProcessResult::Failed {
                                     err: StorageError::from(StorageErrorInner::Closed),
                                 });
