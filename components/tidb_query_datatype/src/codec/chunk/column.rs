@@ -26,6 +26,22 @@ use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder,
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 
+macro_rules! impl_vector_value_fastpath {
+    ($vec:ident, $ty:ty) => {
+        let (head, body, tail) = unsafe { $vec.data.align_to::<u8>() };
+        assert!(head.is_empty());
+        assert!(tail.is_empty());
+
+        Ok(Self {
+            length: $vec.len(),
+            null_cnt: $vec.bitmap.null_cnt(),
+            null_bitmap: $vec.bitmap.data.clone(),
+            var_offsets: vec![],
+            fixed_len: std::mem::size_of::<$ty>(),
+            data: body.to_vec(),
+        })
+    };
+}
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
 pub struct Column {
@@ -144,6 +160,15 @@ impl Column {
                 fixed_len: 0,
                 data: vec.data.clone(),
             }),
+            VectorValue::Int(vec) => {
+                impl_vector_value_fastpath! {vec, Int}
+            }
+            VectorValue::Decimal(vec) => {
+                impl_vector_value_fastpath! {vec, Decimal}
+            }
+            VectorValue::DateTime(vec) => {
+                impl_vector_value_fastpath! {vec, DateTime}
+            }
             _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows),
         }
     }
