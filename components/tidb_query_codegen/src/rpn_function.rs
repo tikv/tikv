@@ -551,7 +551,7 @@ struct RpnFnSignatureReturnGuardType {
 }
 
 impl RpnFnSignatureReturnGuardType {
-    fn to_return_type(self) -> Result<RpnFnSignatureReturnType> {
+    fn into_return_type(self) -> Result<RpnFnSignatureReturnType> {
         match self.eval_type.path.get_ident() {
             Some(x) => {
                 if *x == "BytesGuard" {
@@ -1242,7 +1242,7 @@ impl NormalRpnFn {
                         "Expect return type to be like `Result<SomeGuard>`",
                     )
                 })?
-                .to_return_type()?
+                .into_return_type()?
         } else {
             parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
                 |_| {
