@@ -8,11 +8,11 @@
 //!
 //! There are 3 submodules:
 //!
-//! [reader](reader) module implements read operations, including scanning.
+//! `reader` module implements read operations, including scanning.
 //!
-//! [metrics](metrics) module includes Prometheus metrics.
+//! `metrics` module includes Prometheus metrics.
 //!
-//! [txn](txn) module implements MVCC transaction operations, e.g. commit and rollback.
+//! `txn` module implements MVCC transaction operations, e.g. commit and rollback.
 //!
 //! # Boundaries of this module
 //!
@@ -20,8 +20,8 @@
 //!
 //! MVCC provides actual read and write operations for the [Transaction layer](super::txn).
 //!
-//! Read operations are implemented in [reader].
-//! Write operations are part of the transactional operations and processed in in [txn].
+//! Read operations are implemented in `reader`.
+//! Write operations are part of the transactional operations and processed in `txn`.
 //!
 //! All read and write operations will be sent to the underlying storage engine to execute.
 //! In production, the storage engine is a raft store. There are other engines that are only used for test.
