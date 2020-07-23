@@ -17,6 +17,7 @@ mod errors;
 mod metrics;
 mod observer;
 mod service;
+pub mod test_util;
 
 pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};

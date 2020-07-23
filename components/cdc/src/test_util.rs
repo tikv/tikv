@@ -1,9 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-#[cfg(feature = "failpoints")]
-mod failpoints;
-mod integrations;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::*;
@@ -33,7 +28,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use crate::{CdcObserver, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -51,7 +46,6 @@ pub fn new_event_feed(
     let (req_tx, resp_rx) = client.event_feed().unwrap();
     let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
-
     let receive_event = move |keep_resolved_ts: bool| loop {
         let event_feed = event_feed_wrap_clone.as_ref();
         let (change_data, events) = match event_feed.replace(None).unwrap().into_future().wait() {
@@ -110,10 +104,10 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
+                    create_change_data(crate::Service::new(scheduler.clone(), security_mgr.clone()))
                 }));
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
+            let cdc_ob = crate::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -129,7 +123,7 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
+                crate::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
