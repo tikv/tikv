@@ -1885,6 +1885,7 @@ mod tests_normal {
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
                 nullable: true,
+                writer: false,
             },
             item_fn,
         )
