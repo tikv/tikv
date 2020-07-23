@@ -81,6 +81,24 @@
 //!
 //! The rollback operation is different from an optimistic one, since it requires releasing pessimistic locks.
 //!
+//! ### Behavior
+//!
+//! By default the isolation level is Repeatable Read with same behavior as MySQL.
+//! DML will read the **latest** committed data.
+//!
+//! Check the [official doc](https://docs.pingcap.com/tidb/dev/pessimistic-transaction#isolation-level) for details.
+//!
+//! ### Optimization: pipelining in acquiring pessimistic lock
+//!
+//! Acquiring pessimistic locks is expensive since it requires persistence in the raft-store.
+//!
+//! "Early" returning success when the data meets the requirements for locking can reduce the latency of acquiring locks.
+//! Whereas the penalty is the possibility of commit failure if the lock acquisition fails.
+//!
+//! The optimization is called
+//! [pipelined locking process](https://docs.pingcap.com/tidb/dev/pessimistic-transaction#pipelined-locking-process).
+//!
+//!
 //! ## Other features
 //!
 //! The main idea of implementing MVCC transaction is straightforward, however code might seems confusing
@@ -103,7 +121,11 @@
 //! transaction B's `min_commit_ts` if otherwise A will be blocked by B's reading operations.
 //! Such operation is implemented in the CheckTxnStatus request.
 //!
+//! For more details, check [the blog post](https://pingcap.com/blog/large-transactions-in-tidb/)
+//!
 //! ### Async Commit
+//!
+//! This feature is under development and should be available in TiKV 5.0.
 //!
 //! TBD
 

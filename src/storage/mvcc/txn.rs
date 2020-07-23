@@ -366,7 +366,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     /// # Arguments
     ///
     /// - ...
-    /// - `for_update_ts`: The timestamp used to get **latest** data.
+    /// - `for_update_ts`: The timestamp used to get **latest** committed data.
     /// - `min_commit_ts`: The minimum acceptable commit timestamp, which is used to support large transactions.
     ///
     /// # In TiDB
@@ -374,7 +374,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     /// In TiDB, this is called for each `SELECT FOR UPDATE`, `UPDATE`, `INSERT` or `DELETE` statement
     /// in a pessimistic transaction.
     ///
-    /// `for_update_ts` is acquired for `SELECT FOR UPDATE` and `UPDATE` statements and passed to this function to get **latest** data.
+    /// `for_update_ts` is acquired for `SELECT FOR UPDATE` and `UPDATE` statements and passed to this function to get **latest** committed data.
     /// If there is a commit that happens after `for_update_ts`, the transaction should retry to get the latest data.
     ///
     pub fn acquire_pessimistic_lock(
