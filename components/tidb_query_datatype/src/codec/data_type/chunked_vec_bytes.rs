@@ -318,12 +318,20 @@ mod test {
         let test_bytes: &[Option<Bytes>] = &[
             None,
             None,
-            Some("我好菜啊".as_bytes().to_vec()),
+            Some(
+                "TiDB 是PingCAP 公司自主设计、研发的开源分布式关系型数据库，"
+                    .as_bytes()
+                    .to_vec(),
+            ),
             None,
-            Some("我菜爆了".as_bytes().to_vec()),
-            Some("我失败了".as_bytes().to_vec()),
+            Some(
+                "是一款同时支持在线事务处理与在线分析处理(HTAP)的融合型分布式数据库产品。"
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            Some("🐮🐮🐮🐮🐮".as_bytes().to_vec()),
             None,
-            Some("💩".as_bytes().to_vec()),
+            Some("💩💩💩".as_bytes().to_vec()),
             None,
         ];
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);

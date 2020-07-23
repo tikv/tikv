@@ -1220,8 +1220,7 @@ impl NormalRpnFn {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
         let mut arg_types_no_ref = Vec::new();
-        let take_cnt =
-            item_fn.sig.inputs.len() - attr.captures.len() - if attr.writer { 1 } else { 0 };
+        let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
         let fn_args = item_fn
             .sig
             .inputs
