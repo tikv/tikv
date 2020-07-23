@@ -2,14 +2,16 @@
 
 use futures::Future;
 
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
+use pd_client::DummyPdClient;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, Result, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
+    txn::commands, Engine, PrewriteResult, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
 use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -53,14 +55,13 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
     }
 
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder = TestStorageBuilder::from_engine(self.engine.clone());
+        let mut builder =
+            TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
         let mut gc_worker = GcWorker::new(
             self.engine,
-            None,
-            None,
             None,
             self.gc_config.unwrap_or_default(),
             Default::default(),
@@ -80,7 +81,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
     gc_worker: GcWorker<E>,
-    store: Storage<E, DummyLockManager>,
+    store: Storage<E, DummyLockManager, DummyPdClient>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
@@ -91,7 +92,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.gc_worker.start_auto_gc(cfg).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager, DummyPdClient> {
         self.store.clone()
     }
 
@@ -118,6 +119,32 @@ impl<E: Engine> SyncTestStorage<E> {
         self.store
             .batch_get(ctx, keys.to_owned(), start_ts.into())
             .wait()
+    }
+
+    pub fn batch_get_command(
+        &self,
+        ctx: Context,
+        keys: &[&[u8]],
+        start_ts: u64,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let requests: Vec<GetRequest> = keys
+            .to_owned()
+            .into_iter()
+            .map(|key| {
+                let mut req = GetRequest::default();
+                req.set_context(ctx.clone());
+                req.set_key(key.to_owned());
+                req.set_version(start_ts);
+                req
+            })
+            .collect();
+        let resp = self.store.batch_get_command(requests).wait()?;
+        let mut values = vec![];
+
+        for value in resp.into_iter() {
+            values.push(value?);
+        }
+        Ok(values)
     }
 
     pub fn scan(
@@ -170,7 +197,7 @@ impl<E: Engine> SyncTestStorage<E> {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Vec<Result<()>>> {
+    ) -> Result<PrewriteResult> {
         wait_op!(|cb| self.store.sched_txn_command(
             commands::Prewrite::with_context(mutations, primary, start_ts.into(), ctx),
             cb,
@@ -245,7 +272,7 @@ impl<E: Engine> SyncTestStorage<E> {
             commit_ts.map(Into::into).unwrap_or_else(TimeStamp::zero),
         );
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
             cb,
         ))
         .unwrap()
@@ -258,14 +285,14 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<()> {
         let txn_status: HashMap<TimeStamp, TimeStamp> = txns.into_iter().collect();
         wait_op!(|cb| self.store.sched_txn_command(
-            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            commands::ResolveLockReadPhase::new(txn_status, None, ctx),
             cb,
         ))
         .unwrap()
     }
 
-    pub fn gc(&self, ctx: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(ctx, safe_point.into(), cb)).unwrap()
+    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {

@@ -10,7 +10,7 @@ use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// The parser for FIRST aggregate function.
 pub struct AggrFnDefinitionParserFirst;
@@ -21,22 +21,26 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
+        mut root_expr: Expr,
+        exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
+    ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
 
-        assert_eq!(aggr_def.get_tp(), ExprType::First);
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
+        assert_eq!(root_expr.get_tp(), ExprType::First);
 
-        let out_ft = aggr_def.take_field_type();
+        let eval_type =
+            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+
+        let out_ft = root_expr.take_field_type();
+
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
         if out_et != eval_type {
@@ -48,11 +52,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
 
         // FIRST outputs one column with the same type as its child
         out_schema.push(out_ft);
-        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
-            child,
-            ctx,
-            src_schema.len(),
-        )?);
+        out_exp.push(exp);
 
         match_template::match_template! {
             TT = [Int, Real, Duration, Decimal, DateTime],
@@ -236,7 +236,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[Some(0); 0]),
+            &ChunkedVecSized::from_slice(&[Some(0); 0]),
             &[]
         )
         .unwrap();
@@ -244,7 +244,13 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[None]);
 
         result[0].clear();
-        update_vector!(state, &mut ctx, &NotChunkedVec::from_slice(&[Some(1)]), &[]).unwrap();
+        update_vector!(
+            state,
+            &mut ctx,
+            &ChunkedVecSized::from_slice(&[Some(1)]),
+            &[]
+        )
+        .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[None]);
 
@@ -252,7 +258,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[None, Some(2)]),
+            &ChunkedVecSized::from_slice(&[None, Some(2)]),
             &[0, 1]
         )
         .unwrap();
@@ -263,7 +269,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[Some(1)]),
+            &ChunkedVecSized::from_slice(&[Some(1)]),
             &[0]
         )
         .unwrap();
@@ -277,7 +283,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &NotChunkedVec::from_slice(&[None, Some(2)]),
+            &ChunkedVecSized::from_slice(&[None, Some(2)]),
             &[1, 0]
         )
         .unwrap();

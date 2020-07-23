@@ -31,7 +31,7 @@ const BATCH_GROW_FACTOR: usize = 2;
 
 /// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
 /// can run without being yielded.
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+pub const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
@@ -163,12 +163,14 @@ pub fn build_executors<S: Storage + 'static>(
 
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
+            let primary_column_ids_len = descriptor.take_primary_column_ids().len();
             executor = Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
+                    primary_column_ids_len,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                 )?

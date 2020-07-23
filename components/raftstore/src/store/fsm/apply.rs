@@ -31,7 +31,6 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -65,6 +64,7 @@ use super::metrics::*;
 
 use super::super::RegionTask;
 use std::vec::Drain;
+use time::Timespec;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -2712,6 +2712,7 @@ where
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+        fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
         }
@@ -2962,9 +2963,9 @@ where
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
+                    snapshot: Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
-                        self.delegate.region.clone(),
+                        Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
                 }
