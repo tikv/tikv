@@ -805,7 +805,7 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
     } else {
         *cnt
     };
-    let mut writer = writer.to_partial_writer();
+    let mut writer = writer.begin();
     for _i in 0..cnt {
         writer.partial_write(input);
     }

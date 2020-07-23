@@ -132,20 +132,20 @@ impl BytesGuard {
 }
 
 impl BytesWriter {
-    pub fn to_partial_writer(self) -> PartialBytesWriter {
+    pub fn begin(self) -> PartialBytesWriter {
         PartialBytesWriter {
             chunked_vec: self.chunked_vec,
         }
     }
 
-    pub fn finish(mut self, data: Option<Bytes>) -> BytesGuard {
+    pub fn write(mut self, data: Option<Bytes>) -> BytesGuard {
         self.chunked_vec.push(data);
         BytesGuard {
             chunked_vec: self.chunked_vec,
         }
     }
 
-    pub fn finish_ref(mut self, data: Option<BytesRef>) -> BytesGuard {
+    pub fn write_ref(mut self, data: Option<BytesRef>) -> BytesGuard {
         self.chunked_vec.push_ref(data);
         BytesGuard {
             chunked_vec: self.chunked_vec,
@@ -329,7 +329,7 @@ mod test {
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
         for i in 0..test_bytes.len() {
             let writer = chunked_vec.into_writer();
-            let guard = writer.finish(test_bytes[i].to_owned());
+            let guard = writer.write(test_bytes[i].to_owned());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
@@ -337,7 +337,7 @@ mod test {
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
         for i in 0..test_bytes.len() {
             let writer = chunked_vec.into_writer();
-            let guard = writer.finish(test_bytes[i].clone());
+            let guard = writer.write(test_bytes[i].clone());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
@@ -347,13 +347,13 @@ mod test {
             let writer = chunked_vec.into_writer();
             let guard = match test_bytes[i].clone() {
                 Some(x) => {
-                    let mut writer = writer.to_partial_writer();
+                    let mut writer = writer.begin();
                     writer.partial_write(x.as_slice());
                     writer.partial_write(x.as_slice());
                     writer.partial_write(x.as_slice());
                     writer.finish()
                 }
-                None => writer.finish(None),
+                None => writer.write(None),
             };
             chunked_vec = guard.into_inner();
         }
