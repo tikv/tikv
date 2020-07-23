@@ -90,22 +90,37 @@ pub enum TxnStatus {
     Uncommitted {
         lock_ttl: u64,
         min_commit_ts: TimeStamp,
+        use_async_commit: bool,
+        secondaries: Vec<Vec<u8>>,
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(lock_ttl: u64, min_commit_ts: TimeStamp) -> Self {
+    pub fn uncommitted(
+        lock_ttl: u64,
+        min_commit_ts: TimeStamp,
+        use_async_commit: bool,
+        secondaries: Vec<Vec<u8>>,
+    ) -> Self {
         Self::Uncommitted {
             lock_ttl,
             min_commit_ts,
+            use_async_commit,
+            secondaries,
         }
     }
 
     pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
     }
+}
+
+#[derive(Debug)]
+pub struct PrewriteResult {
+    pub locks: Vec<Result<()>>,
+    pub min_commit_ts: TimeStamp,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,6 +179,7 @@ storage_callback! {
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
+    Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
 }
 

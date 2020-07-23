@@ -16,6 +16,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TxnExtra;
 
@@ -194,6 +195,15 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) -> Result<()> {
         self.ch.send_command(req, cb)
+    }
+
+    fn read(
+        &self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.ch.read(read_id, req, cb)
     }
 
     fn send_command_txn_extra(

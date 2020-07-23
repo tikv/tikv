@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, Range};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -9,9 +8,7 @@ use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::size::get_region_approximate_size_cf;
 use super::Host;
-use engine_rocks::properties::RangeProperties;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -112,18 +109,12 @@ pub fn get_region_approximate_middle(
     db: &impl KvEngine,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
-
-    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
-
-    let middle_by_cf = if default_cf_size >= write_cf_size {
-        CF_DEFAULT
-    } else {
-        CF_WRITE
-    };
-
-    get_region_approximate_middle_cf(db, middle_by_cf, region)
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(
+        db.get_range_approximate_middle(range, region.get_id())
+    ))
 }
 
 /// Get the approximate middle key of the region. If we suppose the region
@@ -132,6 +123,10 @@ pub fn get_region_approximate_middle(
 ///
 /// The returned key maybe is timestamped if transaction KV is used,
 /// and must start with "z".
+///
+/// FIXME the cfg(test) here probably indicates that the test doesn't belong
+/// here. It should be a test of the engine_traits or engine_rocks crates.
+#[cfg(test)]
 fn get_region_approximate_middle_cf(
     db: &impl KvEngine,
     cfname: &str,
@@ -139,26 +134,12 @@ fn get_region_approximate_middle_cf(
 ) -> Result<Option<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
-
-    let mut keys = Vec::new();
-    for (_, v) in collection.iter() {
-        let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        keys.extend(
-            props
-                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
-                .into_iter()
-                .map(|(k, _)| k),
-        );
-    }
-    if keys.is_empty() {
-        return Ok(None);
-    }
-    keys.sort();
-    // Calculate the position by (len-1)/2. So it's the left one
-    // of two middle positions if the number of keys is even.
-    let middle = (keys.len() - 1) / 2;
-    Ok(Some(keys.swap_remove(middle)))
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(db.get_range_approximate_middle_cf(
+        cfname,
+        range,
+        region.get_id()
+    )))
 }
 
 #[cfg(test)]

@@ -1051,6 +1051,7 @@ dependencies = [
  "configuration",
  "encryption",
  "engine_traits",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1922,7 +1923,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1941,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3284,7 +3285,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4190,6 +4191,7 @@ version = "0.0.1"
 dependencies = [
  "futures 0.1.29",
  "kvproto",
+ "pd_client",
  "raftstore",
  "test_raftstore",
  "tikv",
@@ -4270,6 +4272,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio 0.2.13",
@@ -4748,7 +4751,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#85b2ef9503b5c69709871403bb8378139e4bb47f"
+source = "git+https://github.com/pingcap/tipb.git#dcfcea0b59654004a89d5c25d6d22c113a13b848"
 dependencies = [
  "lazy_static",
  "prost",

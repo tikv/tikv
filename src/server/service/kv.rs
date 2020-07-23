@@ -1,15 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tikv_util::time::{duration_to_sec, Instant};
 
+use super::batch::ReqBatcher;
 use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
-use crate::server::service::batch::ReqBatcher;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
 use crate::storage::{
@@ -19,7 +17,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    PointGetCommand, Storage, TxnStatus,
+    Storage, TxnStatus,
 };
 use engine_rocks::RocksSnapshot;
 use futures::executor::{self, Notify, Spawn};
@@ -34,12 +32,12 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use txn_types::{self, Key};
@@ -48,12 +46,16 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-#[derive(Clone)]
-pub struct Service<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> {
+pub struct Service<
+    T: RaftStoreRouter<RocksSnapshot> + 'static,
+    E: Engine,
+    L: LockManager,
+    P: PdClient + 'static,
+> {
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E>,
     // For handling KV requests.
-    storage: Storage<E, L>,
+    storage: Storage<E, L, P>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling raft messages.
@@ -62,8 +64,6 @@ pub struct Service<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: Lo
     snap_scheduler: Scheduler<SnapTask>,
 
     enable_req_batch: bool,
-
-    req_batch_wait_duration: Option<Duration>,
 
     timer_pool: Arc<Mutex<ThreadPool>>,
 
@@ -74,10 +74,39 @@ pub struct Service<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: Lo
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<
+        T: RaftStoreRouter<RocksSnapshot> + Clone + 'static,
+        E: Engine + Clone,
+        L: LockManager + Clone,
+        P: PdClient + 'static,
+    > Clone for Service<T, E, L, P>
+{
+    fn clone(&self) -> Self {
+        Service {
+            gc_worker: self.gc_worker.clone(),
+            storage: self.storage.clone(),
+            cop: self.cop.clone(),
+            ch: self.ch.clone(),
+            snap_scheduler: self.snap_scheduler.clone(),
+            enable_req_batch: self.enable_req_batch,
+            timer_pool: self.timer_pool.clone(),
+            grpc_thread_load: self.grpc_thread_load.clone(),
+            readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
+            security_mgr: self.security_mgr.clone(),
+        }
+    }
+}
+
+impl<
+        T: RaftStoreRouter<RocksSnapshot> + 'static,
+        E: Engine,
+        L: LockManager,
+        P: PdClient + 'static,
+    > Service<T, E, L, P>
+{
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
-        storage: Storage<E, L>,
+        storage: Storage<E, L, P>,
         gc_worker: GcWorker<E>,
         cop: Endpoint<E>,
         ch: T,
@@ -85,7 +114,6 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Ser
         grpc_thread_load: Arc<ThreadLoad>,
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
-        req_batch_wait_duration: Option<Duration>,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
@@ -104,7 +132,6 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Ser
             readpool_normal_thread_load,
             timer_pool,
             enable_req_batch,
-            req_batch_wait_duration,
             security_mgr,
         }
     }
@@ -144,8 +171,12 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tikv
-    for Service<T, E, L>
+impl<
+        T: RaftStoreRouter<RocksSnapshot> + 'static,
+        E: Engine,
+        L: LockManager,
+        P: PdClient + 'static,
+    > Tikv for Service<T, E, L, P>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
@@ -267,27 +298,12 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         unimplemented!();
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
-        let begin_instant = Instant::now_coarse();
-        let future = future_gc(&self.gc_worker, req)
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(move |_| {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .kv_gc
-                    .observe(duration_to_sec(begin_instant.elapsed()))
-            })
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "kv_gc",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
-            });
-
-        ctx.spawn(future);
+    fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
+        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+        ctx.spawn(
+            sink.fail(e)
+                .map_err(|e| error!("kv rpc failed"; "err" => ?e)),
+        );
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
@@ -768,6 +784,7 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
 
         let (cb, future) = paired_future_callback();
 
+        // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
@@ -830,88 +847,26 @@ impl<T: RaftStoreRouter<RocksSnapshot> + 'static, E: Engine, L: LockManager> Tik
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let gc_worker = self.gc_worker.clone();
-        if self.enable_req_batch {
-            let stopped = Arc::new(AtomicBool::new(false));
-            let req_batcher = ReqBatcher::new(
-                tx.clone(),
-                self.req_batch_wait_duration,
-                Arc::clone(&self.readpool_normal_thread_load),
-            );
-            let req_batcher = Arc::new(Mutex::new(req_batcher));
-            if let Some(duration) = self.req_batch_wait_duration {
-                let storage = storage.clone();
-                let req_batcher = req_batcher.clone();
-                let req_batcher2 = req_batcher.clone();
-                let stopped = Arc::clone(&stopped);
-                let start = std::time::Instant::now();
-                let timer = GLOBAL_TIMER_HANDLE.clone();
-                self.timer_pool.lock().unwrap().spawn(
-                    timer
-                        .interval(start, duration)
-                        .take_while(move |_| {
-                            // only stop timer when no more incoming and old batch is submitted.
-                            future::ok(
-                                !stopped.load(Ordering::Relaxed)
-                                    || !req_batcher2.lock().unwrap().is_empty(),
-                            )
-                        })
-                        .for_each(move |_| {
-                            req_batcher.lock().unwrap().should_submit(&storage);
-                            Ok(())
-                        })
-                        .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
-                );
+        let enable_req_batch = self.enable_req_batch;
+        let request_handler = stream.for_each(move |mut req| {
+            let request_ids = req.take_request_ids();
+            let requests: Vec<_> = req.take_requests().into();
+            let mut batcher = if enable_req_batch && requests.len() > 2 {
+                Some(ReqBatcher::new())
+            } else {
+                None
+            };
+            GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+            for (id, req) in request_ids.into_iter().zip(requests) {
+                handle_batch_commands_request(&mut batcher, &storage, &cop, &peer, id, req, &tx);
             }
-            let request_handler = stream.for_each(move |mut req| {
-                let request_ids = req.take_request_ids();
-                let requests: Vec<_> = req.take_requests().into();
-                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-                for (id, mut req) in request_ids.into_iter().zip(requests) {
-                    if !req_batcher.lock().unwrap().filter(id, &mut req) {
-                        handle_batch_commands_request(
-                            &storage,
-                            &gc_worker,
-                            &cop,
-                            &peer,
-                            id,
-                            req,
-                            tx.clone(),
-                        );
-                    }
-                }
-                req_batcher.lock().unwrap().maybe_submit(&storage);
-                future::ok(())
-            });
-            ctx.spawn(
-                request_handler
-                    .map_err(|e| error!("batch_commands error"; "err" => %e))
-                    .and_then(move |_| {
-                        // signal timer guard to stop polling
-                        stopped.store(true, Ordering::Relaxed);
-                        Ok(())
-                    }),
-            );
-        } else {
-            let request_handler = stream.for_each(move |mut req| {
-                let request_ids = req.take_request_ids();
-                let requests: Vec<_> = req.take_requests().into();
-                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-                for (id, req) in request_ids.into_iter().zip(requests) {
-                    handle_batch_commands_request(
-                        &storage,
-                        &gc_worker,
-                        &cop,
-                        &peer,
-                        id,
-                        req,
-                        tx.clone(),
-                    );
-                }
-                future::ok(())
-            });
-            ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
-        };
+            if let Some(mut batch) = batcher {
+                batch.commit(&storage, &tx);
+                storage.release_snapshot();
+            }
+            future::ok(())
+        });
+        ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
 
         let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
@@ -1053,14 +1008,14 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
-    gc_worker: &GcWorker<E>,
+fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'static>(
+    batcher: &mut Option<ReqBatcher>,
+    storage: &Storage<E, L, P>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
-    tx: Sender<(u64, batch_commands_response::Response)>,
+    tx: &Sender<(u64, batch_commands_response::Response)>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1080,14 +1035,42 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     // For some invalid requests.
                     let begin_instant = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx, begin_instant, GrpcTypeKind::invalid);
-                }
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
+                },
+                Some(batch_commands_request::request::Cmd::Get(req)) => {
+                    if batcher.as_mut().map_or(false, |req_batch| {
+                        req_batch.maybe_commit(storage, tx);
+                        req_batch.can_batch_get(&req)
+                    }) {
+                        batcher.as_mut().unwrap().add_get_request(req, id);
+                    } else {
+                       let begin_instant = Instant::now();
+                       let resp = future_get(storage, req)
+                            .map(oneof!(batch_commands_response::response::Cmd::Get))
+                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
+                    }
+                },
+                Some(batch_commands_request::request::Cmd::RawGet(req)) => {
+                    if batcher.as_mut().map_or(false, |req_batch| {
+                        req_batch.maybe_commit(storage, tx);
+                        req_batch.can_batch_raw_get(&req)
+                    }) {
+                        batcher.as_mut().unwrap().add_raw_get_request(req, id);
+                    } else {
+                       let begin_instant = Instant::now();
+                       let resp = future_raw_get(storage, req)
+                            .map(oneof!(batch_commands_response::response::Cmd::RawGet))
+                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
+                    }
+                },
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let begin_instant = Instant::now();
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx, begin_instant, GrpcTypeKind::$metric_name);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -1095,7 +1078,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     }
 
     handle_cmd! {
-        Get, future_get(storage), kv_get;
         Scan, future_scan(storage), kv_scan;
         Prewrite, future_prewrite(storage), kv_prewrite;
         Commit, future_commit(storage), kv_commit;
@@ -1106,9 +1088,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
-        Gc, future_gc(gc_worker), kv_gc;
+        Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
-        RawGet, future_raw_get(storage), raw_get;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1152,8 +1133,8 @@ fn future_handle_empty(
     }
 }
 
-fn future_get<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
@@ -1177,63 +1158,8 @@ fn future_get<E: Engine, L: LockManager>(
         })
 }
 
-pub fn future_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    requests: Vec<u64>,
-    commands: Vec<PointGetCommand>,
-) -> impl Future<Item = (), Error = ()> {
-    let begin_instant = Instant::now_coarse();
-
-    storage.batch_get_command(commands).then(move |v| {
-        match v {
-            Ok(v) => {
-                if requests.len() != v.len() {
-                    error!("KvService batch response size mismatch");
-                }
-                for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                    let mut resp = GetResponse::default();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
-                            Err(e) => resp.set_error(extract_key_error(&e)),
-                        }
-                    }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-            e => {
-                let mut resp = GetResponse::default();
-                if let Some(err) = extract_region_error(&e) {
-                    resp.set_region_error(err);
-                } else if let Err(e) = e {
-                    resp.set_error(extract_key_error(&e));
-                }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-        }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .kv_batch_get_command
-            .observe(begin_instant.elapsed_secs());
-        Ok(())
-    })
-}
-
-fn future_scan<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1263,8 +1189,8 @@ fn future_scan<E: Engine, L: LockManager>(
         })
 }
 
-fn future_batch_get<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1281,26 +1207,15 @@ fn future_batch_get<E: Engine, L: LockManager>(
         })
 }
 
-fn future_gc<E: Engine>(
-    gc_worker: &GcWorker<E>,
-    mut req: GcRequest,
-) -> impl Future<Item = GcResponse, Error = Error> {
-    let (cb, f) = paired_future_callback();
-    let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
-
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GcResponse::default();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else if let Err(e) = v {
-            resp.set_error(extract_key_error(&e));
-        }
-        resp
-    })
+fn future_gc(_: GcRequest) -> impl Future<Item = GcResponse, Error = Error> {
+    future::err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        RpcStatusCode::UNIMPLEMENTED,
+        None,
+    ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1323,8 +1238,8 @@ fn future_delete_range<E: Engine, L: LockManager>(
     })
 }
 
-fn future_raw_get<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
@@ -1344,63 +1259,8 @@ fn future_raw_get<E: Engine, L: LockManager>(
         })
 }
 
-pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    requests: Vec<u64>,
-    cf: String,
-    commands: Vec<PointGetCommand>,
-) -> impl Future<Item = (), Error = ()> {
-    let begin_instant = Instant::now_coarse();
-    storage.raw_batch_get_command(cf, commands).then(move |v| {
-        match v {
-            Ok(v) => {
-                if requests.len() != v.len() {
-                    error!("KvService batch response size mismatch");
-                }
-                for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                    let mut resp = RawGetResponse::default();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
-                            Err(e) => resp.set_error(format!("{}", e)),
-                        }
-                    }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-            e => {
-                let mut resp = RawGetResponse::default();
-                if let Some(err) = extract_region_error(&e) {
-                    resp.set_region_error(err);
-                } else if let Err(e) = e {
-                    resp.set_error(format!("{}", e));
-                }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-        }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .raw_batch_get_command
-            .observe(duration_to_sec(begin_instant.elapsed()));
-        Ok(())
-    })
-}
-
-fn future_raw_batch_get<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
@@ -1417,8 +1277,8 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
         })
 }
 
-fn future_raw_put<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_put<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
@@ -1441,8 +1301,8 @@ fn future_raw_put<E: Engine, L: LockManager>(
     })
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_put<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1466,8 +1326,8 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
     })
 }
 
-fn future_raw_delete<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1484,8 +1344,8 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     })
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_delete<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1504,8 +1364,8 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     })
 }
 
-fn future_raw_scan<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawScanRequest,
 ) -> impl Future<Item = RawScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1534,8 +1394,8 @@ fn future_raw_scan<E: Engine, L: LockManager>(
         })
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
@@ -1558,8 +1418,8 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
         })
 }
 
-fn future_raw_delete_range<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
+    storage: &Storage<E, L, P>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1583,8 +1443,8 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerGetRequest,
 ) -> impl Future<Item = VerGetResponse, Error = Error> {
     let resp = VerGetResponse::default();
@@ -1592,8 +1452,8 @@ fn future_ver_get<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_batch_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerBatchGetRequest,
 ) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
     let resp = VerBatchGetResponse::default();
@@ -1601,8 +1461,8 @@ fn future_ver_batch_get<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_mut<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerMutRequest,
 ) -> impl Future<Item = VerMutResponse, Error = Error> {
     let resp = VerMutResponse::default();
@@ -1610,8 +1470,8 @@ fn future_ver_mut<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_batch_mut<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerBatchMutRequest,
 ) -> impl Future<Item = VerBatchMutResponse, Error = Error> {
     let resp = VerBatchMutResponse::default();
@@ -1619,8 +1479,8 @@ fn future_ver_batch_mut<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_scan<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerScanRequest,
 ) -> impl Future<Item = VerScanResponse, Error = Error> {
     let resp = VerScanResponse::default();
@@ -1628,8 +1488,8 @@ fn future_ver_scan<E: Engine, L: LockManager>(
 }
 
 // unimplemented
-fn future_ver_delete_range<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
+fn future_ver_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
+    _storage: &Storage<E, L, P>,
     mut _req: VerDeleteRangeRequest,
 ) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
     let resp = VerDeleteRangeResponse::default();
@@ -1647,8 +1507,8 @@ fn future_cop<E: Engine>(
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager>(
-            storage: &Storage<E, L>,
+        fn $fn_name<E: Engine, L: LockManager, P: PdClient + 'static>(
+            storage: &Storage<E, L, P>,
             $req: $req_ty,
         ) -> impl Future<Item = $resp_ty, Error = Error> {
             $prelude
@@ -1671,9 +1531,12 @@ macro_rules! txn_command_future {
     };
 }
 
-txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {
-    resp.set_errors(extract_key_errors(v).into())
-});
+txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp) {{
+    if let Ok(v) = &v {
+        resp.set_min_commit_ts(v.min_commit_ts.into_inner());
+    }
+    resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
+}});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
         Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
@@ -1737,8 +1600,12 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Uncommitted {
                     lock_ttl,
                     min_commit_ts,
+                    use_async_commit,
+                    secondaries,
                 } => {
                     resp.set_lock_ttl(lock_ttl);
+                    resp.set_use_async_commit(use_async_commit);
+                    resp.set_secondaries(secondaries.into());
                     // If the caller_start_ts is max, it's a point get in the autocommit transaction.
                     // Even though the min_commit_ts is not pushed, the point get can ingore the lock
                     // next time because it's not committed. So we pretend it has been pushed.

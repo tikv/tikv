@@ -2,6 +2,7 @@
 
 use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<T>` with a compact layout.
 ///
@@ -21,13 +22,7 @@ pub struct ChunkedVecSized<T: Sized> {
 }
 
 impl<T: Sized + Clone> ChunkedVecSized<T> {
-    pub fn from_slice(slice: &[Option<T>]) -> Self {
-        let mut x = Self::with_capacity(slice.len());
-        for i in slice {
-            x.push(i.clone());
-        }
-        x
-    }
+    impl_chunked_vec_common! { T }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -35,14 +30,6 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
             bitmap: BitVec::with_capacity(capacity),
             phantom: std::marker::PhantomData,
         }
-    }
-
-    pub fn from_vec(data: Vec<Option<T>>) -> Self {
-        let mut x = Self::with_capacity(data.len());
-        for element in data {
-            x.push(element);
-        }
-        x
     }
 
     pub fn push_data(&mut self, value: T) {
@@ -55,20 +42,8 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
         self.data.push(unsafe { std::mem::zeroed() });
     }
 
-    pub fn push(&mut self, value: Option<T>) {
-        if let Some(x) = value {
-            self.push_data(x);
-        } else {
-            self.push_null();
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.data.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn truncate(&mut self, len: usize) {
