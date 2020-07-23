@@ -143,6 +143,11 @@ impl Column {
         logical_rows: &[usize],
     ) -> Result<Self> {
         use crate::codec::data_type::*;
+        for (idx, row) in logical_rows.iter().enumerate() {
+            if idx != *row {
+                return Self::from_vector_value_slowpath(field_type, &v, logical_rows);
+            }
+        }
         match v {
             VectorValue::Bytes(vec) => Ok(Self {
                 length: vec.len(),
@@ -978,15 +983,32 @@ mod tests {
 
     macro_rules! test_column_encode {
         ($data_chunked:ident, $fields:ident) => {
-            let logical_rows: Vec<usize> = (0..$data_chunked.len()).collect();
+            let logical_rows: Vec<usize> = (1..$data_chunked.len()).collect();
+            let logical_rows_all: Vec<usize> = (0..$data_chunked.len()).collect();
             let vec_value = VectorValue::from($data_chunked);
             for field in &$fields {
+                // test partial rows
                 let column =
                     Column::from_vector_value(field, &vec_value, logical_rows.as_slice()).unwrap();
                 let column_slowpath =
                     Column::from_vector_value_slowpath(field, &vec_value, logical_rows.as_slice())
                         .unwrap();
                 test_column_eq(&column, &column_slowpath);
+
+                // test all rows
+                let column =
+                Column::from_vector_value(field, &vec_value, logical_rows_all.as_slice()).unwrap();
+                let column_slowpath =
+                    Column::from_vector_value_slowpath(field, &vec_value, logical_rows_all.as_slice())
+                        .unwrap();
+                test_column_eq(&column, &column_slowpath);
+            
+                // test 0-element column
+                let column = Column::new(field.as_accessor().tp(), 0);
+                let mut truncated_vec_value = vec_value.clone();
+                truncated_vec_value.truncate(0);
+                let vec_column = Column::from_vector_value(field, &truncated_vec_value, &[]).unwrap();
+                test_column_eq(&column, &vec_column);
             }
         };
     }
