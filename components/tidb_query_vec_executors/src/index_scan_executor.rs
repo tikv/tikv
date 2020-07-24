@@ -593,6 +593,7 @@ mod tests {
                 0,
                 true,
                 false,
+                false,
             )
             .unwrap();
 
@@ -646,6 +647,7 @@ mod tests {
                 ],
                 key_ranges,
                 0,
+                false,
                 false,
                 false,
             )
@@ -724,6 +726,7 @@ mod tests {
                 0,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -780,6 +783,7 @@ mod tests {
                 0,
                 false,
                 true,
+                false,
             )
             .unwrap();
 
@@ -889,6 +893,7 @@ mod tests {
             1,
             false,
             true,
+            false,
         )
         .unwrap();
 
@@ -931,6 +936,7 @@ mod tests {
             1,
             false,
             true,
+            false,
         )
         .unwrap();
 
@@ -1024,6 +1030,7 @@ mod tests {
             columns_info,
             key_ranges,
             2,
+            false,
             false,
             false,
         )
@@ -1125,6 +1132,7 @@ mod tests {
             0,
             false,
             true,
+            false,
         )
         .unwrap();
 
@@ -1218,6 +1226,7 @@ mod tests {
             0,
             false,
             true,
+            false,
         )
         .unwrap();
 
@@ -1310,6 +1319,7 @@ mod tests {
             1,
             false,
             true,
+            false,
         )
         .unwrap();
 
