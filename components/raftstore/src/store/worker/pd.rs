@@ -1160,12 +1160,12 @@ fn send_admin_request<S>(
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message(
-    router: &RaftRouter<RocksEngine, RocksEngine, impl Snapshot>,
+fn send_destroy_peer_message<EK>(
+    router: &RaftRouter<EK, RocksEngine, impl Snapshot>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
-) {
+) where EK: KvEngine {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
