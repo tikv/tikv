@@ -21,13 +21,22 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
-fn make_rollback(start_ts: TimeStamp, protected: bool, overlay_write: Option<Write>) -> Write {
+fn make_rollback(
+    start_ts: TimeStamp,
+    protected: bool,
+    overlay_write: Option<Write>,
+) -> Option<Write> {
     match overlay_write {
         Some(write) => {
             assert_eq!(start_ts, write.start_ts);
-            write.set_overlay_rollback(protected)
+            if protected {
+                Some(write.set_overlay_rollback(true))
+            } else {
+                // No need to update the original write.
+                None
+            }
         }
-        None => Write::new_rollback(start_ts, protected),
+        None => Some(Write::new_rollback(start_ts, protected)),
     }
 }
 
@@ -57,7 +66,7 @@ impl MissingLockAction {
 
     // This function should only be invoked when it's sure that there are no overlapping commit
     // record whose commit_ts equals to `ts`, the current transaction's start_ts.
-    fn construct_write(&self, ts: TimeStamp, overlay_write: Option<Write>) -> Write {
+    fn construct_write(&self, ts: TimeStamp, overlay_write: Option<Write>) -> Option<Write> {
         match self {
             MissingLockAction::Rollback => make_rollback(ts, false, overlay_write),
             MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlay_write),
@@ -267,8 +276,9 @@ impl<S: Snapshot> MvccTxn<S> {
 
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        let write = make_rollback(self.start_ts, protected, overlay_write);
-        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+        if let Some(write) = make_rollback(self.start_ts, protected, overlay_write) {
+            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+        }
         if self.collapse_rollback {
             self.collapse_prev_rollback(key.clone())?;
         }
@@ -670,7 +680,12 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
+    pub fn commit(
+        &mut self,
+        key: Key,
+        commit_ts: TimeStamp,
+        check_overlay_rollback: bool,
+    ) -> Result<Option<ReleasedLock>> {
         fail_point!("commit", |err| Err(make_txn_error(
             err,
             &key,
@@ -752,11 +767,19 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
+        let mut write = Write::new(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
         );
+        if check_overlay_rollback {
+            // The write cursor shouldn't have been used until here.
+            if let Some(overlay_write) = self.reader.load_write(&key, commit_ts)? {
+                assert_eq!(overlay_write.write_type, WriteType::Rollback);
+                write = write.set_overlay_rollback(overlay_write.is_protected());
+                debug!("commit meets protected rollback record"; "key" => %key, "commit_ts" => commit_ts);
+            }
+        }
         self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         Ok(self.unlock_key(key, is_pessimistic_txn))
     }
@@ -810,8 +833,9 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 // Insert a Rollback to Write CF in case that a stale prewrite
                 // command is received after a cleanup command.
-                let write = action.construct_write(ts, overlay_write);
-                self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                if let Some(write) = action.construct_write(ts, overlay_write) {
+                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
+                }
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
                 Ok(TxnStatus::LockNotExist)
@@ -1911,7 +1935,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
-        txn.commit(key, 15.into()).unwrap();
+        txn.commit(key, 15.into(), false).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -3229,7 +3253,7 @@ mod tests {
             }
             write(WriteData::from_modifies(txn.into_modifies()));
             let mut txn = new_txn(start_ts.into());
-            txn.commit(key.clone(), commit_ts.into()).unwrap();
+            txn.commit(key.clone(), commit_ts.into(), false).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();

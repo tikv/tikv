@@ -952,7 +952,8 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
+        txn.commit(Key::from_raw(key), commit_ts.into(), false)
+            .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -965,7 +966,9 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
+        assert!(txn
+            .commit(Key::from_raw(key), commit_ts.into(), false)
+            .is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {

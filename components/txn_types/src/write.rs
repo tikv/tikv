@@ -116,6 +116,16 @@ impl Write {
     }
 
     #[inline]
+    pub fn is_protected(&self) -> bool {
+        self.write_type == WriteType::Rollback
+            && self
+                .short_value
+                .as_ref()
+                .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
+                .unwrap_or_default()
+    }
+
+    #[inline]
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         let write_type_bytes = b
             .read_u8()
@@ -272,7 +282,8 @@ mod tests {
             Write::new_rollback((1 << 40).into(), true),
             Write::new(WriteType::Rollback, (1 << 41).into(), None),
             Write::new(WriteType::Put, 123.into(), None).set_overlay_rollback(true),
-            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec())).set_overlay_rollback(true),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
+                .set_overlay_rollback(true),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();
