@@ -173,7 +173,7 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         }
         let sched_pool = self.clone_pool();
         let readonly = task.cmd.readonly();
-        let extra_op = cb_ctx.extra_op;
+        let extra_op = cb_ctx.txn_extra_op;
         sched_pool
             .pool
             .spawn(async move {

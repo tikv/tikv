@@ -448,7 +448,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host
-            .on_flush_apply(std::mem::take(&mut self.txn_extras));
+            .on_flush_apply(std::mem::take(&mut self.txn_extras), self.engine.clone());
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -3771,7 +3771,7 @@ mod tests {
         }
     }
 
-    impl CmdObserver for ApplyObserver {
+    impl CmdObserver<RocksEngine> for ApplyObserver {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -3786,7 +3786,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, _: Vec<TxnExtra>) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {

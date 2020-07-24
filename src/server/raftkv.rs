@@ -7,9 +7,7 @@ use std::time::Duration;
 
 use engine::IterOption;
 use engine_rocks::{RocksEngine, RocksTablePropertiesCollection};
-use engine_traits::CfName;
-use engine_traits::Peekable;
-use engine_traits::CF_DEFAULT;
+use engine_traits::{CfName, Peekable, ReadOptions, CF_DEFAULT};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -148,8 +146,8 @@ fn on_read_result(
     mut read_resp: ReadResponse<RocksEngine>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
-    // TODO(5kbpers): set ExtraOp for cb_ctx here.
-    let cb_ctx = new_ctx(&read_resp.response);
+    let mut cb_ctx = new_ctx(&read_resp.response);
+    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
@@ -399,6 +397,14 @@ impl Snapshot for RegionSnapshot<RocksEngine> {
             "injected error for get_cf"
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
+            "injected error for get_cf"
+        )));
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

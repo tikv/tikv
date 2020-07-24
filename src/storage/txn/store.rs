@@ -584,6 +584,7 @@ mod tests {
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use engine::IterOption;
     use engine_traits::CfName;
+    use engine_traits::ReadOptions;
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -725,6 +726,9 @@ mod tests {
             Ok(None)
         }
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
         fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {

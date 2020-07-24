@@ -13,10 +13,11 @@ use std::{error, ptr, result};
 
 use engine::IterOption;
 use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::ReadOptions;
 use engine_traits::{CfName, CF_DEFAULT};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp};
+use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -37,14 +38,14 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
-    pub extra_op: ExtraOp,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl CbContext {
     pub fn new() -> CbContext {
         CbContext {
             term: None,
-            extra_op: ExtraOp::Noop,
+            txn_extra_op: TxnExtraOp::Noop,
         }
     }
 }
@@ -137,6 +138,7 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,

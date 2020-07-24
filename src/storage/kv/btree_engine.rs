@@ -8,7 +8,7 @@ use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -220,6 +220,10 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+    fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
+        self.get_cf(cf, key)
+    }
+
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }

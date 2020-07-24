@@ -284,7 +284,6 @@ impl BackupRawKVWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::Compat;
     use engine_traits::Iterable;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
@@ -301,28 +300,28 @@ mod tests {
             .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
             .build()
             .unwrap();
-        let db = rocks.get_rocksdb();
+        let db = RocksEngine::from_db(rocks.get_rocksdb());
 
         let opt = engine::rocks::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
-            let handle = db.cf_handle(cf).unwrap();
-            db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
+            let handle = db.as_inner().cf_handle(cf).unwrap();
+            db.as_inner()
+                .ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
                 .unwrap();
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.c()
-                .scan_cf(
-                    cf,
-                    keys::DATA_MIN_KEY,
-                    keys::DATA_MAX_KEY,
-                    false,
-                    |key, value| {
-                        map.insert(key.to_owned(), value.to_owned());
-                        Ok(true)
-                    },
-                )
-                .unwrap();
+            db.scan_cf(
+                cf,
+                keys::DATA_MIN_KEY,
+                keys::DATA_MAX_KEY,
+                false,
+                |key, value| {
+                    map.insert(key.to_owned(), value.to_owned());
+                    Ok(true)
+                },
+            )
+            .unwrap();
             assert_eq!(map.len(), kv.len(), "{} {:?} {:?}", cf, map, kv);
             for (k, v) in *kv {
                 assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
