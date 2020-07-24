@@ -126,12 +126,23 @@ impl Operator {
                 if target_region_id == region_id {
                     pdpb::RegionHeartbeatResponse::new()
                 } else {
-                    let region = cluster
-                        .get_region_by_id(target_region_id)
-                        .unwrap()
-                        .unwrap()
-                        .clone();
-                    new_pd_merge_region(region)
+                    let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
+                    if cluster.check_merge_target_integrity {
+                        let mut all_exist = true;
+                        for peer in region.get_peers() {
+                            if cluster.pending_peers.contains_key(&peer.get_id()) {
+                                all_exist = false;
+                                break;
+                            }
+                        }
+                        if all_exist {
+                            new_pd_merge_region(region)
+                        } else {
+                            pdpb::RegionHeartbeatResponse::new()
+                        }
+                    } else {
+                        new_pd_merge_region(region)
+                    }
                 }
             }
             Operator::HalfSplitRegion { .. } => new_half_split_region(),
@@ -224,6 +235,9 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+
+    // for merging
+    pub check_merge_target_integrity: bool,
 }
 
 impl Cluster {
@@ -251,6 +265,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            check_merge_target_integrity: true,
         }
     }
 
@@ -950,6 +965,10 @@ impl TestPdClient {
 
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
+    }
+
+    pub fn ignore_merge_target_integrity(&self) {
+        self.cluster.wl().check_merge_target_integrity = false;
     }
 }
 
