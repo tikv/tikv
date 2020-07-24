@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
+use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -112,7 +112,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksSnapshot>,
+    router: RaftRouter<RocksEngine, RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
