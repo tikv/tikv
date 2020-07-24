@@ -132,6 +132,8 @@ where
 }
 
 /// A router that routes messages to the raftstore
+#[allow(clippy::type_complexity)] // FIXME: should be removable after the E::Snapshot
+                                  // typarams below are removed
 pub struct ServerRaftStoreRouter<E>
 where
     E: KvEngine,
