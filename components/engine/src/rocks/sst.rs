@@ -97,6 +97,15 @@ impl SstWriterBuilder {
     }
 }
 
+fn fmt_db_compression_type(ct: DBCompressionType) -> &'static str {
+    match ct {
+        DBCompressionType::Lz4 => "lz4",
+        DBCompressionType::Snappy => "snappy",
+        DBCompressionType::Zstd => "zstd",
+        _ => unreachable!(),
+    }
+}
+
 /// SstWriter is used to create sst files that can be added to database later.
 pub struct SstWriter {
     writer: SstFileWriter,
