@@ -241,17 +241,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         if let Some(secondary_keys) = secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
-            // We will reuse min_commit_ts for async commit for now.
-            assert!(
-                min_commit_ts.is_zero(),
-                "async commit is not yet compatible with large transactions"
-            );
-
             // TODO(nrc) this is going to block all the other keys' processing and writing, we should
             // do it async.
             // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
             // node gets a start ts to read the key, it can violate the snapshot property.
             let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
+            assert!(ts >= min_commit_ts);
             lock.min_commit_ts = ts;
             async_commit_ts = ts;
         }
