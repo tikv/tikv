@@ -148,8 +148,8 @@ where
     }
 }
 
-pub type SenderFsmPair<EK, ER, S> = (
-    LooseBoundedSender<PeerMsg<EK, ER, S>>,
+pub type SenderFsmPair<EK, ER> = (
+    LooseBoundedSender<PeerMsg<EK, ER, <EK as KvEngine>::Snapshot>>,
     Box<PeerFsm<EK, ER>>,
 );
 
@@ -167,7 +167,7 @@ where
         sched: Scheduler<RegionTask<EK::Snapshot>>,
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<EK, ER, EK::Snapshot>> {
+    ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -215,7 +215,7 @@ where
         engines: KvEngines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<EK, ER, EK::Snapshot>> {
+    ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";

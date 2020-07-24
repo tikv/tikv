@@ -829,7 +829,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine, RocksEngine, RocksSnapshot>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine, RocksEngine>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -1169,7 +1169,7 @@ impl RaftBatchSystem {
     >(
         &mut self,
         mut workers: Workers,
-        region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine, RocksSnapshot>>,
+        region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
