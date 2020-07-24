@@ -659,6 +659,7 @@ mod tests {
             ranges,
             vec![],
             false,
+            false,
         )
         .unwrap();
 
@@ -740,6 +741,7 @@ mod tests {
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
             vec![],
+            false,
             false,
         )
         .unwrap()
@@ -879,6 +881,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -984,6 +987,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1018,6 +1022,7 @@ mod tests {
                     key_range_point[2].clone(),
                 ],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1056,6 +1061,7 @@ mod tests {
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1074,6 +1080,7 @@ mod tests {
                 columns_info.clone(),
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1106,6 +1113,7 @@ mod tests {
                 columns_info,
                 vec![key_range_point[1].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1154,6 +1162,7 @@ mod tests {
             columns_info,
             vec![key_range],
             vec![],
+            false,
             false,
         )
         .unwrap();
@@ -1255,6 +1264,7 @@ mod tests {
             columns_info.clone(),
             vec![key_range],
             primary_column_ids.clone(),
+            false,
             false,
         )
         .unwrap();
