@@ -12,7 +12,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// A trait for MAX/MIN aggregation functions
 pub trait Extremum: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -51,20 +51,21 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
-        // We use the same structure for all data types, so this parameter is not needed.
+        mut root_expr: Expr,
+        exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
-        assert_eq!(aggr_def.get_tp(), T::TP);
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
+    ) -> Result<Box<dyn AggrFunction>> {
+        assert_eq!(root_expr.get_tp(), T::TP);
+        let eval_type =
+            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
 
-        let out_ft = aggr_def.take_field_type();
+        let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
         let out_coll = box_try!(out_ft.as_accessor().collation());
 
@@ -77,11 +78,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         // `MAX/MIN` outputs one column which has the same type with its child
         out_schema.push(out_ft);
-        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
-            child,
-            ctx,
-            src_schema.len(),
-        )?);
+        out_exp.push(exp);
 
         if out_et == EvalType::Bytes {
             return match_template_collator! {

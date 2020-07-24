@@ -3,20 +3,19 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt, WriteOptions};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest,
-    RaftCmdResponse, ReadIndexResponse, Request, Response, TransferLeaderRequest,
-    TransferLeaderResponse,
+    AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest, RaftCmdResponse,
+    TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -39,15 +38,13 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
-use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadResponse, RegionSnapshot,
-};
+use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::Scheduler;
 
 use super::cmd_resp;
@@ -2596,14 +2593,21 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<RocksSnapshot> {
-        let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
-            check_epoch,
-            false, /* we don't need snapshot time */
-        )
-        .execute(&req, self.region(), read_index);
+        let region = self.region().clone();
+        if check_epoch {
+            if let Err(e) = check_region_epoch(&req, &region, true) {
+                debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
+        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         resp.txn_extra_op = self.txn_extra_op.load();
-
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }
@@ -3012,173 +3016,13 @@ impl RequestInspector for Peer {
     }
 }
 
-#[derive(Debug)]
-pub struct ReadExecutor<E: KvEngine> {
-    check_epoch: bool,
-    engine: E,
-    snapshot: Option<Arc<E::Snapshot>>,
-    snapshot_time: Option<Timespec>,
-    need_snapshot_time: bool,
-}
-
-impl<E> ReadExecutor<E>
-where
-    E: KvEngine,
-{
-    pub fn new(engine: E, check_epoch: bool, need_snapshot_time: bool) -> Self {
-        ReadExecutor {
-            check_epoch,
-            engine,
-            snapshot: None,
-            snapshot_time: None,
-            need_snapshot_time,
-        }
+impl<T, C> ReadExecutor<RocksEngine> for PollContext<T, C> {
+    fn get_engine(&self) -> &RocksEngine {
+        &self.engines.kv
     }
 
-    #[inline]
-    pub fn snapshot_time(&mut self) -> Option<Timespec> {
-        self.maybe_update_snapshot();
-        self.snapshot_time
-    }
-
-    #[inline]
-    fn maybe_update_snapshot(&mut self) {
-        if self.snapshot.is_some() {
-            return;
-        }
-        self.snapshot = Some(Arc::new(self.engine.snapshot()));
-        // Reading current timespec after snapshot, in case we do not
-        // expire lease in time.
-        atomic::fence(atomic::Ordering::Release);
-        if self.need_snapshot_time {
-            self.snapshot_time = Some(monotonic_raw_now());
-        }
-    }
-
-    fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
-        // TODO: the get_get looks weird, maybe we should figure out a better name later.
-        let key = req.get_get().get_key();
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, region)?;
-
-        let mut resp = Response::default();
-        let snapshot = self.snapshot.as_ref().unwrap();
-        let res = if !req.get_get().get_cf().is_empty() {
-            let cf = req.get_get().get_cf();
-            // TODO: check whether cf exists or not.
-            snapshot
-                .get_value_cf(cf, &keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {} with cf {}: {:?}",
-                        region.get_id(),
-                        hex::encode_upper(key),
-                        cf,
-                        e
-                    )
-                })
-        } else {
-            snapshot
-                .get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {}: {:?}",
-                        region.get_id(),
-                        hex::encode_upper(key),
-                        e
-                    )
-                })
-        };
-        if let Some(res) = res {
-            resp.mut_get().set_value(res.to_vec());
-        }
-
-        Ok(resp)
-    }
-
-    pub fn execute(
-        &mut self,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-        read_index: Option<u64>,
-    ) -> ReadResponse<E::Snapshot> {
-        if self.check_epoch {
-            if let Err(e) = check_region_epoch(msg, region, true) {
-                debug!(
-                    "epoch not match";
-                    "region_id" => region.get_id(),
-                    "err" => ?e,
-                );
-                return ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-            }
-        }
-        self.maybe_update_snapshot();
-        let mut need_snapshot = false;
-        let requests = msg.get_requests();
-        let mut responses = Vec::with_capacity(requests.len());
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Get => match self.do_get(req, region) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!(
-                            "failed to execute get command";
-                            "region_id" => region.get_id(),
-                            "err" => ?e,
-                        );
-                        return ReadResponse {
-                            response: cmd_resp::new_error(e),
-                            snapshot: None,
-                            txn_extra_op: TxnExtraOp::Noop,
-                        };
-                    }
-                },
-                CmdType::Snap => {
-                    need_snapshot = true;
-                    raft_cmdpb::Response::default()
-                }
-                CmdType::ReadIndex => {
-                    let mut resp = raft_cmdpb::Response::default();
-                    if let Some(read_index) = read_index {
-                        let mut res = ReadIndexResponse::default();
-                        res.set_read_index(read_index);
-                        resp.set_read_index(res);
-                    } else {
-                        panic!("[region {}] can not get readindex", region.get_id(),);
-                    }
-                    resp
-                }
-                CmdType::Prewrite
-                | CmdType::Put
-                | CmdType::Delete
-                | CmdType::DeleteRange
-                | CmdType::IngestSst
-                | CmdType::Invalid => unreachable!(),
-            };
-            resp.set_cmd_type(cmd_type);
-            responses.push(resp);
-        }
-
-        let mut response = RaftCmdResponse::default();
-        response.set_responses(responses.into());
-        let snapshot = if need_snapshot {
-            Some(RegionSnapshot::from_snapshot(
-                self.snapshot.clone().unwrap(),
-                region.to_owned(),
-            ))
-        } else {
-            None
-        };
-        ReadResponse {
-            response,
-            snapshot,
-            txn_extra_op: TxnExtraOp::Noop,
-        }
+    fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<RocksSnapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 
@@ -3244,10 +3088,10 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
-
-    use super::*;
 
     #[test]
     fn test_sync_log() {
