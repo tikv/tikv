@@ -10,19 +10,11 @@ use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn]
 #[inline]
-pub fn arithmetic<A: ArithmeticOp>(
-    arg0: Option<&A::T>,
-    arg1: Option<&A::T>,
-) -> Result<Option<A::T>> {
-    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-        A::calc(lhs, rhs)
-    } else {
-        // All arithmetical functions with a NULL argument return NULL
-        Ok(None)
-    }
+pub fn arithmetic<A: ArithmeticOp>(lhs: &A::T, rhs: &A::T) -> Result<Option<A::T>> {
+    A::calc(lhs, rhs)
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     ctx: &mut EvalContext,
@@ -34,6 +26,16 @@ pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     } else {
         Ok(None)
     }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn arithmetic_with_ctx_nonnull<A: ArithmeticOpWithCtx>(
+    ctx: &mut EvalContext,
+    lhs: &A::T,
+    rhs: &A::T,
+) -> Result<Option<A::T>> {
+    A::calc(ctx, lhs, rhs)
 }
 
 pub trait ArithmeticOp {
@@ -455,7 +457,7 @@ impl ArithmeticOp for UintDivideInt {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn int_divide_decimal(
     ctx: &mut EvalContext,

@@ -145,7 +145,7 @@ impl_box_observer!(
     RegionChangeObserver,
     WrappedRegionChangeObserver
 );
-impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
+impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
@@ -159,7 +159,7 @@ where
     split_check_observers: Vec<Entry<BoxSplitCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
-    cmd_observers: Vec<Entry<BoxCmdObserver>>,
+    cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     // TODO: add endpoint
 }
 
@@ -219,7 +219,7 @@ impl<E> Registry<E> {
         push!(priority, rlo, self.region_change_observers);
     }
 
-    pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver) {
+    pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
         push!(priority, rlo, self.cmd_observers);
     }
 }
@@ -292,7 +292,7 @@ impl<E> CoprocessorHost<E>
 where
     E: KvEngine,
 {
-    pub fn new<C: CasualRouter<E::Snapshot> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -466,10 +466,11 @@ where
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>) {
+    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: E) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
+
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
@@ -477,7 +478,7 @@ where
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(txn_extras.clone())
+                .on_flush_apply(txn_extras.clone(), engine.clone())
         }
         self.registry
             .cmd_observers
@@ -485,7 +486,7 @@ where
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(txn_extras)
+            .on_flush_apply(txn_extras, engine)
     }
 
     pub fn shutdown(&self) {
@@ -510,7 +511,7 @@ mod tests {
     use std::sync::atomic::*;
     use std::sync::Arc;
 
-    use engine_rocks::RocksEngine;
+    use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
@@ -611,14 +612,14 @@ mod tests {
         }
     }
 
-    impl CmdObserver for TestCoprocessor {
+    impl CmdObserver<PanicEngine> for TestCoprocessor {
         fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
         fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
-        fn on_flush_apply(&self, _: Vec<TxnExtra>) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -641,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_trigger_right_hook() {
-        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let mut host = CoprocessorHost::<PanicEngine>::default();
         let ob = TestCoprocessor::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
@@ -696,13 +697,13 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply(Vec::default());
+        host.on_flush_apply(Vec::default(), PanicEngine);
         assert_all!(&[&ob.called], &[91]);
     }
 
     #[test]
     fn test_order() {
-        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let mut host = CoprocessorHost::<PanicEngine>::default();
 
         let ob1 = TestCoprocessor::default();
         host.registry
