@@ -204,13 +204,15 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 
 struct SampleBuilder<S: Snapshot> {
     data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
-
+    // the number of columns need to be sampled. It equals to cols.len()
+    // if cols[0] is not pk handle, or it should be cols.len() - 1.
+    col_len: usize,
     max_bucket_size: usize,
     max_sample_size: usize,
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
-    columns_info: Vec<tipb::ColumnInfo>,
+    cols_info: Vec<::tipb::ColumnInfo>,
 }
 
 /// `SampleBuilder` is used to analyze columns. It collects sample from
@@ -222,27 +224,36 @@ impl<S: Snapshot> SampleBuilder<S> {
         storage: TiKVStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
-        let columns_info: Vec<_> = req.take_columns_info().into();
-        if columns_info.is_empty() {
+        let cols_info = req.take_columns_info();
+        if cols_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
+
+        let mut col_len = cols_info.len();
+        let vec_cols_info = if cols_info[0].get_pk_handle() {
+            col_len -= 1;
+            cols_info.to_vec()[1..].to_vec()
+        } else {
+            cols_info.to_vec()
+        };
 
         let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
+            cols_info.into(),
             ranges,
             req.take_primary_column_ids().into(),
             false,
         )?;
         Ok(Self {
             data: table_scanner,
+            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
-            columns_info,
+            cols_info: vec_cols_info,
         })
     }
 
@@ -252,12 +263,6 @@ impl<S: Snapshot> SampleBuilder<S> {
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
-        let columns_without_handle_len =
-            self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
-
-        // The number of columns need to be sampled is `columns_without_handle_len`.
-        // It equals to `columns_info.len()` if the first column doesn't contain a handle.
-        // Otherwise, it equals to `columns_info.len() - 1`.
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
@@ -266,7 +271,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 self.cm_sketch_depth,
                 self.cm_sketch_width,
             );
-            columns_without_handle_len
+            self.col_len
         ];
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
@@ -280,20 +285,18 @@ impl<S: Snapshot> SampleBuilder<S> {
             is_drained = result.is_drained?;
 
             let mut columns_slice = result.physical_columns.as_slice();
-            let mut columns_info = &self.columns_info[..];
-            if columns_without_handle_len + 1 == columns_slice.len() {
+            if self.col_len != columns_slice.len() {
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
                     columns_slice[0].encode(
                         *logical_row,
-                        &columns_info[0],
+                        &self.cols_info[0],
                         &mut EvalContext::default(),
                         &mut data,
                     )?;
                     pk_builder.append(&data);
                 }
                 columns_slice = &columns_slice[1..];
-                columns_info = &columns_info[1..];
             }
 
             for (i, collector) in collectors.iter_mut().enumerate() {
@@ -301,16 +304,16 @@ impl<S: Snapshot> SampleBuilder<S> {
                     let mut val = vec![];
                     columns_slice[i].encode(
                         *logical_row,
-                        &columns_info[i],
+                        &self.cols_info[0],
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
-                    if columns_info[i].as_accessor().is_string_like() {
+                    if self.cols_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
-                            TT, match columns_info[i].as_accessor().collation()? {
+                            TT, match self.cols_info[i].as_accessor().collation()? {
                                 Collation::TT => {
                                     let mut mut_val = &val[..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i])?;
+                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.cols_info[i])?;
                                     if decoded_val == Datum::Null {
                                         val
                                     } else {
