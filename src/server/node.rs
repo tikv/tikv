@@ -10,8 +10,10 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{config::Config as StorageConfig, Storage};
-use engine_rocks::RocksEngine;
+use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager, config::Config as StorageConfig, Storage,
+};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -38,6 +40,7 @@ pub fn create_raft_storage<S, P: PdClient + 'static>(
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
+    concurrency_manager: DefaultConcurrencyManager,
     pd_client: Arc<P>,
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager, P>>
@@ -49,6 +52,7 @@ where
         cfg,
         read_pool,
         lock_mgr,
+        concurrency_manager,
         pd_client,
         pipelined_pessimistic_lock,
     )?;

@@ -9,6 +9,7 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
+pub mod concurrency_manager;
 pub mod config;
 pub mod errors;
 pub mod kv;
@@ -34,6 +35,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager,
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
@@ -87,6 +89,8 @@ pub struct Storage<E: Engine, L: LockManager, P: PdClient + 'static> {
     /// The thread pool used to run most read operations.
     read_pool: ReadPoolHandle,
 
+    concurrency_manager: DefaultConcurrencyManager,
+
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -111,6 +115,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Storage<E, L, P
             read_pool: self.read_pool.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            concurrency_manager: self.concurrency_manager.clone(),
         }
     }
 }
@@ -154,6 +159,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: L,
+        concurrency_manager: DefaultConcurrencyManager,
         pd_client: Arc<P>,
         pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
@@ -173,6 +179,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             engine,
             sched,
             read_pool,
+            concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
@@ -1324,6 +1331,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             self.lock_mgr,
+            DefaultConcurrencyManager::new(1.into()),
             Arc::new(DummyPdClient::new()),
             self.pipelined_pessimistic_lock,
         )
