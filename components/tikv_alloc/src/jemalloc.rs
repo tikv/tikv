@@ -14,32 +14,35 @@ pub const fn allocator() -> Allocator {
 }
 
 lazy_static! {
-    static ref THREAD_MEMORY_MAP: Mutex<HashMap<String, MemoryStatsAccessor>> =
+    static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
         Mutex::new(HashMap::new());
 }
 
 struct MemoryStatsAccessor {
     allocated: jemalloc_ctl::thread::AllocatedP,
     deallocated: jemalloc_ctl::thread::DeallocatedP,
+    thread_name: String,
 }
 
 pub fn add_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     thread_memory_map.insert(
-        thread::current().name().unwrap().to_string(),
+        thread::current().id(),
         MemoryStatsAccessor {
             allocated: jemalloc_ctl::thread::AllocatedP::new().unwrap(),
             deallocated: jemalloc_ctl::thread::DeallocatedP::new().unwrap(),
+            thread_name: thread::current().name().unwrap().to_string(),
         },
     );
 }
 
 pub fn remove_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    thread_memory_map.remove(&thread::current().name().unwrap().to_string());
+    thread_memory_map.remove(&thread::current().id());
 }
 
 pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
+use std::thread::ThreadId;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -58,19 +61,19 @@ pub fn dump_stats() -> String {
     memory_stats.push_str("Memory stats by thread:\n");
 
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    for (key, value) in thread_memory_map.iter() {
-        memory_stats.push_str(format!("Thread [{}]: ", key).as_str());
+    for (_, accessor) in thread_memory_map.iter() {
+        memory_stats.push_str(format!("Thread [{}]: ", accessor.thread_name).as_str());
         memory_stats.push_str(
             format!(
                 "allocated: {}, ",
-                value.allocated.get().unwrap().get().to_string()
+                accessor.allocated.get().unwrap().get().to_string()
             )
             .as_str(),
         );
         memory_stats.push_str(
             format!(
                 "deallocated: {}.\n",
-                value.deallocated.get().unwrap().get().to_string()
+                accessor.deallocated.get().unwrap().get().to_string()
             )
             .as_str(),
         );
