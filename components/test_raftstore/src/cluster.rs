@@ -33,6 +33,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;
+use tikv_util::time::ThreadReadId;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -51,7 +52,7 @@ pub trait Simulator {
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -64,7 +65,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -74,6 +75,28 @@ pub trait Simulator {
         let node_id = request.get_header().get_peer().get_store_id();
         self.call_command_on_node(node_id, request, timeout)
     }
+
+    fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
+        let (cb, rx) = make_cb(&request);
+        self.async_read(node_id, batch_id, request, cb);
+        rx.recv_timeout(timeout)
+            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    );
+
     fn call_command_on_node(
         &self,
         node_id: u64,
@@ -159,7 +182,7 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
     }
 
-    fn create_engine(&mut self, router: Option<RaftRouter<RocksSnapshot>>) {
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
         let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
@@ -297,12 +320,41 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self.sim.rl().read(batch_id, request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to read {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
+    }
+
     pub fn call_command(
         &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.rl().call_command(request.clone(), timeout) {
+        let mut is_read = false;
+        for req in request.get_requests() {
+            match req.get_cmd_type() {
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => {
+                    is_read = true;
+                }
+                _ => (),
+            }
+        }
+        let ret = if is_read {
+            self.sim.rl().read(None, request.clone(), timeout)
+        } else {
+            self.sim.rl().call_command(request.clone(), timeout)
+        };
+        match ret {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
                 Err(e)
@@ -1296,12 +1348,14 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksSnapshot>| {
-                let idx = peer.peer.raft_group.store().committed_index();
-                peer.peer.raft_group.request_snapshot(idx).unwrap();
-                debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                request_tx.send(idx).unwrap();
-            })),
+            CasualMessage::AccessPeer(Box::new(
+                move |peer: &mut PeerFsm<RocksEngine, RocksEngine>| {
+                    let idx = peer.peer.raft_group.store().committed_index();
+                    peer.peer.raft_group.request_snapshot(idx).unwrap();
+                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
+                    request_tx.send(idx).unwrap();
+                },
+            )),
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
