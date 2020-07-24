@@ -60,36 +60,18 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
     }
 
     pub fn build(self) -> Result<Box<dyn RequestHandler>> {
-        // TODO: support batch executor while handling server-side streaming requests
-        // https://github.com/tikv/tikv/pull/5945
-        if self.enable_batch_if_possible && !self.is_streaming {
-            tidb_query_vec_executors::runner::BatchExecutorsRunner::check_supported(
-                self.req.get_executors(),
-            )?;
-            COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-            Ok(BatchDAGHandler::new(
-                self.req,
-                self.ranges,
-                self.store,
-                self.data_version,
-                self.deadline,
-                self.is_cache_enabled,
-            )?
-            .into_boxed())
-        } else {
-            COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-            Ok(DAGHandler::new(
-                self.req,
-                self.ranges,
-                self.store,
-                self.data_version,
-                self.deadline,
-                self.batch_row_limit,
-                self.is_streaming,
-                self.is_cache_enabled,
-            )?
-            .into_boxed())
-        }
+        COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
+        Ok(BatchDAGHandler::new(
+            self.req,
+            self.ranges,
+            self.store,
+            self.data_version,
+            self.deadline,
+            self.is_cache_enabled,
+            self.batch_row_limit,
+            self.is_streaming,
+        )?
+        .into_boxed())
     }
 }
 
@@ -153,6 +135,8 @@ impl BatchDAGHandler {
         data_version: Option<u64>,
         deadline: Deadline,
         is_cache_enabled: bool,
+        stream_min_rows_each_iter: usize,
+        is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_vec_executors::runner::BatchExecutorsRunner::from_request(
@@ -160,6 +144,8 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::new(store, is_cache_enabled),
                 deadline,
+                stream_min_rows_each_iter,
+                is_streaming,
             )?,
             data_version,
         })

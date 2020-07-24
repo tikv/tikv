@@ -234,6 +234,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             ranges,
             req.take_primary_column_ids().into(),
             false,
+            false,
         )?;
         Ok(Self {
             data: table_scanner,

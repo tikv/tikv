@@ -137,6 +137,7 @@ pub fn build_executors<S: Storage + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
+    is_streaming: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -162,6 +163,7 @@ pub fn build_executors<S: Storage + 'static>(
                     ranges,
                     primary_column_ids,
                     descriptor.get_desc(),
+                    is_streaming,
                 )?
                 .collect_summary(summary_slot_index),
             );
@@ -181,6 +183,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_column_ids_len,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
+                    is_streaming,
                 )?
                 .collect_summary(summary_slot_index),
             );
@@ -314,13 +317,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+        stream_min_rows_each_iter: usize,
+        is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
 
-        let out_most_executor =
-            build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+        let out_most_executor = build_executors(
+            req.take_executors().into(),
+            storage,
+            ranges,
+            config.clone(),
+            is_streaming,
+        )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
             EncodeType::TypeDefault
@@ -351,8 +361,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
-            stream_batch_size: 100, //TODO pass by parameter
-            stream_min_rows_each_iter: 100,
+            stream_batch_size: BATCH_INITIAL_SIZE,
+            stream_min_rows_each_iter,
         })
     }
 
