@@ -59,7 +59,7 @@ use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -226,7 +226,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
-    pub node_start_time: Option<Instant>,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -917,7 +917,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-            node_start_time: Some(Instant::now()),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),
