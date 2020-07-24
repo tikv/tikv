@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::KvEngine;
 use raft::{Progress, ProgressState, StateRole};
 use raftstore::store::Peer;
 use std::collections::HashMap;
@@ -170,7 +171,7 @@ pub struct RegionMeta {
 }
 
 impl RegionMeta {
-    pub fn new(peer: &Peer) -> Self {
+    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Self {
         let raft_group = &peer.raft_group;
         let store = raft_group.store();
         let region = store.region();

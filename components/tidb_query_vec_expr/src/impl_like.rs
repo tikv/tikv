@@ -7,7 +7,7 @@ use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_shared_expr::*;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn like<C: Collator>(
     target: Option<BytesRef>,

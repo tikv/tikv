@@ -4,7 +4,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_count(arg: Option<&Int>) -> Result<Option<Int>> {
     Ok(arg.map(|v| Int::from(v.count_ones())))
