@@ -37,7 +37,7 @@ impl MockRaftStoreRouter {
     }
 }
 
-impl RaftStoreRouter<RocksSnapshot> for MockRaftStoreRouter {
+impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn significant_send(
         &self,
         region_id: u64,

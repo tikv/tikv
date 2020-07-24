@@ -42,7 +42,7 @@ pub fn create_raft_storage<S, P: PdClient + 'static>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
-    S: RaftStoreRouter<RocksSnapshot> + 'static,
+    S: RaftStoreRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(
         engine,
