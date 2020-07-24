@@ -3,12 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::rocks::{SstWriter, SstWriterBuilder};
+use engine::rocks::{DBCompressionType, SstWriter, SstWriterBuilder};
 use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
-use engine_rocks::raw::DB;
-use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
-use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
@@ -127,9 +123,9 @@ impl BackupWriter {
         db: Arc<DB>,
         name: &str,
         limiter: Limiter,
-        compression_type: Option<SstCompressionType>,
+        compression_type: Option<DBCompressionType>,
     ) -> Result<BackupWriter> {
-        let default = RocksSstWriterBuilder::new()
+        let default = SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(db.clone())
@@ -227,9 +223,9 @@ impl BackupRawKVWriter {
         name: &str,
         cf: CfName,
         limiter: Limiter,
-        compression_type: Option<SstCompressionType>,
+        compression_type: Option<DBCompressionType>,
     ) -> Result<BackupRawKVWriter> {
-        let writer = RocksSstWriterBuilder::new()
+        let writer = SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
             .set_db(db)

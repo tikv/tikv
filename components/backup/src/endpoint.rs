@@ -8,9 +8,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use configuration::Configuration;
-use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOption, SstCompressionType, DATA_KEY_PREFIX_LEN};
+use engine::{name_to_cf, CfName, IterOption, SstCompressionType, DATA_KEY_PREFIX_LEN, DB};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -28,6 +26,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use crate::metrics::*;
 use crate::*;
+use engine::rocks::DBCompressionType;
 
 const WORKER_TAKE_RANGE: usize = 6;
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -782,11 +781,11 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 }
 
 // convert BackupCompresionType to rocks db DBCompressionType
-fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
+fn to_sst_compression_type(ct: CompressionType) -> Option<DBCompressionType> {
     match ct {
-        CompressionType::Lz4 => Some(SstCompressionType::Lz4),
-        CompressionType::Snappy => Some(SstCompressionType::Snappy),
-        CompressionType::Zstd => Some(SstCompressionType::Zstd),
+        CompressionType::Lz4 => Some(DBCompressionType::Lz4),
+        CompressionType::Snappy => Some(DBCompressionType::Snappy),
+        CompressionType::Zstd => Some(DBCompressionType::Zstd),
         CompressionType::Unknown => None,
     }
 }
