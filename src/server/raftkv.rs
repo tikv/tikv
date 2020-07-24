@@ -2,9 +2,8 @@
 
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CfName;
-use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{Peekable, TablePropertiesExt};
+use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot, TablePropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -20,7 +19,8 @@ use txn_types::{Key, TxnExtra, Value};
 use super::metrics::*;
 use crate::storage::kv::{
     write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, Iterator as EngineIterator, Modify, ScanMode, Snapshot, WriteData,
+    ErrorInner as KvErrorInner, Iterator as EngineIterator, Modify, ScanMode,
+    Snapshot as EngineSnapshot, WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
@@ -149,8 +149,8 @@ fn on_read_result(
     mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes>) {
-    // TODO(5kbpers): set ExtraOp for cb_ctx here.
-    let cb_ctx = new_ctx(&read_resp.response);
+    let mut cb_ctx = new_ctx(&read_resp.response);
+    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
     }
@@ -446,8 +446,8 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot<RocksSnapshot> {
-    type Iter = RegionIterator<RocksSnapshot>;
+impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
+    type Iter = RegionIterator<S>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -462,6 +462,14 @@ impl Snapshot for RegionSnapshot<RocksSnapshot> {
             "injected error for get_cf"
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
+            "injected error for get_cf"
+        )));
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -503,7 +511,7 @@ impl Snapshot for RegionSnapshot<RocksSnapshot> {
     }
 }
 
-impl EngineIterator for RegionIterator<RocksSnapshot> {
+impl<S: Snapshot> EngineIterator for RegionIterator<S> {
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }
