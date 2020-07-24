@@ -22,8 +22,7 @@ pub trait CasualRouter<EK>
 where
     EK: KvEngine,
 {
-    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>)
-        -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -46,11 +45,7 @@ where
     EK: KvEngine,
 {
     #[inline]
-    fn send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, RocksEngine>,
-    ) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -59,9 +54,15 @@ where
     }
 }
 
-impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK, RocksEngine> where EK: KvEngine {
+impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK, RocksEngine>
+where
+    EK: KvEngine,
+{
     #[inline]
-    fn send(&self, cmd: RaftCommand<EK::Snapshot>) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
+    fn send(
+        &self,
+        cmd: RaftCommand<EK::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
         self.send_raft_command(cmd)
     }
 }
@@ -83,11 +84,7 @@ impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK, RocksEngi
 where
     EK: KvEngine,
 {
-    fn send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, RocksEngine>,
-    ) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

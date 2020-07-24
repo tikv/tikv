@@ -555,10 +555,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(
-        &mut self,
-        peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>],
-    ) {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -678,8 +675,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient>
-    PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm> for RaftPoller<T, C>
+impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
+    for RaftPoller<T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -734,10 +731,7 @@ impl<T: Transport, C: PdClient>
         expected_msg_count
     }
 
-    fn handle_normal(
-        &mut self,
-        peer: &mut PeerFsm<RocksEngine, RocksEngine>,
-    ) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine, RocksEngine>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -993,8 +987,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
-    for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksEngine>, StoreFsm> for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -1305,10 +1298,7 @@ impl RaftBatchSystem {
 
 pub fn create_raft_batch_system(
     cfg: &Config,
-) -> (
-    RaftRouter<RocksEngine, RocksEngine>,
-    RaftBatchSystem,
-) {
+) -> (RaftRouter<RocksEngine, RocksEngine>, RaftBatchSystem) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -2225,9 +2215,7 @@ fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(
-    ch: RaftRouter<RocksEngine, RocksEngine>,
-) -> CompactionListener {
+pub fn new_compaction_listener(ch: RaftRouter<RocksEngine, RocksEngine>) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();

@@ -19,7 +19,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;

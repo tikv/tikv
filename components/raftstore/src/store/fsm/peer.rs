@@ -148,10 +148,7 @@ where
     }
 }
 
-pub type SenderFsmPair<EK, ER> = (
-    LooseBoundedSender<PeerMsg<EK, ER>>,
-    Box<PeerFsm<EK, ER>>,
-);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK, ER>>, Box<PeerFsm<EK, ER>>);
 
 impl<EK, ER> PeerFsm<EK, ER>
 where

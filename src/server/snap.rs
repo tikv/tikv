@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;

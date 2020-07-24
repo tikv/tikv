@@ -974,7 +974,7 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::StatusServer;
     use configuration::Configuration;
-    use engine_rocks::{RocksEngine};
+    use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;

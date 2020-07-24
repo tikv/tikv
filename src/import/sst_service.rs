@@ -19,7 +19,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;

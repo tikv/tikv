@@ -9,8 +9,8 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::{RocksEngine};
-use engine_traits::{KvEngine};
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use raft::SnapshotStatus;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
@@ -98,7 +98,7 @@ pub struct RaftStoreBlackHole;
 
 impl<EK> RaftStoreRouter<EK> for RaftStoreBlackHole
 where
-    EK: KvEngine
+    EK: KvEngine,
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
@@ -122,11 +122,7 @@ where
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(
-        &self,
-        _: u64,
-        _: CasualMessage<EK, RocksEngine>,
-    ) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<EK, RocksEngine>) -> RaftStoreResult<()> {
         Ok(())
     }
 }

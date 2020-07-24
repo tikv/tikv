@@ -11,7 +11,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine};
+use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -1165,7 +1165,9 @@ fn send_destroy_peer_message<EK>(
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
-) where EK: KvEngine {
+) where
+    EK: KvEngine,
+{
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());

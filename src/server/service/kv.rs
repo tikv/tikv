@@ -19,7 +19,7 @@ use crate::storage::{
     lock_manager::LockManager,
     Storage, TxnStatus,
 };
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
 use futures::future::Either;
 use futures::{future, Async, Future, Sink, Stream};

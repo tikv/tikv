@@ -462,10 +462,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(
-        &self,
-        node_id: u64,
-    ) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

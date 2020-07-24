@@ -410,10 +410,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(
-        &self,
-        node_id: u64,
-    ) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

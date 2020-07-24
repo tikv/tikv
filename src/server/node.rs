@@ -11,7 +11,7 @@ use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use engine_rocks::{RocksEngine};
+use engine_rocks::RocksEngine;
 use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
