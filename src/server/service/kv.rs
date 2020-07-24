@@ -17,7 +17,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    Storage, TxnStatus,
+    SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
@@ -1624,8 +1624,17 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
 });
-txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (v, resp) {
-    todo!()
+txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (status, resp) {
+    // All possible errors should be extracted by `extract_region_error`.
+    match status.expect("unexpected error") {
+        SecondaryLocksStatus::Locked(locks) => {
+            resp.set_locks(locks.into());
+        },
+        SecondaryLocksStatus::Committed(ts) => {
+            resp.set_commit_ts(ts.into_inner());
+        },
+        SecondaryLocksStatus::RolledBack => {}
+    }
 });
 txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
     match v {

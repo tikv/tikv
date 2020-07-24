@@ -28,7 +28,7 @@ pub use self::{
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, PrewriteResult, StorageCallback, TxnStatus},
+    types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
