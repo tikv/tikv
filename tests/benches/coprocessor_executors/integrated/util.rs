@@ -127,6 +127,7 @@ where
                 black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
+                black_box(false),
             )
             .unwrap()
         })
