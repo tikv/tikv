@@ -9,7 +9,7 @@ use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine};
 use raft::SnapshotStatus;
 use std::cell::RefCell;
@@ -53,7 +53,7 @@ where
     fn significant_send(
         &self,
         region_id: u64,
-        msg: SignificantMsg<RocksSnapshot>,
+        msg: SignificantMsg<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
@@ -89,7 +89,7 @@ where
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksEngine, EK::Snapshot>,
+        msg: CasualMessage<EK, RocksEngine, EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 }
 
@@ -116,7 +116,7 @@ where
     }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg<EK::Snapshot>) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -125,7 +125,7 @@ where
     fn casual_send(
         &self,
         _: u64,
-        _: CasualMessage<RocksEngine, RocksEngine, EK::Snapshot>,
+        _: CasualMessage<EK, RocksEngine, EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -138,7 +138,7 @@ pub struct ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
-    router: RaftRouter<RocksEngine, RocksEngine, E::Snapshot>,
+    router: RaftRouter<E, RocksEngine, E::Snapshot>,
     local_reader: RefCell<LocalReader<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>>,
 }
 
@@ -160,7 +160,7 @@ where
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<RocksEngine, RocksEngine, E::Snapshot>,
+        router: RaftRouter<E, RocksEngine, E::Snapshot>,
         reader: LocalReader<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>,
     ) -> ServerRaftStoreRouter<E> {
         let local_reader = RefCell::new(reader);
@@ -239,7 +239,7 @@ where
     fn significant_send(
         &self,
         region_id: u64,
-        msg: SignificantMsg<RocksSnapshot>,
+        msg: SignificantMsg<E::Snapshot>,
     ) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
@@ -256,7 +256,7 @@ where
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksEngine, E::Snapshot>,
+        msg: CasualMessage<E, RocksEngine, E::Snapshot>,
     ) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
