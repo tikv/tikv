@@ -410,7 +410,7 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<RocksEngine, RocksEngine, EK::Snapshot>,
+    router: RaftRouter<EK, RocksEngine, EK::Snapshot>,
     db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -435,7 +435,7 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<RocksEngine, RocksEngine, EK::Snapshot>,
+        router: RaftRouter<EK, RocksEngine, EK::Snapshot>,
         db: EK,
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
@@ -1132,15 +1132,15 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<S>(
-    router: &RaftRouter<RocksEngine, RocksEngine, S>,
+fn send_admin_request<EK>(
+    router: &RaftRouter<EK, RocksEngine, EK::Snapshot>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<S>,
+    callback: Callback<EK::Snapshot>,
 ) where
-    S: Snapshot,
+    EK: KvEngine,
 {
     let cmd_type = request.get_cmd_type();
 
