@@ -279,7 +279,7 @@ mod tests {
         thread::sleep(TICK_INTERVAL * 2);
         assert!(rx.try_recv().is_err());
 
-        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 100);
         assert_eq!(rx.recv_timeout(Duration::from_micros(100)).unwrap(), 0);
         assert!(rx.try_recv().is_err());
 
@@ -288,7 +288,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         // Tick is emitted since long enough time has passed
-        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 100);
         assert_eq!(rx.recv_timeout(Duration::from_micros(100)).unwrap(), 1);
         assert!(rx.try_recv().is_err());
 
