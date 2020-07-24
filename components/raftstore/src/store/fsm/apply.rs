@@ -301,18 +301,18 @@ where
     }
 }
 
-pub enum Notifier<S>
+pub enum Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    Router(RaftRouter<S>),
+    Router(RaftRouter<EK, RocksEngine>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<S>>),
+    Sender(Sender<PeerMsg<EK, RocksEngine>>),
 }
 
-impl<S> Clone for Notifier<S>
+impl<EK> Clone for Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -323,11 +323,11 @@ where
     }
 }
 
-impl<S> Notifier<S>
+impl<EK> Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<EK, RocksEngine>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -348,8 +348,8 @@ where
     host: CoprocessorHost<E>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-    router: ApplyRouter,
-    notifier: Notifier<E::Snapshot>,
+    router: ApplyRouter<RocksEngine>,
+    notifier: Notifier<E>,
     engine: E,
     cbs: MustConsumeVec<ApplyCallback<E>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
@@ -388,8 +388,8 @@ where
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
-        router: ApplyRouter,
-        notifier: Notifier<E::Snapshot>,
+        router: ApplyRouter<RocksEngine>,
+        notifier: Notifier<E>,
         cfg: &Config,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
@@ -2364,7 +2364,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(peer: &Peer) -> Registration {
+    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2539,7 +2539,7 @@ where
         }
     }
 
-    pub fn register(peer: &Peer) -> Msg<E> {
+    pub fn register(peer: &Peer<E, impl KvEngine>) -> Msg<E> {
         Msg::Registration(Registration::new(peer))
     }
 
@@ -2635,7 +2635,9 @@ impl<E> ApplyFsm<E>
 where
     E: KvEngine,
 {
-    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_peer(
+        peer: &Peer<RocksEngine, RocksEngine>,
+    ) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
@@ -3198,16 +3200,16 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksSnapshot>,
-    router: ApplyRouter,
+    sender: Notifier<RocksEngine>,
+    router: ApplyRouter<RocksEngine>,
     _phantom: PhantomData<W>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksSnapshot>,
-        router: ApplyRouter,
+        sender: Notifier<RocksEngine>,
+        router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {
         Builder::<W> {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -3249,26 +3251,38 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter {
-    pub router: BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>,
+pub struct ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
 }
 
-impl Deref for ApplyRouter {
-    type Target = BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>;
+impl<E> Deref for ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
         &self.router
     }
 }
 
-impl DerefMut for ApplyRouter {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+impl<E> DerefMut for ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<RocksEngine>) {
+impl<E> ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3280,7 +3294,7 @@ impl ApplyRouter {
                     );
                     for p in apply.cbs.drain(..) {
                         let cmd =
-                            PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                            PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3362,7 +3376,10 @@ impl DerefMut for ApplyBatchSystem {
 }
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
+    pub fn schedule_all<'a>(
+        &self,
+        peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>,
+    ) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3372,7 +3389,7 @@ impl ApplyBatchSystem {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
+pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
@@ -3392,9 +3409,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{
-        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
-    };
+    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3482,7 +3497,7 @@ mod tests {
         assert_eq!(should_write_to_engine(&cmd), true);
     }
 
-    fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
+    fn validate<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
     where
         F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
     {
@@ -3501,7 +3516,11 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
+    fn batch_messages(
+        router: &ApplyRouter<RocksEngine>,
+        region_id: u64,
+        msgs: Vec<Msg<RocksEngine>>,
+    ) {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -3524,7 +3543,7 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine, RocksEngine>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -4246,9 +4265,11 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
+        let write_batch_max_keys = <RocksEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
+
         let mut props = vec![];
         let mut entries = vec![];
-        for i in 0..WRITE_BATCH_MAX_KEYS {
+        for i in 0..write_batch_max_keys {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
@@ -4265,14 +4286,14 @@ mod tests {
                 entries,
                 11,
                 3,
-                WRITE_BATCH_MAX_KEYS as u64 + 11,
+                write_batch_max_keys as u64 + 11,
                 props,
             )),
         );
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..write_batch_max_keys {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = write_batch_max_keys + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
@@ -4630,7 +4651,7 @@ mod tests {
         let (capture_tx, capture_rx) = mpsc::channel();
         let epoch = Rc::new(RefCell::new(reg.region.get_region_epoch().to_owned()));
         let epoch_ = epoch.clone();
-        let mut exec_split = |router: &ApplyRouter, reqs| {
+        let mut exec_split = |router: &ApplyRouter<RocksEngine>, reqs| {
             let epoch = epoch_.borrow();
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)

@@ -6126,7 +6126,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Apply log duration per server",
+          "title": "99% Apply log duration per server",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -6288,7 +6288,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Append log duration per server",
+          "title": "99% Append log duration per server",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -6442,7 +6442,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Commit log duration per server",
+          "title": "99% Commit log duration per server",
           "tooltip": {
             "shared": true,
             "sort": 0,

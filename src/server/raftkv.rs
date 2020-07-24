@@ -105,7 +105,7 @@ impl From<RaftServerError> for KvError {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter<RocksSnapshot> + 'static> {
+pub struct RaftKv<S: RaftStoreRouter<RocksEngine> + 'static> {
     router: S,
     engine: RocksEngine,
 }
@@ -162,7 +162,7 @@ fn on_read_result(
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> RaftKv<S> {
+impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
         RaftKv { router, engine }
@@ -259,19 +259,19 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Display for RaftKv<S> {
+impl<S: RaftStoreRouter<RocksEngine>> Display for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Debug for RaftKv<S> {
+impl<S: RaftStoreRouter<RocksEngine>> Debug for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
+impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
     type Snap = RegionSnapshot<RocksSnapshot>;
 
     fn kv_engine(&self) -> RocksEngine {
