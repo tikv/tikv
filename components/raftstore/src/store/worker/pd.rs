@@ -11,7 +11,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::{KvEngine};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -410,7 +410,7 @@ where
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<EK, RocksEngine, EK::Snapshot>,
+    router: RaftRouter<EK, RocksEngine>,
     db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -435,7 +435,7 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<EK, RocksEngine, EK::Snapshot>,
+        router: RaftRouter<EK, RocksEngine>,
         db: EK,
         scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
@@ -1133,7 +1133,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request<EK>(
-    router: &RaftRouter<EK, RocksEngine, EK::Snapshot>,
+    router: &RaftRouter<EK, RocksEngine>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -1161,7 +1161,7 @@ fn send_admin_request<EK>(
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message<EK>(
-    router: &RaftRouter<EK, RocksEngine, impl Snapshot>,
+    router: &RaftRouter<EK, RocksEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

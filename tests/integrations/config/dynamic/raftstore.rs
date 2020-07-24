@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -63,7 +63,7 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+    RaftRouter<RocksEngine, RocksEngine>,
     ApplyRouter<RocksEngine>,
     RaftBatchSystem,
 ) {
@@ -117,7 +117,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {

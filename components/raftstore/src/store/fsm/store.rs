@@ -8,7 +8,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
-    Snapshot, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -150,20 +150,18 @@ impl StoreMeta {
     }
 }
 
-pub struct RaftRouter<EK, ER, S>
+pub struct RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
-    pub router: BatchRouter<PeerFsm<EK, ER, S>, StoreFsm>,
+    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
 }
 
-impl<EK, ER, S> Clone for RaftRouter<EK, ER, S>
+impl<EK, ER> Clone for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     fn clone(&self) -> Self {
         RaftRouter {
@@ -172,24 +170,22 @@ where
     }
 }
 
-impl<EK, ER, S> Deref for RaftRouter<EK, ER, S>
+impl<EK, ER> Deref for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER, S>, StoreFsm>;
+    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER, S>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
         &self.router
     }
 }
 
-impl<EK, ER, S> RaftRouter<EK, ER, S>
+impl<EK, ER> RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     pub fn send_raft_message(
         &self,
@@ -220,8 +216,8 @@ where
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<S>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+        cmd: RaftCommand<EK::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
@@ -266,7 +262,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
-    pub router: RaftRouter<EK, ER, EK::Snapshot>,
+    pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
@@ -561,7 +557,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     fn handle_raft_ready(
         &mut self,
-        peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>>],
+        peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>],
     ) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
@@ -683,7 +679,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 }
 
 impl<T: Transport, C: PdClient>
-    PollHandler<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>, StoreFsm> for RaftPoller<T, C>
+    PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm> for RaftPoller<T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -740,7 +736,7 @@ impl<T: Transport, C: PdClient>
 
     fn handle_normal(
         &mut self,
-        peer: &mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>,
+        peer: &mut PeerFsm<RocksEngine, RocksEngine>,
     ) -> Option<usize> {
         let mut expected_msg_count = None;
 
@@ -784,7 +780,7 @@ impl<T: Transport, C: PdClient>
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -815,7 +811,7 @@ pub struct RaftPollerBuilder<T, C> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
     pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     apply_router: ApplyRouter<RocksEngine>,
-    pub router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+    pub router: RaftRouter<RocksEngine, RocksEngine>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
@@ -997,7 +993,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>, StoreFsm>
+impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
     for RaftPollerBuilder<T, C>
 where
     T: Transport + 'static,
@@ -1069,15 +1065,15 @@ struct Workers {
 }
 
 pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>, StoreFsm>,
+    system: BatchSystem<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>,
     apply_router: ApplyRouter<RocksEngine>,
     apply_system: ApplyBatchSystem,
-    router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+    router: RaftRouter<RocksEngine, RocksEngine>,
     workers: Option<Workers>,
 }
 
 impl RaftBatchSystem {
-    pub fn router(&self) -> RaftRouter<RocksEngine, RocksEngine, RocksSnapshot> {
+    pub fn router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
         self.router.clone()
     }
 
@@ -1310,7 +1306,7 @@ impl RaftBatchSystem {
 pub fn create_raft_batch_system(
     cfg: &Config,
 ) -> (
-    RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+    RaftRouter<RocksEngine, RocksEngine>,
     RaftBatchSystem,
 ) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
@@ -2230,7 +2226,7 @@ fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
 }
 
 pub fn new_compaction_listener(
-    ch: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+    ch: RaftRouter<RocksEngine, RocksEngine>,
 ) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {

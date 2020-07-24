@@ -355,7 +355,7 @@ mod tests {
         fn casual_send(
             &self,
             _: u64,
-            _: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>,
+            _: CasualMessage<RocksEngine, RocksEngine>,
         ) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

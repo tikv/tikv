@@ -22,7 +22,7 @@ pub trait CasualRouter<EK>
 where
     EK: KvEngine,
 {
-    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine, EK::Snapshot>)
+    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>)
         -> Result<()>;
 }
 
@@ -41,7 +41,7 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<EK> CasualRouter<EK> for RaftRouter<EK, RocksEngine, EK::Snapshot>
+impl<EK> CasualRouter<EK> for RaftRouter<EK, RocksEngine>
 where
     EK: KvEngine,
 {
@@ -49,7 +49,7 @@ where
     fn send(
         &self,
         region_id: u64,
-        msg: CasualMessage<EK, RocksEngine, EK::Snapshot>,
+        msg: CasualMessage<EK, RocksEngine>,
     ) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
@@ -59,14 +59,14 @@ where
     }
 }
 
-impl<EK, S> ProposalRouter<S> for RaftRouter<EK, RocksEngine, S> where EK: KvEngine, S: Snapshot {
+impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK, RocksEngine> where EK: KvEngine {
     #[inline]
-    fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
+    fn send(&self, cmd: RaftCommand<EK::Snapshot>) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl<S: Snapshot> StoreRouter for RaftRouter<RocksEngine, RocksEngine, S> {
+impl StoreRouter for RaftRouter<RocksEngine, RocksEngine> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {
@@ -79,14 +79,14 @@ impl<S: Snapshot> StoreRouter for RaftRouter<RocksEngine, RocksEngine, S> {
     }
 }
 
-impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK, RocksEngine, EK::Snapshot>)>
+impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK, RocksEngine>)>
 where
     EK: KvEngine,
 {
     fn send(
         &self,
         region_id: u64,
-        msg: CasualMessage<EK, RocksEngine, EK::Snapshot>,
+        msg: CasualMessage<EK, RocksEngine>,
     ) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),

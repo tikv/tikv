@@ -89,7 +89,7 @@ where
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<EK, RocksEngine, EK::Snapshot>,
+        msg: CasualMessage<EK, RocksEngine>,
     ) -> RaftStoreResult<()>;
 }
 
@@ -125,26 +125,24 @@ where
     fn casual_send(
         &self,
         _: u64,
-        _: CasualMessage<EK, RocksEngine, EK::Snapshot>,
+        _: CasualMessage<EK, RocksEngine>,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
-#[allow(clippy::type_complexity)] // FIXME: should be removable after the E::Snapshot
-                                  // typarams below are removed
-pub struct ServerRaftStoreRouter<E>
+pub struct ServerRaftStoreRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    router: RaftRouter<E, RocksEngine, E::Snapshot>,
-    local_reader: RefCell<LocalReader<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>>,
+    router: RaftRouter<EK, RocksEngine>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK, RocksEngine>, EK>>,
 }
 
-impl<E> Clone for ServerRaftStoreRouter<E>
+impl<EK> Clone for ServerRaftStoreRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
@@ -154,15 +152,15 @@ where
     }
 }
 
-impl<E> ServerRaftStoreRouter<E>
+impl<EK> ServerRaftStoreRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<E, RocksEngine, E::Snapshot>,
-        reader: LocalReader<RaftRouter<RocksEngine, RocksEngine, E::Snapshot>, E>,
-    ) -> ServerRaftStoreRouter<E> {
+        router: RaftRouter<EK, RocksEngine>,
+        reader: LocalReader<RaftRouter<EK, RocksEngine>, EK>,
+    ) -> ServerRaftStoreRouter<EK> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -188,9 +186,9 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E>
+impl<EK> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
@@ -199,7 +197,7 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<E::Snapshot>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let region_id = cmd.request.get_header().get_region_id();
         self.router
@@ -211,7 +209,7 @@ where
         &self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.read(read_id, req, cb);
@@ -227,7 +225,7 @@ where
         &self,
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
         let region_id = cmd.request.get_header().get_region_id();
@@ -239,7 +237,7 @@ where
     fn significant_send(
         &self,
         region_id: u64,
-        msg: SignificantMsg<E::Snapshot>,
+        msg: SignificantMsg<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
@@ -256,7 +254,7 @@ where
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<E, RocksEngine, E::Snapshot>,
+        msg: CasualMessage<EK, RocksEngine>,
     ) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))

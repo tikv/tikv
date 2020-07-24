@@ -231,11 +231,10 @@ where
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<EK, ER, S>
+pub enum CasualMessage<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     /// Split the target region into several partitions.
     SplitRegion {
@@ -243,7 +242,7 @@ where
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<S>,
+        callback: Callback<EK::Snapshot>,
     },
 
     /// Hash result of ComputeHash command.
@@ -281,14 +280,13 @@ where
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER, S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER>) + Send + 'static>),
 }
 
-impl<EK, ER, S> fmt::Debug for CasualMessage<EK, ER, S>
+impl<EK, ER> fmt::Debug for CasualMessage<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -387,7 +385,7 @@ where
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK, ER, S>),
+    CasualMessage(CasualMessage<EK, ER>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.

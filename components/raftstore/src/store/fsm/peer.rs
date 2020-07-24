@@ -84,11 +84,10 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<EK, ER, S>
+pub struct PeerFsm<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
@@ -105,8 +104,8 @@ where
     stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<EK, ER, S>>>,
-    pub receiver: Receiver<PeerMsg<EK, ER, S>>,
+    mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
+    pub receiver: Receiver<PeerMsg<EK, ER, EK::Snapshot>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
@@ -125,11 +124,10 @@ where
     txn_extra: TxnExtra,
 }
 
-impl<EK, ER, S> Drop for PeerFsm<EK, ER, S>
+impl<EK, ER> Drop for PeerFsm<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     fn drop(&mut self) {
         self.peer.stop();
@@ -152,14 +150,13 @@ where
 
 pub type SenderFsmPair<EK, ER, S> = (
     LooseBoundedSender<PeerMsg<EK, ER, S>>,
-    Box<PeerFsm<EK, ER, S>>,
+    Box<PeerFsm<EK, ER>>,
 );
 
-impl<EK, ER, S> PeerFsm<EK, ER, S>
+impl<EK, ER> PeerFsm<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
@@ -170,7 +167,7 @@ where
         sched: Scheduler<RegionTask<EK::Snapshot>>,
         engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<EK, ER, S>> {
+    ) -> Result<SenderFsmPair<EK, ER, EK::Snapshot>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -218,7 +215,7 @@ where
         engines: KvEngines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<EK, ER, S>> {
+    ) -> Result<SenderFsmPair<EK, ER, EK::Snapshot>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -391,13 +388,12 @@ where
     }
 }
 
-impl<EK, ER, S> Fsm for PeerFsm<EK, ER, S>
+impl<EK, ER> Fsm for PeerFsm<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
-    type Message = PeerMsg<EK, ER, S>;
+    type Message = PeerMsg<EK, ER, EK::Snapshot>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -429,7 +425,7 @@ where
     EK: KvEngine,
     ER: KvEngine,
 {
-    fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
+    fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
@@ -439,7 +435,7 @@ where
     ER: KvEngine,
 {
     pub fn new(
-        fsm: &'a mut PeerFsm<EK, ER, EK::Snapshot>,
+        fsm: &'a mut PeerFsm<EK, ER>,
         ctx: &'a mut PollContext<EK, ER, T, C>,
     ) -> PeerFsmDelegate<'a, EK, ER, T, C> {
         PeerFsmDelegate { fsm, ctx }
@@ -515,7 +511,7 @@ where
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER, EK::Snapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,

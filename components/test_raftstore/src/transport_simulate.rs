@@ -218,7 +218,7 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksEngine, RocksSnapshot>,
+        msg: CasualMessage<RocksEngine, RocksEngine>,
     ) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }

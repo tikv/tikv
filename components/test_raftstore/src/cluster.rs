@@ -52,7 +52,7 @@ pub trait Simulator {
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -68,7 +68,7 @@ pub trait Simulator {
     fn get_router(
         &self,
         node_id: u64,
-    ) -> Option<RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>>;
+    ) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -187,7 +187,7 @@ impl<T: Simulator> Cluster<T> {
 
     fn create_engine(
         &mut self,
-        router: Option<RaftRouter<RocksEngine, RocksEngine, RocksSnapshot>>,
+        router: Option<RaftRouter<RocksEngine, RocksEngine>>,
     ) {
         let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
         self.dbs.push(engines);
@@ -1355,7 +1355,7 @@ impl<T: Simulator> Cluster<T> {
             &router,
             region_id,
             CasualMessage::AccessPeer(Box::new(
-                move |peer: &mut PeerFsm<RocksEngine, RocksEngine, RocksSnapshot>| {
+                move |peer: &mut PeerFsm<RocksEngine, RocksEngine>| {
                     let idx = peer.peer.raft_group.store().committed_index();
                     peer.peer.raft_group.request_snapshot(idx).unwrap();
                     debug!("{} request snapshot at {}", idx, peer.peer.tag);
