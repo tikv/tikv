@@ -8,13 +8,9 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-<<<<<<< HEAD
-use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
-=======
 use configuration::Configuration;
 use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
+use engine_traits::{name_to_cf, CfName, IterOption, SstCompressionType, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -266,14 +262,9 @@ impl BackupRange {
         db: Arc<DB>,
         storage: &LimitedStorage,
         file_name: String,
-<<<<<<< HEAD
         backup_ts: u64,
         start_ts: u64,
-=======
-        backup_ts: TimeStamp,
-        start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer =
             match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
@@ -970,12 +961,8 @@ pub mod tests {
                         limiter: Limiter::new(INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
-<<<<<<< HEAD
                         cf: engine::CF_DEFAULT,
-=======
-                        cf: engine_traits::CF_DEFAULT,
                         compress_type: CompressionType::Unknown,
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
                     },
                     resp: tx,
                     concurrency: 4,

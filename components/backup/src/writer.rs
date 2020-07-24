@@ -3,15 +3,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-<<<<<<< HEAD
 use engine::rocks::{SstWriter, SstWriterBuilder};
 use engine::{CfName, CF_DEFAULT, CF_WRITE, DB};
-=======
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
 use external_storage::ExternalStorage;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
@@ -126,13 +123,6 @@ pub struct BackupWriter {
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-<<<<<<< HEAD
-    pub fn new(db: Arc<DB>, name: &str, limiter: Limiter) -> Result<BackupWriter> {
-        let default = SstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_cf(CF_DEFAULT)
-            .set_db(db.clone())
-=======
     pub fn new(
         db: Arc<DB>,
         name: &str,
@@ -142,19 +132,14 @@ impl BackupWriter {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
-            .set_db(RocksEngine::from_ref(&db))
+            .set_db(db.clone())
             .set_compression_type(compression_type)
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
             .build(name)?;
         let write = SstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
-<<<<<<< HEAD
             .set_db(db.clone())
-=======
-            .set_db(RocksEngine::from_ref(&db))
             .set_compression_type(compression_type)
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -237,13 +222,6 @@ pub struct BackupRawKVWriter {
 
 impl BackupRawKVWriter {
     /// Create a new BackupRawKVWriter.
-<<<<<<< HEAD
-    pub fn new(db: Arc<DB>, name: &str, cf: CfName, limiter: Limiter) -> Result<BackupRawKVWriter> {
-        let writer = SstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_cf(cf)
-            .set_db(db)
-=======
     pub fn new(
         db: Arc<DB>,
         name: &str,
@@ -254,9 +232,8 @@ impl BackupRawKVWriter {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf)
-            .set_db(RocksEngine::from_ref(&db))
+            .set_db(db)
             .set_compression_type(compression_type)
->>>>>>> 6880ca9... backup: support explicitly set sst compression type (#8200)
             .build(name)?;
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
