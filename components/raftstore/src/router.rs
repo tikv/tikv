@@ -10,22 +10,22 @@ use crate::store::{
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::{KvEngine};
 use raft::SnapshotStatus;
 use std::cell::RefCell;
 use tikv_util::time::ThreadReadId;
 use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter<S>: Send + Clone
+pub trait RaftStoreRouter<EK>: Send + Clone
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<S>) -> RaftStoreResult<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
         self.send_command_txn_extra(req, TxnExtra::default(), cb)
     }
 
@@ -34,7 +34,7 @@ where
         &self,
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
-        cb: Callback<S>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
@@ -42,7 +42,7 @@ where
         &self,
         _read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<S>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         self.send_command(req, cb)
     }
@@ -89,16 +89,16 @@ where
     fn casual_send(
         &self,
         region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksEngine, S>,
+        msg: CasualMessage<RocksEngine, RocksEngine, EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
-impl<S> RaftStoreRouter<S> for RaftStoreBlackHole
+impl<EK> RaftStoreRouter<EK> for RaftStoreBlackHole
 where
-    S: Snapshot,
+    EK: KvEngine
 {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
@@ -110,7 +110,7 @@ where
         &self,
         _: RaftCmdRequest,
         _: TxnExtra,
-        _: Callback<S>,
+        _: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -125,7 +125,7 @@ where
     fn casual_send(
         &self,
         _: u64,
-        _: CasualMessage<RocksEngine, RocksEngine, S>,
+        _: CasualMessage<RocksEngine, RocksEngine, EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -188,7 +188,7 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<E> RaftStoreRouter<E::Snapshot> for ServerRaftStoreRouter<E>
+impl<E> RaftStoreRouter<E> for ServerRaftStoreRouter<E>
 where
     E: KvEngine,
 {
