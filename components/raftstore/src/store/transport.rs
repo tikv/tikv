@@ -59,7 +59,7 @@ where
     }
 }
 
-impl<S: Snapshot> ProposalRouter<S> for RaftRouter<RocksEngine, RocksEngine, S> {
+impl<EK, S> ProposalRouter<S> for RaftRouter<EK, RocksEngine, S> where EK: KvEngine, S: Snapshot {
     #[inline]
     fn send(&self, cmd: RaftCommand<S>) -> std::result::Result<(), TrySendError<RaftCommand<S>>> {
         self.send_raft_command(cmd)
