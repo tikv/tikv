@@ -16,7 +16,7 @@ use txn_types::TxnExtra;
 #[allow(clippy::type_complexity)]
 pub struct MockRaftStoreRouter {
     senders: Arc<
-        Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine, RocksEngine, RocksSnapshot>>>>,
+        Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine, RocksEngine>>>>,
     >,
 }
 
@@ -30,7 +30,7 @@ impl MockRaftStoreRouter {
         &self,
         region_id: u64,
         cap: usize,
-    ) -> Receiver<PeerMsg<RocksEngine, RocksEngine, RocksSnapshot>> {
+    ) -> Receiver<PeerMsg<RocksEngine, RocksEngine>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx

@@ -358,11 +358,10 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK, ER, S>
+pub enum PeerMsg<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
@@ -371,12 +370,12 @@ where
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<S>),
+    RaftCommand(RaftCommand<EK::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<S> },
+    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -392,11 +391,10 @@ where
     UpdateReplicationMode,
 }
 
-impl<EK, ER, S> fmt::Debug for PeerMsg<EK, ER, S>
+impl<EK, ER> fmt::Debug for PeerMsg<EK, ER>
 where
     EK: KvEngine,
     ER: KvEngine,
-    S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -105,7 +105,7 @@ where
     has_ready: bool,
     early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    pub receiver: Receiver<PeerMsg<EK, ER, EK::Snapshot>>,
+    pub receiver: Receiver<PeerMsg<EK, ER>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
@@ -149,7 +149,7 @@ where
 }
 
 pub type SenderFsmPair<EK, ER> = (
-    LooseBoundedSender<PeerMsg<EK, ER, <EK as KvEngine>::Snapshot>>,
+    LooseBoundedSender<PeerMsg<EK, ER>>,
     Box<PeerFsm<EK, ER>>,
 );
 
@@ -393,7 +393,7 @@ where
     EK: KvEngine,
     ER: KvEngine,
 {
-    type Message = PeerMsg<EK, ER, EK::Snapshot>;
+    type Message = PeerMsg<EK, ER>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -441,7 +441,7 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER, EK::Snapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
