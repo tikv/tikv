@@ -78,15 +78,18 @@ mod profiling {
     use super::{ProfError, ProfResult};
 
     // C string should end with a '\0'.
-    const PROF_ACTIVE: &'static [u8] = b"prof.active\0";
-    const PROF_DUMP: &'static [u8] = b"prof.dump\0";
+    const PROF_ACTIVE: &[u8] = b"prof.active\0";
+    const PROF_DUMP: &[u8] = b"prof.dump\0";
 
     pub fn activate_prof() -> ProfResult<()> {
         info!("start profiler");
         unsafe {
-            if let Err(e) = tikv_jemallocator::mallctl_set(PROF_ACTIVE, true) {
+            if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, true) {
                 error!("failed to activate profiling: {}", e);
-                return Err(ProfError::JemallocError(e));
+                return Err(ProfError::JemallocError(format!(
+                    "failed to activate profiling: {}",
+                    e
+                )));
             }
         }
         Ok(())
@@ -95,9 +98,12 @@ mod profiling {
     pub fn deactivate_prof() -> ProfResult<()> {
         info!("stop profiler");
         unsafe {
-            if let Err(e) = tikv_jemallocator::mallctl_set(PROF_ACTIVE, false) {
+            if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, false) {
                 error!("failed to deactivate profiling: {}", e);
-                return Err(ProfError::JemallocError(e));
+                return Err(ProfError::JemallocError(format!(
+                    "failed to deactivate profiling: {}",
+                    e
+                )));
             }
         }
         Ok(())
@@ -107,11 +113,14 @@ mod profiling {
     pub fn dump_prof(path: &str) -> ProfResult<()> {
         let mut bytes = CString::new(path)?.into_bytes_with_nul();
         let ptr = bytes.as_mut_ptr() as *mut c_char;
-        let res = unsafe { tikv_jemallocator::mallctl_set(PROF_DUMP, ptr) };
+        let res = unsafe { tikv_jemalloc_ctl::raw::update(PROF_DUMP, ptr) };
         match res {
             Err(e) => {
                 error!("failed to dump the profile to {:?}: {}", path, e);
-                Err(ProfError::JemallocError(e))
+                Err(ProfError::JemallocError(format!(
+                    "failed to dump the profile to {:?}: {}",
+                    path, e
+                )))
             }
             Ok(_) => {
                 info!("dump profile to {}", path);
@@ -128,14 +137,12 @@ mod profiling {
         const OPT_PROF: &'static [u8] = b"opt.prof\0";
 
         fn is_profiling_on() -> bool {
-            let mut prof = false;
-            let res = unsafe { tikv_jemallocator::mallctl_fetch(OPT_PROF, &mut prof) };
-            match res {
+            match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
                 Err(e) => {
                     // Shouldn't be possible since mem-profiling is set
                     panic!("is_profiling_on: {:?}", e);
                 }
-                Ok(_) => prof,
+                Ok(prof) => prof,
             }
         }
 
