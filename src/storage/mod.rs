@@ -45,7 +45,7 @@ use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use pd_client::{DummyPdClient, PdClient};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -440,7 +440,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         mut ctx: Context,
         start_key: Key,
         end_key: Option<Key>,
-        limit: usize,
+        mut limit: usize,
+        sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
@@ -479,10 +480,17 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 {
                     let begin_instant = Instant::now_coarse();
 
+                    let isolation_level = if sample_step > 0 {
+                        limit *= sample_step;
+                        IsolationLevel::Rc
+                    } else {
+                        ctx.get_isolation_level()
+                    };
+
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
-                        ctx.get_isolation_level(),
+                        isolation_level,
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
@@ -496,7 +504,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         scanner =
                             snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
-                    let res = scanner.scan(limit);
+                    let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
@@ -1628,6 +1636,7 @@ mod tests {
                     Key::from_raw(b"x"),
                     None,
                     1000,
+                    0,
                     1.into(),
                     false,
                     false,
@@ -1701,6 +1710,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1716,6 +1726,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1731,6 +1742,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1746,6 +1758,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1761,6 +1774,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1776,6 +1790,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1812,6 +1827,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1831,6 +1847,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1849,6 +1866,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1867,6 +1885,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1886,6 +1905,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1904,6 +1924,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1963,6 +1984,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -1978,6 +2000,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -1993,6 +2016,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2008,6 +2032,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2023,6 +2048,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2038,6 +2064,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2074,6 +2101,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2093,6 +2121,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2108,6 +2137,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2123,6 +2153,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2139,6 +2170,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2154,6 +2186,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,
