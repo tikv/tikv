@@ -18,6 +18,7 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raft_engine::{WriteBatch as RaftWriteBatch,RaftEngine, RaftState as RaftLogState};
 
 use crate::store::fsm::GenSnapTask;
 use crate::store::util::conf_state_from_region;
@@ -313,7 +314,7 @@ impl CacheQueryStats {
 pub trait HandleRaftReadyContext<WK, WR>
 where
     WK: WriteBatch,
-    WR: WriteBatch,
+    WR: RaftWriteBatch,
 {
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
     fn wb_mut(&mut self) -> (&mut WK, &mut WR);
@@ -359,7 +360,7 @@ pub struct InvokeContext {
 }
 
 impl InvokeContext {
-    pub fn new(store: &PeerStorage<impl KvEngine, impl KvEngine>) -> InvokeContext {
+    pub fn new(store: &PeerStorage<impl KvEngine, impl RaftEngine>) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
@@ -412,9 +413,9 @@ impl InvokeContext {
     }
 }
 
-pub fn recover_from_applying_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
-    raft_wb: &mut impl WriteBatch,
+pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
+    raft_wb: &mut ER::WriteBatch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -449,7 +450,7 @@ pub fn recover_from_applying_state(
 }
 
 fn init_applied_index_term(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<impl KvEngine, impl RaftEngine>,
     region: &Region,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
@@ -472,7 +473,7 @@ fn init_applied_index_term(
 }
 
 fn init_raft_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<impl KvEngine, impl RaftEngine>,
     region: &Region,
 ) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
@@ -493,7 +494,7 @@ fn init_raft_state(
 }
 
 fn init_apply_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<impl KvEngine, impl RaftEngine>,
     region: &Region,
 ) -> Result<RaftApplyState> {
     Ok(
@@ -518,7 +519,7 @@ fn init_apply_state(
 
 fn validate_states(
     region_id: u64,
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<impl KvEngine, impl RaftEngine>,
     raft_state: &mut RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<()> {
@@ -565,7 +566,7 @@ fn validate_states(
 }
 
 fn init_last_term(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<impl KvEngine, impl RaftEngine>,
     region: &Region,
     raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
@@ -619,7 +620,7 @@ where
 impl<EK, ER> Storage for PeerStorage<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
@@ -654,7 +655,7 @@ where
 impl<EK, ER> PeerStorage<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
@@ -1139,7 +1140,11 @@ where
         raft_wb: &mut ER::WriteBatch,
     ) -> Result<()> {
         let region_id = self.get_region_id();
-        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
+        let raft_state = RaftLogState {
+            last_index: last_index(&self.raft_state),
+            hard_state: self.raft_state.get_hard_state().clone(),
+        };
+        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &raft_state)?;
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1522,17 +1527,17 @@ pub fn clear_meta<EK, ER>(
     kv_wb: &mut EK::WriteBatch,
     raft_wb: &mut ER::WriteBatch,
     region_id: u64,
-    raft_state: &RaftLocalState,
+    raft_state: &RaftLogState,
 ) -> Result<()>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
 
-    let last_index = last_index(raft_state);
+    let last_index = raft_state.last_index;
     let mut first_index = last_index + 1;
     let begin_log_key = keys::raft_log_key(region_id, 0);
     let end_log_key = keys::raft_log_key(region_id, first_index);

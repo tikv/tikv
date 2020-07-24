@@ -10,6 +10,7 @@ use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
+use raft_engine::RaftEngine;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -87,7 +88,7 @@ pub enum GroupState {
 pub struct PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
@@ -127,7 +128,7 @@ where
 impl<EK, ER> Drop for PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn drop(&mut self) {
         self.peer.stop();
@@ -153,7 +154,7 @@ pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK, ER>>, Box<PeerF
 impl<EK, ER> PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
@@ -388,7 +389,7 @@ where
 impl<EK, ER> Fsm for PeerFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     type Message = PeerMsg<EK, ER>;
 
@@ -420,7 +421,7 @@ where
 pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fsm: &'a mut PeerFsm<EK, ER>,
     ctx: &'a mut PollContext<EK, ER, T, C>,
@@ -429,7 +430,7 @@ where
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         fsm: &'a mut PeerFsm<EK, ER>,
@@ -1871,7 +1872,8 @@ where
         }
     }
 
-    fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
+    fn on_ready_compact_log(&mut self, _first_index: u64, _state: RaftTruncatedState) {
+        /*************************************************************
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
@@ -1893,6 +1895,7 @@ where
                 "err" => %e,
             );
         }
+        *************************************************************/
     }
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
@@ -3429,7 +3432,7 @@ where
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EK::Snapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
@@ -3654,7 +3657,7 @@ fn new_compact_log_request(
 impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.

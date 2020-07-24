@@ -16,6 +16,7 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use raft_engine::RaftEngine;
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
@@ -301,18 +302,20 @@ where
     }
 }
 
-pub enum Notifier<EK>
+pub enum Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    Router(RaftRouter<EK, RocksEngine>),
+    Router(RaftRouter<EK, ER>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<EK, RocksEngine>>),
+    Sender(Sender<PeerMsg<EK, ER>>),
 }
 
-impl<EK> Clone for Notifier<EK>
+impl<EK, ER> Clone for Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -323,11 +326,12 @@ where
     }
 }
 
-impl<EK> Notifier<EK>
+impl<EK, ER> Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<EK, RocksEngine>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<EK, ER>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -2364,7 +2368,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Registration {
+    pub fn new(peer: &Peer<impl KvEngine, impl RaftEngine>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2539,7 +2543,7 @@ where
         }
     }
 
-    pub fn register(peer: &Peer<E, impl KvEngine>) -> Msg<E> {
+    pub fn register(peer: &Peer<E, impl RaftEngine>) -> Msg<E> {
         Msg::Registration(Registration::new(peer))
     }
 
@@ -3206,8 +3210,8 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
-    pub fn new<T, C>(
-        builder: &RaftPollerBuilder<T, C>,
+    pub fn new<T, C, R: RaftEngine>(
+        builder: &RaftPollerBuilder<T, C, R>,
         sender: Notifier<RocksEngine>,
         router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {

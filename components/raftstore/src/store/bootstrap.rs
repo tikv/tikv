@@ -6,7 +6,7 @@ use super::peer_storage::{
 use super::util::new_peer;
 use crate::Result;
 use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt, KvEngine};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -85,7 +85,7 @@ pub fn prepare_bootstrap_cluster(
     let mut raft_wb = engines.raft.write_batch();
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
     engines.raft.write(&raft_wb)?;
-    engines.sync_raft()?;
+    engines.raft.sync()?;
     Ok(())
 }
 
@@ -95,7 +95,7 @@ pub fn clear_prepare_bootstrap_cluster(
     region_id: u64,
 ) -> Result<()> {
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
-    engines.sync_raft()?;
+    engines.raft.sync()?;
 
     let mut wb = engines.kv.write_batch();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));

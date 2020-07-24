@@ -1,7 +1,7 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable, WriteBatch as _,
+    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable, WriteBatch as KvWriteBatch,
     WriteBatchExt, CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
@@ -17,6 +17,10 @@ pub struct RecoveryMode;
 impl RaftEngine for RocksEngine {
     type RecoveryMode = RecoveryMode;
     type WriteBatch = RocksWriteBatch;
+
+    fn write_batch(&self, capacity: usize) -> Self::WriteBatch {
+        RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
+    }
 
     fn recover(&mut self, _: Self::RecoveryMode) -> Result<()> {
         Ok(())
@@ -121,9 +125,12 @@ impl RaftEngine for RocksEngine {
     }
 
     #[allow(unused_variables)]
-    fn consume_write_batch(&self, batch: &mut Self::WriteBatch) -> Result<()> {
+    fn consume_write_batch(&self, batch: &mut Self::WriteBatch, sync_log: bool) -> Result<()> {
         box_try!(self.write(batch));
         batch.clear();
+        if sync_log {
+            self.sync()?;
+        }
         Ok(())
     }
 
@@ -148,10 +155,7 @@ impl RaftEngine for RocksEngine {
         }
         Ok(())
     }
-}
 
-impl WriteBatch for RocksEngine {
-    #[allow(unused_variables)]
     fn append(&mut self, raft_group_id: u64, entries: &mut Vec<Entry>) -> Result<usize> {
         let (total_size, max_size) = entries.iter().fold((0usize, 0usize), |(total, max), e| {
             let size = e.compute_size() as usize;
@@ -161,11 +165,10 @@ impl WriteBatch for RocksEngine {
         let mut wb = RocksWriteBatch::with_capacity(self.as_inner().clone(), total_size);
         let buf = Vec::with_capacity(max_size);
         let ret = wb.append_impl(raft_group_id, entries, buf)?;
-        self.consume_write_batch(&mut wb)?;
+        self.consume_write_batch(&mut wb, false)?;
         return Ok(ret);
     }
 
-    #[allow(unused_variables)]
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftState) -> Result<()> {
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(state.last_index);
@@ -176,7 +179,6 @@ impl WriteBatch for RocksEngine {
 }
 
 impl WriteBatch for RocksWriteBatch {
-    #[allow(unused_variables)]
     fn append(&mut self, raft_group_id: u64, entries: &mut Vec<Entry>) -> Result<usize> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
@@ -185,13 +187,20 @@ impl WriteBatch for RocksWriteBatch {
         Ok(0)
     }
 
-    #[allow(unused_variables)]
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftState) -> Result<()> {
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(state.last_index);
         raft_state.set_hard_state(state.hard_state.clone());
         box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), &raft_state));
         Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        KvWriteBatch::is_empty(self)
+    }
+
+    fn size(&self) -> usize {
+        self.data_size()
     }
 }
 

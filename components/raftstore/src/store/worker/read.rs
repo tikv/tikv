@@ -26,6 +26,7 @@ use crate::Result;
 
 use engine_traits::KvEngine;
 use tikv_util::collections::HashMap;
+use raft_engine::RaftEngine;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
@@ -149,7 +150,7 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer<impl KvEngine, impl KvEngine>) -> ReadDelegate {
+    pub fn from_peer(peer: &Peer<impl KvEngine, impl RaftEngine>) -> ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();

@@ -62,6 +62,7 @@ prost = { version = "0.6", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
+raft-engine = { git = "https://github.com/hicqu/raft-engine", branch = "change-raft-engine-to-trait" }
 rand = "0.7.3"
 serde = "1.0"
 serde_derive = "1.0"

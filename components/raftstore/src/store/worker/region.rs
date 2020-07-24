@@ -26,6 +26,7 @@ use crate::store::{
     self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
 };
 use yatp::pool::{Builder, ThreadPool};
+use raft_engine::RaftEngine;
 use yatp::task::future::TaskCell;
 
 use tikv_util::timer::Timer;
@@ -216,7 +217,7 @@ impl PendingDeleteRanges {
 struct SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     engines: KvEngines<EK, ER>,
     batch_size: usize,
@@ -230,7 +231,7 @@ where
 impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -556,7 +557,7 @@ where
 pub struct Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, ER, R>,
@@ -568,7 +569,7 @@ where
 impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
@@ -629,7 +630,7 @@ where
 impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task<EK::Snapshot>) {
@@ -696,7 +697,7 @@ pub enum Event {
 impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
+use raft_engine::RaftEngine;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteOptions};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -178,7 +179,7 @@ pub struct CheckTickResult {
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
@@ -287,7 +288,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         store_id: u64,
@@ -2655,7 +2656,7 @@ where
 impl<EK, ER> Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
@@ -3015,7 +3016,7 @@ pub trait RequestInspector {
 impl<EK, ER> RequestInspector for Peer<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
@@ -3044,7 +3045,7 @@ where
 impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn get_engine(&self) -> &EK {
         &self.engines.kv
