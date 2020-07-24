@@ -403,15 +403,15 @@ where
     }
 }
 
-pub struct Runner<E, T>
+pub struct Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<RocksEngine, RocksEngine, E::Snapshot>,
-    db: E,
+    router: RaftRouter<RocksEngine, RocksEngine, EK::Snapshot>,
+    db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -421,13 +421,13 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<E>>,
-    stats_monitor: StatsMonitor<E>,
+    scheduler: Scheduler<Task<EK>>,
+    stats_monitor: StatsMonitor<EK>,
 }
 
-impl<E, T> Runner<E, T>
+impl<EK, T> Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -435,12 +435,12 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<RocksEngine, RocksEngine, E::Snapshot>,
-        db: E,
-        scheduler: Scheduler<Task<E>>,
+        router: RaftRouter<RocksEngine, RocksEngine, EK::Snapshot>,
+        db: EK,
+        scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<E, T> {
+    ) -> Runner<EK, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -469,7 +469,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -513,7 +513,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
         if split_keys.is_empty() {
@@ -630,7 +630,7 @@ where
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<E>,
+        store_info: StoreInfo<EK>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -923,12 +923,12 @@ where
     }
 }
 
-impl<E, T> Runnable<Task<E>> for Runner<E, T>
+impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
-    fn run(&mut self, task: Task<E>, handle: &Handle) {
+    fn run(&mut self, task: Task<EK>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
