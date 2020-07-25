@@ -4,7 +4,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{
-    RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
+    RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec,
 };
 use engine_traits::{
     CompactionJobInfo, KvEngine, KvEngines, Mutable,
@@ -1059,14 +1059,14 @@ where
     }
 }
 
-struct Workers {
-    pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
+struct Workers<EK> where EK: KvEngine {
+    pd_worker: FutureWorker<PdTask<EK>>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksSnapshot>>,
+    region_worker: Worker<RegionTask<EK::Snapshot>>,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }
@@ -1076,7 +1076,7 @@ pub struct RaftBatchSystem {
     apply_router: ApplyRouter<RocksEngine>,
     apply_system: ApplyBatchSystem,
     router: RaftRouter<RocksEngine, RocksEngine>,
-    workers: Option<Workers>,
+    workers: Option<Workers<RocksEngine>>,
 }
 
 impl RaftBatchSystem {
@@ -1176,7 +1176,7 @@ impl RaftBatchSystem {
         W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
     >(
         &mut self,
-        mut workers: Workers,
+        mut workers: Workers<RocksEngine>,
         region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
         builder: RaftPollerBuilder<RocksEngine, RocksEngine, T, C>,
         auto_split_controller: AutoSplitController,
