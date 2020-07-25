@@ -553,19 +553,19 @@ impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> w
     }
 }
 
-pub struct RaftPoller<T: 'static, C: 'static> {
+pub struct RaftPoller<EK, T: 'static, C: 'static> where EK: KvEngine {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
+    peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
-    poll_ctx: PollContext<RocksEngine, RocksEngine, T, C>,
+    poll_ctx: PollContext<EK, RocksEngine, T, C>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
+impl<EK, T: Transport, C: PdClient> RaftPoller<EK, T, C> where EK: KvEngine {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, RocksEngine>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -685,8 +685,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
-    for RaftPoller<T, C>
+impl<EK, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, RocksEngine>, StoreFsm>
+    for RaftPoller<EK, T, C> where EK: KvEngine
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -741,7 +741,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine, RocksEngine>) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<EK, RocksEngine>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -784,7 +784,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<EK, RocksEngine>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -1003,9 +1003,9 @@ where
     T: Transport + 'static,
     C: PdClient + 'static,
 {
-    type Handler = RaftPoller<T, C>;
+    type Handler = RaftPoller<RocksEngine, T, C>;
 
-    fn build(&mut self) -> RaftPoller<T, C> {
+    fn build(&mut self) -> RaftPoller<RocksEngine, T, C> {
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
