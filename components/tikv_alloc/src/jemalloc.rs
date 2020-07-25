@@ -27,7 +27,7 @@ pub fn dump_stats() -> String {
 }
 
 pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
-    // Stats are cached. Need to advance epoch to refresh.
+    // Stats are cached. Need to advance epoch to refresh. Just a change.
     JeEpoch::new()?.advance()?;
 
     Ok(Some(vec![
