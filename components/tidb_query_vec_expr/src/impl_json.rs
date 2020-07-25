@@ -9,21 +9,16 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::json::*;
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-fn json_depth(arg: Option<JsonRef>) -> Result<Option<i64>> {
-    match arg {
-        Some(j) => Ok(Some(j.depth()?)),
-        None => Ok(None),
-    }
+fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
+    Ok(Some(arg.depth()?))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-fn json_type(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
-    Ok(arg
-        .as_ref()
-        .map(|json_arg| Bytes::from(json_arg.json_type())))
+fn json_type(arg: JsonRef, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(Bytes::from(arg.json_type()))))
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
