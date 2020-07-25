@@ -476,12 +476,12 @@ impl Fsm for StoreFsm {
     }
 }
 
-struct StoreFsmDelegate<'a, EK, T: 'static, C: 'static> where EK: KvEngine {
+struct StoreFsmDelegate<'a, EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: KvEngine {
     fsm: &'a mut StoreFsm,
-    ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
+    ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
         match tick {
@@ -1339,7 +1339,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -2066,7 +2066,7 @@ impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK:
     }
 }
 
-impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
