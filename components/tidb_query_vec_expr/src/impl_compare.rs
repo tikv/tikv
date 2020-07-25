@@ -20,30 +20,17 @@ where
     C::compare(lhs, rhs)
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn compare_json<F: CmpOp>(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<i64>> {
-    Ok(match (lhs, rhs) {
-        (None, None) => F::compare_null(),
-        (None, _) | (_, None) => F::compare_partial_null(),
-        (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(&rhs)) as i64),
-    })
+pub fn compare_json<F: CmpOp>(lhs: JsonRef, rhs: JsonRef) -> Result<Option<i64>> {
+    Ok(Some(F::compare_order(lhs.cmp(&rhs)) as i64))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn compare_bytes<C: Collator, F: CmpOp>(
-    lhs: Option<BytesRef>,
-    rhs: Option<BytesRef>,
-) -> Result<Option<i64>> {
-    Ok(match (lhs, rhs) {
-        (None, None) => F::compare_null(),
-        (None, _) | (_, None) => F::compare_partial_null(),
-        (Some(lhs), Some(rhs)) => {
-            let ord = C::sort_compare(lhs, rhs)?;
-            Some(F::compare_order(ord) as i64)
-        }
-    })
+pub fn compare_bytes<C: Collator, F: CmpOp>(lhs: BytesRef, rhs: BytesRef) -> Result<Option<i64>> {
+    let ord = C::sort_compare(lhs, rhs)?;
+    Ok(Some(F::compare_order(ord) as i64))
 }
 
 pub trait Comparer {
