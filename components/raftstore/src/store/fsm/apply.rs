@@ -3316,7 +3316,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
-        builder: &RaftPollerBuilder<RocksEngine, T, C>,
+        builder: &RaftPollerBuilder<RocksEngine, RocksEngine, T, C>,
         sender: Notifier<RocksEngine>,
         router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {

@@ -7,7 +7,7 @@ use engine_rocks::{
     RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
 };
 use engine_traits::{
-    CompactionJobInfo, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
+    CompactionJobInfo, KvEngine, KvEngines, Mutable,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -805,17 +805,17 @@ impl<EK, ER, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
     }
 }
 
-pub struct RaftPollerBuilder<EK, T, C> where EK: KvEngine {
+pub struct RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
+    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
-    pub router: RaftRouter<EK, RocksEngine>,
+    pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
@@ -825,16 +825,16 @@ pub struct RaftPollerBuilder<EK, T, C> where EK: KvEngine {
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: KvEngines<EK, RocksEngine>,
+    pub engines: KvEngines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<EK, T, C> RaftPollerBuilder<EK, T, C> where EK: KvEngine {
+impl<EK, ER, T, C> RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<EK, RocksEngine>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<EK, ER>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -954,7 +954,7 @@ impl<EK, T, C> RaftPollerBuilder<EK, T, C> where EK: KvEngine {
     fn clear_stale_meta(
         &self,
         kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut RocksWriteBatch,
+        raft_wb: &mut ER::WriteBatch,
         origin_state: &RegionLocalState,
     ) {
         let region = origin_state.get_region();
@@ -998,15 +998,16 @@ impl<EK, T, C> RaftPollerBuilder<EK, T, C> where EK: KvEngine {
     }
 }
 
-impl<EK, T, C> HandlerBuilder<PeerFsm<EK, RocksEngine>, StoreFsm> for RaftPollerBuilder<EK, T, C>
+impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> for RaftPollerBuilder<EK, ER, T, C>
 where
     EK: KvEngine,
+    ER: KvEngine, 
     T: Transport + 'static,
     C: PdClient + 'static,
 {
-    type Handler = RaftPoller<EK, RocksEngine, T, C>;
+    type Handler = RaftPoller<EK, ER, T, C>;
 
-    fn build(&mut self) -> RaftPoller<EK, RocksEngine, T, C> {
+    fn build(&mut self) -> RaftPoller<EK, ER, T, C> {
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1177,7 +1178,7 @@ impl RaftBatchSystem {
         &mut self,
         mut workers: Workers,
         region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
-        builder: RaftPollerBuilder<RocksEngine, T, C>,
+        builder: RaftPollerBuilder<RocksEngine, RocksEngine, T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
