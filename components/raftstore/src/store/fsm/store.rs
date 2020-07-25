@@ -7,7 +7,7 @@ use engine_rocks::{
     RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
 };
 use engine_traits::{
-    CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
+    CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -476,12 +476,12 @@ impl Fsm for StoreFsm {
     }
 }
 
-struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
+struct StoreFsmDelegate<'a, EK, T: 'static, C: 'static> where EK: KvEngine {
     fsm: &'a mut StoreFsm,
-    ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
+    ctx: &'a mut PollContext<EK, RocksEngine, T, C>,
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
         match tick {
@@ -1339,7 +1339,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -2066,7 +2066,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, EK, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, T, C> where EK: KvEngine {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
