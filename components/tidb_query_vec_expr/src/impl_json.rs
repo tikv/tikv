@@ -15,10 +15,10 @@ fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
     Ok(Some(arg.depth()?))
 }
 
-#[rpn_fn]
+#[rpn_fn(writer)]
 #[inline]
-fn json_type(arg: JsonRef) -> Result<Option<Bytes>> {
-    Ok(Some(Bytes::from(arg.json_type())))
+fn json_type(arg: JsonRef, writer: BytesWriter) -> Result<BytesGuard> {
+    Ok(writer.write(Some(Bytes::from(arg.json_type()))))
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
