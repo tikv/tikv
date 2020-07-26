@@ -70,7 +70,7 @@ pub struct SkiplistEngine {
 }
 
 impl SkiplistEngine {
-    fn get_cf_engine(&self, cf: &str) -> Result<&Arc<SkipMap<Vec<u8>, Vec<u8>>>> {
+    pub fn get_cf_engine(&self, cf: &str) -> Result<&Arc<SkipMap<Vec<u8>, Vec<u8>>>> {
         let handle = self
             .cf_handles
             .get(cf)

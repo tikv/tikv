@@ -11,6 +11,9 @@
 
 #![allow(unused)]
 
+#[macro_use]
+extern crate tikv_util;
+
 mod cf_handle;
 pub use crate::cf_handle::*;
 mod cf_names;

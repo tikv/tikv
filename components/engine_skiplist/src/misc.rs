@@ -59,10 +59,10 @@ impl MiscExt for SkiplistEngine {
     }
 
     fn get_latest_sequence_number(&self) -> u64 {
-        panic!()
+        std::u64::MIN
     }
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
-        None
+        Some(self.get_latest_sequence_number() + 1)
     }
 }
