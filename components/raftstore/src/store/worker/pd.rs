@@ -632,44 +632,44 @@ where
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK>,
     ) {
-        let disk_stats = match fs2::statvfs(store_info.engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.engine.path(),
-                    "err" => ?e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
+        // let disk_stats = match fs2::statvfs(store_info.engine.path()) {
+        //     Err(e) => {
+        //         error!(
+        //             "get disk stat for rocksdb failed";
+        //             "engine_path" => store_info.engine.path(),
+        //             "err" => ?e
+        //         );
+        //         return;
+        //     }
+        //     Ok(stats) => stats,
+        // };
 
-        let disk_cap = disk_stats.total_space();
-        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-            disk_cap
-        } else {
-            store_info.capacity
-        };
-        stats.set_capacity(capacity);
+        // let disk_cap = disk_stats.total_space();
+        // let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+        //     disk_cap
+        // } else {
+        //     store_info.capacity
+        // };
+        // stats.set_capacity(capacity);
 
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
-        stats.set_used_size(used_size);
+        // // already include size of snapshot files
+        // let used_size =
+        //     stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
+        // stats.set_used_size(used_size);
 
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("no available space");
-            0
-        };
+        // let mut available = if capacity > used_size {
+        //     capacity - used_size
+        // } else {
+        //     warn!("no available space");
+        //     0
+        // };
 
-        // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
-        }
+        // // We only care about rocksdb SST file size, so we should check disk available here.
+        // if available > disk_stats.free_space() {
+        //     available = disk_stats.free_space();
+        // }
 
-        stats.set_available(available);
+        // stats.set_available(available);
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
         );
@@ -692,12 +692,12 @@ where
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as i64);
+        // STORE_SIZE_GAUGE_VEC
+        //     .with_label_values(&["capacity"])
+        //     .set(capacity as i64);
+        // STORE_SIZE_GAUGE_VEC
+        //     .with_label_values(&["available"])
+        //     .set(available as i64);
 
         let router = self.router.clone();
         let f = self
