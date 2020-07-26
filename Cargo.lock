@@ -1041,6 +1041,7 @@ dependencies = [
  "engine_traits",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1083,6 +1084,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
-use engine_traits::CfName;
-use engine_traits::IterOptions;
-use engine_traits::CF_DEFAULT;
-use engine_traits::{Peekable, TablePropertiesExt};
+use engine_traits::{
+    self, CfName, IterOptions, MvccProperties, MvccPropertiesExt, Peekable, TablePropertiesExt,
+    CF_DEFAULT,
+};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -15,7 +15,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -442,6 +442,20 @@ impl<S: RaftStoreRouter<RocksSnapshot>> Engine for RaftKv<S> {
         let end = keys::data_end_key(end);
         self.engine
             .get_range_properties_cf(cf, &start, &end)
+            .map_err(|e| e.into())
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        cf: CfName,
+        safe_point: TimeStamp,
+        start: &[u8],
+        end: &[u8],
+    ) -> kv::Result<MvccProperties> {
+        let start = keys::data_key(start);
+        let end = keys::data_end_key(end);
+        self.engine
+            .get_mvcc_properties_cf(cf, safe_point, &start, &end)
             .map_err(|e| e.into())
     }
 }
