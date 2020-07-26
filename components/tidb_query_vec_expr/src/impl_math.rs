@@ -444,7 +444,7 @@ pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
 
 #[inline]
 #[rpn_fn]
-pub fn truncate_int_with_uint(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
     Ok(Some(*arg0))
 }
 
