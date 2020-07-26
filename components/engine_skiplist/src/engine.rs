@@ -56,12 +56,14 @@ impl SkiplistEngineBuilder {
         SkiplistEngine {
             engines,
             cf_handles,
+            total_bytes: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct SkiplistEngine {
+    pub total_bytes: Arc<AtomicUsize>,
     pub(crate) engines: HashMap<SkiplistCFHandle, Arc<SkipMap<Vec<u8>, Vec<u8>>>>,
     pub(crate) cf_handles: HashMap<CfName, SkiplistCFHandle>,
 }
@@ -80,10 +82,10 @@ impl KvEngine for SkiplistEngine {
     type Snapshot = SkiplistSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
-        panic!()
+        SkiplistSnapshot::new(self.clone())
     }
     fn sync(&self) -> Result<()> {
-        panic!()
+        Ok(())
     }
     fn bad_downcast<T: 'static>(&self) -> &T {
         panic!()
@@ -114,6 +116,8 @@ impl SyncMutable for SkiplistEngine {
         self.put_cf(CF_DEFAULT, key, value)
     }
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
+        self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
         let engine = self.get_cf_engine(cf)?;
         engine.insert(key.to_vec(), value.to_vec());
         Ok(())
@@ -124,7 +128,11 @@ impl SyncMutable for SkiplistEngine {
     }
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let engine = self.get_cf_engine(cf)?;
-        engine.remove(key);
+        if let Some(e) = engine.remove(key) {
+            self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
+            self.total_bytes
+                .fetch_sub(e.value().len(), Ordering::Relaxed);
+        }
         Ok(())
     }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
@@ -135,6 +143,9 @@ impl SyncMutable for SkiplistEngine {
         let engine = self.get_cf_engine(cf)?;
         engine.range(range).for_each(|e| {
             e.remove();
+            self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
+            self.total_bytes
+                .fetch_sub(e.value().len(), Ordering::Relaxed);
         });
         Ok(())
     }

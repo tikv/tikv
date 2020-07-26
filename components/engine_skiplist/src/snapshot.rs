@@ -14,6 +14,12 @@ pub struct SkiplistSnapshot {
     engine: SkiplistEngine,
 }
 
+impl SkiplistSnapshot {
+    pub fn new(engine: SkiplistEngine) -> Self {
+        Self { engine }
+    }
+}
+
 impl Snapshot for SkiplistSnapshot {
     fn cf_names(&self) -> Vec<&str> {
         self.engine.cf_names()

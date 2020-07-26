@@ -2,14 +2,15 @@
 
 use crate::engine::SkiplistEngine;
 use engine_traits::{MiscExt, Range, Result};
+use std::sync::atomic::Ordering;
 
 impl MiscExt for SkiplistEngine {
     fn flush(&self, sync: bool) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn delete_files_in_range_cf(
@@ -19,39 +20,42 @@ impl MiscExt for SkiplistEngine {
         end_key: &[u8],
         include_end: bool,
     ) -> Result<()> {
-        panic!()
+        self.delete_all_in_range_cf(cf, start_key, end_key, false)
     }
 
     fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
-        panic!()
+        Ok((0, 0))
     }
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool> {
-        panic!()
+        Ok(true)
     }
 
     fn get_engine_used_size(&self) -> Result<u64> {
-        panic!()
+        Ok(self.total_bytes.load(Ordering::Relaxed) as u64)
     }
 
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-        panic!()
+        for range in ranges {
+            self.delete_all_in_range(range.0.as_slice(), range.1.as_slice(), false)?;
+        }
+        Ok(())
     }
 
     fn path(&self) -> &str {
-        panic!()
+        ""
     }
 
     fn sync_wal(&self) -> Result<()> {
-        panic!()
+        Ok(())
     }
 
     fn exists(path: &str) -> bool {
-        panic!()
+        true
     }
 
     fn dump_stats(&self) -> Result<String> {
-        panic!()
+        Ok("".to_owned())
     }
 
     fn get_latest_sequence_number(&self) -> u64 {
@@ -59,6 +63,6 @@ impl MiscExt for SkiplistEngine {
     }
 
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
-        panic!()
+        None
     }
 }
