@@ -2,8 +2,8 @@
 
 use crate::engine::SkiplistEngine;
 use engine_traits::{
-    CfName, Error, Mutable, MvccPropertiesExt, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt,
-    WriteOptions, CF_DEFAULT,
+    CfName, Error, KvEngine, Mutable, MvccPropertiesExt, Result, SyncMutable, WriteBatch,
+    WriteBatchExt, WriteBatchVecExt, WriteOptions, CF_DEFAULT,
 };
 
 impl WriteBatchExt for SkiplistEngine {
@@ -13,7 +13,20 @@ impl WriteBatchExt for SkiplistEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        panic!()
+        for e in wb.actions.clone() {
+            match e {
+                WriteAction::Put((cf, key, value)) => {
+                    self.put_cf(&cf, &key, &value);
+                }
+                WriteAction::Delete((cf, key)) => {
+                    self.delete_cf(&cf, &key);
+                }
+                WriteAction::DeleteRange((cf, begin_key, end_key)) => {
+                    self.delete_range_cf(&cf, &begin_key, &end_key);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn support_write_batch_vec(&self) -> bool {
@@ -21,26 +34,28 @@ impl WriteBatchExt for SkiplistEngine {
     }
 
     fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
-        panic!()
+        self.write_opt(wb, opts)
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
-        panic!()
+        SkiplistWriteBatch::default()
     }
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        panic!()
+        SkiplistWriteBatch::default()
     }
     fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
-        panic!()
+        SkiplistWriteBatch::default()
     }
 }
 
+#[derive(Clone)]
 enum WriteAction {
     Put((String, Vec<u8>, Vec<u8>)),
     Delete((String, Vec<u8>)),
     DeleteRange((String, Vec<u8>, Vec<u8>)),
 }
 
+#[derive(Default)]
 pub struct SkiplistWriteBatch {
     data_size: usize,
     actions: Vec<WriteAction>,
@@ -58,7 +73,7 @@ impl WriteBatch for SkiplistWriteBatch {
         self.actions.is_empty()
     }
     fn should_write_to_engine(&self) -> bool {
-        panic!()
+        self.count() > SkiplistEngine::WRITE_BATCH_MAX_KEYS
     }
     fn clear(&mut self) {
         self.actions.clear();
