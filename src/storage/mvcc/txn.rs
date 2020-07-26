@@ -74,6 +74,17 @@ impl ReleasedLock {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum AsyncLockInfo {
+    // The key is locked by our transaction.
+    Locked(Lock),
+    // The key is unlocked and our transaction has completed.
+    Committed(TimeStamp),
+    // The key is not locked and our transaction has either been rolled back or
+    // was lost.
+    Missing,
+}
+
 pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
@@ -204,6 +215,27 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
+    // Check the lock status of a key for async commit.
+    pub fn check_async_lock(&mut self, key: &Key) -> Result<AsyncLockInfo> {
+        match self.reader.load_lock(key)? {
+            Some(lock) if lock.ts == self.start_ts => Ok(AsyncLockInfo::Locked(lock)),
+            _ => {
+                match self.reader.get_txn_commit_info(key, self.start_ts)? {
+                    Some((_, ty)) if ty == WriteType::Rollback => Ok(AsyncLockInfo::Missing),
+                    Some((ts, _)) => Ok(AsyncLockInfo::Committed(ts)),
+                    None => {
+                        // Locking did not complete or has otherwise disappeared. To prevent a race
+                        // where the completed operation occurs after this check, we store a rollback.
+                        let write = Write::new_rollback(self.start_ts, false);
+                        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+
+                        Ok(AsyncLockInfo::Missing)
+                    }
+                }
+            }
+        }
+    }
+
     fn prewrite_key_value(
         &mut self,
         key: Key,
@@ -253,6 +285,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             // node gets a start ts to read the key, it can violate the snapshot property.
             let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
             lock.min_commit_ts = ts;
+            // TODO(nrc) check that our txn hasn't been rolled back already
             async_commit_ts = ts;
         }
 
@@ -260,7 +293,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(async_commit_ts)
     }
 
-    fn rollback_lock(
+    pub fn rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,

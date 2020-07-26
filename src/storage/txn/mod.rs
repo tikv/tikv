@@ -42,6 +42,10 @@ pub enum ProcessResult {
     MvccStartTs {
         mvcc: Option<(Key, MvccInfo)>,
     },
+    AsyncLocks {
+        locks: Vec<Option<LockInfo>>,
+        commit_ts: TimeStamp,
+    },
     Locks {
         locks: Vec<LockInfo>,
     },
@@ -118,32 +122,57 @@ quick_error! {
                         lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
                         upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
         }
+        InvalidCommitTimestamps { start_ts: TimeStamp, t1: TimeStamp, t2: TimeStamp } {
+            display("Async transaction (start ts: {}) with mismatched commit timestamps {} and {}",
+                        start_ts,
+                        t1,
+                        t2)
+        }
+        InvalidAsyncTxnStatus { start_ts: TimeStamp, commit_ts: TimeStamp } {
+            display("Invalid transaction status (rolled back, async commit) with start_ts: {}, commit_ts: {}",
+                start_ts,
+                commit_ts)
+        }
     }
 }
 
 impl ErrorInner {
     pub fn maybe_clone(&self) -> Option<ErrorInner> {
-        match *self {
-            ErrorInner::Engine(ref e) => e.maybe_clone().map(ErrorInner::Engine),
-            ErrorInner::Codec(ref e) => e.maybe_clone().map(ErrorInner::Codec),
-            ErrorInner::Mvcc(ref e) => e.maybe_clone().map(ErrorInner::Mvcc),
+        match self {
+            ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
+            ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
+            ErrorInner::Mvcc(e) => e.maybe_clone().map(ErrorInner::Mvcc),
             ErrorInner::InvalidTxnTso {
                 start_ts,
                 commit_ts,
             } => Some(ErrorInner::InvalidTxnTso {
-                start_ts,
-                commit_ts,
+                start_ts: *start_ts,
+                commit_ts: *commit_ts,
             }),
             ErrorInner::InvalidReqRange {
-                ref start,
-                ref end,
-                ref lower_bound,
-                ref upper_bound,
+                start,
+                end,
+                lower_bound,
+                upper_bound,
             } => Some(ErrorInner::InvalidReqRange {
                 start: start.clone(),
                 end: end.clone(),
                 lower_bound: lower_bound.clone(),
                 upper_bound: upper_bound.clone(),
+            }),
+            ErrorInner::InvalidCommitTimestamps { start_ts, t1, t2 } => {
+                Some(ErrorInner::InvalidCommitTimestamps {
+                    start_ts: *start_ts,
+                    t1: *t1,
+                    t2: *t2,
+                })
+            }
+            ErrorInner::InvalidAsyncTxnStatus {
+                start_ts,
+                commit_ts,
+            } => Some(ErrorInner::InvalidAsyncTxnStatus {
+                start_ts: *start_ts,
+                commit_ts: *commit_ts,
             }),
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }

@@ -177,6 +177,7 @@ storage_callback! {
     Booleans(Vec<Result<()>>) ProcessResult::MultiRes { results } => results,
     MvccInfoByKey(MvccInfo) ProcessResult::MvccKey { mvcc } => mvcc,
     MvccInfoByStartTs(Option<(Key, MvccInfo)>) ProcessResult::MvccStartTs { mvcc } => mvcc,
+    AsyncLocks((Vec<Option<kvrpcpb::LockInfo>>, TimeStamp)) ProcessResult::AsyncLocks { locks, commit_ts } => (locks, commit_ts),
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,

@@ -21,7 +21,7 @@ mod scan_lock;
 mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
-pub use check_txn_status::CheckTxnStatus;
+pub use check_txn_status::{CheckSecondaryLocks, CheckTxnStatus};
 pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use mvcc_by_key::MvccByKey;
@@ -71,6 +71,7 @@ pub enum Command {
     PessimisticRollback(PessimisticRollback),
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
+    CheckSecondaryLocks(CheckSecondaryLocks),
     ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
@@ -238,6 +239,16 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
     }
 }
 
+impl From<CheckSecondaryLocksRequest> for TypedCommand<(Vec<Option<LockInfo>>, TimeStamp)> {
+    fn from(mut req: CheckSecondaryLocksRequest) -> Self {
+        CheckSecondaryLocks::new(
+            req.keys.iter().map(|k| Key::from_raw(k)).collect(),
+            req.get_start_version().into(),
+            req.take_context(),
+        )
+    }
+}
+
 impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
     fn from(mut req: ScanLockRequest) -> Self {
         let start_key = if req.get_start_key().is_empty() {
@@ -346,6 +357,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
@@ -367,6 +379,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,

@@ -225,6 +225,12 @@ impl<
         CheckTxnStatusResponse
     );
     handle_request!(
+        kv_check_secondary_locks,
+        future_kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
+    );
+    handle_request!(
         kv_scan_lock,
         future_scan_lock,
         ScanLockRequest,
@@ -1086,6 +1092,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
         BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
+        CheckSecondaryLocks, future_kv_check_secondary_locks(storage), kv_check_secondary_locks;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
@@ -1615,6 +1622,16 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 }
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
+        }
+});
+txn_command_future!(future_kv_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse,
+    (v, resp) {
+        match v {
+            Ok((locks, commit_ts)) => {
+                resp.set_locks(locks.into_iter().map(|l| l.unwrap_or_else(|| LockInfo::default())).collect());
+                resp.set_commit_ts(commit_ts.into_inner());
+            },
+            Err(e) => {} // TODO resp.set_error(extract_key_error(&e)),
         }
 });
 txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {

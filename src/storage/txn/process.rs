@@ -13,14 +13,14 @@ use txn_types::{Key, Value};
 use crate::storage::kv::{Engine, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
-    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
-    MvccReader, MvccTxn, ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    has_data_in_range, AsyncLockInfo, Error as MvccError, ErrorInner as MvccErrorInner,
+    Lock as MvccLock, MvccReader, MvccTxn, ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
     commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
-        Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
-        ResolveLockReadPhase, Rollback, ScanLock, TxnHeartBeat,
+        AcquirePessimisticLock, CheckSecondaryLocks, CheckTxnStatus, Cleanup, Command, Commit,
+        MvccByKey, MvccByStartTs, Pause, PessimisticRollback, Prewrite, PrewritePessimistic,
+        ResolveLock, ResolveLockLite, ResolveLockReadPhase, Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
     Error, ErrorInner, ProcessResult, Result,
@@ -671,6 +671,92 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             let pr = ProcessResult::TxnStatus { txn_status };
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
+        }
+        Command::CheckSecondaryLocks(CheckSecondaryLocks {
+            keys,
+            start_ts,
+            ctx,
+        }) => {
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut locks = Vec::with_capacity(keys.len());
+            let mut commit_ts = None;
+            let mut rolled_back = false;
+
+            // Check each lock, update `commit_ts` if found.
+            for k in &keys {
+                match txn.check_async_lock(k)? {
+                    AsyncLockInfo::Locked(lock) => {
+                        locks.push(Some(lock));
+                    }
+                    AsyncLockInfo::Committed(ts) => {
+                        // If there are multiple commit timestamps, then they must agree.
+                        if let Some(commit_ts) = commit_ts {
+                            if commit_ts != ts {
+                                return Err(Error::from(ErrorInner::InvalidCommitTimestamps {
+                                    start_ts,
+                                    t1: commit_ts,
+                                    t2: ts,
+                                }));
+                            }
+                        }
+                        commit_ts = Some(ts);
+                        locks.push(None);
+                    }
+                    AsyncLockInfo::Missing => {
+                        rolled_back = true;
+                        locks.push(None);
+                    }
+                }
+            }
+            assert_eq!(keys.len(), locks.len());
+
+            // If any key was committed, then none may have been rolled back and we can commit any
+            // locked keys.
+            if let Some(commit_ts) = commit_ts {
+                if rolled_back {
+                    return Err(Error::from(ErrorInner::InvalidAsyncTxnStatus {
+                        start_ts,
+                        commit_ts,
+                    }));
+                }
+                for (k, l) in keys.iter().zip(locks.iter_mut()) {
+                    // If lock is None and commit_ts is some, then the key must have been committed
+                    // already.
+                    if l.is_some() {
+                        // l.is_some() should imply that the commit releases a lock.
+                        txn.commit(k.clone(), commit_ts)?.unwrap();
+                    }
+                    *l = None;
+                }
+            }
+            // If any are rolled back, then we can roll them all back.
+            if rolled_back {
+                for (k, l) in keys.iter().zip(locks.iter_mut()) {
+                    // If lock is None and commit_ts is none, then the key must have been rolled back
+                    // already.
+                    if let Some(l) = l {
+                        // TODO(nrc) need to change last argument if transaction is pessimistic.
+                        txn.rollback_lock(k.clone(), l, false)?;
+                    }
+                    *l = None;
+                }
+            }
+            // Either all keys are locked, all are committed, or all are rolled back.
+
+            statistics.add(&txn.take_statistics());
+            // TODO(nrc) if locks is all None, may as well return an empty vec, needs the protobuf
+            // updating.
+            let locks = keys
+                .into_iter()
+                .zip(locks.into_iter())
+                .map(|(k, l)| l.map(|l| Ok(l.into_lock_info(k.into_raw()?))).transpose())
+                .collect::<Result<Vec<_>>>()?;
+            let pr = ProcessResult::AsyncLocks {
+                locks,
+                commit_ts: commit_ts.unwrap_or_else(TimeStamp::zero),
+            };
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, 0, ctx, None)
         }
         Command::Pause(Pause { duration, ctx, .. }) => {
             thread::sleep(Duration::from_millis(duration));

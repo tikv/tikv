@@ -2,6 +2,7 @@
 
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
 use crate::storage::TxnStatus;
+use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -37,4 +38,32 @@ impl CommandExt for CheckTxnStatus {
     ts!(lock_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
+}
+
+command! {
+    /// Send as part of the async commit recovery protocol. Transaction B has found a key it wants to
+    /// locked by transaction A. Transaction A is using async commit and so its status is undetermined.
+    /// Transaction B's client has found the primary lock for Transaction A which lets it find all
+    /// other locks, it will then send CheckSecondaryLocks messages to each region to check their
+    /// locks.
+    ///
+    /// Returns the status of all locks - `None` of unlocked, `Some` if locked. If any of `keys`
+    /// have been committed, we'll also return the commit ts.
+    CheckSecondaryLocks:
+        cmd_ty => (Vec<Option<LockInfo>>, TimeStamp),
+        display => "kv::command::check_secondary_locks {} keys({:?}) | {:?}", (start_ts, keys, ctx),
+        content => {
+            /// The keys to check.
+            keys: Vec<Key>,
+            /// The timestamp of the async transaction which should own all keys in `keys`.
+            start_ts: TimeStamp,
+        }
+}
+
+impl CommandExt for CheckSecondaryLocks {
+    ctx!();
+    tag!(check_secondary_locks);
+    ts!(start_ts);
+    write_bytes!(keys: multiple);
+    gen_lock!(keys: multiple);
 }
