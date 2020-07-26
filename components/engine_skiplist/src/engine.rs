@@ -162,15 +162,6 @@ impl Iterable for SkiplistEngine {
     }
     fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let engine = self.get_cf_engine(cf)?.clone();
-        let lower_bound = Range {
-            start: opts.lower_bound().map(|e| e.to_vec()).unwrap_or_default(),
-            end: opts.upper_bound().map(|e| e.to_vec()).unwrap_or_else(|| {
-                engine
-                    .back()
-                    .map(|e| e.value().to_owned())
-                    .unwrap_or_default()
-            }),
-        };
         let lower_bound = opts
             .lower_bound()
             .map(|e| Bound::Included(e))
@@ -189,9 +180,9 @@ impl Iterable for SkiplistEngine {
 
 pub struct SkiplistEngineIterator {
     engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
-    lower_bound: SkipEntry<'static, Vec<u8>, Vec<u8>>,
-    upper_bound: SkipEntry<'static, Vec<u8>, Vec<u8>>,
-    cursor: SkipEntry<'static, Vec<u8>, Vec<u8>>,
+    lower_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
+    upper_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
+    cursor: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
     valid: bool,
 }
 
@@ -202,21 +193,9 @@ impl SkiplistEngineIterator {
         upper_bound: Bound<&[u8]>,
     ) -> Self {
         Self {
-            lower_bound: unsafe {
-                (*Arc::downgrade(&engine).as_ptr())
-                    .lower_bound(lower_bound)
-                    .unwrap()
-            },
-            upper_bound: unsafe {
-                (*Arc::downgrade(&engine).as_ptr())
-                    .upper_bound(upper_bound)
-                    .unwrap()
-            },
-            cursor: unsafe {
-                (*Arc::downgrade(&engine).as_ptr())
-                    .lower_bound(lower_bound)
-                    .unwrap()
-            },
+            lower_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
+            upper_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).upper_bound(upper_bound) },
+            cursor: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
             engine,
             valid: true,
         }
@@ -225,20 +204,24 @@ impl SkiplistEngineIterator {
 
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
+        let cursor = match self.cursor.as_mut() {
+            Some(c) => c,
+            None => return Ok(false),
+        };
         match key {
             SeekKey::Start => self.cursor = self.lower_bound.clone(),
             SeekKey::End => self.cursor = self.upper_bound.clone(),
             SeekKey::Key(key) => {
-                if key < self.cursor.key().as_slice() {
-                    while key < self.cursor.key().as_slice() {
-                        if !self.cursor.move_next() {
+                if key < cursor.key().as_slice() {
+                    while key < cursor.key().as_slice() {
+                        if !cursor.move_next() {
                             break;
                         }
                     }
-                } else if key > self.cursor.key().as_slice() {
-                    while let Some(e) = self.cursor.prev() {
+                } else if key > cursor.key().as_slice() {
+                    while let Some(e) = cursor.prev() {
                         if e.key().as_slice() >= key {
-                            self.cursor.move_prev();
+                            cursor.move_prev();
                         } else {
                             break;
                         }
@@ -249,21 +232,25 @@ impl Iterator for SkiplistEngineIterator {
         Ok(true)
     }
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+        let cursor = match self.cursor.as_mut() {
+            Some(c) => c,
+            None => return Ok(false),
+        };
         match key {
             SeekKey::Start => self.cursor = self.lower_bound.clone(),
             SeekKey::End => self.cursor = self.upper_bound.clone(),
             SeekKey::Key(key) => {
-                if key < self.cursor.key().as_slice() {
-                    while let Some(e) = self.cursor.next() {
+                if key < cursor.key().as_slice() {
+                    while let Some(e) = cursor.next() {
                         if e.key().as_slice() <= key {
-                            self.cursor.move_next();
+                            cursor.move_next();
                         } else {
                             break;
                         }
                     }
-                } else if key > self.cursor.key().as_slice() {
-                    while key > self.cursor.key().as_slice() {
-                        if !self.cursor.move_prev() {
+                } else if key > cursor.key().as_slice() {
+                    while key > cursor.key().as_slice() {
+                        if !cursor.move_prev() {
                             break;
                         }
                     }
@@ -274,19 +261,31 @@ impl Iterator for SkiplistEngineIterator {
     }
 
     fn prev(&mut self) -> Result<bool> {
-        self.valid = self.cursor.move_prev();
+        self.valid = match self.cursor.as_mut() {
+            Some(e) => e.move_prev(),
+            None => false,
+        };
         Ok(self.valid)
     }
     fn next(&mut self) -> Result<bool> {
-        self.valid = self.cursor.move_next();
+        self.valid = match self.cursor.as_mut() {
+            Some(e) => e.move_next(),
+            None => false,
+        };
         Ok(self.valid)
     }
 
     fn key(&self) -> &[u8] {
-        self.cursor.key()
+        match self.cursor.as_ref() {
+            Some(e) => e.key(),
+            None => &[],
+        }
     }
     fn value(&self) -> &[u8] {
-        self.cursor.value()
+        match self.cursor.as_ref() {
+            Some(e) => e.value(),
+            None => &[],
+        }
     }
 
     fn valid(&self) -> Result<bool> {
