@@ -54,13 +54,13 @@ pub fn log_1_arg(arg: &Real) -> Result<Option<Real>> {
 #[rpn_fn]
 #[allow(clippy::float_cmp)]
 pub fn log_2_arg(arg0: &Real, arg1: &Real) -> Result<Option<Real>> {
-    Ok(Some({
+    Ok({
         if **arg0 <= 0f64 || **arg0 == 1f64 || **arg1 <= 0f64 {
             None
         } else {
             f64_to_real(arg1.log(**arg0))
         }
-    }))
+    })
 }
 
 #[inline]
