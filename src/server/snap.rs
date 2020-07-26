@@ -221,7 +221,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<SkiplistSnapshot>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<SkiplistEngine>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -238,7 +238,7 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<SkiplistSnapshot> + 'static>(
+fn recv_snap<R: RaftStoreRouter<SkiplistEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager<SkiplistEngine>,
@@ -294,7 +294,7 @@ fn recv_snap<R: RaftStoreRouter<SkiplistSnapshot> + 'static>(
     .map_err(Error::from)
 }
 
-pub struct Runner<R: RaftStoreRouter<SkiplistSnapshot> + 'static> {
+pub struct Runner<R: RaftStoreRouter<SkiplistEngine> + 'static> {
     env: Arc<Environment>,
     snap_mgr: SnapManager<SkiplistEngine>,
     pool: CpuPool,
@@ -305,7 +305,7 @@ pub struct Runner<R: RaftStoreRouter<SkiplistSnapshot> + 'static> {
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter<SkiplistSnapshot> + 'static> Runner<R> {
+impl<R: RaftStoreRouter<SkiplistEngine> + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager<SkiplistEngine>,
@@ -329,7 +329,7 @@ impl<R: RaftStoreRouter<SkiplistSnapshot> + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter<SkiplistSnapshot> + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<SkiplistEngine> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {

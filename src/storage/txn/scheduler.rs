@@ -321,7 +321,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
-        self.try_to_wake_up(cid);
+        if self.inner.acquire_lock(cid) {
+            self.get_snapshot(cid);
+        }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -366,7 +368,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                         if let Some(term) = cb_ctx.term {
                             task.cmd.ctx_mut().set_term(term);
                         }
-                        task.extra_op = cb_ctx.extra_op;
+                        task.extra_op = cb_ctx.txn_extra_op;
 
                         debug!(
                             "process cmd with snapshot";
@@ -393,7 +395,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         );
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, cb) {
+            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);

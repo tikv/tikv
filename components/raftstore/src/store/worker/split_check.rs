@@ -169,7 +169,7 @@ pub struct Runner<S> {
     cfg: Config,
 }
 
-impl<S: CasualRouter<SkiplistSnapshot>> Runner<S> {
+impl<S: CasualRouter<SkiplistEngine>> Runner<S> {
     pub fn new(
         engine: SkiplistEngine,
         router: S,
@@ -318,7 +318,7 @@ impl<S: CasualRouter<SkiplistSnapshot>> Runner<S> {
     }
 }
 
-impl<S: CasualRouter<SkiplistSnapshot>> Runnable<Task> for Runner<S> {
+impl<S: CasualRouter<SkiplistEngine>> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
         match task {
             Task::SplitCheckTask {
@@ -336,7 +336,7 @@ impl<S: CasualRouter<SkiplistSnapshot>> Runnable<Task> for Runner<S> {
 fn new_split_region(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<SkiplistSnapshot> {
+) -> CasualMessage<SkiplistEngine, SkiplistEngine> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

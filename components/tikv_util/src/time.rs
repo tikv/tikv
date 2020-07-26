@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::mpsc::{self, Sender};
@@ -434,6 +435,29 @@ impl BlockingClock for CoarseClock {
 
 /// A limiter which uses the coarse clock for measurement.
 pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
+
+/// ReadId to judge whether the read requests come from the same GRPC stream.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct ThreadReadId {
+    sequence: u64,
+    pub create_time: Timespec,
+}
+
+thread_local!(static READ_SEQUENCE: RefCell<u64> = RefCell::new(0));
+
+impl ThreadReadId {
+    pub fn new() -> ThreadReadId {
+        let sequence = READ_SEQUENCE.with(|s| {
+            let seq = *s.borrow() + 1;
+            *s.borrow_mut() = seq;
+            seq
+        });
+        ThreadReadId {
+            sequence,
+            create_time: monotonic_raw_now(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

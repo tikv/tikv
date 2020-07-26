@@ -7,6 +7,8 @@ impl WriteBatchExt for SkiplistEngine {
     type WriteBatch = SkiplistWriteBatch;
     type WriteBatchVec = SkiplistWriteBatch;
 
+    const WRITE_BATCH_MAX_KEYS: usize = 256;
+
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         panic!()
     }

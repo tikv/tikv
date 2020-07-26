@@ -8,12 +8,13 @@ use crate::util::get_cf_handle;
 use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteBatchVecExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
-pub const WRITE_BATCH_MAX_KEYS: usize = 256;
-pub const WRITE_BATCH_MAX_BATCH: usize = 16;
+const WRITE_BATCH_MAX_BATCH: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
     type WriteBatchVec = RocksWriteBatchVec;
+
+    const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         debug_assert_eq!(
@@ -107,7 +108,7 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.wb.count() > WRITE_BATCH_MAX_KEYS
+        self.wb.count() > RocksEngine::WRITE_BATCH_MAX_KEYS
     }
 
     fn clear(&mut self) {
@@ -340,7 +341,7 @@ mod tests {
         .unwrap();
         assert!(engine.support_write_batch_vec());
         let mut wb = engine.write_batch();
-        for _i in 0..WRITE_BATCH_MAX_KEYS {
+        for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());
