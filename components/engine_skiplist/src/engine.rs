@@ -1,19 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::{Bound, Range};
+use std::sync::Arc;
+
+use crossbeam_skiplist::map::{Entry as SkipEntry, Range as SkipRange, SkipMap};
+use engine_traits::{
+    CFHandleExt, CfName, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
+    Result, SeekKey, SyncMutable, WriteOptions, CF_DEFAULT,
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tikv_util::collections::HashMap;
+
 use crate::cf_handle::SkiplistCFHandle;
 use crate::db_vector::SkiplistDBVector;
 use crate::snapshot::SkiplistSnapshot;
 use crate::write_batch::SkiplistWriteBatch;
-
-use crossbeam_skiplist::map::{Entry as SkipEntry, Iter as SkipIter, Range as SkipRange, SkipMap};
-use engine_traits::{
-    CfName, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result,
-    SeekKey, SyncMutable, WriteOptions, CF_DEFAULT,
-};
-use std::ops::{Bound, Range};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
-use tikv_util::collections::HashMap;
 
 static ENGINE_SEQ_NO_ALLOC: AtomicUsize = AtomicUsize::new(0);
 

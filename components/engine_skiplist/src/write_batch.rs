@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::SkiplistEngine;
-use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions};
+use engine_traits::{
+    CfName, Error, Mutable, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    CF_DEFAULT,
+};
 
 impl WriteBatchExt for SkiplistEngine {
     type WriteBatch = SkiplistWriteBatch;
@@ -32,52 +35,88 @@ impl WriteBatchExt for SkiplistEngine {
     }
 }
 
-pub struct SkiplistWriteBatch;
+enum WriteAction {
+    Put((String, Vec<u8>, Vec<u8>)),
+    Delete((String, Vec<u8>)),
+    DeleteRange((String, Vec<u8>, Vec<u8>)),
+}
+
+pub struct SkiplistWriteBatch {
+    data_size: usize,
+    actions: Vec<WriteAction>,
+    safe_points: Vec<usize>,
+}
 
 impl WriteBatch for SkiplistWriteBatch {
     fn data_size(&self) -> usize {
-        panic!()
+        self.data_size
     }
     fn count(&self) -> usize {
-        panic!()
+        self.actions.len()
     }
     fn is_empty(&self) -> bool {
-        panic!()
+        self.actions.is_empty()
     }
     fn should_write_to_engine(&self) -> bool {
         panic!()
     }
-
     fn clear(&mut self) {
-        panic!()
+        self.actions.clear();
     }
     fn set_save_point(&mut self) {
-        panic!()
+        self.safe_points.push(self.actions.len());
     }
     fn pop_save_point(&mut self) -> Result<()> {
-        panic!()
+        self.safe_points.pop();
+        Ok(())
     }
     fn rollback_to_save_point(&mut self) -> Result<()> {
-        panic!()
+        let p = self
+            .safe_points
+            .pop()
+            .ok_or_else(|| Error::Engine("no save point".to_owned()))?;
+        self.actions.truncate(p);
+        Ok(())
     }
 }
 
 impl Mutable for SkiplistWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        panic!()
+        self.data_size += key.len() + value.len();
+        self.actions.push(WriteAction::Put((
+            CF_DEFAULT.to_owned(),
+            key.to_vec(),
+            value.to_vec(),
+        )));
+        Ok(())
     }
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        panic!()
+        self.data_size += key.len() + value.len();
+        self.actions.push(WriteAction::Put((
+            cf.to_owned(),
+            key.to_vec(),
+            value.to_vec(),
+        )));
+        Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
-        panic!()
+        self.actions
+            .push(WriteAction::Delete((CF_DEFAULT.to_owned(), key.to_vec())));
+        Ok(())
     }
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        panic!()
+        self.actions
+            .push(WriteAction::Delete((cf.to_owned(), key.to_vec())));
+        Ok(())
     }
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        panic!()
+        self.actions.push(WriteAction::DeleteRange((
+            cf.to_owned(),
+            begin_key.to_vec(),
+            end_key.to_vec(),
+        )));
+        Ok(())
     }
 }
 
