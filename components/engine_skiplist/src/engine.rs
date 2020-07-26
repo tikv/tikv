@@ -75,7 +75,9 @@ impl SkiplistEngine {
             .cf_handles
             .get(cf)
             .ok_or_else(|| Error::CFName(cf.to_owned()))?;
-        Ok(self.engines.get(handle).unwrap())
+        self.engines
+            .get(handle)
+            .ok_or_else(|| Error::Engine("cannot get engine by handle".to_string()))
     }
 }
 
@@ -289,5 +291,14 @@ impl Iterator for SkiplistEngineIterator {
 
     fn valid(&self) -> Result<bool> {
         Ok(self.valid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_get_engine() {
+        let engine = SkiplistEngineBuilder::new().build();
+        let _ = engine.get_cf_engine(CF_DEFAULT);
     }
 }
