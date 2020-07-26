@@ -9,6 +9,7 @@ publish = false
 engine_traits = { path = "../engine_traits" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types" }
 
 [dependencies.crossbeam-skiplist]
 git = "https://github.com/crossbeam-rs/crossbeam.git"

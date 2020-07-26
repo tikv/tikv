@@ -13,11 +13,11 @@ use std::{error, ptr, result};
 
 use engine_skiplist::{SkiplistEngine, SkiplistTablePropertiesCollection};
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, ReadOptions};
+use engine_traits::{IterOptions, MvccProperties, ReadOptions};
 use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use txn_types::{Key, TxnExtra, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -163,6 +163,16 @@ pub trait Engine: Send + Clone + 'static {
         _end: &[u8],
     ) -> Result<SkiplistTablePropertiesCollection> {
         Err(box_err!("no user properties"))
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        _: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Result<MvccProperties> {
+        Err(box_err!("no mvcc properties"))
     }
 }
 

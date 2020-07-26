@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crossbeam_skiplist::map::{Entry as SkipEntry, Range as SkipRange, SkipMap};
 use engine_traits::{
-    CFHandleExt, CfName, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
-    Result, SeekKey, SyncMutable, WriteOptions, CF_DEFAULT,
+    CFHandleExt, CfName, Error, IterOptions, Iterable, Iterator, KvEngine, MvccPropertiesExt,
+    Peekable, ReadOptions, Result, SeekKey, SyncMutable, WriteOptions, CF_DEFAULT,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tikv_util::collections::HashMap;

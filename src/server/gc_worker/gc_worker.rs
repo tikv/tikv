@@ -168,14 +168,14 @@ impl<E: Engine> GcRunner<E> {
     /// If this is not supported or any error happens, returns true to do further check after
     /// getting snapshot.
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
-        let collection = match self
+        let props = match self
             .engine
-            .get_properties_cf(CF_WRITE, &start_key, &end_key)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key)
         {
             Ok(c) => c,
             Err(_) => return true,
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, props)
     }
 
     /// Cleans up outdated data.

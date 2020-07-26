@@ -2,8 +2,8 @@
 
 use crate::engine::SkiplistEngine;
 use engine_traits::{
-    CfName, Error, Mutable, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
-    CF_DEFAULT,
+    CfName, Error, Mutable, MvccPropertiesExt, Result, WriteBatch, WriteBatchExt, WriteBatchVecExt,
+    WriteOptions, CF_DEFAULT,
 };
 
 impl WriteBatchExt for SkiplistEngine {
