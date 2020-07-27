@@ -298,7 +298,7 @@ mod test {
             vec3.push(i % 3 == 0);
             vec5.push(i % 5 == 0);
         }
-        for (idx, i) in BitAndIterator::new(&[vec1, vec2, vec3, vec5], size).enumerate() {
+        for (idx, i) in BitAndIterator::new(&[&vec1, &vec2, &vec3, &vec5], size).enumerate() {
             assert_eq!(i, idx % 30 == 0);
             cnt += 1;
         }
