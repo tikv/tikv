@@ -57,7 +57,7 @@ impl MissingLockAction {
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
 /// It's used by `LockManager` to wake up transactions waiting for locks.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
     /// The hash value of the lock.
     pub hash: u64,
@@ -74,7 +74,7 @@ impl ReleasedLock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SecondaryLockStatus {
     Locked(Lock),
     Committed(TimeStamp),
@@ -3405,5 +3405,96 @@ mod tests {
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
+    }
+
+    #[test]
+    fn test_check_async_commit_secondary_locks() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let pd_client = Arc::new(DummyPdClient::new());
+
+        let check_secondary = |key, ts| {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let key = Key::from_raw(key);
+            let ts = TimeStamp::new(ts);
+            let mut txn = MvccTxn::new(snapshot, ts, true, pd_client.clone());
+            let res = txn.check_secondary_lock(&key, ts).unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            res
+        };
+
+        must_prewrite_lock(&engine, b"k1", b"key", 1);
+        must_commit(&engine, b"k1", 1, 3);
+        must_rollback(&engine, b"k1", 5);
+        must_prewrite_lock(&engine, b"k1", b"key", 7);
+        must_commit(&engine, b"k1", 7, 9);
+
+        // Lock CF has no lock
+        //
+        // LOCK CF       | WRITE CF
+        // --------------+---------------------
+        //               | 9: start_ts = 7
+        //               | 5: rollback
+        //               | 3: start_ts = 1
+
+        assert_eq!(
+            check_secondary(b"k1", 7),
+            (SecondaryLockStatus::Committed(9.into()), None)
+        );
+        assert_eq!(
+            check_secondary(b"k1", 5),
+            (SecondaryLockStatus::RolledBack, None)
+        );
+        assert_eq!(
+            check_secondary(b"k1", 1),
+            (SecondaryLockStatus::Committed(3.into()), None)
+        );
+        // The write record does not exist. But there is a record whose commit_ts
+        // is larger, so we needn't write a rollback.
+        assert_eq!(
+            check_secondary(b"k1", 6),
+            (SecondaryLockStatus::RolledBack, None)
+        );
+        must_seek_write(&engine, b"k1", 6, 5, 5, WriteType::Rollback);
+
+        // ----------------------------
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"key", 11, 11);
+
+        // Lock CF has a pessimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        // ts = 11 (pes) | 9: start_ts = 7
+        //               | 5: rollback
+        //               | 3: start_ts = 1
+
+        let (status, released_lock) = check_secondary(b"k1", 11);
+        assert_eq!(status, SecondaryLockStatus::RolledBack);
+        assert!(released_lock.is_some());
+        must_seek_write(&engine, b"k1", 11, 11, 11, WriteType::Rollback);
+
+        // ----------------------------
+
+        must_prewrite_lock(&engine, b"k1", b"key", 13);
+
+        // Lock CF has an optimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        // ts = 13 (opt) | 11: rollback
+        //               |  9: start_ts = 7
+        //               |  5: rollback
+        //               |  3: start_ts = 1
+
+        match check_secondary(b"k1", 13) {
+            (SecondaryLockStatus::Locked(_), None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
     }
 }
