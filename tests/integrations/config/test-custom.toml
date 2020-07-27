@@ -135,6 +135,7 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = true
+hibernate-timeout = "10m"
 dev-assert = true
 perf-level = 4
 
