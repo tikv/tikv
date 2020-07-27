@@ -10,7 +10,7 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState, RegionLocalState};
 use tempdir::TempDir;
 
 use engine::rocks;
@@ -800,6 +800,13 @@ impl<T: Simulator> Cluster<T> {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
             .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &key)
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .get_msg_cf::<RegionLocalState>(engine::CF_RAFT, &keys::region_state_key(region_id))
             .unwrap()
             .unwrap()
     }
