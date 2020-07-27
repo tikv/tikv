@@ -875,13 +875,14 @@ fn test_node_mutiple_rollback_merge() {
 // than recorded.
 #[test]
 fn test_node_merge_write_data_to_source_region_after_merging() {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
-    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_max_batch_size = 1;
+    cluster.cfg.raft_store.apply_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -980,6 +981,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
 /// This test is to reproduce above situation.
 #[test]
 fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
@@ -1091,6 +1093,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
 /// Test if snapshot is applying correctly when crash happens.
 #[test]
 fn test_node_merge_crash_when_snapshot() {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
