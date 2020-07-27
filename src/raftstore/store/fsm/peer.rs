@@ -712,9 +712,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if self.fsm.group_state == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
-<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
-                if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
-=======
                 // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
                 // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
                 // and the follwer's `election_elapsed` in raft-rs is 1.
@@ -729,7 +726,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
                     < self.ctx.cfg.raft_election_timeout_ticks
                 {
->>>>>>> 2300f2d... raftstore: change the max value of missing tick (#8299):components/raftstore/src/store/fsm/peer.rs
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
                 }
