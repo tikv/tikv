@@ -63,7 +63,7 @@ use engine::{Iterable, Mutable, Peekable};
 
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -240,6 +240,7 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -278,6 +279,21 @@ impl<T, C> PollContext<T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Timeout is calculated from TiKV start, the node should not become
+    /// hibernated if it still within the hibernate timeout, see
+    /// https://github.com/tikv/tikv/issues/7747
+    #[allow(clippy::wrong_self_convention)]
+    pub fn is_hibernate_timeout(&mut self) -> bool {
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
+        }
+        timeout
     }
 }
 
@@ -915,6 +931,7 @@ where
             need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

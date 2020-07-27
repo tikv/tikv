@@ -122,6 +122,7 @@ pub struct Config {
     pub store_pool_size: usize,
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
+    pub hibernate_timeout: ReadableDuration,
     #[doc(hidden)]
     pub dev_assert: bool,
 
@@ -200,6 +201,7 @@ impl Default for Config {
             store_pool_size: 2,
             future_poll_size: 1,
             hibernate_regions: false,
+            hibernate_timeout: ReadableDuration::minutes(10),
             dev_assert: false,
 
             // They are preserved for compatibility check.
