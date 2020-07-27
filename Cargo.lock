@@ -454,6 +454,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -1923,7 +1924,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1942,7 +1943,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2992,6 +2993,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -3285,7 +3287,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
+source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4272,6 +4274,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio 0.2.13",

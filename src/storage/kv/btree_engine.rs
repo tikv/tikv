@@ -7,7 +7,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -16,6 +17,7 @@ use crate::storage::kv::{
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
     WriteData,
 };
+use tikv_util::time::ThreadReadId;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -70,6 +72,18 @@ impl Default for BTreeEngine {
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
 
+    fn kv_engine(&self) -> RocksEngine {
+        unimplemented!();
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+        unimplemented!();
+    }
+
+    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+        unimplemented!();
+    }
+
     fn async_write(
         &self,
         _ctx: &Context,
@@ -83,8 +97,14 @@ impl Engine for BTreeEngine {
 
         Ok(())
     }
+
     /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
-    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
+    fn async_snapshot(
+        &self,
+        _ctx: &Context,
+        _: Option<ThreadReadId>,
+        cb: EngineCallback<Self::Snap>,
+    ) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
         Ok(())
     }
@@ -218,6 +238,9 @@ impl Snapshot for BTreeEngineSnapshot {
             None => Ok(None),
             Some(v) => Ok(Some(v.clone())),
         }
+    }
+    fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
+        self.get_cf(cf, key)
     }
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)

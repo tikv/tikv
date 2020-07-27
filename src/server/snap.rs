@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
@@ -218,7 +218,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksSnapshot>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<RocksEngine>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -235,7 +235,7 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksSnapshot> + 'static>(
+fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager<RocksEngine>,
@@ -291,7 +291,7 @@ fn recv_snap<R: RaftStoreRouter<RocksSnapshot> + 'static>(
     .map_err(Error::from)
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksSnapshot> + 'static> {
+pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
     env: Arc<Environment>,
     snap_mgr: SnapManager<RocksEngine>,
     pool: CpuPool,
@@ -302,7 +302,7 @@ pub struct Runner<R: RaftStoreRouter<RocksSnapshot> + 'static> {
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
+impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager<RocksEngine>,
@@ -326,7 +326,7 @@ impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter<RocksSnapshot> + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {
