@@ -724,21 +724,13 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
+        let metrics_flusher = MetricsFlusher::new(KvEngines::new(
             self.engines.as_ref().unwrap().engines.kv.clone(),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.engines.as_ref().unwrap().engines.shared_block_cache,
-        )));
-
+        ));
         // Start metrics flusher
-        if let Err(e) = metrics_flusher.start() {
-            error!(
-                "failed to start metrics flusher";
-                "err" => %e
-            );
-        }
-
-        self.to_stop.push(metrics_flusher);
+        self.shared_worker.start(metrics_flusher);
     }
 
     fn run_server(&mut self) {
@@ -907,12 +899,6 @@ where
     R: 'static + Send,
 {
     fn stop(self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
-impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
-    fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
 }

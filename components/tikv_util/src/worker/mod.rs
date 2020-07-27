@@ -75,9 +75,6 @@ pub trait Runnable<T: Display> {
         unimplemented!()
     }
 
-    /// Runs a batch of tasks ans flush them at last
-    fn flush(&mut self) {}
-
     fn on_tick(&mut self) {}
     fn shutdown(&mut self) {}
 }
@@ -147,6 +144,10 @@ impl<T: Display + Send + 'static> Scheduler<T> {
         Ok(())
     }
 
+    pub fn notify(&self) {
+        let _ = self.pool_notify.try_send(WorkerMsg::Task(self.runner_id));
+    }
+
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.counter.load(Ordering::Relaxed) > 0
@@ -155,6 +156,8 @@ impl<T: Display + Send + 'static> Scheduler<T> {
     pub fn register_timeout(&self, task: T, wait: Duration) {
         debug!("scheduling task {}", task);
         let sender = self.sender.clone();
+        let notify = self.pool_notify.clone();
+        let runner_id = self.runner_id;
         let delay = GLOBAL_TIMER_HANDLE
             .delay(std::time::Instant::now() + wait)
             .map_err(|_| panic!("register time task error"))
@@ -165,6 +168,7 @@ impl<T: Display + Send + 'static> Scheduler<T> {
                         _ => panic!("send delay scheduler message error"),
                     }
                 }
+                let _ = notify.send(WorkerMsg::Task(runner_id));
             });
         poll_future_notify(delay);
     }

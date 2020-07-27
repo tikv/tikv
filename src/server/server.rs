@@ -10,7 +10,6 @@ use futures::Stream;
 use grpcio::{ChannelBuilder, EnvBuilder, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
 use pd_client::PdClient;
-use tokio_threadpool::Builder as ThreadPoolBuilder;
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
@@ -74,17 +73,6 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         yatp_read_pool: Option<ReadPool>,
         common_worker: Worker,
     ) -> Result<Self> {
-        // A helper thread (or pool) for transport layer.
-        let stats_pool = if cfg.stats_concurrency > 0 {
-            Some(
-                ThreadPoolBuilder::new()
-                    .pool_size(cfg.stats_concurrency)
-                    .name_prefix(STATS_THREAD_PREFIX)
-                    .build(),
-            )
-        } else {
-            None
-        };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
         let readpool_normal_thread_load =
             Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
@@ -143,7 +131,6 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             Arc::clone(security_mgr),
             raft_router.clone(),
             Arc::clone(&grpc_thread_load),
-            stats_pool.as_ref().map(|p| p.sender().clone()),
         )));
 
         let trans = ServerTransport::new(raft_client, snap_scheduler, raft_router, resolver);

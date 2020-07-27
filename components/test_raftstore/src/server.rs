@@ -100,7 +100,6 @@ impl ServerCluster {
             security_mgr,
             RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            None,
         );
         ServerCluster {
             metas: HashMap::default(),

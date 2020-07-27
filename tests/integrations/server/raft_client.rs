@@ -17,19 +17,12 @@ use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
+pub fn get_raft_client() -> RaftClient<RaftStoreBlackHole> {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(1000));
-    RaftClient::new(
-        env,
-        cfg,
-        security_mgr,
-        RaftStoreBlackHole,
-        grpc_thread_load,
-        Some(pool.sender().clone()),
-    )
+    RaftClient::new(env, cfg, security_mgr, RaftStoreBlackHole, grpc_thread_load)
 }
 
 #[derive(Clone)]

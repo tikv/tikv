@@ -294,7 +294,7 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
 pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
     env: Arc<Environment>,
     snap_mgr: SnapManager<RocksEngine>,
-    pool: CpuPool,
+    pool: Option<CpuPool>,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
     cfg: Arc<Config>,
@@ -313,10 +313,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
         Runner {
             env,
             snap_mgr,
-            pool: CpuPoolBuilder::new()
-                .name_prefix(thd_name!("snap-sender"))
-                .pool_size(DEFAULT_POOL_SIZE)
-                .create(),
+            pool: None,
             raft_router: r,
             security_mgr,
             cfg,
@@ -328,7 +325,14 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
 
 impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
-        let pool = &self.pool;
+        if self.pool.is_none() {
+            let pool = CpuPoolBuilder::new()
+                .name_prefix(thd_name!("snap-sender"))
+                .pool_size(DEFAULT_POOL_SIZE)
+                .create();
+            self.pool = Some(pool);
+        }
+        let pool = self.pool.as_ref().unwrap();
         match task {
             Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);

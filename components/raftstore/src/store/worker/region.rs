@@ -567,7 +567,6 @@ where
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
     scheduler: Option<Scheduler<Task<EK::Snapshot>>>,
-    pending_apply_delay: usize,
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
@@ -600,7 +599,6 @@ where
             },
             pending_applies: VecDeque::new(),
             scheduler: None,
-            pending_apply_delay: 0,
         }
     }
 
@@ -616,6 +614,12 @@ where
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
             }
+        }
+        if !self.pending_applies.is_empty() {
+            self.scheduler.as_ref().unwrap().register_timeout(
+                Task::ApplyOnTimeout,
+                Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+            );
         }
     }
 
@@ -671,13 +675,6 @@ where
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
                     SNAP_COUNTER.apply.delay.inc();
-                    if self.pending_apply_delay == 0 {
-                        self.scheduler.as_ref().unwrap().register_timeout(
-                            Task::ApplyOnTimeout,
-                            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                        );
-                        self.pending_apply_delay += 1;
-                    }
                 }
             }
             Task::Destroy {
@@ -694,16 +691,7 @@ where
                 self.clean_stale_ranges();
             }
             Task::ApplyOnTimeout => {
-                self.pending_apply_delay -= 1;
                 self.handle_pending_applies();
-
-                if !self.pending_applies.is_empty() && self.pending_apply_delay == 0 {
-                    self.scheduler.as_ref().unwrap().register_timeout(
-                        Task::ApplyOnTimeout,
-                        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                    );
-                    self.pending_apply_delay += 1;
-                }
             }
             Task::DestroyOnTimeout => {
                 self.clean_stale_ranges();
