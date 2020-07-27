@@ -29,7 +29,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
-use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -57,6 +56,7 @@ use crate::store::worker::{
     RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::PeerTicks;
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -69,6 +69,7 @@ use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -247,6 +248,11 @@ where
     }
 }
 
+pub struct PeerTickBatch {
+    pub ticks: Vec<Box<dyn FnOnce() + Send>>,
+    pub wait_duration: Duration,
+}
+
 pub struct PollContext<EK, ER, T, C: 'static>
 where
     EK: KvEngine,
@@ -265,7 +271,6 @@ where
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
-    pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
@@ -287,6 +292,7 @@ where
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub node_start_time: Option<Instant>,
+    pub tick_batch: Vec<PeerTickBatch>,
 }
 
 impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>
@@ -369,7 +375,7 @@ where
                 .map_err(move |e| {
                     panic!("tick {:?} is lost due to timeout error: {:?}", tick, e);
                 });
-            self.future_poller.spawn(f).unwrap();
+            poll_future_notify(f);
         }
     }
 
@@ -673,6 +679,37 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
         );
     }
+
+    fn flush_ticks(&mut self) {
+        const TICKS: &[PeerTicks] = &[
+            PeerTicks::RAFT,
+            PeerTicks::RAFT_LOG_GC,
+            PeerTicks::SPLIT_REGION_CHECK,
+            PeerTicks::PD_HEARTBEAT,
+            PeerTicks::CHECK_MERGE,
+            PeerTicks::CHECK_PEER_STALE_STATE,
+        ];
+        for t in TICKS {
+            let idx = t.bits() as usize;
+            if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
+                continue;
+            }
+            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let f = self
+                .poll_ctx
+                .timer
+                .delay(self.poll_ctx.tick_batch[idx].wait_duration)
+                .map(move |_| {
+                    for tick in peer_ticks {
+                        tick();
+                    }
+                })
+                .map_err(|e| {
+                    panic!("batch tick failed because: {:?}", e);
+                });
+            poll_future_notify(f);
+        }
+    }
 }
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
@@ -775,6 +812,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
+        self.flush_ticks();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -808,7 +846,6 @@ pub struct RaftPollerBuilder<T, C> {
     pub router: RaftRouter<RocksEngine, RocksEngine>,
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    future_poller: ThreadPoolSender,
     snap_mgr: SnapManager<RocksEngine>,
     pub coprocessor_host: CoprocessorHost<RocksEngine>,
     trans: T,
@@ -1008,7 +1045,6 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
-            future_poller: self.future_poller.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
@@ -1030,6 +1066,7 @@ where
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
+            tick_batch: Vec::with_capacity(256),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
@@ -1054,7 +1091,6 @@ struct Workers {
     // region_worker: Worker<RegionTask<RocksSnapshot>>,
     common_worker: Worker,
     coprocessor_host: CoprocessorHost<RocksEngine>,
-    future_poller: ThreadPool,
 }
 
 pub struct RaftBatchSystem {
@@ -1103,10 +1139,6 @@ impl RaftBatchSystem {
             common_worker: Worker::new("store-worker"),
             pd_worker,
             coprocessor_host,
-            future_poller: tokio_threadpool::Builder::new()
-                .name_prefix("future-poller")
-                .pool_size(cfg.value().future_poll_size)
-                .build(),
         };
         let region_runner = RegionRunner::new(
             engines.clone(),
@@ -1155,7 +1187,6 @@ impl RaftBatchSystem {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
@@ -1277,7 +1308,6 @@ impl RaftBatchSystem {
             }
         }
         workers.coprocessor_host.shutdown();
-        workers.future_poller.shutdown_now().wait().unwrap();
     }
 }
 

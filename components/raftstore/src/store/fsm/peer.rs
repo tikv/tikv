@@ -29,6 +29,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -946,36 +947,46 @@ where
             }
         };
         let peer_id = self.fsm.peer.peer_id();
-        let f = self
-            .ctx
-            .timer
-            .delay(timeout)
-            .map(move |_| {
-                fail_point!(
-                    "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
-                    |_| unreachable!()
+        let cb = Box::new(move || {
+            fail_point!(
+                "on_raft_log_gc_tick_1",
+                peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
+                |_| unreachable!()
+            );
+            // This can happen only when the peer is about to be destroyed
+            // or the node is shutting down. So it's OK to not to clean up
+            // registry.
+            if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                debug!(
+                    "failed to schedule peer tick";
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                    "tick" => ?tick,
+                    "err" => %e,
                 );
-                // This can happen only when the peer is about to be destroyed
-                // or the node is shutting down. So it's OK to not to clean up
-                // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
-                    debug!(
-                        "failed to schedule peer tick";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "tick" => ?tick,
-                        "err" => %e,
+            }
+        });
+        let idx = tick.bits() as usize;
+        let batch = &mut self.ctx.tick_batch[idx];
+        if batch.ticks.is_empty() || batch.wait_duration == timeout {
+            batch.ticks.push(cb);
+            batch.wait_duration = timeout;
+        } else {
+            let f = self
+                .ctx
+                .timer
+                .delay(timeout)
+                .map(move |_| {
+                    cb();
+                })
+                .map_err(move |e| {
+                    panic!(
+                        "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
+                        region_id, peer_id, tick, e
                     );
-                }
-            })
-            .map_err(move |e| {
-                panic!(
-                    "[region {}] {} tick {:?} is lost due to timeout error: {:?}",
-                    region_id, peer_id, tick, e
-                );
-            });
-        self.ctx.future_poller.spawn(f).unwrap();
+                });
+            poll_future_notify(f);
+        }
     }
 
     fn register_raft_base_tick(&mut self) {
