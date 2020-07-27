@@ -152,6 +152,15 @@ pub enum SecondaryLocksStatus {
     RolledBack,
 }
 
+impl SecondaryLocksStatus {
+    pub fn push(&mut self, lock: kvrpcpb::LockInfo) {
+        match self {
+            SecondaryLocksStatus::Locked(v) => v.push(lock),
+            _ => panic!("unexpected SecondaryLocksStatus"),
+        }
+    }
+}
+
 macro_rules! storage_callback {
     ($($variant: ident ( $cb_ty: ty ) $result_variant: pat => $result: expr,)*) => {
         pub enum StorageCallback {
