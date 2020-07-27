@@ -124,7 +124,7 @@ impl<K, V> LruCache<K, V> {
             capacity = 1;
         }
         LruCache {
-            map: HashMap::with_capacity_and_hasher(capacity, Default::default()),
+            map: HashMap::default(),
             trace: Trace::new(),
             capacity,
         }
