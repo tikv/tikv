@@ -15,7 +15,7 @@ use txn_types::TxnExtra;
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct MockRaftStoreRouter {
-    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine, RocksEngine>>>>>,
+    senders: Arc<Mutex<HashMap<u64, LooseBoundedSender<PeerMsg<RocksEngine>>>>>,
 }
 
 impl MockRaftStoreRouter {
@@ -24,11 +24,7 @@ impl MockRaftStoreRouter {
             senders: Arc::default(),
         }
     }
-    pub fn add_region(
-        &self,
-        region_id: u64,
-        cap: usize,
-    ) -> Receiver<PeerMsg<RocksEngine, RocksEngine>> {
+    pub fn add_region(&self, region_id: u64, cap: usize) -> Receiver<PeerMsg<RocksEngine>> {
         let (tx, rx) = loose_bounded(cap);
         self.senders.lock().unwrap().insert(region_id, tx);
         rx
@@ -51,11 +47,7 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
         }
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<RocksEngine, RocksEngine>,
-    ) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.try_send(PeerMsg::CasualMessage(msg))
