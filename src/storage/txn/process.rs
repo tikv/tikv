@@ -867,7 +867,10 @@ mod tests {
             100,
         )
         .unwrap();
-        rollback(&engine, &mut statistic, keys.clone(), 100).unwrap();
+        // Rollback to make tombstones in lock-cf.
+        rollback(&engine, &mut statistic, keys, 100).unwrap();
+        // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
+        // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = PerfStatisticsInstant::new();
