@@ -50,7 +50,9 @@ impl<K> Trace<K> {
                 }
             } else {
                 self.head = record.as_mut().next;
-                if self.head.is_none() {
+                if let Some(mut h) = self.head {
+                    h.as_mut().prev = None;
+                } else {
                     self.tail = None;
                 }
             }
@@ -269,20 +271,17 @@ mod tests {
         for i in 0..10 {
             map.insert(i, i);
         }
-        for i in 5..10 {
+        for i in (0..3).chain(8..10) {
             map.remove(&i);
         }
         for i in 10..15 {
             map.insert(i, i);
         }
-        for i in 0..5 {
-            assert_eq!(map.get(&i), Some(&i));
-        }
-        for i in 10..15 {
-            assert_eq!(map.get(&i), Some(&i));
-        }
-        for i in 5..10 {
+        for i in (0..3).chain(8..10) {
             assert_eq!(map.get(&i), None);
+        }
+        for i in (3..8).chain(10..15) {
+            assert_eq!(map.get(&i), Some(&i));
         }
     }
 
@@ -299,7 +298,7 @@ mod tests {
         for i in 5..10 {
             assert_eq!(map.get(&i), Some(&i));
         }
-        assert_eq!(map.capacity(), 10);
+        assert_eq!(map.capacity(), 5);
 
         map.resize(10);
         assert_eq!(map.capacity(), 10);
