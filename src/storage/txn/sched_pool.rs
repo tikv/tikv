@@ -1,16 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::future::Future as StdFuture;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use prometheus::local::*;
+use rand::prelude::{thread_rng, RngCore};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::Builder as FuturePoolBuilder;
 use tikv_util::future_pool::FuturePool;
 
+use crate::read_pool::{self, YatpReadPoolHandle};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics};
 use crate::storage::metrics::*;
+use kvproto::kvrpcpb::CommandPri;
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -31,11 +35,16 @@ thread_local! {
 }
 
 #[derive(Clone)]
-pub struct SchedPool {
-    pub pool: FuturePool,
+pub enum SchedPool {
+    Independent(FuturePool),
+    Shared(YatpReadPoolHandle),
 }
 
 impl SchedPool {
+    pub fn from_unified(handle: YatpReadPoolHandle) -> Self {
+        SchedPool::Shared(handle)
+    }
+
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
         let engine = Arc::new(Mutex::new(engine));
         let pool = FuturePoolBuilder::new()
@@ -53,7 +62,28 @@ impl SchedPool {
                 tls_flush();
             })
             .build();
-        SchedPool { pool }
+        SchedPool::Independent(pool)
+    }
+
+    /// Spawns a future in the pool.
+    pub fn spawn<F>(&self, f: F, priority: CommandPri) -> Result<(), read_pool::ReadPoolError>
+    where
+        F: StdFuture<Output = ()> + Send + 'static,
+    {
+        let fixed_priority = match priority {
+            CommandPri::High => Some(2),
+            CommandPri::Normal | CommandPri::Low => None,
+        };
+        match self {
+            SchedPool::Shared(handle) => {
+                let task_id = thread_rng().next_u64();
+                handle.spawn(f, fixed_priority, task_id)?;
+            }
+            SchedPool::Independent(pool) => {
+                pool.spawn_with_priority(f, fixed_priority)?;
+            }
+        }
+        Ok(())
     }
 }
 

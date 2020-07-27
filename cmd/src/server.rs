@@ -40,6 +40,8 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
+use tikv::read_pool::ReadPoolHandle;
+use tikv::storage::txn::sched_pool::SchedPool;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -449,18 +451,14 @@ impl TiKVServer {
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
-            Some(build_yatp_read_pool(
-                &self.config.readpool.unified,
-                pd_sender.clone(),
-                engines.engine.clone(),
-            ))
-        } else {
-            None
-        };
+        let unified_read_pool = build_yatp_read_pool(
+            &self.config.readpool.unified,
+            pd_sender.clone(),
+            engines.engine.clone(),
+        );
 
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
-            unified_read_pool.as_ref().unwrap().handle()
+            ReadPoolHandle::Yatp(unified_read_pool.handle())
         } else {
             let storage_read_pools = ReadPool::from(storage::build_read_pool(
                 &self.config.readpool.storage,
@@ -469,14 +467,15 @@ impl TiKVServer {
             ));
             storage_read_pools.handle()
         };
+        let sched_pool = SchedPool::Shared(unified_read_pool.handle());
 
         let storage = create_raft_storage(
             engines.engine.clone(),
-            &self.config.storage,
+            &self.config,
             storage_read_pool_handle,
+            sched_pool,
             lock_mgr.clone(),
             self.pd_client.clone(),
-            self.config.pessimistic_txn.pipelined,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -499,7 +498,7 @@ impl TiKVServer {
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
-            unified_read_pool.as_ref().unwrap().handle()
+            ReadPoolHandle::Yatp(unified_read_pool.handle())
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
@@ -528,7 +527,7 @@ impl TiKVServer {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
-            unified_read_pool,
+            Some(unified_read_pool),
             self.shared_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));

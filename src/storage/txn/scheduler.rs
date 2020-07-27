@@ -20,13 +20,12 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use futures::future;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
-use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use kvproto::kvrpcpb::ExtraOp;
 use pd_client::PdClient;
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
@@ -150,9 +149,6 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
     // worker pool
     worker_pool: SchedPool,
 
-    // high priority commands and system commands will be delivered to this pool
-    high_priority_pool: SchedPool,
-
     // used to control write flow
     running_write_bytes: AtomicUsize,
 
@@ -256,7 +252,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         lock_mgr: L,
         pd_client: Arc<P>,
         concurrency: usize,
-        worker_pool_size: usize,
+        worker_pool: SchedPool,
         sched_pending_write_threshold: usize,
         pipelined_pessimistic_lock: bool,
     ) -> Self {
@@ -267,19 +263,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
         }
-
         let inner = Arc::new(SchedulerInner {
             task_contexts,
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
             sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
-            high_priority_pool: SchedPool::new(
-                engine.clone(),
-                std::cmp::max(1, worker_pool_size / 2),
-                "sched-high-pri-pool",
-            ),
+            worker_pool,
             lock_mgr,
             pd_client,
             pipelined_pessimistic_lock,
@@ -338,12 +328,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         }
     }
 
-    fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
-        if priority == CommandPri::High {
-            &self.inner.high_priority_pool
-        } else {
-            &self.inner.worker_pool
-        }
+    fn get_sched_pool(&self) -> &SchedPool {
+        &self.inner.worker_pool
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
@@ -360,6 +346,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     "receive snapshot finish msg";
                     "cid" => task.cid, "cb_ctx" => ?cb_ctx
                 );
+                let priority = task.cmd.priority();
 
                 match snapshot {
                     Ok(snapshot) => {
@@ -381,12 +368,14 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
                         info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                         sched
-                            .get_sched_pool(task.cmd.priority())
+                            .get_sched_pool()
                             .clone()
-                            .pool
-                            .spawn(async move {
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            })
+                            .spawn(
+                                async move {
+                                    sched.finish_with_err(task.cid, Error::from(err));
+                                },
+                                priority,
+                            )
                             .unwrap();
                     }
                 }
@@ -529,41 +518,44 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        let priority = task.cmd.priority();
 
-        self.get_sched_pool(task.cmd.priority())
+        self.get_sched_pool()
             .clone()
-            .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
+            .spawn(
+                async move {
+                    fail_point!("scheduler_async_snapshot_finish");
 
-                let read_duration = Instant::now_coarse();
+                    let read_duration = Instant::now_coarse();
 
-                let region_id = task.cmd.ctx().get_region_id();
-                let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
-                let mut statistics = Statistics::default();
+                    let region_id = task.cmd.ctx().get_region_id();
+                    let ts = task.cmd.ts();
+                    let timer = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
 
-                if task.cmd.readonly() {
-                    self.process_read(snapshot, task, &mut statistics);
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
-                    }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    slow_log!(
+                        timer.elapsed(),
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            })
+                    tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                },
+                priority,
+            )
             .unwrap();
     }
 
@@ -634,24 +626,24 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched
-                            .get_sched_pool(priority)
+                            .get_sched_pool()
                             .clone()
-                            .pool
-                            .spawn(async move {
-                                fail_point!("scheduler_async_write_finish");
-
-                                sched.on_write_finished(
-                                    cid,
-                                    write_finished_pr,
-                                    result,
-                                    pipelined,
-                                    tag,
-                                );
-                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                    .get(tag)
-                                    .observe(rows as f64);
-                                future::ok::<_, ()>(())
-                            })
+                            .spawn(
+                                async move {
+                                    fail_point!("scheduler_async_write_finish");
+                                    sched.on_write_finished(
+                                        cid,
+                                        write_finished_pr,
+                                        result,
+                                        pipelined,
+                                        tag,
+                                    );
+                                    KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                        .get(tag)
+                                        .observe(rows as f64);
+                                },
+                                priority,
+                            )
                             .unwrap()
                     });
 

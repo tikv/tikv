@@ -33,9 +33,10 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
+use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::{
     config::Config,
-    kv::{with_tls_engine, Modify, WriteData},
+    kv::{destroy_tls_engine, set_tls_engine, with_tls_engine, Modify, WriteData},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     mvcc::PointGetterBuilder,
@@ -50,7 +51,8 @@ use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest}
 use pd_client::{DummyPdClient, PdClient};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, Mutex};
+use tikv_util::future_pool::Builder;
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
@@ -153,6 +155,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         engine: E,
         config: &Config,
         read_pool: ReadPoolHandle,
+        sched_pool: SchedPool,
         lock_mgr: L,
         pd_client: Arc<P>,
         pipelined_pessimistic_lock: bool,
@@ -162,7 +165,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             lock_mgr,
             pd_client,
             config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
+            sched_pool,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
         );
@@ -1318,11 +1321,19 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
+        let engine = Arc::new(Mutex::new(self.engine.clone()));
+        let p = Builder::new()
+            .pool_size(1)
+            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            // Safety: we call `set_` and `destroy_` with the same engine type.
+            .before_stop(|| unsafe { destroy_tls_engine::<E>() })
+            .build();
 
         Storage::from_engine(
             self.engine,
             &self.config,
             ReadPool::from(read_pool).handle(),
+            SchedPool::Independent(p),
             self.lock_mgr,
             Arc::new(DummyPdClient::new()),
             self.pipelined_pessimistic_lock,

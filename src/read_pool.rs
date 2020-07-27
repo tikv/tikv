@@ -11,12 +11,62 @@ use tikv_util::time::Instant;
 use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::{multilevel, Extras, QueueType};
 use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::Remote;
 
 use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use prometheus::IntGauge;
+
+pub struct YatpReadPool {
+    pool: yatp::ThreadPool<TaskCell>,
+    running_tasks: IntGauge,
+    max_tasks: usize,
+}
+
+#[derive(Clone)]
+pub struct YatpReadPoolHandle {
+    pub remote: yatp::Remote<TaskCell>,
+    pub running_tasks: IntGauge,
+    pub max_tasks: usize,
+}
+
+impl YatpReadPoolHandle {
+    pub fn spawn<F>(&self, f: F, fixed_level: Option<u8>, task_id: u64) -> Result<(), ReadPoolError>
+    where
+        F: StdFuture<Output = ()> + Send + 'static,
+    {
+        let running_tasks = self.running_tasks.clone();
+
+        // Note that the running task number limit is not strict.
+        // If several tasks are spawned at the same time while the running task number
+        // is close to the limit, they may all pass this check and the number of running
+        // tasks may exceed the limit.
+        if running_tasks.get() as usize >= self.max_tasks {
+            return Err(ReadPoolError::UnifiedReadPoolFull);
+        }
+        let extras = Extras::new_multilevel(task_id, fixed_level);
+        let task = TaskCell::new(
+            async move {
+                running_tasks.inc();
+                f.await;
+                running_tasks.dec();
+            },
+            extras,
+        );
+        self.remote.spawn(task);
+        Ok(())
+    }
+}
+
+impl YatpReadPool {
+    pub fn handle(&self) -> YatpReadPoolHandle {
+        YatpReadPoolHandle {
+            remote: self.pool.remote().clone(),
+            running_tasks: self.running_tasks.clone(),
+            max_tasks: self.max_tasks,
+        }
+    }
+}
 
 pub enum ReadPool {
     FuturePools {
@@ -24,11 +74,7 @@ pub enum ReadPool {
         read_pool_normal: FuturePool,
         read_pool_low: FuturePool,
     },
-    Yatp {
-        pool: yatp::ThreadPool<TaskCell>,
-        running_tasks: IntGauge,
-        max_tasks: usize,
-    },
+    Yatp(YatpReadPool),
 }
 
 impl ReadPool {
@@ -43,15 +89,7 @@ impl ReadPool {
                 read_pool_normal: read_pool_normal.clone(),
                 read_pool_low: read_pool_low.clone(),
             },
-            ReadPool::Yatp {
-                pool,
-                running_tasks,
-                max_tasks,
-            } => ReadPoolHandle::Yatp {
-                remote: pool.remote().clone(),
-                running_tasks: running_tasks.clone(),
-                max_tasks: *max_tasks,
-            },
+            ReadPool::Yatp(pool) => ReadPoolHandle::Yatp(pool.handle()),
         }
     }
 }
@@ -63,11 +101,7 @@ pub enum ReadPoolHandle {
         read_pool_normal: FuturePool,
         read_pool_low: FuturePool,
     },
-    Yatp {
-        remote: Remote<TaskCell>,
-        running_tasks: IntGauge,
-        max_tasks: usize,
-    },
+    Yatp(YatpReadPoolHandle),
 }
 
 impl ReadPoolHandle {
@@ -89,35 +123,13 @@ impl ReadPoolHandle {
 
                 pool.spawn(f)?;
             }
-            ReadPoolHandle::Yatp {
-                remote,
-                running_tasks,
-                max_tasks,
-            } => {
-                let running_tasks = running_tasks.clone();
-                // Note that the running task number limit is not strict.
-                // If several tasks are spawned at the same time while the running task number
-                // is close to the limit, they may all pass this check and the number of running
-                // tasks may exceed the limit.
-                if running_tasks.get() as usize >= *max_tasks {
-                    return Err(ReadPoolError::UnifiedReadPoolFull);
-                }
-
+            ReadPoolHandle::Yatp(handle) => {
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
                     CommandPri::Low => Some(2),
                 };
-                let extras = Extras::new_multilevel(task_id, fixed_level);
-                let task_cell = TaskCell::new(
-                    async move {
-                        running_tasks.inc();
-                        f.await;
-                        running_tasks.dec();
-                    },
-                    extras,
-                );
-                remote.spawn(task_cell);
+                handle.spawn(f, fixed_level, task_id)?;
             }
         }
         Ok(())
@@ -241,7 +253,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
-) -> ReadPool {
+) -> YatpReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
 
     let mut builder = yatp::Builder::new(&unified_read_pool_name);
@@ -255,7 +267,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
     let pool = builder
         .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
-    ReadPool::Yatp {
+    YatpReadPool {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),

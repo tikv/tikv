@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use futures03::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
+use rand::prelude::{thread_rng, RngCore};
+use yatp::queue::Extras;
 use yatp::task::future;
+use yatp::task::future::TaskCell;
 
 type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
@@ -133,11 +136,18 @@ impl FuturePool {
             Ok(())
         }
     }
+    /// Spawns a future in the pool.
+    pub fn spawn<F>(&self, f: F) -> Result<(), Full>
+    where
+        F: StdFuture<Output = ()> + Send + 'static,
+    {
+        self.spawn_with_priority(f, None)
+    }
 
     /// Spawns a future in the pool.
-    pub fn spawn<F>(&self, future: F) -> Result<(), Full>
+    pub fn spawn_with_priority<F>(&self, f: F, priority: Option<u8>) -> Result<(), Full>
     where
-        F: StdFuture + Send + 'static,
+        F: StdFuture<Output = ()> + Send + 'static,
     {
         let timer = Instant::now_coarse();
         let h_schedule = self.env.metrics_pool_schedule_duration.clone();
@@ -145,10 +155,16 @@ impl FuturePool {
         self.gate_spawn()?;
 
         self.env.metrics_running_task_count.inc();
-        self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
-            let _ = future.await;
-        });
+        let task_id = thread_rng().next_u64();
+        let extras = Extras::new_multilevel(task_id, priority);
+        let task_cell = TaskCell::new(
+            async move {
+                h_schedule.observe(timer.elapsed_secs());
+                f.await;
+            },
+            extras,
+        );
+        self.pool.spawn(task_cell);
         Ok(())
     }
 

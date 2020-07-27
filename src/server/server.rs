@@ -32,7 +32,7 @@ use super::service::*;
 use super::snap::Runner as SnapHandler;
 use super::transport::ServerTransport;
 use super::{Config, Result};
-use crate::read_pool::ReadPool;
+use crate::read_pool::YatpReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(1000);
@@ -54,7 +54,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     trans: ServerTransport<T, S>,
     // Currently load statistics is done in the thread.
     grpc_thread_load: Arc<ThreadLoad>,
-    yatp_read_pool: Option<ReadPool>,
+    yatp_read_pool: Option<YatpReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
@@ -70,7 +70,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         resolver: S,
         snap_mgr: SnapManager<RocksEngine>,
         gc_worker: GcWorker<E>,
-        yatp_read_pool: Option<ReadPool>,
+        yatp_read_pool: Option<YatpReadPool>,
         common_worker: Worker,
     ) -> Result<Self> {
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));

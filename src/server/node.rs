@@ -6,11 +6,13 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
+use crate::config::TiKvConfig;
 use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{config::Config as StorageConfig, Storage};
+use crate::storage::txn::sched_pool::SchedPool;
+use crate::storage::Storage;
 use engine_rocks::RocksEngine;
 use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
@@ -34,22 +36,23 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 /// protocol.
 pub fn create_raft_storage<S, P: PdClient + 'static>(
     engine: RaftKv<S>,
-    cfg: &StorageConfig,
+    cfg: &TiKvConfig,
     read_pool: ReadPoolHandle,
+    sched_pool: SchedPool,
     lock_mgr: LockManager,
     pd_client: Arc<P>,
-    pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
     S: RaftStoreRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(
         engine,
-        cfg,
+        &cfg.storage,
         read_pool,
+        sched_pool,
         lock_mgr,
         pd_client,
-        pipelined_pessimistic_lock,
+        cfg.pessimistic_txn.pipelined,
     )?;
     Ok(store)
 }
