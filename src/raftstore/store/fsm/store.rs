@@ -601,6 +601,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
         self.timer = SlowTimer::new();
+        self.poll_ctx.perf_context_statistics.start();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
