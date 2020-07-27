@@ -2,13 +2,13 @@
 
 use crate::collections::{HashMap, HashMapEntry};
 use std::hash::Hash;
-use std::mem;
-use std::ptr::NonNull;
+use std::mem::MaybeUninit;
+use std::ptr::{self, NonNull};
 
 struct Record<K> {
-    prev: Option<NonNull<Record<K>>>,
-    next: Option<NonNull<Record<K>>>,
-    key: K,
+    prev: NonNull<Record<K>>,
+    next: NonNull<Record<K>>,
+    key: MaybeUninit<K>,
 }
 
 struct ValueEntry<K, V> {
@@ -17,93 +17,97 @@ struct ValueEntry<K, V> {
 }
 
 struct Trace<K> {
-    head: Option<NonNull<Record<K>>>,
-    tail: Option<NonNull<Record<K>>>,
+    head: Box<Record<K>>,
+    tail: Box<Record<K>>,
 }
 
 impl<K> Trace<K> {
+    fn new() -> Trace<K> {
+        unsafe {
+            let mut head = Box::new(Record {
+                prev: NonNull::new_unchecked(1usize as _),
+                next: NonNull::new_unchecked(1usize as _),
+                key: MaybeUninit::uninit(),
+            });
+            let mut tail = Box::new(Record {
+                prev: NonNull::new_unchecked(1usize as _),
+                next: NonNull::new_unchecked(1usize as _),
+                key: MaybeUninit::uninit(),
+            });
+            head.next = NonNull::new_unchecked(&mut *tail);
+            tail.prev = NonNull::new_unchecked(&mut *head);
+
+            Trace { head, tail }
+        }
+    }
+
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
-            if let Some(mut prev) = record.as_mut().prev {
-                prev.as_mut().next = record.as_mut().next;
-                if let Some(mut next) = record.as_mut().next {
-                    next.as_mut().prev = Some(prev);
-                } else {
-                    self.tail = Some(prev);
-                }
-                self.head.unwrap().as_mut().prev = Some(record);
-                record.as_mut().next = self.head;
-                record.as_mut().prev = None;
-                self.head = Some(record);
-            }
+            record.as_mut().prev.as_mut().next = record.as_mut().next;
+            record.as_mut().next.as_mut().prev = record.as_mut().prev;
+            self.head.next.as_mut().prev = record;
+            record.as_mut().next = self.head.next;
+            record.as_mut().prev = NonNull::new_unchecked(&mut *self.head);
+            self.head.next = record;
         }
     }
 
     fn delete(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
-            if let Some(mut prev) = record.as_mut().prev {
-                prev.as_mut().next = record.as_mut().next;
-                if let Some(mut next) = record.as_mut().next {
-                    next.as_mut().prev = Some(prev);
-                } else {
-                    self.tail = Some(prev);
-                }
-            } else {
-                self.head = record.as_mut().next;
-                if let Some(mut h) = self.head {
-                    h.as_mut().prev = None;
-                } else {
-                    self.tail = None;
-                }
-            }
-            Box::from_raw(record.as_ptr());
+            record.as_mut().prev.as_mut().next = record.as_mut().next;
+            record.as_mut().next.as_mut().prev = record.as_mut().prev;
+
+            ptr::drop_in_place(Box::from_raw(record.as_ptr()).key.as_mut_ptr());
         }
     }
 
     fn create(&mut self, key: K) -> NonNull<Record<K>> {
         let record = Box::leak(Box::new(Record {
-            prev: None,
-            next: self.head,
-            key,
+            prev: unsafe { NonNull::new_unchecked(&mut *self.head) },
+            next: self.head.next,
+            key: MaybeUninit::new(key),
         }))
         .into();
-        if let Some(mut head) = self.head {
-            unsafe {
-                head.as_mut().prev = Some(record);
-            }
-        }
-        self.head = Some(record);
-        if self.tail.is_none() {
-            self.tail = self.head;
+        unsafe {
+            self.head.next.as_mut().prev = record;
+            self.head.next = record;
         }
         record
     }
 
     fn reuse_tail(&mut self, key: K) -> (K, NonNull<Record<K>>) {
-        let mut tail = self.tail.unwrap();
         unsafe {
-            if self.tail != self.head {
-                tail.as_mut().prev.unwrap().as_mut().next = None;
-                self.tail = tail.as_mut().prev;
-                self.head.unwrap().as_mut().prev = Some(tail);
-
-                tail.as_mut().prev = None;
-                tail.as_mut().next = self.head;
-                self.head = Some(tail);
-            }
-            let old_key = mem::replace(&mut tail.as_mut().key, key);
-            (old_key, tail)
+            let mut record = self.tail.prev;
+            record.as_mut().prev.as_mut().next = NonNull::new_unchecked(&mut *self.tail);
+            self.tail.prev = record.as_mut().prev;
+            self.head.next.as_mut().prev = record;
+            record.as_mut().prev = NonNull::new_unchecked(&mut *self.head);
+            record.as_mut().next = self.head.next;
+            self.head.next = record;
+            let old_key = record.as_mut().key.as_ptr().read();
+            record.as_mut().key = MaybeUninit::new(key);
+            (old_key, record)
         }
     }
 
     fn clear(&mut self) {
-        let mut cur = self.head;
-        while cur.is_some() {
-            unsafe {
-                let tmp = cur.unwrap().as_mut().next;
-                Box::from_raw(cur.unwrap().as_ptr());
+        let mut cur = self.head.next;
+        unsafe {
+            while cur.as_ptr() != &mut *self.tail {
+                let tmp = cur.as_mut().next;
+                ptr::drop_in_place(Box::from_raw(cur.as_ptr()).key.as_mut_ptr());
                 cur = tmp;
             }
+        }
+    }
+
+    fn remove_tail(&mut self) -> K {
+        unsafe {
+            let mut record = self.tail.prev;
+            record.as_mut().prev.as_mut().next = NonNull::new_unchecked(&mut *self.tail);
+            self.tail.prev = record.as_mut().prev;
+            let r = Box::from_raw(record.as_ptr());
+            r.key.as_ptr().read()
         }
     }
 }
@@ -116,15 +120,12 @@ pub struct LruCache<K, V> {
 
 impl<K, V> LruCache<K, V> {
     pub fn with_capacity(mut capacity: usize) -> LruCache<K, V> {
-        if capacity < 2 {
-            capacity = 2;
+        if capacity == 0 {
+            capacity = 1;
         }
         LruCache {
             map: HashMap::with_capacity_and_hasher(capacity, Default::default()),
-            trace: Trace {
-                head: None,
-                tail: None,
-            },
+            trace: Trace::new(),
             capacity,
         }
     }
@@ -147,14 +148,13 @@ where
 {
     #[inline]
     pub fn resize(&mut self, mut new_cap: usize) {
-        if new_cap < 2 {
-            new_cap = 2;
+        if new_cap == 0 {
+            new_cap = 1;
         }
         if new_cap < self.capacity && self.map.len() > new_cap {
             for _ in new_cap..self.map.len() {
-                let record = self.trace.tail.unwrap();
-                self.map.remove(unsafe { &record.as_ref().key });
-                self.trace.delete(record);
+                let key = self.trace.remove_tail();
+                self.map.remove(&key);
             }
             self.map.shrink_to_fit();
         }
@@ -263,6 +263,35 @@ mod tests {
         for i in 5..10 {
             assert_eq!(map.get(&i), None);
         }
+    }
+
+    #[test]
+    fn test_empty() {
+        let mut map = LruCache::with_capacity(0);
+        map.insert(2, 4);
+        assert_eq!(map.get(&2), Some(&4));
+        map.insert(3, 5);
+        assert_eq!(map.get(&3), Some(&5));
+        assert_eq!(map.get(&2), None);
+
+        map.resize(1);
+        map.insert(2, 4);
+        assert_eq!(map.get(&2), Some(&4));
+        assert_eq!(map.get(&3), None);
+        map.insert(3, 5);
+        assert_eq!(map.get(&3), Some(&5));
+        assert_eq!(map.get(&2), None);
+
+        map.remove(&3);
+        assert_eq!(map.get(&3), None);
+        map.insert(2, 4);
+        assert_eq!(map.get(&2), Some(&4));
+
+        map.resize(0);
+        assert_eq!(map.get(&2), Some(&4));
+        map.insert(3, 5);
+        assert_eq!(map.get(&3), Some(&5));
+        assert_eq!(map.get(&2), None);
     }
 
     #[test]
