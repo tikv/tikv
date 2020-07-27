@@ -145,7 +145,7 @@ impl PessimisticLockRes {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SecondaryLocksStatus {
     Locked(Vec<kvrpcpb::LockInfo>),
     Committed(TimeStamp),
