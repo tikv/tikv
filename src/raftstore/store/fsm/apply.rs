@@ -2663,7 +2663,9 @@ pub struct ApplyPoller {
 }
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
-    fn begin(&mut self, _batch_size: usize) {}
+    fn begin(&mut self, _batch_size: usize) {
+        self.apply_ctx.perf_context_statistics.start();
+    }
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
