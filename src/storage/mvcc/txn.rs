@@ -28,7 +28,7 @@ fn make_rollback(
 ) -> Option<Write> {
     match overlay_write {
         Some(write) => {
-            assert_eq!(start_ts, write.start_ts);
+            assert!(start_ts > write.start_ts);
             if protected {
                 Some(write.set_overlay_rollback(true))
             } else {
@@ -1514,8 +1514,8 @@ mod tests {
         assert!(!w1.has_overlay_rollback);
         assert!(!w2.has_overlay_rollback);
 
-        must_cleanup(&engine, k2, 20, 30);
-        must_rollback(&engine, k1, 20);
+        must_cleanup(&engine, k1, 20, 0);
+        must_rollback(&engine, k2, 20);
 
         let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
         assert!(w1r.has_overlay_rollback);
@@ -1526,6 +1526,32 @@ mod tests {
         // Rollback is invoked on secondaries, so the rollback is not protected and overlay_rollback
         // won't be set.
         assert_eq!(w2r, w2);
+    }
+
+    #[test]
+    fn test_commit_overlay() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+
+        must_prewrite_put(&engine, k1, v1, k2, 10);
+        must_prewrite_put(&engine, k2, v2, k2, 10);
+
+        // Write a protected rollback on k1.
+        must_cleanup(&engine, k1, 20, 0);
+        // Write a non-protected rollback on k2.
+        must_rollback(&engine, k2, 20);
+
+        must_commit_maybe_overlay(&engine, k2, 10, 20);
+        must_commit_maybe_overlay(&engine, k1, 10, 20);
+
+        let w1 = must_written(&engine, k1, 10, 20, WriteType::Put);
+        let w2 = must_written(&engine, k2, 10, 20, WriteType::Put);
+
+        // Protected rollback will be kept in the new commit record as overlay rollback flag.
+        assert!(w1.has_overlay_rollback);
+        // Non-protected rollback can be freely overwritten.
+        assert!(!w2.has_overlay_rollback);
     }
 
     #[test]
@@ -2308,7 +2334,7 @@ mod tests {
         must_pessimistic_locked(&engine, k, 46, 47);
         must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, true);
         must_locked(&engine, k, 46);
-        must_commit(&engine, k, 46, 49);
+        must_commit(&engine, k, 46, 50);
         must_unlocked(&engine, k);
 
         // Prewrite on non-pessimistic key meets write with larger commit_ts than current
@@ -2330,6 +2356,14 @@ mod tests {
         must_prewrite_put(&engine, k, v, k, 51);
         must_rollback_collapsed(&engine, k, 51);
         must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
+
+        // Overlay rollback record will be written when the current start_ts equals to another write
+        // records' commit ts. Now there is a commit record with commit_ts = 50.
+        must_acquire_pessimistic_lock(&engine, k, k, 50, 61);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
+        must_locked(&engine, k, 50);
+        must_cleanup(&engine, k, 50, 0);
+        must_get_overlay_rollback(&engine, k, 50, 46, WriteType::Put);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
