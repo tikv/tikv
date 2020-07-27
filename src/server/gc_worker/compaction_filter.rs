@@ -292,13 +292,11 @@ pub mod tests {
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CompactExt, Peekable, SyncMutable};
+    use engine_traits::{CompactExt, Peekable};
     use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = RocksEngine::from_db(engine.get_rocksdb());
-        // Put a new key-value pair to ensure compaction can be triggered correctly.
-        engine.put_cf("write", b"k1", b"v1").unwrap();
         do_gc_by_compact(&engine, None, None, safe_point);
     }
 

@@ -842,6 +842,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_prewrite_skip_too_many_tombstone() {
+        use crate::server::gc_worker::gc_by_compact;
+        use crate::storage::kv::PerfStatisticsInstant;
+        use engine_rocks::{set_perf_level, PerfLevel};
+        let mut mutations = Vec::default();
+        let pri_key_number = 0;
+        let pri_key = &[pri_key_number];
+        for i in 0..100 {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        let mut statistic = Statistics::default();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .unwrap();
+        rollback(&engine, &mut statistic, keys.clone(), 100).unwrap();
+        gc_by_compact(&engine, pri_key, 101);
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
+        let perf = PerfStatisticsInstant::new();
+        let mut statistic = Statistics::default();
+        while mutations.len() > 20 {
+            mutations.pop();
+        }
+        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        let d = perf.delta();
+        assert_eq!(1, statistic.write.seek);
+        assert_eq!(d.0.internal_delete_skipped_count, 0);
+    }
+
     fn prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
@@ -892,6 +931,30 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
+
+        let ret = process_write_impl(
+            cmd.into(),
+            snap,
+            &DummyLockManager {},
+            Arc::new(DummyPdClient::new()),
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
 
         let ret = process_write_impl(
             cmd.into(),
