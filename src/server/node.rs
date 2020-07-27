@@ -11,7 +11,7 @@ use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -42,7 +42,7 @@ pub fn create_raft_storage<S, P: PdClient + 'static>(
     pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
-    S: RaftStoreRouter<RocksSnapshot> + 'static,
+    S: RaftStoreRouter<RocksEngine> + 'static,
 {
     let store = Storage::from_engine(
         engine,
@@ -195,11 +195,11 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksSnapshot> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter {
+    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
         self.system.apply_router()
     }
 
