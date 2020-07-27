@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
-use crate::server::service::kv::{batch_commands_response, poll_future_notify};
+use crate::server::service::kv::batch_commands_response;
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
     kv::Engine,
@@ -10,6 +10,7 @@ use crate::storage::{
 };
 use futures::Future;
 use kvproto::kvrpcpb::*;
+use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
