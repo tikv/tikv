@@ -65,7 +65,7 @@ impl Runnable<Task> for Runner {
 struct RocksEngineCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Worker<Task>,
+    worker: Worker,
 }
 
 impl Drop for RocksEngineCore {
@@ -104,7 +104,7 @@ impl RocksEngine {
             }
             _ => (path.to_owned(), None),
         };
-        let mut worker = Worker::new("engine-rocksdb");
+        let worker = Worker::new("engine-rocksdb");
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path, None, cfs, cfs_opts,
         )?);
@@ -115,9 +115,9 @@ impl RocksEngine {
             BaseRocksEngine::from_db(db),
             shared_block_cache,
         );
-        box_try!(worker.start(Runner(engines.clone())));
+        let sched = worker.start(Runner(engines.clone()));
         Ok(RocksEngine {
-            sched: worker.scheduler(),
+            sched,
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,

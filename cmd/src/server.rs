@@ -33,7 +33,7 @@ use raftstore::{
 use security::SecurityManager;
 use std::{
     convert::TryFrom,
-    env, fmt,
+    env,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -46,7 +46,6 @@ use tikv::{
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
     server::{
-        config::Config as ServerConfig,
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
@@ -93,10 +92,10 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_encryption();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
-    let server_config = tikv.init_servers(&gc_worker);
+    tikv.init_servers(&gc_worker);
     tikv.register_services();
     tikv.init_metrics_flusher();
-    tikv.run_server(server_config);
+    tikv.run_server();
     tikv.run_status_server();
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
@@ -124,6 +123,7 @@ struct TiKVServer {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
+    shared_worker: Worker,
 }
 
 struct Engines {
@@ -161,13 +161,14 @@ impl TiKVServer {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        let (resolve_worker, resolver, state) =
-            resolve::new_resolver(Arc::clone(&pd_client), router.clone())
+        let shared_worker = Worker::new("common-worker");
+        let (resolver, state) =
+            resolve::new_resolver(Arc::clone(&pd_client), router.clone(), &shared_worker)
                 .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
-        region_info_accessor.start();
+        let region_info_accessor =
+            RegionInfoAccessor::new(&shared_worker, coprocessor_host.as_mut().unwrap());
 
         TiKVServer {
             config,
@@ -180,11 +181,12 @@ impl TiKVServer {
             state,
             store_path,
             encryption_key_manager: None,
+            shared_worker: shared_worker.clone(),
             engines: None,
             servers: None,
             region_info_accessor,
             coprocessor_host,
-            to_stop: vec![Box::new(resolve_worker)],
+            to_stop: vec![Box::new(shared_worker)],
             lock_files: vec![],
         }
     }
@@ -416,16 +418,16 @@ impl TiKVServer {
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         gc_worker
-            .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
+            .start_observe_lock_apply(
+                &mut self.shared_worker,
+                self.coprocessor_host.as_mut().unwrap(),
+            )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         gc_worker
     }
 
-    fn init_servers(
-        &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
-    ) -> Arc<ServerConfig> {
+    fn init_servers(&mut self, gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>) {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Gc,
@@ -508,10 +510,11 @@ impl TiKVServer {
         };
 
         // Create and register cdc.
-        let mut cdc_worker = Box::new(tikv_util::worker::Worker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_ob = cdc::CdcObserver::new();
         cdc_ob.register_to(&mut coprocessor_host);
+        let cdc_endpoint =
+            cdc::Endpoint::new(self.pd_client.clone(), engines.raft_router.clone(), cdc_ob);
+        let cdc_scheduler = self.shared_worker.start(cdc_endpoint);
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -526,6 +529,7 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             unified_read_pool,
+            self.shared_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -533,17 +537,16 @@ impl TiKVServer {
         let importer =
             Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
 
-        let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
         );
-        split_check_worker.start(split_check_runner).unwrap();
+        let split_check_scheduler = self.shared_worker.start(split_check_runner);
         cfg_controller.register(
             tikv::config::Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),
+            Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
         self.config
@@ -581,7 +584,7 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
@@ -599,19 +602,6 @@ impl TiKVServer {
         }
 
         // Start CDC.
-        let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
-        let cdc_endpoint = cdc::Endpoint::new(
-            self.pd_client.clone(),
-            cdc_worker.scheduler(),
-            raft_router,
-            cdc_ob,
-        );
-        let cdc_timer = cdc_endpoint.new_timer();
-        cdc_worker
-            .start_with_timer(cdc_endpoint, cdc_timer)
-            .unwrap_or_else(|e| fatal!("failed to start cdc: {}", e));
-        self.to_stop.push(cdc_worker);
-
         self.servers = Some(Servers {
             lock_mgr,
             server,
@@ -619,8 +609,6 @@ impl TiKVServer {
             importer,
             cdc_scheduler,
         });
-
-        server_config
     }
 
     fn register_services(&mut self) {
@@ -702,18 +690,6 @@ impl TiKVServer {
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
-        // Backup service.
-        let mut backup_worker = Box::new(tikv_util::worker::Worker::new("backup-endpoint"));
-        let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
-
         let backup_endpoint = backup::Endpoint::new(
             servers.node.id(),
             engines.engine.clone(),
@@ -725,10 +701,16 @@ impl TiKVServer {
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
         );
-        let backup_timer = backup_endpoint.new_timer();
-        backup_worker
-            .start_with_timer(backup_endpoint, backup_timer)
-            .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
+        let backup_scheduler = self.shared_worker.start(backup_endpoint);
+        // Backup service.
+        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
 
         let cdc_service =
             cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
@@ -739,8 +721,6 @@ impl TiKVServer {
         {
             fatal!("failed to register cdc service");
         }
-
-        self.to_stop.push(backup_worker);
     }
 
     fn init_metrics_flusher(&mut self) {
@@ -761,7 +741,7 @@ impl TiKVServer {
         self.to_stop.push(metrics_flusher);
     }
 
-    fn run_server(&mut self, server_config: Arc<ServerConfig>) {
+    fn run_server(&mut self) {
         let server = self.servers.as_mut().unwrap();
         server
             .server
@@ -769,7 +749,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server
-            .start(server_config, self.security_mgr.clone())
+            .start()
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 
@@ -937,7 +917,7 @@ impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
     }
 }
 
-impl<T: fmt::Display + Send + 'static> Stop for Worker<T> {
+impl Stop for Worker {
     fn stop(mut self: Box<Self>) {
         if let Some(Err(e)) = Worker::stop(&mut *self).map(JoinHandle::join) {
             info!(

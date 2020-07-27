@@ -25,7 +25,7 @@ use tikv::storage::Statistics;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::{Runnable, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
@@ -62,6 +62,7 @@ impl fmt::Display for Task {
         write!(f, "{:?}", self)
     }
 }
+
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BackupTask")
@@ -72,6 +73,19 @@ impl fmt::Debug for Task {
             .field("is_raw_kv", &self.request.is_raw_kv)
             .field("cf", &self.request.cf)
             .finish()
+    }
+}
+
+pub enum TaskMsg {
+    NormalTask(Task),
+    Timeout,
+}
+impl fmt::Display for TaskMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            TaskMsg::NormalTask(ref t) => write!(f, "{:?}", t),
+            TaskMsg::Timeout => write!(f, "timeout"),
+        }
     }
 }
 
@@ -351,6 +365,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
+    scheduler: Option<Scheduler<TaskMsg>>,
 }
 
 /// The progress of a backup task
@@ -562,6 +577,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
+            scheduler: None,
         }
     }
 
@@ -732,23 +748,33 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
-    fn run(&mut self, task: Task) {
-        if task.has_canceled() {
-            warn!("backup task has canceled"; "task" => %task);
-            return;
-        }
-        info!("run backup task"; "task" => %task);
-        self.handle_backup_task(task);
-        self.pool.borrow_mut().heartbeat();
-    }
-}
-
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+impl<E: Engine, R: RegionInfoProvider> Runnable<TaskMsg> for Endpoint<E, R> {
+    fn register_scheduler(&mut self, scheduler: Scheduler<TaskMsg>) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool.borrow_mut().check_active(pool_idle_duration);
-        timer.add_task(pool_idle_duration, ());
+        scheduler.register_timeout(TaskMsg::Timeout, pool_idle_duration);
+        self.scheduler = Some(scheduler);
+    }
+
+    fn run(&mut self, msg: TaskMsg) {
+        match msg {
+            TaskMsg::NormalTask(task) => {
+                if task.has_canceled() {
+                    warn!("backup task has canceled"; "task" => %task);
+                    return;
+                }
+                info!("run backup task"; "task" => %task);
+                self.handle_backup_task(task);
+                self.pool.borrow_mut().heartbeat();
+            }
+            TaskMsg::Timeout => {
+                let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
+                self.pool.borrow_mut().check_active(pool_idle_duration);
+                self.scheduler
+                    .as_ref()
+                    .unwrap()
+                    .register_timeout(TaskMsg::Timeout, pool_idle_duration);
+            }
+        }
     }
 }
 

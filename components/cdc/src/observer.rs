@@ -22,7 +22,7 @@ use crate::Error as CdcError;
 ///   2. Apply command events.
 #[derive(Clone)]
 pub struct CdcObserver {
-    sched: Scheduler<Task>,
+    sched: Option<Scheduler<Task>>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
@@ -34,12 +34,16 @@ impl CdcObserver {
     ///
     /// Events are strong ordered, so `sched` must be implemented as
     /// a FIFO queue.
-    pub fn new(sched: Scheduler<Task>) -> CdcObserver {
+    pub fn new() -> CdcObserver {
         CdcObserver {
-            sched,
+            sched: None,
             observe_regions: Arc::default(),
             cmd_batches: RefCell::default(),
         }
+    }
+
+    pub fn set_scheduler(&mut self, sched: Scheduler<Task>) {
+        self.sched = Some(sched);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
@@ -112,7 +116,12 @@ impl CmdObserver for CdcObserver {
         fail_point!("before_cdc_flush_apply");
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
-            if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
+            if let Err(e) = self
+                .sched
+                .as_ref()
+                .unwrap()
+                .schedule(Task::MultiBatch { multi: batches })
+            {
                 warn!("schedule cdc task failed"; "error" => ?e);
             }
         }
@@ -131,7 +140,12 @@ impl RoleObserver for CdcObserver {
                     observe_id,
                     err: CdcError::Request(store_err.into()),
                 };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                if let Err(e) = self
+                    .sched
+                    .as_ref()
+                    .unwrap()
+                    .schedule(Task::Deregister(deregister))
+                {
                     error!("schedule cdc task failed"; "error" => ?e);
                 }
             }
@@ -156,7 +170,12 @@ impl RegionChangeObserver for CdcObserver {
                     observe_id,
                     err: CdcError::Request(store_err.into()),
                 };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                if let Err(e) = self
+                    .sched
+                    .as_ref()
+                    .unwrap()
+                    .schedule(Task::Deregister(deregister))
+                {
                     error!("schedule cdc task failed"; "error" => ?e);
                 }
             }

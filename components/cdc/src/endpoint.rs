@@ -21,8 +21,8 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
-use tikv_util::timer::{SteadyTimer, Timer};
-use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
+use tikv_util::timer::SteadyTimer;
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -124,6 +124,7 @@ pub enum Task {
         cb: InitCallback,
     },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
+    OnTimeout,
 }
 
 impl fmt::Display for Task {
@@ -195,6 +196,7 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
+            Task::OnTimeout => de.field("type", &"on_timeout").finish(),
         }
     }
 }
@@ -204,7 +206,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
-    scheduler: Scheduler<Task>,
+    scheduler: Option<Scheduler<Task>>,
     raft_router: T,
     observer: CdcObserver,
 
@@ -212,31 +214,23 @@ pub struct Endpoint<T> {
     timer: SteadyTimer,
     min_ts_interval: Duration,
     scan_batch_size: usize,
-    tso_worker: ThreadPool,
-
-    workers: ThreadPool,
+    tso_worker: Option<ThreadPool>,
+    workers: Option<ThreadPool>,
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
-    pub fn new(
-        pd_client: Arc<dyn PdClient>,
-        scheduler: Scheduler<Task>,
-        raft_router: T,
-        observer: CdcObserver,
-    ) -> Endpoint<T> {
-        let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
-        let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+    pub fn new(pd_client: Arc<dyn PdClient>, raft_router: T, observer: CdcObserver) -> Endpoint<T> {
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
-            scheduler,
+            scheduler: None,
             pd_client,
-            tso_worker,
+            tso_worker: None,
             timer: SteadyTimer::default(),
-            workers,
+            workers: None,
             raft_router,
             observer,
             scan_batch_size: 1024,
@@ -244,16 +238,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
         };
-        ep.register_min_ts_event();
         ep
-    }
-
-    pub fn new_timer(&self) -> Timer<()> {
-        // Currently there is only one timeout for CDC.
-        let cdc_timer_cap = 1;
-        let mut timer = Timer::new(cdc_timer_cap);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        timer
     }
 
     pub fn set_min_ts_interval(&mut self, dur: Duration) {
@@ -359,6 +344,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         mut downstream: Downstream,
         conn_id: ConnID,
     ) {
+        if self.workers.is_none() {
+            self.workers = Some(Builder::new().name_prefix("cdcwkr").pool_size(4).build());
+            self.tso_worker = Some(Builder::new().name_prefix("tso").pool_size(1).build());
+            self.register_min_ts_event();
+        }
         let region_id = request.region_id;
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
@@ -394,7 +384,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
-        let sched = self.scheduler.clone();
+        let sched = self.scheduler.clone().unwrap();
         let batch_size = self.scan_batch_size;
 
         let init = Initializer {
@@ -439,7 +429,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
         };
         let (cb, fut) = tikv_util::future::paired_future_callback();
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.scheduler.clone().unwrap();
         let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
             let deregister = Deregister::Downstream {
@@ -452,7 +442,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 error!("schedule cdc task failed"; "error" => ?e);
             }
         };
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.scheduler.clone().unwrap();
         if let Err(e) = self.raft_router.significant_send(
             region_id,
             SignificantMsg::CaptureChange {
@@ -474,7 +464,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(fut.then(move |res| {
+        self.workers.as_ref().unwrap().spawn(fut.then(move |res| {
             match res {
                 Ok(resp) => init.on_change_cmd(resp),
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
@@ -558,7 +548,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     fn register_min_ts_event(&self) {
         let timeout = self.timer.delay(self.min_ts_interval);
         let tso = self.pd_client.get_tso();
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.scheduler.clone().unwrap();
         let raft_router = self.raft_router.clone();
         let regions: Vec<(u64, ObserveID)> = self
             .capture_regions
@@ -614,7 +604,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Ok(())
             },
         );
-        self.tso_worker.spawn(fut);
+        self.tso_worker.as_ref().unwrap().spawn(fut);
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -810,6 +800,15 @@ impl Initializer {
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
+    fn register_scheduler(&mut self, scheduler: Scheduler<Task>) {
+        scheduler.register_timeout(
+            Task::OnTimeout,
+            Duration::from_millis(METRICS_FLUSH_INTERVAL),
+        );
+        self.observer.set_scheduler(scheduler.clone());
+        self.scheduler = Some(scheduler);
+    }
+
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -847,22 +846,21 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
             }
+            Task::OnTimeout => {
+                CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
+                if self.min_resolved_ts != TimeStamp::max() {
+                    CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
+                    CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
+                }
+                self.min_resolved_ts = TimeStamp::max();
+                self.min_ts_region_id = 0;
+                self.scheduler.as_ref().unwrap().register_timeout(
+                    Task::OnTimeout,
+                    Duration::from_millis(METRICS_FLUSH_INTERVAL),
+                );
+            }
         }
         self.flush_all();
-    }
-}
-
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
-        if self.min_resolved_ts != TimeStamp::max() {
-            CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
-            CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
-        }
-        self.min_resolved_ts = TimeStamp::max();
-        self.min_ts_region_id = 0;
-
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }
 }
 

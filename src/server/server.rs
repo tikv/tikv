@@ -6,13 +6,11 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use futures::{Future, Stream};
-use grpcio::{
-    ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
-};
+use futures::Stream;
+use grpcio::{ChannelBuilder, EnvBuilder, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
 use pd_client::PdClient;
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use tokio_threadpool::Builder as ThreadPoolBuilder;
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
@@ -23,6 +21,7 @@ use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
+use tikv_util::future::poll_future_notify;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
 use tikv_util::Either;
@@ -31,13 +30,13 @@ use super::load_statistics::*;
 use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::snap::Runner as SnapHandler;
 use super::transport::ServerTransport;
 use super::{Config, Result};
 use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
-const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(1000);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
@@ -47,7 +46,6 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
-    env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
     /// If the listening port is configured, the server will be started lazily.
@@ -55,13 +53,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
-    raft_router: T,
-    // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
-    snap_worker: Worker<SnapTask>,
-
     // Currently load statistics is done in the thread.
-    stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
@@ -80,6 +72,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager<RocksEngine>,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<ReadPool>,
+        common_worker: Worker,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
@@ -102,14 +95,20 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let snap_worker = Worker::new("snap-handler");
-
+        let snap_runner = SnapHandler::new(
+            Arc::clone(&env),
+            snap_mgr.clone(),
+            raft_router.clone(),
+            security_mgr.clone(),
+            Arc::clone(&cfg),
+        );
+        let snap_scheduler = common_worker.start(snap_runner);
         let kv_service = KvService::new(
             storage,
             gc_worker,
             cop,
             raft_router.clone(),
-            snap_worker.scheduler(),
+            snap_scheduler.clone(),
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
@@ -147,22 +146,12 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             stats_pool.as_ref().map(|p| p.sender().clone()),
         )));
 
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
-            resolver,
-        );
+        let trans = ServerTransport::new(raft_client, snap_scheduler, raft_router, resolver);
 
         let svr = Server {
-            env: Arc::clone(&env),
             builder_or_server: Some(builder),
             local_addr: addr,
             trans,
-            raft_router,
-            snap_mgr,
-            snap_worker,
-            stats_pool,
             grpc_thread_load,
             yatp_read_pool,
             readpool_normal_thread_load,
@@ -206,16 +195,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
 
     /// Starts the TiKV server.
     /// Notice: Make sure call `build_and_bind` first.
-    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-            Arc::clone(&cfg),
-        );
-        box_try!(self.snap_worker.start(snap_runner));
-
+    pub fn start(&mut self) -> Result<()> {
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
         grpc_server.start();
@@ -229,31 +209,24 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             let tl = Arc::clone(&self.readpool_normal_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
         };
-        if let Some(ref p) = self.stats_pool {
-            p.spawn(
-                self.timer
-                    .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
-                    .map_err(|_| ())
-                    .for_each(move |i| {
-                        grpc_load_stats.record(i);
-                        readpool_normal_load_stats.record(i);
-                        Ok(())
-                    }),
-            )
-        };
-
+        let f = self
+            .timer
+            .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+            .map_err(|_| ())
+            .for_each(move |i| {
+                grpc_load_stats.record(i);
+                readpool_normal_load_stats.record(i);
+                Ok(())
+            });
+        poll_future_notify(f);
         info!("TiKV is ready to serve");
         Ok(())
     }
 
     /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
-        self.snap_worker.stop();
         if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
             server.shutdown();
-        }
-        if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_now().wait();
         }
         let _ = self.yatp_read_pool.take();
         Ok(())

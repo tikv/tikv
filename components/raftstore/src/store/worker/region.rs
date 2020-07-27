@@ -28,8 +28,7 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
-use tikv_util::timer::Timer;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::{Runnable, Scheduler};
 
 use super::metrics::*;
 
@@ -65,6 +64,8 @@ pub enum Task<S> {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    ApplyOnTimeout,
+    DestroyOnTimeout,
 }
 
 impl<S> Task<S> {
@@ -93,6 +94,8 @@ impl<S> Display for Task<S> {
                 hex::encode_upper(start_key),
                 hex::encode_upper(end_key)
             ),
+            Task::ApplyOnTimeout => write!(f, "apply on timeout"),
+            Task::DestroyOnTimeout => write!(f, "destroy on timeout"),
         }
     }
 }
@@ -563,6 +566,8 @@ where
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
+    scheduler: Option<Scheduler<Task<EK::Snapshot>>>,
+    pending_apply_delay: usize,
 }
 
 impl<EK, ER, R> Runner<EK, ER, R>
@@ -594,20 +599,9 @@ where
                 router,
             },
             pending_applies: VecDeque::new(),
+            scheduler: None,
+            pending_apply_delay: 0,
         }
-    }
-
-    pub fn new_timer(&self) -> Timer<Event> {
-        let mut timer = Timer::new(2);
-        timer.add_task(
-            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            Event::CheckApply,
-        );
-        timer.add_task(
-            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Event::CheckStalePeer,
-        );
-        timer
     }
 
     /// Tries to apply pending tasks if there is some.
@@ -624,6 +618,16 @@ where
             }
         }
     }
+
+    fn clean_stale_ranges(&mut self) {
+        self.ctx.clean_stale_ranges();
+        if self.ctx.pending_delete_ranges.len() > 0 {
+            self.scheduler.as_ref().unwrap().register_timeout(
+                Task::DestroyOnTimeout,
+                Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+            );
+        }
+    }
 }
 
 impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
@@ -632,6 +636,10 @@ where
     ER: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
+    fn register_scheduler(&mut self, scheduler: Scheduler<Task<EK::Snapshot>>) {
+        self.scheduler = Some(scheduler);
+    }
+
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::Gen {
@@ -662,7 +670,14 @@ where
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
-                    SNAP_COUNTER.apply.delay.inc()
+                    SNAP_COUNTER.apply.delay.inc();
+                    if self.pending_apply_delay == 0 {
+                        self.scheduler.as_ref().unwrap().register_timeout(
+                            Task::ApplyOnTimeout,
+                            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+                        );
+                        self.pending_apply_delay += 1;
+                    }
                 }
             }
             Task::Destroy {
@@ -675,47 +690,29 @@ where
                 // there might be a coprocessor request related to this range
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
-
                 // try to delete stale ranges if there are any
-                self.ctx.clean_stale_ranges();
+                self.clean_stale_ranges();
+            }
+            Task::ApplyOnTimeout => {
+                self.pending_apply_delay -= 1;
+                self.handle_pending_applies();
+
+                if !self.pending_applies.is_empty() && self.pending_apply_delay == 0 {
+                    self.scheduler.as_ref().unwrap().register_timeout(
+                        Task::ApplyOnTimeout,
+                        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+                    );
+                    self.pending_apply_delay += 1;
+                }
+            }
+            Task::DestroyOnTimeout => {
+                self.clean_stale_ranges();
             }
         }
     }
 
     fn shutdown(&mut self) {
         self.pool.shutdown();
-    }
-}
-
-/// Region related timeout event
-pub enum Event {
-    CheckStalePeer,
-    CheckApply,
-}
-
-impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, R>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-    R: CasualRouter<EK> + Send + Clone + 'static,
-{
-    fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
-        match event {
-            Event::CheckApply => {
-                self.handle_pending_applies();
-                timer.add_task(
-                    Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                    Event::CheckApply,
-                );
-            }
-            Event::CheckStalePeer => {
-                self.ctx.clean_stale_ranges();
-                timer.add_task(
-                    Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-                    Event::CheckStalePeer,
-                );
-            }
-        }
     }
 }
 

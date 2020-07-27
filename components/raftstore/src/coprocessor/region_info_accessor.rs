@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use super::metrics::*;
@@ -16,8 +16,7 @@ use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;
-use tikv_util::timer::Timer;
-use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -86,6 +85,7 @@ enum RegionInfoQuery {
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
+    OnTimeout,
 }
 
 impl Display for RegionInfoQuery {
@@ -99,6 +99,7 @@ impl Display for RegionInfoQuery {
                 write!(f, "FindRegionById(region_id: {})", region_id)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
+            RegionInfoQuery::OnTimeout => write!(f, "OnTimeout"),
         }
     }
 }
@@ -162,6 +163,7 @@ pub struct RegionCollector {
     regions: RegionsMap,
     // BTreeMap: data_end_key -> region_id
     region_ranges: RegionRangesMap,
+    scheduler: Option<Scheduler<RegionInfoQuery>>,
 }
 
 impl RegionCollector {
@@ -169,6 +171,7 @@ impl RegionCollector {
         Self {
             regions: HashMap::default(),
             region_ranges: BTreeMap::default(),
+            scheduler: None,
         }
     }
 
@@ -403,6 +406,14 @@ impl RegionCollector {
 }
 
 impl Runnable<RegionInfoQuery> for RegionCollector {
+    fn register_scheduler(&mut self, scheduler: Scheduler<RegionInfoQuery>) {
+        scheduler.register_timeout(
+            RegionInfoQuery::OnTimeout,
+            Duration::from_millis(METRICS_FLUSH_INTERVAL),
+        );
+        self.scheduler = Some(scheduler);
+    }
+
     fn run(&mut self, task: RegionInfoQuery) {
         match task {
             RegionInfoQuery::RaftStoreEvent(event) => {
@@ -421,36 +432,35 @@ impl Runnable<RegionInfoQuery> for RegionCollector {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
                     .unwrap();
             }
+            RegionInfoQuery::OnTimeout => {
+                let mut count = 0;
+                let mut leader = 0;
+                for r in self.regions.values() {
+                    count += 1;
+                    if r.role == StateRole::Leader {
+                        leader += 1;
+                    }
+                }
+                REGION_COUNT_GAUGE_VEC
+                    .with_label_values(&["region"])
+                    .set(count);
+                REGION_COUNT_GAUGE_VEC
+                    .with_label_values(&["leader"])
+                    .set(leader);
+                self.scheduler.as_ref().unwrap().register_timeout(
+                    RegionInfoQuery::OnTimeout,
+                    Duration::from_millis(METRICS_FLUSH_INTERVAL),
+                );
+            }
         }
     }
 }
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        let mut count = 0;
-        let mut leader = 0;
-        for r in self.regions.values() {
-            count += 1;
-            if r.role == StateRole::Leader {
-                leader += 1;
-            }
-        }
-        REGION_COUNT_GAUGE_VEC
-            .with_label_values(&["region"])
-            .set(count);
-        REGION_COUNT_GAUGE_VEC
-            .with_label_values(&["leader"])
-            .set(leader);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-    }
-}
-
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 
@@ -458,32 +468,16 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<RocksEngine>) -> Self {
-        let worker = WorkerBuilder::new("region-collector-worker").create();
-        let scheduler = worker.scheduler();
+    pub fn new(worker: &Worker, host: &mut CoprocessorHost<RocksEngine>) -> Self {
+        let scheduler = worker.start(RegionCollector::new());
 
         register_region_event_listener(host, scheduler.clone());
-
-        Self {
-            worker: Arc::new(Mutex::new(worker)),
-            scheduler,
-        }
-    }
-
-    /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
-    pub fn start(&self) {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        self.worker
-            .lock()
-            .unwrap()
-            .start_with_timer(RegionCollector::new(), timer)
-            .unwrap();
+        Self { scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
-        self.worker.lock().unwrap().stop().unwrap().join().unwrap();
+        // self.scheduler.stop();
     }
 
     /// Gets all content from the collection. Only used for testing.

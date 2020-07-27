@@ -328,6 +328,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
 
 impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
+        let pool = &self.pool;
         match task {
             Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
@@ -340,7 +341,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
                             task_num, self.cfg.concurrent_recv_snap_limit
                         )),
                     );
-                    self.pool.spawn(sink.fail(status)).forget();
+                    pool.spawn(sink.fail(status)).forget();
                     return;
                 }
                 SNAP_TASK_COUNTER_STATIC.recv.inc();
@@ -356,7 +357,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
                     }
                     future::ok::<_, ()>(())
                 });
-                self.pool.spawn(f).forget();
+                pool.spawn(f).forget();
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");
@@ -400,7 +401,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable<Task> for Runner<R> {
                         future::ok::<_, ()>(())
                     });
 
-                self.pool.spawn(f).forget();
+                pool.spawn(f).forget();
             }
         }
     }

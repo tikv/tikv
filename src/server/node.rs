@@ -25,8 +25,7 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{FutureWorker, Scheduler};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -140,7 +139,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
@@ -181,7 +180,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
         )?;
 
@@ -375,7 +374,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()>
     where
@@ -401,7 +400,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
             self.state.clone(),
         )?;

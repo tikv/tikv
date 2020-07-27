@@ -18,7 +18,7 @@ use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
+    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped, Worker,
 };
 use tokio_core::reactor::Handle;
 use txn_types::{Key, TimeStamp};
@@ -656,10 +656,11 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn start_observe_lock_apply(
         &mut self,
+        worker: &mut Worker,
         coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
-        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        let collector = Arc::new(AppliedLockCollector::new(worker, coprocessor_host));
         self.applied_lock_collector = Some(collector);
         Ok(())
     }

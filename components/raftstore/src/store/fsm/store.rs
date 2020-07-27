@@ -1047,12 +1047,12 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
-    split_check_worker: Worker<SplitCheckTask>,
-    // handle Compact, CleanupSST task
-    cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksSnapshot>>,
+    // consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
+    // // handle Compact, CleanupSST task
+    // cleanup_worker: Worker<CleanupTask>,
+    // raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
+    // region_worker: Worker<RegionTask<RocksSnapshot>>,
+    common_worker: Worker,
     coprocessor_host: CoprocessorHost<RocksEngine>,
     future_poller: ThreadPool,
 }
@@ -1087,7 +1087,7 @@ impl RaftBatchSystem {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     ) -> Result<()> {
@@ -1100,29 +1100,51 @@ impl RaftBatchSystem {
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
         let workers = Workers {
-            split_check_worker,
-            region_worker: Worker::new("snapshot-worker"),
+            common_worker: Worker::new("store-worker"),
             pd_worker,
-            consistency_check_worker: Worker::new("consistency-check"),
-            cleanup_worker: Worker::new("cleanup-worker"),
-            raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host,
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
                 .build(),
         };
+        let region_runner = RegionRunner::new(
+            engines.clone(),
+            mgr.clone(),
+            cfg.value().snap_apply_batch_size.0 as usize,
+            cfg.value().use_delete_range,
+            workers.coprocessor_host.clone(),
+            self.router(),
+        );
+        let region_scheduler = workers.common_worker.start(region_runner);
+
+        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_scheduler = workers.common_worker.start(raftlog_gc_runner);
+
+        let compact_runner = CompactRunner::new(engines.kv.clone());
+        let cleanup_sst_runner = CleanupSSTRunner::new(
+            meta.get_id(),
+            self.router.clone(),
+            Arc::clone(&importer),
+            Arc::clone(&pd_client),
+        );
+        let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
+        let cleanup_scheduler = workers.common_worker.start(cleanup_runner);
+        let consistency_check_runner =
+            ConsistencyCheckRunner::<RocksEngine, _>::new(self.router.clone());
+        let consistency_check_scheduler = workers.common_worker.start(consistency_check_runner);
+
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
             engines,
             router: self.router.clone(),
-            split_check_scheduler: workers.split_check_worker.scheduler(),
-            region_scheduler: workers.region_worker.scheduler(),
+            split_check_scheduler,
+            region_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
-            consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
-            cleanup_scheduler: workers.cleanup_worker.scheduler(),
-            raftlog_gc_scheduler: workers.raftlog_gc_worker.scheduler(),
+            consistency_check_scheduler,
+            cleanup_scheduler,
+            raftlog_gc_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             pd_client,
@@ -1169,11 +1191,9 @@ impl RaftBatchSystem {
         builder.snap_mgr.init()?;
 
         let engines = builder.engines.clone();
-        let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
-        let importer = builder.importer.clone();
 
         let apply_poller_builder = ApplyPollerBuilder::<W>::new(
             &builder,
@@ -1223,30 +1243,6 @@ impl RaftBatchSystem {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
-        let region_runner = RegionRunner::new(
-            engines.clone(),
-            snap_mgr,
-            cfg.snap_apply_batch_size.0 as usize,
-            cfg.use_delete_range,
-            workers.coprocessor_host.clone(),
-            self.router(),
-        );
-        let timer = region_runner.new_timer();
-        box_try!(workers.region_worker.start_with_timer(region_runner, timer));
-
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
-        box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
-
-        let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSSTRunner::new(
-            store.get_id(),
-            self.router.clone(),
-            Arc::clone(&importer),
-            Arc::clone(&pd_client),
-        );
-        let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
-        box_try!(workers.cleanup_worker.start(cleanup_runner));
-
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
@@ -1257,13 +1253,6 @@ impl RaftBatchSystem {
             auto_split_controller,
         );
         box_try!(workers.pd_worker.start(pd_runner));
-
-        let consistency_check_runner =
-            ConsistencyCheckRunner::<RocksEngine, _>::new(self.router.clone());
-        box_try!(workers
-            .consistency_check_worker
-            .start(consistency_check_runner));
-
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
@@ -1278,12 +1267,8 @@ impl RaftBatchSystem {
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
         let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
-        handles.push(workers.split_check_worker.stop());
-        handles.push(workers.region_worker.stop());
         handles.push(workers.pd_worker.stop());
-        handles.push(workers.consistency_check_worker.stop());
-        handles.push(workers.cleanup_worker.stop());
-        handles.push(workers.raftlog_gc_worker.stop());
+        handles.push(workers.common_worker.stop());
         self.apply_system.shutdown();
         self.system.shutdown();
         for h in handles {

@@ -11,17 +11,18 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
 
 use super::Task;
+use crate::endpoint::TaskMsg;
 
 /// Service handles the RPC messages for the `Backup` service.
 #[derive(Clone)]
 pub struct Service {
-    scheduler: Scheduler<Task>,
+    scheduler: Scheduler<TaskMsg>,
     security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
     /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
+    pub fn new(scheduler: Scheduler<TaskMsg>, security_mgr: Arc<SecurityManager>) -> Service {
         Service {
             scheduler,
             security_mgr,
@@ -45,9 +46,11 @@ impl Backup for Service {
         if let Err(status) = match Task::new(req, tx) {
             Ok((task, c)) => {
                 cancel = Some(c);
-                self.scheduler.schedule(task).map_err(|e| {
-                    RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e)))
-                })
+                self.scheduler
+                    .schedule(TaskMsg::NormalTask(task))
+                    .map_err(|e| {
+                        RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e)))
+                    })
             }
             Err(e) => Err(RpcStatus::new(
                 RpcStatusCode::UNKNOWN,

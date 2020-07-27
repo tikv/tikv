@@ -4,14 +4,14 @@ use keys::origin_key;
 use std::cmp::Ordering::*;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use txn_types::Key;
 
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
-use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler, Worker};
 
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 use raftstore::coprocessor::{
@@ -378,38 +378,17 @@ impl Runnable<LockCollectorTask> for LockCollectorRunner {
 }
 
 pub struct AppliedLockCollector {
-    worker: Mutex<Worker<LockCollectorTask>>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
-        let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
-
-        let scheduler = worker.lock().unwrap().scheduler();
-
+    pub fn new(worker: &mut Worker, coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Self {
         let state = Arc::new(LockObserverState::default());
         let runner = LockCollectorRunner::new(Arc::clone(&state));
+        let scheduler = worker.start(runner);
         let observer = LockObserver::new(state, scheduler.clone());
-
         observer.register(coprocessor_host);
-
-        // Start the worker
-        worker.lock().unwrap().start(runner)?;
-
-        Ok(Self { worker, scheduler })
-    }
-
-    pub fn stop(&self) -> Result<()> {
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!(
-                    "failed to join applied_lock_collector handle, err: {:?}",
-                    e
-                ));
-            }
-        }
-        Ok(())
+        Self { scheduler }
     }
 
     /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
@@ -441,15 +420,6 @@ impl AppliedLockCollector {
         self.scheduler
             .schedule(LockCollectorTask::StopCollecting { max_ts, callback })
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
-    }
-}
-
-impl Drop for AppliedLockCollector {
-    fn drop(&mut self) {
-        let r = self.stop();
-        if let Err(e) = r {
-            error!("Failed to stop applied_lock_collector"; "err" => ?e);
-        }
     }
 }
 

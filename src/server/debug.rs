@@ -9,7 +9,7 @@ use std::{error, result};
 
 use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
-use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksSnapshot, RocksWriteBatch};
 use engine_traits::{
     IterOptions, Iterable, Iterator as EngineIterator, KvEngines, Mutable, Peekable,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
@@ -30,12 +30,13 @@ use engine_rocks::properties::MvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
+use raftstore::store::RegionTask;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::worker::Worker;
+use tikv_util::worker::Scheduler;
 use txn_types::Key;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -477,7 +478,7 @@ impl Debugger {
         let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_snap_worker = Worker::new("fake-snap-worker");
+        let sched = Scheduler::<RegionTask<RocksSnapshot>>::fake();
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
@@ -501,7 +502,7 @@ impl Debugger {
             let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
                 self.engines.clone(),
                 region,
-                fake_snap_worker.scheduler(),
+                sched.clone(),
                 peer_id,
                 tag,
             ));
