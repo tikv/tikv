@@ -1360,7 +1360,7 @@ impl NormalRpnFn {
 
         let nonnull_unwrap = if !self.nullable {
             quote! {
-                #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
+                #(let #extract2 = #extract2.unwrap());*;
             }
         } else {
             quote! {}
@@ -1401,6 +1401,36 @@ impl NormalRpnFn {
             }
         };
 
+        let chunked_push_2 = chunked_push.clone();
+        let extract_2 = extract.clone();
+
+        let nullable_loop = quote! {
+            for row_index in 0..output_rows {
+                #(let (#extract, arg) = arg.extract(row_index));*;
+                #chunked_push
+            }
+        };
+
+        let nonnullable_loop = quote! {
+            use tidb_query_datatype::BitAndIterator;
+
+            for (row_index, val) in BitAndIterator::new(&[], output_rows).enumerate() {
+                if !val {
+                    result.chunked_push(None);
+                    continue;
+                }
+                #(let (#extract_2, arg) = arg.extract(row_index));*;
+                #nonnull_unwrap
+                #chunked_push_2
+            }
+        };
+
+        let final_loop = if self.nullable {
+            nullable_loop
+        } else {
+            nonnullable_loop
+        };
+
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
                 default fn eval(
@@ -1414,11 +1444,7 @@ impl NormalRpnFn {
                     #downcast_metadata
                     let arg = &self;
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
-                    for row_index in 0..output_rows {
-                        #(let (#extract, arg) = arg.extract(row_index));*;
-                        #nonnull_unwrap
-                        #chunked_push
-                    }
+                    #final_loop
                     Ok(#vec_type::into_vector_value(result))
                 }
             }

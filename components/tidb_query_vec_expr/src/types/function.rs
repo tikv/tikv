@@ -76,6 +76,11 @@ pub trait RpnFnArg: std::fmt::Debug {
 
     /// Gets the value in the given row.
     fn get(&self, row: usize) -> Self::Type;
+
+    /// Gets the bit vector of the arg.
+    /// Returns `None` if scalar value, and bool indicates whether
+    /// all is null or isn't null, otherwise a BitVec.
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool);
 }
 
 /// Represents an RPN function argument of a `ScalarValue`.
@@ -96,6 +101,12 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
     fn get(&self, _row: usize) -> Option<T> {
         self.0.clone()
     }
+
+    // All items of scalar arg is either not null or null
+    #[inline]
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool) {
+        (None, self.0.is_some())
+    }
 }
 
 /// Represents an RPN function argument of a `VectorValue`.
@@ -112,6 +123,11 @@ impl<'a, T: EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> RpnFnArg for VectorArg<'a
     #[inline]
     fn get(&self, row: usize) -> Option<T> {
         self.physical_col.get_option_ref(self.logical_rows[row])
+    }
+
+    #[inline]
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool) {
+        (self.physical_col.get_bit_vec(), true)
     }
 }
 
@@ -142,6 +158,12 @@ impl<A: RpnFnArg, Rem: ArgDef> Arg<A, Rem> {
     #[inline]
     pub fn extract(&self, row: usize) -> (A::Type, &Rem) {
         (self.arg.get(row), &self.rem)
+    }
+
+    /// Gets the bit vector of each arg
+    #[inline]
+    pub fn get_bit_vec(&self) -> Option<&BitVec> {
+        self.arg.get_bit_vec()
     }
 }
 
