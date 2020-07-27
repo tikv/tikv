@@ -1072,7 +1072,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 let mut need_rollback = true;
                 let status = loop {
                     if let Some((commit_ts, write)) = self.reader.seek_write(&key, seek_ts)? {
-                        // If the there is a write record whose commit_ts is greater than or equal
+                        // If there is a write record whose commit_ts is greater than or equal
                         // to the start_ts, it is impossible for this key to be locked (restrainted
                         // by the checks in prewrite and acquire_pessimistic_lock). So we needn't
                         // write a rollback.

@@ -1625,15 +1625,15 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
         }
 });
 txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (status, resp) {
-    // All possible errors should be extracted by `extract_region_error`.
-    match status.expect("unexpected error") {
-        SecondaryLocksStatus::Locked(locks) => {
+    match status {
+        Ok(SecondaryLocksStatus::Locked(locks)) => {
             resp.set_locks(locks.into());
         },
-        SecondaryLocksStatus::Committed(ts) => {
+        Ok(SecondaryLocksStatus::Committed(ts)) => {
             resp.set_commit_ts(ts.into_inner());
         },
-        SecondaryLocksStatus::RolledBack => {}
+        Ok(SecondaryLocksStatus::RolledBack) => {},
+        Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
 txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
