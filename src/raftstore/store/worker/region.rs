@@ -607,7 +607,8 @@ where
                     .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
-                // to makes sure appling snapshots in order.
+                fail_point!("on_region_worker_apply", true, |_| {});
+                // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
@@ -622,6 +623,7 @@ where
                 start_key,
                 end_key,
             } => {
+                fail_point!("on_region_worker_destroy", true, |_| {});
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
                 if !self
