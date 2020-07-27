@@ -1,33 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, ExtraOp};
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::{Key, Value};
-
-use crate::storage::kv::{Engine, Snapshot, Statistics, WriteData};
+use crate::storage::kv::{Snapshot, WriteData};
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, ReleasedLock,
     TimeStamp, Write,
 };
-use crate::storage::txn::{commands::Command, Error, ErrorInner, ProcessResult, Result};
+use crate::storage::txn::{Error, ErrorInner, ProcessResult, Result};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
+use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
-
-pub(super) fn process_read_impl<E: Engine>(
-    mut cmd: Command,
-    snapshot: E::Snap,
-    statistics: &mut Statistics,
-) -> Result<ProcessResult> {
-    cmd.read_command_mut::<E>()
-        .process_read(snapshot, statistics)
-}
 
 #[derive(Default)]
 pub struct ReleasedLocks {
@@ -82,25 +70,6 @@ pub struct WriteResult {
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
 }
 
-pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'static>(
-    mut cmd: Command,
-    snapshot: S,
-    lock_mgr: &L,
-    pd_client: Arc<P>,
-    extra_op: ExtraOp,
-    statistics: &mut Statistics,
-    pipelined_pessimistic_lock: bool,
-) -> Result<WriteResult> {
-    cmd.write_command_mut().process_write(
-        snapshot,
-        lock_mgr,
-        pd_client,
-        extra_op,
-        statistics,
-        pipelined_pessimistic_lock,
-    )
-}
-
 type LockWritesVals = (
     Option<MvccLock>,
     Vec<(TimeStamp, Write)>,
@@ -134,13 +103,15 @@ pub fn find_mvcc_infos_by_key<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::{Snapshot, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Snapshot, Statistics, TestEngineBuilder};
     use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
     use crate::storage::txn::commands::{Commit, Prewrite};
     use crate::storage::txn::LockInfo;
     use crate::storage::{mvcc::Mutation, DummyLockManager, PrewriteResult};
     use engine_traits::CF_WRITE;
+    use kvproto::kvrpcpb::ExtraOp;
     use pd_client::DummyPdClient;
+    use std::sync::Arc;
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -281,9 +252,8 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
-        let ret = process_write_impl(
-            cmd,
+        let mut cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
+        let ret = cmd.cmd.write_command_mut().process_write(
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),
@@ -316,15 +286,14 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Commit::new(
+        let mut cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
             TimeStamp::from(commit_ts),
             ctx,
         );
 
-        let ret = process_write_impl(
-            cmd.into(),
+        let ret = cmd.cmd.write_command_mut().process_write(
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),

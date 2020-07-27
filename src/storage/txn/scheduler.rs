@@ -43,7 +43,7 @@ use crate::storage::metrics::{
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    process::{process_read_impl, process_write_impl, WriteResult},
+    process::WriteResult,
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
@@ -569,13 +569,17 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
-    fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    fn process_read(self, snapshot: E::Snap, mut task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
 
         let tag = task.cmd.tag();
 
-        let pr = match process_read_impl::<E>(task.cmd, snapshot, statistics) {
+        let pr = match task
+            .cmd
+            .read_command_mut::<E>()
+            .process_read(snapshot, statistics)
+        {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
@@ -584,7 +588,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    fn process_write(
+        self,
+        engine: &E,
+        snapshot: E::Snap,
+        mut task: Task,
+        statistics: &mut Statistics,
+    ) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -593,8 +603,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let scheduler = self.clone();
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        match process_write_impl(
-            task.cmd,
+        match task.cmd.write_command_mut().process_write(
             snapshot,
             &self.inner.lock_mgr,
             self.inner.pd_client.clone(),
