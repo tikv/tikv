@@ -4516,15 +4516,8 @@ mod tests {
 
         storage
             .sched_txn_command(
-                commands::CheckSecondaryLocks::new(
-                    vec![k3.clone(), k4],
-                    10.into(),
-                    Context::default(),
-                ),
-                expect_secondary_locks_status_callback(
-                    tx.clone(),
-                    SecondaryLocksStatus::RolledBack,
-                ),
+                commands::CheckSecondaryLocks::new(vec![k3, k4], 10.into(), Context::default()),
+                expect_secondary_locks_status_callback(tx, SecondaryLocksStatus::RolledBack),
             )
             .unwrap();
         rx.recv().unwrap();
