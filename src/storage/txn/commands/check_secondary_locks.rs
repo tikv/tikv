@@ -5,7 +5,13 @@ use crate::storage::types::SecondaryLocksStatus;
 use txn_types::Key;
 
 command! {
-    /// TODO
+    /// Check secondary locks of an async commit transaction.
+    ///
+    /// If all prewritten locks exist, the lock information is returned.
+    /// Otherwise, it returns the commit timestamp of the transaction.
+    ///
+    /// If the lock does not exist or is a pessimistic lock, to prevent the
+    /// status being changed, a rollback may be written.
     CheckSecondaryLocks:
         cmd_ty => SecondaryLocksStatus,
         display => "kv::command::CheckSecondaryLocks {} keys@{} | {:?}", (keys.len, start_ts, ctx),
