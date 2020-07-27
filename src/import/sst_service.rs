@@ -19,7 +19,7 @@ use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
@@ -49,7 +49,7 @@ pub struct ImportSSTService<Router> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
     pub fn new(
         cfg: Config,
         router: Router,
@@ -75,7 +75,7 @@ impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSSTService<Router> {
     }
 }
 
-impl<Router: RaftStoreRouter<RocksSnapshot>> ImportSst for ImportSSTService<Router> {
+impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,

@@ -368,7 +368,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                         if let Some(term) = cb_ctx.term {
                             task.cmd.ctx_mut().set_term(term);
                         }
-                        task.extra_op = cb_ctx.extra_op;
+                        task.extra_op = cb_ctx.txn_extra_op;
 
                         debug!(
                             "process cmd with snapshot";

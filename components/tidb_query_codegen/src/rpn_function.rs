@@ -231,6 +231,9 @@ struct RpnFnAttr {
     /// Whether or not the function needs extra logic on `None` value.
     nullable: bool,
 
+    /// Whether or not to use writer / guard pattern.
+    writer: bool,
+
     /// The maximum accepted arguments, which will be checked by the validator.
     ///
     /// Only varg or raw_varg function accepts a range of number of arguments. Other kind of
@@ -259,6 +262,7 @@ impl Default for RpnFnAttr {
             is_varg: false,
             is_raw_varg: false,
             nullable: true,
+            writer: false,
             max_args: None,
             min_args: None,
             extra_validator: None,
@@ -274,6 +278,7 @@ impl parse::Parse for RpnFnAttr {
         let mut is_varg = false;
         let mut is_raw_varg = false;
         let mut nullable = false;
+        let mut writer = false;
         let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
@@ -338,6 +343,9 @@ impl parse::Parse for RpnFnAttr {
                         "nullable" => {
                             nullable = true;
                         }
+                        "writer" => {
+                            writer = true;
+                        }
                         _ => {
                             return Err(Error::new_spanned(
                                 path,
@@ -354,32 +362,58 @@ impl parse::Parse for RpnFnAttr {
                 }
             }
         }
+
         if is_varg && is_raw_varg {
             return Err(Error::new_spanned(
                 config_items,
                 "`varg` and `raw_varg` conflicts to each other",
             ));
         }
+
         if !is_varg && !is_raw_varg && (min_args != None || max_args != None) {
             return Err(Error::new_spanned(
                 config_items,
                 "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
+
         if !nullable && is_raw_varg {
             return Err(Error::new_spanned(
                 config_items,
                 "`raw_varg` function must be nullable",
             ));
         }
+
         if !nullable && is_varg {
             return Err(Error::new_spanned(config_items, "`varg` must be nullable"));
+        }
+
+        if writer && is_varg {
+            return Err(Error::new_spanned(
+                config_items,
+                "`varg` doesn't support writer",
+            ));
+        }
+
+        if writer && is_raw_varg {
+            return Err(Error::new_spanned(
+                config_items,
+                "`raw_varg` doesn't support writer",
+            ));
+        }
+
+        if writer && (metadata_type.is_some() || metadata_mapper.is_some()) {
+            return Err(Error::new_spanned(
+                config_items,
+                "writer cannot be used with metadata",
+            ));
         }
 
         Ok(Self {
             is_varg,
             is_raw_varg,
             nullable,
+            writer,
             max_args,
             min_args,
             extra_validator,
@@ -508,6 +542,62 @@ impl parse::Parse for VargsRpnFnSignatureParam {
             _pat: pat,
             eval_type: et,
         })
+    }
+}
+
+/// Parses a function signature return type like `Result<SomeGuard>`.
+struct RpnFnSignatureReturnGuardType {
+    eval_type: TypePath,
+}
+
+impl RpnFnSignatureReturnGuardType {
+    fn into_return_type(self) -> Result<RpnFnSignatureReturnType> {
+        match self.eval_type.path.get_ident() {
+            Some(x) => {
+                if *x == "BytesGuard" {
+                    Ok(RpnFnSignatureReturnType {
+                        eval_type: parse_quote! { Bytes },
+                    })
+                } else {
+                    Err(Error::new_spanned(
+                        self.eval_type.to_token_stream(),
+                        format!("Unknown writer type `{:?}`", self.eval_type),
+                    ))
+                }
+            }
+            None => Err(Error::new_spanned(
+                self.eval_type.to_token_stream(),
+                format!("Unknown type `{:?}`", self.eval_type),
+            )),
+        }
+    }
+}
+
+impl parse::Parse for RpnFnSignatureReturnGuardType {
+    fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
+        input.parse::<Token![->]>()?;
+        let tp = input.parse::<Type>()?;
+        if let Type::Path(TypePath {
+            path: Path { segments, .. },
+            ..
+        }) = &tp
+        {
+            let result_type = segments.last().unwrap().clone();
+            if let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) =
+                result_type.arguments
+            {
+                Ok(Self {
+                    eval_type: parse2::<TypePath>(args.into_token_stream())?,
+                })
+            } else {
+                Err(Error::new_spanned(
+                    tp,
+                    "expect angle bracketed path arguments",
+                ))
+            }
+        } else {
+            Err(Error::new_spanned(tp, "expect path"))
+        }
     }
 }
 
@@ -1086,6 +1176,7 @@ struct NormalRpnFn {
     metadata_type: Option<TokenStream>,
     metadata_mapper: Option<TokenStream>,
     nullable: bool,
+    writer: bool,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -1129,21 +1220,38 @@ impl NormalRpnFn {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
         let mut arg_types_no_ref = Vec::new();
-        for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
+        let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
+        let fn_args = item_fn
+            .sig
+            .inputs
+            .iter()
+            .skip(attr.captures.len())
+            .take(take_cnt);
+        for fn_arg in fn_args {
             let arg_type = Self::get_arg_type(&attr, &fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
             arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
         }
-        let ret_type = parse2::<RpnFnSignatureReturnType>(
-            (&item_fn.sig.output).into_token_stream(),
-        )
-        .map_err(|_| {
-            Error::new_spanned(
-                &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T>>`",
-            )
-        })?;
+        let ret_type = if attr.writer {
+            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+                .map_err(|_| {
+                    Error::new_spanned(
+                        &item_fn.sig.output,
+                        "Expect return type to be like `Result<SomeGuard>`",
+                    )
+                })?
+                .into_return_type()?
+        } else {
+            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+                |_| {
+                    Error::new_spanned(
+                        &item_fn.sig.output,
+                        "Expect return type to be like `Result<Option<T>>`",
+                    )
+                },
+            )?
+        };
         let camel_name = item_fn.sig.ident.to_string().to_camel_case();
         let fn_trait_ident = Ident::new(&format!("{}_Fn", camel_name), Span::call_site());
         let evaluator_ident = Ident::new(&format!("{}_Evaluator", camel_name), Span::call_site());
@@ -1153,6 +1261,7 @@ impl NormalRpnFn {
             metadata_type: attr.metadata_type,
             metadata_mapper: attr.metadata_mapper,
             nullable: attr.nullable,
+            writer: attr.writer,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -1280,6 +1389,18 @@ impl NormalRpnFn {
 
         let vec_type = &self.ret_type;
 
+        let chunked_push = if self.writer {
+            quote! {
+                let writer = result.into_writer();
+                let guard = #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* , writer)?;
+                result = guard.into_inner();
+            }
+        } else {
+            quote! {
+                result.chunked_push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
+            }
+        };
+
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
                 default fn eval(
@@ -1296,7 +1417,7 @@ impl NormalRpnFn {
                     for row_index in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row_index));*;
                         #nonnull_unwrap
-                        result.chunked_push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
+                        #chunked_push
                     }
                     Ok(#vec_type::into_vector_value(result))
                 }
@@ -1763,6 +1884,7 @@ mod tests_normal {
                 metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
                 nullable: true,
+                writer: false,
             },
             item_fn,
         )
