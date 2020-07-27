@@ -266,7 +266,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .get_region_by_id_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
@@ -321,9 +323,11 @@ impl PdClient for RpcClient {
             }
 
             info!("heartbeat sender is refreshed");
-            let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
+            let left = inner.hb_sender.as_mut().left().unwrap();
+            let sender = left.take().expect("expect region heartbeat sink");
             let (tx, rx) = mpsc::unbounded();
-            tx.unbounded_send(req).unwrap();
+            tx.unbounded_send(req)
+                .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
             inner.hb_sender = Either::Right(tx);
             Box::new(
                 sender
@@ -370,7 +374,7 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .ask_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
@@ -402,7 +406,7 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .ask_batch_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
@@ -429,7 +433,7 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .store_heartbeat_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
@@ -456,7 +460,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .report_batch_split_async_opt(&req, Self::call_option())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "report_batch_split", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
@@ -506,7 +512,9 @@ impl PdClient for RpcClient {
                 .rl()
                 .client
                 .get_gc_safe_point_async_opt(&req, option)
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
+                });
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.0.15"
+version = "3.0.16"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -211,7 +211,7 @@ codegen-units = 4
 lto = false
 incremental = true
 panic = 'abort'
-debug-assertions = false
+debug-assertions = true
 overflow-checks = false
 rpath = false
 
