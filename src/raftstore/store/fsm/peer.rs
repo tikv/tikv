@@ -851,7 +851,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
-            self.reset_raft_tick(GroupState::Chaos);
+            if self.fsm.group_state != GroupState::Chaos {
+                self.fsm.group_state = GroupState::Chaos;
+                self.register_raft_base_tick();
+            }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.reset_raft_tick(GroupState::Ordered);
         }
@@ -1312,6 +1315,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
+
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
 
         // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();
