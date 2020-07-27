@@ -36,15 +36,6 @@
 //! After `commit`, all locks are released and data become visible to other transactions.
 //!
 //!
-//! ### Concurrency
-//!
-//! TiKV distributes data in regions, so write operations will only be processed by one TiKV instance (the leader of the region replicas).
-//! Before executing operations in the mvcc module,
-//! a request must have acquired all latches of keys that it wants to modify. So there is no data race here.
-//!
-//! However, because each transaction contains multiple requests to complete (at least there should be a prewrite and a commit),
-//! interleaving requests of concurrent transactions could cause complicated situations that are worth consideration.
-//!
 //! ## Pessimistic Transaction
 //!
 //! Pessimistic transaction aims to work in situations with intense contention or where interactive transaction are required.
@@ -81,8 +72,18 @@
 //! The optimization is called
 //! [pipelined locking process](https://docs.pingcap.com/tidb/dev/pessimistic-transaction#pipelined-locking-process).
 //!
+//! ## Concurrent transactions
 //!
-//! ## Other features
+//! TiKV distributes data in regions, so write operations will only be processed by one TiKV instance (the leader of the region replicas).
+//! Before executing operations in the mvcc module,
+//! a request must have acquired all latches of keys that it wants to modify. So there is no data race here.
+//!
+//! However, because each transaction contains multiple requests to complete (at least there should be a prewrite and a commit),
+//! interleaving requests of concurrent transactions could cause complicated situations that are worth consideration.
+//! Handling such situations makes the code more obscure.
+//!
+//!
+//! ## Other Features
 //!
 //! The main idea of implementing MVCC transaction is straightforward, however code might seems confusing
 //! because we added support for extra features.

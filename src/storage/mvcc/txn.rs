@@ -235,7 +235,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     ///
     /// There wouldn't be write conflict or data race here because the caller
     /// ([prewrite] or [pessimistic_prewrite](MvccTxn::pessimistic_prewrite)) should have checked the lock.
-    /// And since the region is only handled by this TiKV instance, latches protect us from data race.
+    /// And since the region is only handled by this TiKV instance, latches protect us from "some" data race.
     ///
     /// Returns the async commit ts which is used for the async commit feature.
     fn prewrite_key_value(
