@@ -1,13 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
 use fail;
 
-use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 

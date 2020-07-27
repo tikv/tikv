@@ -321,6 +321,7 @@ pub struct RegionPacketFilter {
     drop_type: Vec<MessageType>,
     skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
+    msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
 impl Filter for RegionPacketFilter {
@@ -376,6 +377,7 @@ impl RegionPacketFilter {
             skip_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
+            msg_callback: None,
         }
     }
 
@@ -407,6 +409,14 @@ impl RegionPacketFilter {
 
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
+        self
+    }
+
+    pub fn set_msg_callback(
+        mut self,
+        cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,
+    ) -> RegionPacketFilter {
+        self.msg_callback = Some(cb);
         self
     }
 }
