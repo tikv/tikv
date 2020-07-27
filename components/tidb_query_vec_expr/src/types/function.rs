@@ -127,7 +127,7 @@ impl<'a, T: EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> RpnFnArg for VectorArg<'a
 
     #[inline]
     fn get_bit_vec(&self) -> (Option<&BitVec>, bool) {
-        (self.physical_col.get_bit_vec(), true)
+        (Some(self.physical_col.get_bit_vec()), true)
     }
 }
 
@@ -162,8 +162,8 @@ impl<A: RpnFnArg, Rem: ArgDef> Arg<A, Rem> {
 
     /// Gets the bit vector of each arg
     #[inline]
-    pub fn get_bit_vec(&self) -> Option<&BitVec> {
-        self.arg.get_bit_vec()
+    pub fn get_bit_vec(&self) -> ((Option<&BitVec>, bool), &Rem) {
+        (self.arg.get_bit_vec(), &self.rem)
     }
 }
 

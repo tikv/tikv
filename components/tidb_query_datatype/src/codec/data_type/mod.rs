@@ -14,10 +14,10 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_json::ChunkedVecJson;
 pub use chunked_vec_sized::ChunkedVecSized;
-pub use bit_vec::{BitAndIterator, BitVec};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};

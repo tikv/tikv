@@ -1403,6 +1403,7 @@ impl NormalRpnFn {
 
         let chunked_push_2 = chunked_push.clone();
         let extract_2 = extract.clone();
+        let extract_3 = extract.clone();
 
         let nullable_loop = quote! {
             for row_index in 0..output_rows {
@@ -1412,9 +1413,30 @@ impl NormalRpnFn {
         };
 
         let nonnullable_loop = quote! {
-            use tidb_query_datatype::BitAndIterator;
+            use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
 
-            for (row_index, val) in BitAndIterator::new(&[], output_rows).enumerate() {
+            let vecs = {
+                let mut vecs: Vec<&BitVec> = vec![];
+                #(
+                    let ((#extract_3, scalar_val), arg) = arg.get_bit_vec();
+                    if let Some(x) = #extract_3 {
+                        vecs.push(x);
+                    } else {
+                        if !scalar_val {
+                            // there's a scalar column of None, just return None vector
+                            let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                            for i in 0..output_rows {
+                                result.chunked_push(None);
+                            }
+                            return Ok(#vec_type::into_vector_value(result));
+                        }
+                    }
+                )*;
+
+                vecs
+            };
+
+            for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
                 if !val {
                     result.chunked_push(None);
                     continue;

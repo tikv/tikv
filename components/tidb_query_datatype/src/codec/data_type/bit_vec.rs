@@ -75,15 +75,15 @@ impl BitVec {
     }
 }
 
-pub struct BitAndIterator <'a> {
-    vecs: &'a [BitVec],
+pub struct BitAndIterator<'a> {
+    vecs: &'a [&'a BitVec],
     or: u8,
     cnt: usize,
-    output_rows: usize
+    output_rows: usize,
 }
 
-impl <'a> BitAndIterator <'a> {
-    pub fn new(vecs: &'a [BitVec], output_rows: usize) -> Self {
+impl<'a> BitAndIterator<'a> {
+    pub fn new(vecs: &'a [&'a BitVec], output_rows: usize) -> Self {
         for i in vecs {
             if i.len() != output_rows {
                 panic!("column length doesn't match");
@@ -93,12 +93,12 @@ impl <'a> BitAndIterator <'a> {
             vecs,
             or: 0,
             cnt: 0,
-            output_rows
+            output_rows,
         }
     }
 }
 
-impl <'a> Iterator for BitAndIterator<'a> {
+impl<'a> Iterator for BitAndIterator<'a> {
     type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {
