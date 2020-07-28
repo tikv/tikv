@@ -730,7 +730,6 @@ mod tests {
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
 
-    use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
 
@@ -822,7 +821,6 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
-        let sched = worker.scheduler();
         let shared_block_cache = false;
         let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let (router, _) = mpsc::sync_channel(1);
@@ -834,9 +832,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
-        worker.start_with_timer(runner, timer).unwrap();
+        let sched = worker.start(runner);
 
         engine.kv.put(b"k1", b"v1").unwrap();
         let snap = engine.kv.snapshot();
@@ -906,7 +902,6 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
-        let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
             engines.clone(),
@@ -916,9 +911,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckApply);
-        worker.start_with_timer(runner, timer).unwrap();
+        let sched = worker.start(runner);
 
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot

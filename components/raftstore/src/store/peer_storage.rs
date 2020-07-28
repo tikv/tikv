@@ -1840,7 +1840,7 @@ mod tests {
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
-            let sched = worker.scheduler();
+            let sched = Scheduler::fake();
             let store = new_storage_from_ents(sched, &td, &ents);
             let t = store.term(idx);
             if wterm != t {
@@ -1893,8 +1893,7 @@ mod tests {
     #[test]
     fn test_storage_clear_meta() {
         let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
-        let worker = Worker::new("snap-manager");
-        let sched = worker.scheduler();
+        let sched = Scheduler::fake();
         let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
         append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
@@ -1971,8 +1970,7 @@ mod tests {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
-            let sched = worker.scheduler();
+            let sched = Scheduler::fake();
             let store = new_storage_from_ents(sched, &td, &ents);
             let e = store.entries(lo, hi, maxsize);
             if e != wentries {
@@ -1995,8 +1993,7 @@ mod tests {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager");
-            let sched = worker.scheduler();
+            let sched = Scheduler::fake();
             let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
             let res = store
@@ -2049,8 +2046,6 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
-        let sched = worker.scheduler();
-        let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s.engines.clone(),
@@ -2060,7 +2055,8 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        let sched = worker.start(runner).unwrap();
+        let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
@@ -2376,7 +2372,7 @@ mod tests {
             CoprocessorHost::<RocksEngine>::default(),
             router,
         );
-        worker.start(runner).unwrap();
+        worker.start(runner);
         assert!(s1.snapshot(0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();

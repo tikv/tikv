@@ -248,9 +248,19 @@ where
     }
 }
 
+#[derive(Default)]
 pub struct PeerTickBatch {
     pub ticks: Vec<Box<dyn FnOnce() + Send>>,
     pub wait_duration: Duration,
+}
+
+impl Clone for PeerTickBatch {
+    fn clone(&self) -> PeerTickBatch {
+        PeerTickBatch {
+            ticks: vec![],
+            wait_duration: self.wait_duration
+        }
+    }
 }
 
 pub struct PollContext<EK, ER, T, C: 'static>
@@ -1032,6 +1042,7 @@ where
     type Handler = RaftPoller<T, C>;
 
     fn build(&mut self) -> RaftPoller<T, C> {
+        let tick_batch = vec![PeerTickBatch::default();256];
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1066,7 +1077,7 @@ where
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
-            tick_batch: Vec::with_capacity(256),
+            tick_batch,
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {

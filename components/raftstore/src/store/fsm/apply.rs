@@ -3420,7 +3420,6 @@ mod tests {
     use crate::store::{Config, RegionTask};
     use test_sst_importer::*;
     use tikv_util::config::VersionTrack;
-    use tikv_util::worker::dummy_scheduler;
 
     use super::*;
 
