@@ -3442,13 +3442,11 @@ mod tests {
             check_secondary(b"k1", 1),
             (SecondaryLockStatus::Committed(3.into()), None)
         );
-        // The write record does not exist. But there is a record whose commit_ts
-        // is larger, so we needn't write a rollback.
         assert_eq!(
             check_secondary(b"k1", 6),
             (SecondaryLockStatus::RolledBack, None)
         );
-        must_seek_write(&engine, b"k1", 6, 5, 5, WriteType::Rollback);
+        must_get_rollback_protected(&engine, b"k1", 6, true);
 
         // ----------------------------
 
@@ -3465,7 +3463,7 @@ mod tests {
         let (status, released_lock) = check_secondary(b"k1", 11);
         assert_eq!(status, SecondaryLockStatus::RolledBack);
         assert!(released_lock.is_some());
-        must_seek_write(&engine, b"k1", 11, 11, 11, WriteType::Rollback);
+        must_get_rollback_protected(&engine, b"k1", 11, true);
 
         // ----------------------------
 
@@ -3484,5 +3482,6 @@ mod tests {
             (SecondaryLockStatus::Locked(_), None) => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
+        must_get_rollback_protected(&engine, b"k1", 13, true);
     }
 }
