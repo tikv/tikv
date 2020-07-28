@@ -722,7 +722,7 @@ dependencies = [
  "clap",
  "criterion-plot",
  "csv",
- "itertools 0.8.2",
+ "itertools",
  "lazy_static",
  "num-traits",
  "rand_core 0.5.1",
@@ -764,7 +764,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
 dependencies = [
  "cast",
- "itertools 0.8.2",
+ "itertools",
 ]
 
 [[package]]
@@ -1497,8 +1497,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.3"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#8ea3bf26d768ff3daae83a197e05e81cf5470e3e"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40601ccb2814bbb83312b229cf220eb39460dafcf1c561c6b2e9213291976db5"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
@@ -1526,7 +1527,8 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.5.3"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.5.x#8ea3bf26d768ff3daae83a197e05e81cf5470e3e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ae317d29eb55297b760ca3641662f140e17b9dc36e3f23a3e7e7327e3c33c7e"
 dependencies = [
  "bindgen",
  "cc",
@@ -1779,15 +1781,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1870,7 +1863,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#1e0910aabe6cffc721689606d88c8117d837d3cb"
+source = "git+https://github.com/pingcap/kvproto.git#f735bcd8f9f90c778a3964d289c3fe7cc3cea38b"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1945,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1964,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2886,7 +2879,7 @@ checksum = "02b10678c913ecbd69350e8535c3aef91a8676c0773fc1d7b95cdd196d7f2f26"
 dependencies = [
  "bytes 0.5.3",
  "heck",
- "itertools 0.8.2",
+ "itertools",
  "log",
  "multimap",
  "petgraph",
@@ -2903,7 +2896,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "537aa19b95acde10a12fec4301466386f757403de4cd4e5b4fa78fb5ecb18f72"
 dependencies = [
  "anyhow",
- "itertools 0.8.2",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn",
@@ -3422,7 +3415,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d60144dfc60aa7020117da081719c0b5007bffab"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4679,7 +4672,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools 0.8.2",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4888,7 +4881,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dcfcea0b59654004a89d5c25d6d22c113a13b848"
+source = "git+https://github.com/pingcap/tipb.git#85b2ef9503b5c69709871403bb8378139e4bb47f"
 dependencies = [
  "lazy_static",
  "prost",
@@ -5602,12 +5595,11 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.17+zstd.1.4.5"
+version = "1.4.15+zstd.1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b89249644df056b522696b1bb9e7c18c87e8ffa3e2f0dc3b0155875d6498f01b"
+checksum = "89719b034dc22d240d5b407fb0a3fe6d29952c181cff9a9f95c0bd40b4f8f7d8"
 dependencies = [
  "cc",
  "glob",
- "itertools 0.9.0",
  "libc",
 ]
