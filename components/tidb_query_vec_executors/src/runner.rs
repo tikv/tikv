@@ -55,7 +55,7 @@ pub struct BatchExecutorsRunner<SS> {
     exec_stats: ExecuteStats,
 
     /// Minimum rows to return in batch stream mode.
-    stream_min_rows_each_iter: usize,
+    streaming_batch_limit: usize,
 
     /// `batch_size` in stream mode. When calling `next_batch(batch_size)`,
     /// Scanner will fetch `batch_size` physical rows. This variable will be initialized as `BATCH_INITIAL_SIZE`.
@@ -317,7 +317,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
-        stream_min_rows_each_iter: usize,
+        streaming_batch_limit: usize,
         is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
@@ -362,7 +362,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             exec_stats,
             encode_type,
             stream_batch_size: BATCH_INITIAL_SIZE,
-            stream_min_rows_each_iter,
+            streaming_batch_limit,
         })
     }
 
@@ -443,11 +443,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut chunk = Chunk::default();
         let mut ctx = EvalContext::new(self.config.clone());
         // record count less than batch size and is not drained
-        while record_len < self.stream_min_rows_each_iter && !is_drained {
+        while record_len < self.streaming_batch_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             let (drained, len) = self.internal_handle_request(
                 true,
-                self.stream_batch_size,
+                self.stream_batch_size
+                    .min(self.streaming_batch_limit - record_len),
                 &mut current_chunk,
                 &mut warnings,
                 &mut ctx,

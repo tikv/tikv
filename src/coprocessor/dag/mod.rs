@@ -135,7 +135,7 @@ impl BatchDAGHandler {
         data_version: Option<u64>,
         deadline: Deadline,
         is_cache_enabled: bool,
-        stream_min_rows_each_iter: usize,
+        streaming_batch_limit: usize,
         is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
@@ -144,7 +144,7 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::new(store, is_cache_enabled),
                 deadline,
-                stream_min_rows_each_iter,
+                streaming_batch_limit,
                 is_streaming,
             )?,
             data_version,
