@@ -1084,8 +1084,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         if need_rollback {
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
-            let write = Write::new_rollback(self.start_ts, true);
-            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+            let write = Write::new_rollback(start_ts, true);
+            self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
             if self.collapse_rollback {
                 self.collapse_prev_rollback(key.clone())?;
             }
