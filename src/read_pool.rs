@@ -5,7 +5,6 @@ use futures::{future, Future};
 use kvproto::kvrpcpb::CommandPri;
 use std::cell::Cell;
 use std::future::Future as StdFuture;
-use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
 use tikv_util::time::Instant;
@@ -18,8 +17,6 @@ use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use prometheus::IntGauge;
-
-type Callback = dyn Fn() + Send + Sync + 'static;
 
 pub enum ReadPool {
     FuturePools {
@@ -166,7 +163,7 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
         set_tls_engine(self.engine.take().unwrap());
         self.inner.start(local);
-        fail_registry.register_current();
+        self.fail_registry.register_current();
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
