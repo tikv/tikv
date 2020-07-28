@@ -137,6 +137,7 @@ fn test_stream_batch_row_limit() {
         let start = resp.get_range().get_start();
         let end = resp.get_range().get_end();
         assert_eq!(&start[ignored_suffix_len..], start_last_bytes);
+        //TODO fix error
         assert_eq!(&end[ignored_suffix_len..], end_last_bytes);
     };
 
