@@ -1057,13 +1057,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         let mut released_lock = None;
         let (status, need_rollback) = match self.reader.load_lock(&key)? {
             Some(lock) if lock.ts == start_ts => {
-                let status = if lock.lock_type == LockType::Pessimistic {
+                if lock.lock_type == LockType::Pessimistic {
                     released_lock = self.unlock_key(key.clone(), true);
-                    SecondaryLockStatus::RolledBack
+                    (SecondaryLockStatus::RolledBack, true)
                 } else {
-                    SecondaryLockStatus::Locked(lock)
-                };
-                (status, true)
+                    (SecondaryLockStatus::Locked(lock), false)
+                }
             }
             _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
                 Some((commit_ts, write_type)) => {
@@ -3439,10 +3438,12 @@ mod tests {
             check_secondary(b"k1", 5),
             (SecondaryLockStatus::RolledBack, None)
         );
+        must_get_rollback_ts(&engine, b"k1", 5);
         assert_eq!(
             check_secondary(b"k1", 1),
             (SecondaryLockStatus::Committed(3.into()), None)
         );
+        must_get_commit_ts(&engine, b"k1", 1, 3);
         assert_eq!(
             check_secondary(b"k1", 6),
             (SecondaryLockStatus::RolledBack, None)
@@ -3463,7 +3464,7 @@ mod tests {
 
         let (status, released_lock) = check_secondary(b"k1", 11);
         assert_eq!(status, SecondaryLockStatus::RolledBack);
-        assert!(released_lock.is_some());
+        assert!(released_lock.unwrap().pessimistic);
         must_get_rollback_protected(&engine, b"k1", 11, true);
 
         // ----------------------------
@@ -3483,6 +3484,6 @@ mod tests {
             (SecondaryLockStatus::Locked(_), None) => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_rollback_protected(&engine, b"k1", 13, true);
+        must_locked(&engine, b"k1", 13);
     }
 }
