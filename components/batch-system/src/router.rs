@@ -56,7 +56,7 @@ where
     ) -> Router<N, C, Ns, Cs> {
         Router {
             normals: Arc::default(),
-            caches: Cell::new((Instant::now(), HashMap::default())),
+            caches: Cell::new((Instant::now_coarse(), HashMap::default())),
             control_box,
             normal_scheduler,
             control_scheduler,
@@ -66,7 +66,7 @@ where
 
     pub fn dump_stats(&self, tag: &str) {
         let (last_dump, map) = unsafe { &mut *self.caches.as_ptr() };
-        let now = Instant::now();
+        let now = Instant::now_coarse();
         if now.duration_since(*last_dump) < Duration::from_secs(60 * 60) {
             return;
         }
@@ -286,7 +286,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
         Router {
             normals: self.normals.clone(),
-            caches: Cell::new((Instant::now(), HashMap::new())),
+            caches: Cell::new((Instant::now_coarse(), HashMap::new())),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
