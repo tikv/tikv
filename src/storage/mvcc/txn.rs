@@ -1047,38 +1047,27 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     /// (0 if the lock is not committed).
     ///
     /// If the lock does not exist or is a pessimistic lock, to prevent the
-    /// status being changed, a rollback may be written.
+    /// status being changed, a rollback may be written and this rollback
+    /// needs to be protected.
     pub fn check_secondary_lock(
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
-        match self.reader.load_lock(&key)? {
+        let mut released_lock = None;
+        let status = match self.reader.load_lock(&key)? {
             Some(lock) if lock.ts == start_ts => {
                 if lock.lock_type == LockType::Pessimistic {
-                    // Pessimistic locks can be rewritten to optimistic locks in the future.
-                    // So we must roll it back.
-                    let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-                    self.rollback_lock(key.clone(), &lock, is_pessimistic_txn)
-                        .map(|released_lock| (SecondaryLockStatus::RolledBack, released_lock))
+                    released_lock = self.unlock_key(key.clone(), true);
+                    SecondaryLockStatus::RolledBack
                 } else {
-                    Ok((SecondaryLockStatus::Locked(lock), None))
+                    SecondaryLockStatus::Locked(lock)
                 }
             }
             _ => {
                 let mut seek_ts = TimeStamp::max();
-                // If the lock does not exist, we may need to write a rollback so subsequent
-                // prewrites to this secondary lock won't succeed.
-                let mut need_rollback = true;
-                let status = loop {
+                loop {
                     if let Some((commit_ts, write)) = self.reader.seek_write(&key, seek_ts)? {
-                        // If there is a write record whose commit_ts is greater than or equal
-                        // to the start_ts, it is impossible for this key to be locked (restrainted
-                        // by the checks in prewrite and acquire_pessimistic_lock). So we needn't
-                        // write a rollback.
-                        if commit_ts >= start_ts {
-                            need_rollback = false;
-                        }
                         if write.start_ts == start_ts {
                             break match write.write_type {
                                 WriteType::Rollback => SecondaryLockStatus::RolledBack,
@@ -1092,18 +1081,17 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     } else {
                         break SecondaryLockStatus::RolledBack;
                     }
-                };
-                if need_rollback {
-                    // Because it is a secondary lock, the rollback needn't be protected.
-                    let write = Write::new_rollback(self.start_ts, false);
-                    self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-                    if self.collapse_rollback {
-                        self.collapse_prev_rollback(key.clone())?;
-                    }
                 }
-                Ok((status, None))
             }
+        };
+        // We must protect this rollback in case this rollback is collapsed and a stale
+        // acquire_pessimistic_lock and prewrite succeed again.
+        let write = Write::new_rollback(self.start_ts, true);
+        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+        if self.collapse_rollback {
+            self.collapse_prev_rollback(key.clone())?;
         }
+        Ok((status, released_lock))
     }
 
     pub fn gc(&mut self, key: Key, safe_point: TimeStamp) -> Result<GcInfo> {
