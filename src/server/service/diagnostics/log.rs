@@ -170,8 +170,7 @@ impl Iterator for LogIterator {
                         item.set_level(level);
                         item.set_message(content.to_owned());
                     }
-                    Err(err) => {
-                        warn!("parse line failed: {:?}", err);
+                    Err(_) => {
                         if self.pre_log.time < self.begin_time {
                             continue;
                         }
