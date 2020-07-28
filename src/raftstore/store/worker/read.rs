@@ -183,6 +183,7 @@ impl LocalReader<RaftRouter> {
 
 impl<C: ProposalRouter> LocalReader<C> {
     fn redirect(&self, mut cmd: RaftCommand) {
+        self.router.dump_stats("raft");
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::new();

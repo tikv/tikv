@@ -372,6 +372,8 @@ impl<T: PdClient> Runner<T> {
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo,
     ) {
+        self.router.dump_stats("raft");
+
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
                 error!(
