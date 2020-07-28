@@ -1,17 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::Lock;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::ErrorInner as MvccErrorInner;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
 use crate::storage::txn::{Error, ErrorInner, Result};
-use crate::storage::Error as StorageError;
-use crate::storage::ErrorInner as StorageErrorInner;
-use crate::storage::Result as StorageResult;
-use crate::storage::{PessimisticLockRes, ProcessResult, Snapshot, Statistics};
+use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
+    Result as StorageResult, Snapshot, Statistics,
+};
 use kvproto::kvrpcpb::ExtraOp;
 use pd_client::PdClient;
 use std::sync::Arc;

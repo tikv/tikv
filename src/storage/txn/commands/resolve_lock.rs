@@ -7,8 +7,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, TypedCommand, WriteCommand,
     WriteResult,
 };
-use crate::storage::txn::Result;
-use crate::storage::txn::{Error, ErrorInner};
+use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, Statistics};
 use kvproto::kvrpcpb::ExtraOp;
 use pd_client::PdClient;

@@ -50,16 +50,14 @@ use kvproto::kvrpcpb::*;
 use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::Lock as MvccLock;
-use crate::storage::mvcc::{MvccReader, ReleasedLock};
+use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
 use crate::storage::txn::latch::{self, Latches};
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
 };
-use crate::storage::{lock_manager, metrics, Result as StorageResult, Snapshot, Statistics};
-use kvproto::kvrpcpb::Context;
+use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use pd_client::PdClient;
 use std::sync::Arc;
 use tikv_util::collections::HashMap;

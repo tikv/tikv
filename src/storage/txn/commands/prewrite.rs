@@ -2,16 +2,15 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{has_data_in_range, MvccTxn};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use crate::storage::mvcc::{
+    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+};
 use crate::storage::txn::commands::{WriteCommand, WriteResult};
-use crate::storage::txn::Error;
-use crate::storage::txn::Result;
-use crate::storage::Error as StorageError;
+use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, ProcessResult, ScanMode, Snapshot, Statistics,
+    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot, Statistics,
 };
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::ExtraOp;
