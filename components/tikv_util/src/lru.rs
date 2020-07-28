@@ -23,6 +23,17 @@ struct Trace<K> {
     sample_mask: usize,
 }
 
+#[inline]
+unsafe fn suture<K>(leading: &mut Record<K>, following: &mut Record<K>) {
+    leading.next = NonNull::new_unchecked(following);
+    following.prev = NonNull::new_unchecked(leading);
+}
+
+#[inline]
+unsafe fn cut_out<K>(record: &mut Record<K>) {
+    suture(record.prev.as_mut(), record.next.as_mut())
+}
+
 impl<K> Trace<K> {
     fn new(sample_mask: usize) -> Trace<K> {
         unsafe {
@@ -36,8 +47,7 @@ impl<K> Trace<K> {
                 next: NonNull::new_unchecked(1usize as _),
                 key: MaybeUninit::uninit(),
             });
-            head.next = NonNull::new_unchecked(&mut *tail);
-            tail.prev = NonNull::new_unchecked(&mut *head);
+            suture(&mut head, &mut tail);
 
             Trace {
                 head,
@@ -58,19 +68,15 @@ impl<K> Trace<K> {
 
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
-            record.as_mut().prev.as_mut().next = record.as_mut().next;
-            record.as_mut().next.as_mut().prev = record.as_mut().prev;
-            self.head.next.as_mut().prev = record;
-            record.as_mut().next = self.head.next;
-            record.as_mut().prev = NonNull::new_unchecked(&mut *self.head);
-            self.head.next = record;
+            cut_out(record.as_mut());
+            suture(record.as_mut(), &mut self.head.next.as_mut());
+            suture(&mut self.head, record.as_mut());
         }
     }
 
     fn delete(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
-            record.as_mut().prev.as_mut().next = record.as_mut().next;
-            record.as_mut().next.as_mut().prev = record.as_mut().prev;
+            cut_out(record.as_mut());
 
             ptr::drop_in_place(Box::from_raw(record.as_ptr()).key.as_mut_ptr());
         }
@@ -93,12 +99,10 @@ impl<K> Trace<K> {
     fn reuse_tail(&mut self, key: K) -> (K, NonNull<Record<K>>) {
         unsafe {
             let mut record = self.tail.prev;
-            record.as_mut().prev.as_mut().next = NonNull::new_unchecked(&mut *self.tail);
-            self.tail.prev = record.as_mut().prev;
-            self.head.next.as_mut().prev = record;
-            record.as_mut().prev = NonNull::new_unchecked(&mut *self.head);
-            record.as_mut().next = self.head.next;
-            self.head.next = record;
+            cut_out(record.as_mut());
+            suture(record.as_mut(), self.head.next.as_mut());
+            suture(&mut self.head, record.as_mut());
+
             let old_key = record.as_mut().key.as_ptr().read();
             record.as_mut().key = MaybeUninit::new(key);
             (old_key, record)
@@ -113,14 +117,15 @@ impl<K> Trace<K> {
                 ptr::drop_in_place(Box::from_raw(cur.as_ptr()).key.as_mut_ptr());
                 cur = tmp;
             }
+            suture(&mut self.head, &mut self.tail);
         }
     }
 
     fn remove_tail(&mut self) -> K {
         unsafe {
             let mut record = self.tail.prev;
-            record.as_mut().prev.as_mut().next = NonNull::new_unchecked(&mut *self.tail);
-            self.tail.prev = record.as_mut().prev;
+            cut_out(record.as_mut());
+
             let r = Box::from_raw(record.as_ptr());
             r.key.as_ptr().read()
         }
@@ -383,6 +388,27 @@ mod tests {
             assert_eq!(map.get(&i), None);
         }
         for i in (7..8).chain(10..19) {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut map = LruCache::with_capacity(10);
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        for i in 0..10 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+        map.clear();
+        for i in 0..10 {
+            assert_eq!(map.get(&i), None);
+        }
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        for i in 0..10 {
             assert_eq!(map.get(&i), Some(&i));
         }
     }
