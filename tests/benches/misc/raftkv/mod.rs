@@ -64,7 +64,7 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
@@ -84,11 +84,11 @@ impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
         Ok(())
     }
 
-    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine, RocksEngine>) -> Result<()> {
         Ok(())
     }
 

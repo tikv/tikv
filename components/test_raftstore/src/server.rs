@@ -24,7 +24,7 @@ use pd_client::DummyPdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
     AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
@@ -63,8 +63,8 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksSnapshot>,
-    raw_apply_router: ApplyRouter,
+    raw_router: RaftRouter<RocksEngine, RocksEngine>,
+    raw_apply_router: ApplyRouter<RocksEngine>,
     worker: Worker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
 }
@@ -120,7 +120,7 @@ impl ServerCluster {
         &self.addrs[&node_id]
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter {
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
@@ -140,8 +140,9 @@ impl Simulator for ServerCluster {
         node_id: u64,
         mut cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
@@ -158,7 +159,6 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -462,7 +462,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

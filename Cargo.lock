@@ -461,6 +461,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "fail 0.4.0",
@@ -3007,6 +3008,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "fail 0.4.0",
