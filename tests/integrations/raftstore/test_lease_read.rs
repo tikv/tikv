@@ -355,8 +355,8 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         snaps[2].get_snapshot()
     ));
 
-    // Sleep to make sure that region 2 could renew lease.
-    thread::sleep(Duration::from_millis(200));
+    // make sure that region 2 could renew lease.
+    cluster.must_put(b"k55", b"v2");
     let responses = batch_read_on_peer(cluster, &requests);
     let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()
