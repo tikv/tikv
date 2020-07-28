@@ -1064,25 +1064,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     SecondaryLockStatus::Locked(lock)
                 }
             }
-            _ => {
-                let mut seek_ts = TimeStamp::max();
-                loop {
-                    if let Some((commit_ts, write)) = self.reader.seek_write(&key, seek_ts)? {
-                        if write.start_ts == start_ts {
-                            break match write.write_type {
-                                WriteType::Rollback => SecondaryLockStatus::RolledBack,
-                                _ => SecondaryLockStatus::Committed(commit_ts),
-                            };
-                        }
-                        if commit_ts < start_ts {
-                            break SecondaryLockStatus::RolledBack;
-                        }
-                        seek_ts = commit_ts.prev();
-                    } else {
-                        break SecondaryLockStatus::RolledBack;
-                    }
+            _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
+                Some((commit_ts, write_type)) if write_type != WriteType::Rollback => {
+                    SecondaryLockStatus::Committed(commit_ts)
                 }
-            }
+                _ => SecondaryLockStatus::RolledBack,
+            },
         };
         // We must protect this rollback in case this rollback is collapsed and a stale
         // acquire_pessimistic_lock and prewrite succeed again.
