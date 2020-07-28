@@ -1,11 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
-use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
-use std::{cmp, io};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
@@ -36,7 +33,7 @@ use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
-use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tikv_util::worker::{FutureRunnable, FutureScheduler, Runnable, Scheduler, Stopped, Worker};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -59,7 +56,7 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_read_stats(&self, read_stats: ReadStats);
 }
 
-impl<E> FlowStatsReporter for Scheduler<Task<E>>
+impl<E> FlowStatsReporter for FutureScheduler<Task<E>>
 where
     E: KvEngine,
 {
@@ -255,7 +252,6 @@ where
     }
 }
 
-const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
 
 #[inline]
@@ -274,132 +270,115 @@ struct StatsMonitor<E>
 where
     E: KvEngine,
 {
-    scheduler: Scheduler<Task<E>>,
-    handle: Option<JoinHandle<()>>,
-    timer: Option<Sender<bool>>,
-    sender: Option<Sender<ReadStats>>,
-    thread_info_interval: Duration,
-    qps_info_interval: Duration,
+    scheduler: FutureScheduler<Task<E>>,
+    sender: Option<Scheduler<StatsMsg>>,
     collect_interval: Duration,
+    msgs: Vec<ReadStats>,
+    auto_split_controller: AutoSplitController,
+    thread_stats: ThreadInfoStatistics,
+}
+
+#[derive(Clone, Debug)]
+enum StatsMsg {
+    CollectTimeout,
+    RefreshTimeout,
+    Stats(ReadStats),
+}
+
+impl Display for StatsMsg {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            StatsMsg::CollectTimeout => write!(f, "CollectTimeout"),
+            StatsMsg::RefreshTimeout => write!(f, "RefresshTimeout"),
+            StatsMsg::Stats(..) => write!(f, "Stats"),
+        }
+    }
 }
 
 impl<E> StatsMonitor<E>
 where
     E: KvEngine,
 {
-    pub fn new(interval: Duration, scheduler: Scheduler<Task<E>>) -> Self {
+    pub fn new(
+        interval: Duration,
+        scheduler: FutureScheduler<Task<E>>,
+        auto_split_controller: AutoSplitController,
+    ) -> Self {
         StatsMonitor {
             scheduler,
-            handle: None,
-            timer: None,
             sender: None,
-            thread_info_interval: interval,
-            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
-            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
+            collect_interval: interval,
+            thread_stats: ThreadInfoStatistics::new(),
+            msgs: vec![],
+            auto_split_controller,
         }
     }
+}
 
-    // Collecting thread information and obtaining qps information for auto split.
-    // They run together in the same thread by taking modulo at different intervals.
-    pub fn start(
-        &mut self,
-        mut auto_split_controller: AutoSplitController,
-    ) -> Result<(), io::Error> {
-        if self.collect_interval < DEFAULT_COLLECT_INTERVAL {
-            info!("it seems we are running tests, skip stats monitoring.");
-            return Ok(());
-        }
-        let mut timer_cnt = 0; // to run functions with different intervals in a loop
-        let collect_interval = self.collect_interval;
-        if self.thread_info_interval < self.collect_interval {
-            info!("running in test mode, skip starting monitor.");
-            return Ok(());
-        }
-        let thread_info_interval = self
-            .thread_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
-        let qps_info_interval = self
-            .qps_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
-        let (tx, rx) = mpsc::channel();
-        self.timer = Some(tx);
+impl<E> Runnable<StatsMsg> for StatsMonitor<E>
+where
+    E: KvEngine,
+{
+    fn register_scheduler(&mut self, scheduler: Scheduler<StatsMsg>) {
+        scheduler.register_timeout(StatsMsg::CollectTimeout, self.collect_interval);
+        scheduler.register_timeout(StatsMsg::RefreshTimeout, DEFAULT_COLLECT_INTERVAL);
+        self.sender = Some(scheduler);
+    }
 
-        let (sender, receiver) = mpsc::channel();
-        self.sender = Some(sender);
+    fn run(&mut self, msg: StatsMsg) {
+        match msg {
+            StatsMsg::CollectTimeout => {
+                self.thread_stats.record();
+                let cpu_usages = convert_record_pairs(self.thread_stats.get_cpu_usages());
+                let read_io_rates = convert_record_pairs(self.thread_stats.get_read_io_rates());
+                let write_io_rates = convert_record_pairs(self.thread_stats.get_write_io_rates());
 
-        let scheduler = self.scheduler.clone();
-
-        let h = Builder::new()
-            .name(thd_name!("stats-monitor"))
-            .spawn(move || {
-                let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
-                    if timer_cnt % thread_info_interval == 0 {
-                        thread_stats.record();
-                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                        let write_io_rates =
-                            convert_record_pairs(thread_stats.get_write_io_rates());
-
-                        let task = Task::StoreInfos {
-                            cpu_usages,
-                            read_io_rates,
-                            write_io_rates,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send store infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
-                    }
-                    if timer_cnt % qps_info_interval == 0 {
-                        let mut others = vec![];
-                        while let Ok(other) = receiver.try_recv() {
-                            others.push(other);
-                        }
-                        let (top, split_infos) = auto_split_controller.flush(others);
-                        auto_split_controller.clear();
-                        let task = Task::AutoSplit { split_infos };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send split infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
-
-                        for i in 0..TOP_N {
-                            if i < top.len() {
-                                READ_QPS_TOPN
-                                    .with_label_values(&[&i.to_string()])
-                                    .set(top[i] as f64);
-                            } else {
-                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
-                            }
-                        }
-                    }
-                    // modules timer_cnt with the least common multiple of intervals to avoid overflow
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
-                    auto_split_controller.refresh_cfg();
+                let task = Task::StoreInfos {
+                    cpu_usages,
+                    read_io_rates,
+                    write_io_rates,
+                };
+                if let Err(e) = self.scheduler.schedule(task) {
+                    error!("failed to send store infos to pd worker"; "err" => ?e);
                 }
-            })?;
+                if !self.msgs.is_empty() {
+                    let others = std::mem::replace(&mut self.msgs, vec![]);
+                    let (top, split_infos) = self.auto_split_controller.flush(others);
+                    self.auto_split_controller.clear();
+                    let task = Task::AutoSplit { split_infos };
+                    if let Err(e) = self.scheduler.schedule(task) {
+                        error!(
+                            "failed to send split infos to pd worker";
+                            "err" => ?e,
+                        );
+                    }
 
-        self.handle = Some(h);
-        Ok(())
-    }
-
-    pub fn stop(&mut self) {
-        if let Some(h) = self.handle.take() {
-            drop(self.timer.take());
-            drop(self.sender.take());
-            if let Err(e) = h.join() {
-                error!("join stats collector failed"; "err" => ?e);
+                    for i in 0..TOP_N {
+                        if i < top.len() {
+                            READ_QPS_TOPN
+                                .with_label_values(&[&i.to_string()])
+                                .set(top[i] as f64);
+                        } else {
+                            READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+                        }
+                    }
+                }
+                self.sender
+                    .as_ref()
+                    .unwrap()
+                    .register_timeout(StatsMsg::CollectTimeout, self.collect_interval);
+            }
+            StatsMsg::Stats(stat) => {
+                self.msgs.push(stat);
+            }
+            StatsMsg::RefreshTimeout => {
+                self.auto_split_controller.refresh_cfg();
+                self.sender
+                    .as_ref()
+                    .unwrap()
+                    .register_timeout(StatsMsg::RefreshTimeout, DEFAULT_COLLECT_INTERVAL);
             }
         }
-    }
-
-    pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
-        &self.sender
     }
 }
 
@@ -421,8 +400,8 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<EK>>,
-    stats_monitor: StatsMonitor<EK>,
+    scheduler: FutureScheduler<Task<EK>>,
+    sender: Scheduler<StatsMsg>,
 }
 
 impl<EK, T> Runner<EK, T>
@@ -437,15 +416,14 @@ where
         pd_client: Arc<T>,
         router: RaftRouter<EK, RocksEngine>,
         db: EK,
-        scheduler: Scheduler<Task<EK>>,
+        scheduler: FutureScheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
+        worker: Worker,
     ) -> Runner<EK, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
-        let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start(auto_split_controller) {
-            error!("failed to start stats collector, error = {:?}", e);
-        }
+        let stats_monitor = StatsMonitor::new(interval, scheduler.clone(), auto_split_controller);
+        let sender = worker.start(stats_monitor);
 
         Runner {
             store_id,
@@ -457,7 +435,7 @@ where
             store_stat: StoreStat::default(),
             start_ts: UnixSecs::now(),
             scheduler,
-            stats_monitor,
+            sender,
         }
     }
 
@@ -896,10 +874,8 @@ where
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
         }
         if !read_stats.region_infos.is_empty() {
-            if let Some(sender) = self.stats_monitor.get_sender() {
-                if sender.send(read_stats).is_err() {
-                    warn!("send read_stats failed, are we shutting down?")
-                }
+            if self.sender.schedule(StatsMsg::Stats(read_stats)).is_err() {
+                warn!("send read_stats failed, are we shutting down?")
             }
         }
     }
@@ -923,7 +899,7 @@ where
     }
 }
 
-impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
+impl<EK, T> FutureRunnable<Task<EK>> for Runner<EK, T>
 where
     EK: KvEngine,
     T: PdClient,
@@ -1068,10 +1044,6 @@ where
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
         };
     }
-
-    fn shutdown(&mut self) {
-        self.stats_monitor.stop();
-    }
 }
 
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
@@ -1201,7 +1173,7 @@ mod tests {
     impl RunnerTest {
         fn new(
             interval: u64,
-            scheduler: Scheduler<Task<RocksEngine>>,
+            scheduler: FutureScheduler<Task<RocksEngine>>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
             let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
@@ -1229,7 +1201,7 @@ mod tests {
         }
     }
 
-    impl Runnable<Task<RocksEngine>> for RunnerTest {
+    impl FutureRunnable<Task<RocksEngine>> for RunnerTest {
         fn run(&mut self, task: Task<RocksEngine>, _handle: &Handle) {
             if let Task::StoreInfos {
                 cpu_usages,

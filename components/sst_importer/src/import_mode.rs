@@ -5,11 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
-use futures_cpupool::CpuPool;
-use futures_util::compat::{Compat, Future01CompatExt};
-use futures_util::future::FutureExt;
 use kvproto::import_sstpb::*;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use super::Config;
 use super::Result;
@@ -73,7 +69,7 @@ pub struct ImportModeSwitcher<E: KvEngine> {
 }
 
 impl<E: KvEngine> ImportModeSwitcher<E> {
-    pub fn new(cfg: &Config, executor: &CpuPool, db: E) -> ImportModeSwitcher<E> {
+    pub fn new(cfg: &Config, db: E) -> ImportModeSwitcher<E> {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let timeout = cfg.import_mode_timeout.0;
@@ -87,45 +83,14 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
             metrics_fn: mf,
         }));
 
-        // spawn a background future to put TiKV back into normal mode after timeout
-        let switcher = Arc::downgrade(&inner);
-        let timer_loop = async move {
-            // loop until the switcher has been dropped
-            while let Some(switcher) = switcher.upgrade() {
-                let next_check = {
-                    let mut switcher = switcher.lock().unwrap();
-                    let now = Instant::now();
-                    if now >= switcher.next_check {
-                        if switcher.mode == SwitchMode::Import {
-                            let mf = switcher.metrics_fn;
-                            if switcher.enter_normal_mode(mf).is_err() {
-                                error!("failed to put TiKV back into normal mode");
-                            }
-                        }
-                        switcher.next_check = now + switcher.timeout
-                    }
-                    switcher.next_check
-                };
-
-                let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
-
-                if !ok {
-                    warn!("failed to delay with global timer");
-                }
-            }
-        };
-        executor
-            .spawn(Compat::new(timer_loop.unit_error().boxed()))
-            .forget();
-
         ImportModeSwitcher { inner }
     }
 
-    pub fn enter_normal_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_normal_mode(&self, mf: RocksDBMetricsFn) -> Result<()> {
         self.inner.lock().unwrap().enter_normal_mode(mf)
     }
 
-    pub fn enter_import_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_import_mode(&self, mf: RocksDBMetricsFn) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         inner.enter_import_mode(mf)?;
         inner.next_check = Instant::now() + inner.timeout;

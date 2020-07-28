@@ -95,6 +95,7 @@ where
     R: Runnable<T> + Send + 'static,
 {
     fn handle(&mut self) {
+        self.runner.on_tick();
         while let Ok(t) = self.receiver.try_recv() {
             self.runner.run(t);
             self.counter.fetch_sub(1, Ordering::Relaxed);
@@ -151,6 +152,18 @@ impl<T: Display + Send + 'static> Scheduler<T> {
     /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.counter.load(Ordering::Relaxed) > 0
+    }
+
+    pub fn notify_timeout(&self, wait: Duration) {
+        let notify = self.pool_notify.clone();
+        let runner_id = self.runner_id;
+        let delay = GLOBAL_TIMER_HANDLE
+            .delay(std::time::Instant::now() + wait)
+            .map_err(|_| panic!("register time task error"))
+            .inspect(move |_| {
+                let _ = notify.send(WorkerMsg::Task(runner_id));
+            });
+        poll_future_notify(delay);
     }
 
     pub fn register_timeout(&self, task: T, wait: Duration) {

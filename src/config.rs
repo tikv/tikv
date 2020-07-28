@@ -927,6 +927,7 @@ impl DbConfig {
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_background_jobs(self.max_background_jobs);
+        info!("DbConfig";"max_background_jobs" => self.max_background_jobs);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
@@ -1183,6 +1184,7 @@ impl RaftDbConfig {
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
         opts.set_max_background_jobs(self.max_background_jobs);
+        info!("RaftDbConfig";"max_background_jobs" => self.max_background_jobs);
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);

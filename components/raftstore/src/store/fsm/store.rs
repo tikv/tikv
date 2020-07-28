@@ -258,7 +258,7 @@ impl Clone for PeerTickBatch {
     fn clone(&self) -> PeerTickBatch {
         PeerTickBatch {
             ticks: vec![],
-            wait_duration: self.wait_duration
+            wait_duration: self.wait_duration,
         }
     }
 }
@@ -1042,7 +1042,7 @@ where
     type Handler = RaftPoller<T, C>;
 
     fn build(&mut self) -> RaftPoller<T, C> {
-        let tick_batch = vec![PeerTickBatch::default();256];
+        let tick_batch = vec![PeerTickBatch::default(); 256];
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1293,6 +1293,7 @@ impl RaftBatchSystem {
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
+            workers.common_worker.clone(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {

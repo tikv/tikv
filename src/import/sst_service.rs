@@ -42,11 +42,13 @@ pub struct ImportSSTService<Router> {
     cfg: Config,
     router: Router,
     engine: RocksEngine,
-    threads: CpuPool,
+    threads: Option<CpuPool>,
     importer: Arc<SSTImporter>,
     switcher: ImportModeSwitcher<RocksEngine>,
     limiter: Limiter,
     security_mgr: Arc<SecurityManager>,
+    pending_task_count: usize,
+    num_threads: usize,
 }
 
 impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
@@ -57,21 +59,31 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
-        let threads = Builder::new()
-            .name_prefix("sst-importer")
-            .pool_size(cfg.num_threads)
-            .create();
-        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        let switcher = ImportModeSwitcher::new(&cfg, engine.clone());
+        // spawn a background future to put TiKV back into normal mode after timeout
+        let num_threads = cfg.num_threads;
         ImportSSTService {
             cfg,
             router,
             engine,
-            threads,
+            threads: None,
             importer,
             switcher,
             limiter: Limiter::new(INFINITY),
             security_mgr,
+            pending_task_count: 0,
+            num_threads,
         }
+    }
+
+    fn may_create_pool(&mut self) -> &CpuPool {
+        let num_threads = self.num_threads;
+        self.threads.get_or_insert_with(|| {
+            Builder::new()
+                .name_prefix("sst-importer")
+                .pool_size(num_threads)
+                .create()
+        })
     }
 }
 
@@ -94,7 +106,12 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
+                SwitchMode::Normal => {
+                    if self.switcher.get_mode() != req.get_mode() {
+                        self.threads.take();
+                    }
+                    self.switcher.enter_normal_mode(mf)
+                }
                 SwitchMode::Import => self.switcher.enter_import_mode(mf),
             }
         };
@@ -123,10 +140,11 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
-        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
-
+        let window = self.cfg.stream_channel_window;
+        let threads = self.may_create_pool();
+        let bounded_stream = mpsc::spawn(stream, threads, window);
         ctx.spawn(
-            self.threads.spawn(
+            threads.spawn(
                 bounded_stream
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
@@ -184,7 +202,8 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
             .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
             .unwrap();
 
-        ctx.spawn(self.threads.spawn_fn(move || {
+        let threads = self.may_create_pool();
+        ctx.spawn(threads.spawn_fn(move || {
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
@@ -308,7 +327,8 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let timer = Instant::now_coarse();
         let engine = self.engine.clone();
 
-        ctx.spawn(self.threads.spawn_fn(move || {
+        let threads = self.may_create_pool();
+        ctx.spawn(threads.spawn_fn(move || {
             let (start, end) = if !req.has_range() {
                 (None, None)
             } else {
@@ -384,9 +404,11 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSst for ImportSSTService<Router
         let timer = Instant::now_coarse();
         let import = Arc::clone(&self.importer);
         let engine = self.engine.clone();
-        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
+        let window = self.cfg.stream_channel_window;
+        let threads = self.may_create_pool();
+        let bounded_stream = mpsc::spawn(stream, threads, window);
         ctx.spawn(
-            self.threads.spawn(
+            threads.spawn(
                 bounded_stream
                     .into_future()
                     .map_err(|(e, _)| Error::from(e))
