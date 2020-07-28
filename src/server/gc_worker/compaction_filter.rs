@@ -329,7 +329,7 @@ pub mod tests {
     }
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
-        let engine = RocksEngine::from_db(engine.get_rocksdb());
+        let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.put_cf("write", b"k1", b"v1").unwrap();
         do_gc_by_compact(&engine, None, None, safe_point, None);
@@ -369,7 +369,7 @@ pub mod tests {
         #[test]
         fn at_bottommost_level() {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let raw_engine = RocksEngine::from_db(engine.get_rocksdb());
+            let raw_engine = engine.get_rocksdb();
 
             let split_key = Key::from_raw(b"key")
                 .append_ts(TimeStamp::from(135))
@@ -411,12 +411,10 @@ pub mod tests {
 
         #[test]
         fn at_no_bottommost_level() {
-            let mut cfg_rocksdb = DbConfig::default();
-            cfg_rocksdb.writecf.dynamic_level_bytes = false;
-            let engine = TestEngineBuilder::new()
-                .build_with_cfg(&cfg_rocksdb)
-                .unwrap();
-            let raw_engine = RocksEngine::from_db(engine.get_rocksdb());
+            let mut cfg = DbConfig::default();
+            cfg.writecf.dynamic_level_bytes = false;
+            let engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+            let raw_engine = engine.get_rocksdb();
 
             // So the construction of SST files will be:
             // L6: |AAAAA_101, CCCCC_111|
