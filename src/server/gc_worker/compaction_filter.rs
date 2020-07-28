@@ -239,11 +239,11 @@ impl CompactionFilter for WriteCompactionFilter {
             self.switch_key_metrics();
         }
 
-        self.versions += 1;
         if commit_ts > self.safe_point {
             return false;
         }
 
+        self.versions += 1;
         let mut filtered = self.remove_older;
         let write = WriteRef::parse(value).unwrap();
 
