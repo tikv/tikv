@@ -576,6 +576,7 @@ dependencies = [
  "engine_traits",
  "fs2",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",

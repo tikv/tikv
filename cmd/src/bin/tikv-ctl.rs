@@ -19,7 +19,11 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{future, stream, Future, Stream};
+use futures03::{
+    compat::{Future01CompatExt, Stream01CompatExt},
+    executor::block_on,
+    future, stream, Stream, StreamExt, TryStreamExt,
+};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
@@ -41,6 +45,7 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
+use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::{escape, file::calc_crc32, unescape};
@@ -50,6 +55,8 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+
+type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
@@ -239,7 +246,7 @@ trait DebugExecutor {
 
         let scan_future =
             self.get_mvcc_infos(from.clone(), to, limit)
-                .for_each(move |(key, mvcc)| {
+                .try_for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
                         return future::err::<(), String>("no mvcc infos".to_owned());
@@ -271,7 +278,7 @@ trait DebugExecutor {
                     v1!("");
                     future::ok::<(), String>(())
                 });
-        if let Err(e) = scan_future.wait() {
+        if let Err(e) = block_on(scan_future) {
             ve1!("{}", e);
             process::exit(-1);
         }
@@ -341,15 +348,16 @@ trait DebugExecutor {
 
                 let mut take_item = |i: usize| -> Option<(Vec<u8>, MvccInfo)> {
                     let wait = match i {
-                        1 => future::poll_fn(|| mvcc_infos_1.poll()).wait(),
-                        _ => future::poll_fn(|| mvcc_infos_2.poll()).wait(),
+                        1 => block_on(future::poll_fn(|cx| mvcc_infos_1.poll_next_unpin(cx))),
+                        _ => block_on(future::poll_fn(|cx| mvcc_infos_2.poll_next_unpin(cx))),
                     };
                     match wait {
-                        Ok(item1) => item1,
-                        Err(e) => {
+                        Some(Err(e)) => {
                             v1!("db{} scan data in region {} fail: {}", i, region, e);
                             process::exit(-1);
                         }
+                        Some(Ok(s)) => Some(s),
+                        None => None,
                     }
                 };
 
@@ -469,9 +477,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -512,9 +518,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -541,12 +545,7 @@ trait DebugExecutor {
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry;
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream;
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
 
@@ -643,22 +642,18 @@ impl DebugExecutor for DebugClient {
             .take_entry()
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let mut req = ScanMvccRequest::default();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
-        Box::new(
+        Box::pin(
             self.scan_mvcc(&req)
                 .unwrap()
+                .compat()
                 .map_err(|e| e.to_string())
-                .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+                .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
+        ) as MvccInfoStream
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -817,17 +812,12 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::pin(stream) as MvccInfoStream
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
@@ -923,7 +913,7 @@ impl DebugExecutor for Debugger {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
-        let mut region = match rpc_client.get_region_by_id(region_id).wait() {
+        let mut region = match block_on(rpc_client.get_region_by_id(region_id).compat()) {
             Ok(Some(region)) => region,
             Ok(None) => {
                 ve1!("no such region {} on PD", region_id);
@@ -1116,7 +1106,7 @@ fn main() {
                 .long("encode")
                 .takes_value(true)
                 .help("Encode a key in escaped format"),
-            )
+        )
         .arg(
             Arg::with_name("pd")
                 .long("pd")
@@ -1407,10 +1397,10 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("region")
-                    .short("r")
-                    .long("region")
-                    .takes_value(true)
-                    .help("Set the region id"),
+                        .short("r")
+                        .long("region")
+                        .takes_value(true)
+                        .help("Set the region id"),
                 )
                 .arg(
                     Arg::with_name("bottommost")
@@ -1559,7 +1549,7 @@ fn main() {
                         .short("r")
                         .takes_value(true)
                         .help("The origin region id"),
-                        ),
+                ),
         )
         .subcommand(
             SubCommand::with_name("metrics")
@@ -1733,22 +1723,22 @@ fn main() {
                 .about("Inject failures to TiKV and recovery")
                 .subcommand(
                     SubCommand::with_name("inject")
-                    .about("Inject failures")
-                    .arg(
-                        Arg::with_name("args")
-                            .multiple(true)
-                            .takes_value(true)
-                            .help(
-                                "Inject fail point and actions pairs.\
+                        .about("Inject failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help(
+                                    "Inject fail point and actions pairs.\
                                 E.g. tikv-ctl fail inject a=off b=panic",
-                            ),
-                    )
-                    .arg(
-                        Arg::with_name("file")
-                            .short("f")
-                            .takes_value(true)
-                            .help("Read a file of fail points and actions to inject"),
-                    ),
+                                ),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Read a file of fail points and actions to inject"),
+                        ),
                 )
                 .subcommand(
                     SubCommand::with_name("recover")
@@ -2299,9 +2289,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    let region = block_on(pd_client.get_region_by_id(region_id).compat())
         .expect("get_region_by_id should success")
         .expect("must have the region");
 
