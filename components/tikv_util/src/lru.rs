@@ -19,10 +19,12 @@ struct ValueEntry<K, V> {
 struct Trace<K> {
     head: Box<Record<K>>,
     tail: Box<Record<K>>,
+    tick: usize,
+    sample_mask: usize,
 }
 
 impl<K> Trace<K> {
-    fn new() -> Trace<K> {
+    fn new(sample_mask: usize) -> Trace<K> {
         unsafe {
             let mut head = Box::new(Record {
                 prev: NonNull::new_unchecked(1usize as _),
@@ -37,7 +39,20 @@ impl<K> Trace<K> {
             head.next = NonNull::new_unchecked(&mut *tail);
             tail.prev = NonNull::new_unchecked(&mut *head);
 
-            Trace { head, tail }
+            Trace {
+                head,
+                tail,
+                sample_mask,
+                tick: 0,
+            }
+        }
+    }
+
+    #[inline]
+    fn maybe_promote(&mut self, record: NonNull<Record<K>>) {
+        self.tick += 1;
+        if self.tick & self.sample_mask == 0 {
+            self.promote(record);
         }
     }
 
@@ -119,13 +134,17 @@ pub struct LruCache<K, V> {
 }
 
 impl<K, V> LruCache<K, V> {
-    pub fn with_capacity(mut capacity: usize) -> LruCache<K, V> {
+    pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
+        LruCache::with_capacity_and_sample(capacity, 0)
+    }
+
+    pub fn with_capacity_and_sample(mut capacity: usize, sample_mask: usize) -> LruCache<K, V> {
         if capacity == 0 {
             capacity = 1;
         }
         LruCache {
             map: HashMap::default(),
-            trace: Trace::new(),
+            trace: Trace::new(sample_mask),
             capacity,
         }
     }
@@ -199,7 +218,7 @@ where
     pub fn get(&mut self, key: &K) -> Option<&V> {
         match self.map.get(key) {
             Some(v) => {
-                self.trace.promote(v.record);
+                self.trace.maybe_promote(v.record);
                 Some(&v.value)
             }
             None => None,
@@ -346,5 +365,25 @@ mod tests {
             assert_eq!(map.get(&i), Some(&i));
         }
         assert_eq!(map.capacity(), 10);
+    }
+
+    #[test]
+    fn test_sample() {
+        let mut map = LruCache::with_capacity_and_sample(10, 7);
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        for i in 0..10 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+        for i in 10..19 {
+            map.insert(i, i);
+        }
+        for i in (0..7).chain(8..10) {
+            assert_eq!(map.get(&i), None);
+        }
+        for i in (7..8).chain(10..19) {
+            assert_eq!(map.get(&i), Some(&i));
+        }
     }
 }
