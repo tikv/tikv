@@ -344,6 +344,7 @@ impl<T: Display + Send + 'static> Worker<T> {
             .spawn(move || {
                 local_registry.register_current();
                 poll(runner, rx, counter, batch_size, timer);
+                fail::FailPointRegistry::deregister_current();
             })?;
         self.handle = Some(h);
         Ok(())

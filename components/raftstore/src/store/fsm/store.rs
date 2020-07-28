@@ -1112,6 +1112,7 @@ impl RaftBatchSystem {
                 .name_prefix("future-poller")
                 .pool_size(cfg.value().future_poll_size)
                 .after_start(move || local_registry.register_current())
+                .before_stop(|| fail::FailPointRegistry::deregister_current())
                 .build(),
         };
         let mut builder = RaftPollerBuilder {

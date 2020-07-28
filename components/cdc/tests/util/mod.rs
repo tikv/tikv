@@ -28,7 +28,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use crate::{CdcObserver, Task};
+use cdc::{CdcObserver, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -104,10 +104,10 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(crate::Service::new(scheduler.clone(), security_mgr.clone()))
+                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
                 }));
             let scheduler = worker.scheduler();
-            let cdc_ob = crate::CdcObserver::new(scheduler.clone());
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -122,7 +122,7 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint = crate::Endpoint::new(
+            let mut cdc_endpoint = cdc::Endpoint::new(
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,

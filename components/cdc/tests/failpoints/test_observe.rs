@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use cdc::test_util::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite};
 use fail::FailPointRegistry;
 use futures::sink::Sink;
 use futures::Future;
@@ -25,9 +25,6 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_observe_duplicate_cmd() {
-    let local_registry = FailPointRegistry::new();
-    local_registry.register_current();
-
     let mut suite = TestSuite::new(3);
 
     let region = suite.cluster.get_region(&[]);

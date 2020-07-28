@@ -655,6 +655,7 @@ where
                         kv_snap,
                         notifier,
                     );
+                    fail::FailPointRegistry::deregister_current();
                 });
             }
             task @ Task::Apply { .. } => {

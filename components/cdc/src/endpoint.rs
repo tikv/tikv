@@ -239,6 +239,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .name_prefix("cdcwkr")
             .pool_size(4)
             .after_start(move || local_registry.register_current())
+            .before_stop(|| fail::FailPointRegistry::deregister_current())
             .build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {

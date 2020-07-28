@@ -398,6 +398,7 @@ where
                 .spawn(move || {
                     local_registry.register_current();
                     poller.poll();
+                    FailPointRegistry::deregister_current();
                 })
                 .unwrap();
             self.workers.push(t);

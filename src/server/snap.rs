@@ -318,6 +318,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
                 .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
                 .after_start(move || local_registry.register_current())
+                .before_stop(|| fail::FailPointRegistry::deregister_current())
                 .create(),
             raft_router: r,
             security_mgr,

@@ -1161,7 +1161,7 @@ dependencies = [
 [[package]]
 name = "fail"
 version = "0.4.0"
-source = "git+https://github.com/hunterlxt/fail-rs?branch=XT/threads#0421da8aaf3b5ec1ba0266707ae484491b7e99a0"
+source = "git+https://github.com/hunterlxt/fail-rs?branch=XT/threads#db8079171af75c9d455ac0bc5d93ffc72a5d3012"
 dependencies = [
  "lazy_static",
  "log",

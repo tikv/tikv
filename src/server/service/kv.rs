@@ -122,6 +122,7 @@ impl<
                 .pool_size(1)
                 .name_prefix("req_batch_timer_guard")
                 .after_start(move || local_registry.register_current())
+                .before_stop(|| fail::FailPointRegistry::deregister_current())
                 .build(),
         ));
         Service {

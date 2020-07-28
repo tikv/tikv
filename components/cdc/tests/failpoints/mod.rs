@@ -5,3 +5,5 @@
 mod test_observe;
 mod test_register;
 mod test_resolve;
+
+include!("../util/mod.rs");

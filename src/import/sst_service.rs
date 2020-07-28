@@ -62,6 +62,7 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .after_start(move || local_registry.register_current())
+            .before_stop(|| fail::FailPointRegistry::deregister_current())
             .create();
         let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
         ImportSSTService {

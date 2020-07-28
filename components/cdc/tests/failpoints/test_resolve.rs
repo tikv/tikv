@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use cdc::test_util::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;

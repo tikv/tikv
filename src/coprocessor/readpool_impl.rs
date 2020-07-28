@@ -34,6 +34,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     set_tls_engine(engine.lock().unwrap().clone());
                 })
                 .before_stop(move || {
+                    fail::FailPointRegistry::deregister_current();
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     unsafe {
                         destroy_tls_engine::<E>();
@@ -63,7 +64,10 @@ pub fn build_read_pool_for_test<E: Engine>(
                     set_tls_engine(engine.lock().unwrap().clone());
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
+                .before_stop(|| {
+                    fail::FailPointRegistry::deregister_current();
+                    unsafe { destroy_tls_engine::<E>() }
+                })
                 .build()
         })
         .collect()

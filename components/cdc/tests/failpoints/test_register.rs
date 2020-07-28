@@ -2,7 +2,7 @@
 use std::thread;
 use std::time::Duration;
 
-use cdc::test_util::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite};
 use futures::sink::Sink;
 use futures::Future;
 use grpcio::WriteFlags;

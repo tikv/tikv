@@ -89,6 +89,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
                     .pool_size(cfg.stats_concurrency)
                     .name_prefix(STATS_THREAD_PREFIX)
                     .after_start(move || local_registry.register_current())
+                    .before_stop(|| fail::FailPointRegistry::deregister_current())
                     .build(),
             )
         } else {
