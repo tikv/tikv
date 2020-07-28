@@ -132,13 +132,13 @@ impl<K> Trace<K> {
     }
 }
 
-pub struct LruCache<K, V> {
+pub struct LruCache<K: Eq + Hash, V> {
     map: HashMap<K, ValueEntry<K, V>>,
     trace: Trace<K>,
     capacity: usize,
 }
 
-impl<K, V> LruCache<K, V> {
+impl<K: Eq + Hash, V> LruCache<K, V> {
     pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
         LruCache::with_capacity_and_sample(capacity, 0)
     }
@@ -231,9 +231,9 @@ where
     }
 }
 
-unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
+unsafe impl<K: Eq + Hash + Send, V: Send> Send for LruCache<K, V> {}
 
-impl<K, V> Drop for LruCache<K, V> {
+impl<K: Eq + Hash, V> Drop for LruCache<K, V> {
     fn drop(&mut self) {
         self.clear();
     }
