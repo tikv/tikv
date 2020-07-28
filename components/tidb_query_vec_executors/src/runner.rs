@@ -57,10 +57,6 @@ pub struct BatchExecutorsRunner<SS> {
     /// Maximum rows to return in batch stream mode.
     stream_row_limit: usize,
 
-    /// `batch_size` in stream mode. When calling `next_batch(batch_size)`,
-    /// Scanner will fetch `batch_size` physical rows. This variable will be initialized as `BATCH_INITIAL_SIZE`.
-    stream_batch_size: usize,
-
     /// The encoding method for the response.
     /// Possible encoding methods are:
     /// 1. default: result is encoded row by row using datum format.
@@ -361,7 +357,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
-            stream_batch_size: BATCH_INITIAL_SIZE,
             stream_row_limit: streaming_batch_limit,
         })
     }
@@ -442,13 +437,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let (mut record_len, mut is_drained) = (0, false);
         let mut chunk = Chunk::default();
         let mut ctx = EvalContext::new(self.config.clone());
+        let batch_size = self.stream_row_limit.min(BATCH_MAX_SIZE);
+
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             let (drained, len) = self.internal_handle_request(
                 true,
-                self.stream_batch_size
-                    .min(self.stream_row_limit - record_len),
+                batch_size.min(self.stream_row_limit - record_len),
                 &mut current_chunk,
                 &mut warnings,
                 &mut ctx,
@@ -458,9 +454,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
             is_drained = drained;
-
-            // Grow batch size
-            grow_batch_size(&mut self.stream_batch_size)
         }
 
         if !is_drained || record_len > 0 {
