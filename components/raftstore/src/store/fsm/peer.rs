@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use engine_rocks::{RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
+use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngines, Peekable, Snapshot};
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -84,8 +84,12 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm<S: Snapshot> {
-    pub peer: Peer,
+pub struct PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
+    pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -100,24 +104,31 @@ pub struct PeerFsm<S: Snapshot> {
     stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<S>>>,
-    pub receiver: Receiver<PeerMsg<S>>,
+    mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
+    pub receiver: Receiver<PeerMsg<EK, ER>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
     // Batch raft command which has the same header into an entry
-    batch_req_builder: BatchRaftCmdRequestBuilder,
+    batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
 }
 
-pub struct BatchRaftCmdRequestBuilder {
+pub struct BatchRaftCmdRequestBuilder<S>
+where
+    S: Snapshot,
+{
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<RocksSnapshot>, usize)>,
+    callbacks: Vec<(Callback<S>, usize)>,
     txn_extra: TxnExtra,
 }
 
-impl<S: Snapshot> Drop for PeerFsm<S> {
+impl<EK, ER> Drop for PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -137,19 +148,23 @@ impl<S: Snapshot> Drop for PeerFsm<S> {
     }
 }
 
-pub type SenderFsmPair<S> = (LooseBoundedSender<PeerMsg<S>>, Box<PeerFsm<S>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK, ER>>, Box<PeerFsm<EK, ER>>);
 
-impl<S: Snapshot> PeerFsm<S> {
+impl<EK, ER> PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        engines: KvEngines<EK, ER>,
         region: &metapb::Region,
-    ) -> Result<SenderFsmPair<S>> {
+    ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -193,11 +208,11 @@ impl<S: Snapshot> PeerFsm<S> {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<RocksSnapshot>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        engines: KvEngines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<SenderFsmPair<S>> {
+    ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -235,7 +250,7 @@ impl<S: Snapshot> PeerFsm<S> {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer {
+    pub fn get_peer(&self) -> &Peer<EK, ER> {
         &self.peer
     }
 
@@ -258,8 +273,11 @@ impl<S: Snapshot> PeerFsm<S> {
     }
 }
 
-impl BatchRaftCmdRequestBuilder {
-    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder {
+impl<S> BatchRaftCmdRequestBuilder<S>
+where
+    S: Snapshot,
+{
+    fn new(raft_entry_max_size: f64) -> BatchRaftCmdRequestBuilder<S> {
         BatchRaftCmdRequestBuilder {
             raft_entry_max_size,
             request: None,
@@ -293,7 +311,7 @@ impl BatchRaftCmdRequestBuilder {
         true
     }
 
-    fn add(&mut self, cmd: RaftCommand<RocksSnapshot>, req_size: u32) {
+    fn add(&mut self, cmd: RaftCommand<S>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
@@ -321,14 +339,14 @@ impl BatchRaftCmdRequestBuilder {
             if f64::from(self.batch_req_size) > self.raft_entry_max_size * 0.4 {
                 return true;
             }
-            if batch_req.get_requests().len() > WRITE_BATCH_MAX_KEYS {
+            if batch_req.get_requests().len() > RocksEngine::WRITE_BATCH_MAX_KEYS {
                 return true;
             }
         }
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<RocksSnapshot>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<S>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
@@ -367,8 +385,12 @@ impl BatchRaftCmdRequestBuilder {
     }
 }
 
-impl<S: Snapshot> Fsm for PeerFsm<S> {
-    type Message = PeerMsg<S>;
+impl<EK, ER> Fsm for PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
+    type Message = PeerMsg<EK, ER>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -395,20 +417,28 @@ impl<S: Snapshot> Fsm for PeerFsm<S> {
     }
 }
 
-pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm<RocksSnapshot>,
-    ctx: &'a mut PollContext<T, C>,
+pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
+    fsm: &'a mut PeerFsm<EK, ER>,
+    ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub fn new(
-        fsm: &'a mut PeerFsm<RocksSnapshot>,
-        ctx: &'a mut PollContext<T, C>,
-    ) -> PeerFsmDelegate<'a, T, C> {
+        fsm: &'a mut PeerFsm<EK, ER>,
+        ctx: &'a mut PollContext<EK, ER, T, C>,
+    ) -> PeerFsmDelegate<'a, EK, ER, T, C> {
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksSnapshot>>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK, ER>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -478,7 +508,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<RocksSnapshot>) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<EK, ER>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -671,7 +701,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         fail_point!("raft_on_capture_change");
         let region_id = self.region_id();
@@ -699,7 +729,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         );
     }
 
-    fn on_significant_msg(&mut self, msg: SignificantMsg) {
+    fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
         match msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..
@@ -787,7 +817,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
-    fn on_leader_callback(&mut self, cb: Callback<RocksSnapshot>) {
+    fn on_leader_callback(&mut self, cb: Callback<EK::Snapshot>) {
         let msg = new_read_index_request(
             self.region_id(),
             self.region().get_region_epoch().clone(),
@@ -981,17 +1011,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if self.fsm.group_state == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
-                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 3
-                // (default 7) and the follwer's `election_elapsed` in raft-rs is 1.
+                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
+                // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
+                // and the follwer's `election_elapsed` in raft-rs is 1.
                 // After the group state becomes Chaos, the next tick will call `raft_group.tick`
-                // `missing_tick` + 1 times(default 8).
-                // So the follower's `election_elapsed` should be 1 + `missing_tick` + 1(default 9)
-                // which is less than the min election timeout.
+                // `missing_tick` + 1 times(default 7).
+                // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
+                // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
                 // The reason is that we don't want let all followers become (pre)candidate if one
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
-                // to others. As long as the leader can wake up and broadcast hearbeats in one raft base
-                // tick time(default 1s), no more followers will wake up and sends vote msg again.
-                if self.fsm.missing_ticks + 3 < self.ctx.cfg.raft_election_timeout_ticks {
+                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // time(default 2s), no more followers will wake up and sends vote msg again.
+                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                    < self.ctx.cfg.raft_election_timeout_ticks
+                {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
                 }
@@ -1033,7 +1066,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<RocksSnapshot>) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
@@ -2665,7 +2698,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<RocksSnapshot>>,
+        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -2866,7 +2899,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn propose_raft_command(
         &mut self,
         mut msg: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
         txn_extra: TxnExtra,
     ) {
         match self.pre_propose_raft_command(&msg) {
@@ -3126,7 +3159,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -3402,13 +3435,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn on_ready_compute_hash(
         &mut self,
         region: metapb::Region,
         index: u64,
         safe_point: u64,
-        snap: RocksSnapshot,
+        snap: EK::Snapshot,
     ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, safe_point, snap);
@@ -3641,7 +3678,11 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
@@ -3696,6 +3737,7 @@ mod tests {
     use crate::store::local_metrics::RaftProposeMetrics;
     use crate::store::msg::{Callback, RaftCommand};
 
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_cmdpb::{
         AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
         StatusRequest,
@@ -3707,7 +3749,7 @@ mod tests {
     #[test]
     fn test_batch_raft_cmd_request_builder() {
         let max_batch_size = 1000.0;
-        let mut builder = BatchRaftCmdRequestBuilder::new(max_batch_size);
+        let mut builder = BatchRaftCmdRequestBuilder::<RocksSnapshot>::new(max_batch_size);
         let mut q = Request::default();
         let mut metric = RaftProposeMetrics::default();
 

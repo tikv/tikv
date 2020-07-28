@@ -44,13 +44,13 @@ impl<S: Snapshot> Display for Task<S> {
     }
 }
 
-pub struct Runner<E: KvEngine, C: CasualRouter<E::Snapshot>> {
+pub struct Runner<EK: KvEngine, C: CasualRouter<EK>> {
     router: C,
-    coprocessor_host: CoprocessorHost<E>,
+    coprocessor_host: CoprocessorHost<EK>,
 }
 
-impl<E: KvEngine, C: CasualRouter<E::Snapshot>> Runner<E, C> {
-    pub fn new(router: C, cop_host: CoprocessorHost<E>) -> Runner<E, C> {
+impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
+    pub fn new(router: C, cop_host: CoprocessorHost<EK>) -> Runner<EK, C> {
         Runner {
             router,
             coprocessor_host: cop_host,
@@ -58,7 +58,7 @@ impl<E: KvEngine, C: CasualRouter<E::Snapshot>> Runner<E, C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, safe_point: u64, snap: E::Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, safe_point: u64, snap: EK::Snapshot) {
         info!("computing hash"; "region_id" => region.get_id(), "index" => index);
         REGION_HASH_COUNTER.compute.all.inc();
 
@@ -94,12 +94,12 @@ impl<E: KvEngine, C: CasualRouter<E::Snapshot>> Runner<E, C> {
     }
 }
 
-impl<E, C> Runnable<Task<E::Snapshot>> for Runner<E, C>
+impl<EK, C> Runnable<Task<EK::Snapshot>> for Runner<EK, C>
 where
-    E: KvEngine,
-    C: CasualRouter<E::Snapshot>,
+    EK: KvEngine,
+    C: CasualRouter<EK>,
 {
-    fn run(&mut self, task: Task<E::Snapshot>) {
+    fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::ComputeHash {
                 index,
