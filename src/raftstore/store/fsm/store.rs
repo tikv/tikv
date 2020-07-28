@@ -1560,6 +1560,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn store_heartbeat_pd(&mut self) {
+        self.ctx.router.dump_stats("raft");
+        self.ctx.apply_router.dump_stats("apply");
+
         let mut stats = StoreStats::new();
 
         let used_size = self.ctx.snap_mgr.get_total_snap_size();

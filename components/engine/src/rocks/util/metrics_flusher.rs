@@ -40,6 +40,7 @@ impl MetricsFlusher {
         let h = Builder::new()
             .name("rocksdb-metrics".to_owned())
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
@@ -51,6 +52,7 @@ impl MetricsFlusher {
                         last_reset = Instant::now();
                     }
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);

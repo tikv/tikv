@@ -541,6 +541,7 @@ impl<T: PdClient> Runner<T> {
                 let peer = resp.take_target_peer();
 
                 if resp.has_change_peer() {
+                    router.dump_stats("raft");
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["change peer"])
                         .inc();
@@ -558,6 +559,7 @@ impl<T: PdClient> Runner<T> {
                     );
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_transfer_leader() {
+                    router.dump_stats("raft");
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["transfer leader"])
                         .inc();
@@ -572,6 +574,7 @@ impl<T: PdClient> Runner<T> {
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_split_region() {
+                    router.dump_stats("raft");
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["split region"])
                         .inc();
@@ -586,6 +589,7 @@ impl<T: PdClient> Runner<T> {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
+                    router.dump_stats("raft");
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
 
                     let merge = resp.take_merge();

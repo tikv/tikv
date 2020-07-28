@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::fsm::{Fsm, FsmScheduler};
+use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crate::mailbox::{BasicMailbox, Mailbox};
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::{Arc, Mutex};
+use std::{mem, thread};
 use tikv_util::collections::HashMap;
+use tikv_util::time::{Duration, Instant};
 use tikv_util::Either;
 
 enum CheckDoResult<T> {
@@ -27,7 +29,7 @@ enum CheckDoResult<T> {
 /// different scheduler, but this is not required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<HashMap<u64, BasicMailbox<N>>>>,
-    caches: Cell<HashMap<u64, BasicMailbox<N>>>,
+    caches: Cell<(Instant, HashMap<u64, BasicMailbox<N>>)>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
@@ -50,11 +52,30 @@ where
     ) -> Router<N, C, Ns, Cs> {
         Router {
             normals: Arc::default(),
-            caches: Cell::default(),
+            caches: Cell::new((Instant::now_coarse(), HashMap::default())),
             control_box,
             normal_scheduler,
             control_scheduler,
         }
+    }
+
+    pub fn dump_stats(&self, tag: &str) {
+        let (last_dump, map) = unsafe { &mut *self.caches.as_ptr() };
+        let now = Instant::now_coarse();
+        if now.duration_since(*last_dump) < Duration::from_secs(60 * 60) {
+            return;
+        }
+        *last_dump = now;
+        let (cache_len, cache_capacity) = (map.len(), map.capacity());
+        // hashbrown uses 7/8 of allocated memory.
+        let memory_size = cache_capacity * mem::size_of::<(u64, BasicMailbox<N>)>() * 8 / 7
+            + mem::size_of::<FsmState<N>>() * cache_len
+            + (mem::size_of::<N::Message>() + 8) * 31 * cache_len;
+        let (alive_len, alive_capacity) = {
+            let boxes = self.normals.lock().unwrap();
+            (boxes.len(), boxes.capacity())
+        };
+        info!("router stats"; "tag" => tag, "thread" => thread::current().name(), "approximate_cache_size" => memory_size, "cache_len" => cache_len, "cache_capacity" => cache_capacity, "alive_len" => alive_len, "alive_capacity" => alive_capacity);
     }
 
     /// A helper function that tries to unify a common access pattern to
@@ -72,7 +93,7 @@ where
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let caches = unsafe { &mut *self.caches.as_ptr() };
+        let (_, caches) = unsafe { &mut *self.caches.as_ptr() };
         let mut connected = true;
         if let Some(mailbox) = caches.get(&addr) {
             match f(mailbox) {
@@ -198,7 +219,7 @@ where
         match self.send(addr, msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(m)) => {
-                let caches = unsafe { &mut *self.caches.as_ptr() };
+                let (_, caches) = unsafe { &mut *self.caches.as_ptr() };
                 caches[&addr].force_send(m, &self.normal_scheduler)
             }
             Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
@@ -229,7 +250,7 @@ where
     /// Try to notify all fsm that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
-        unsafe { &mut *self.caches.as_ptr() }.clear();
+        unsafe { &mut *self.caches.as_ptr() }.1.clear();
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.drain() {
             debug!("[region {}] shutdown mailbox", addr);
@@ -243,7 +264,7 @@ where
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
         info!("[region {}] shutdown mailbox", addr);
-        unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
+        unsafe { &mut *self.caches.as_ptr() }.1.remove(&addr);
         let mut mailboxes = self.normals.lock().unwrap();
         if let Some(mb) = mailboxes.remove(&addr) {
             mb.close();
@@ -255,7 +276,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
         Router {
             normals: self.normals.clone(),
-            caches: Cell::default(),
+            caches: Cell::new((Instant::now_coarse(), HashMap::new())),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
