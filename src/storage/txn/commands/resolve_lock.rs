@@ -9,6 +9,7 @@ command! {
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before safe point.
+    /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
         display => "kv::resolve_lock", (),
@@ -39,10 +40,7 @@ impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
 
-    fn readonly(&self) -> bool {
-        self.key_locks.is_empty()
-    }
-
+    command_method!(readonly, bool, false);
     command_method!(is_sys_cmd, bool, true);
 
     fn write_bytes(&self) -> usize {

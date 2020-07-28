@@ -10,7 +10,7 @@ use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_vec_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_vec_expr::RpnExpression;
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -21,25 +21,25 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
-    fn parse(
+    #[inline]
+    fn parse_rpn(
         &self,
-        mut aggr_def: Expr,
-        ctx: &mut EvalContext,
+        mut root_expr: Expr,
+        mut exp: RpnExpression,
+        _ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn super::AggrFunction>> {
+    ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
 
-        assert_eq!(aggr_def.get_tp(), ExprType::Avg);
+        assert_eq!(root_expr.get_tp(), ExprType::Avg);
 
-        let col_sum_ft = aggr_def.take_field_type();
+        let col_sum_ft = root_expr.take_field_type();
         let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
-        let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(0), Some(0), Some(2)]);
         assert_eq!(result[1].to_real_vec(), &[None, None, Real::new(15.0).ok()]);
 
-        let x: NotChunkedVec<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
+        let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
         update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
 
@@ -250,7 +250,7 @@ mod tests {
             .unwrap();
         let exp_result = exp_result.vector_value().unwrap();
         let slice = exp_result.as_ref().to_decimal_vec();
-        let slice: NotChunkedVec<Decimal> = slice.into();
+        let slice: ChunkedVecSized<Decimal> = slice.into();
         update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [

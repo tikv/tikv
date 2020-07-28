@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::Result;
+use crate::storage::types::PrewriteResult;
 use txn_types::{Mutation, TimeStamp};
 
 command! {
@@ -10,7 +10,7 @@ command! {
     /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
     /// or a [`Rollback`](Command::Rollback) should follow.
     PrewritePessimistic:
-        cmd_ty => Vec<Result<()>>,
+        cmd_ty => PrewriteResult,
         display => "kv::command::prewrite_pessimistic mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
@@ -31,7 +31,6 @@ impl CommandExt for PrewritePessimistic {
     ctx!();
     tag!(prewrite);
     ts!(start_ts);
-    command_method!(requires_pessimistic_txn, bool, true);
 
     fn write_bytes(&self) -> usize {
         let mut bytes = 0;

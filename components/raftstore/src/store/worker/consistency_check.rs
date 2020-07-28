@@ -1,14 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
 use crate::store::{CasualMessage, CasualRouter};
-use engine_rocks::RocksSnapshot;
-use engine_traits::Snapshot;
 use engine_traits::CF_RAFT;
+use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -45,20 +45,24 @@ where
     }
 }
 
-pub struct Runner<C: CasualRouter<RocksSnapshot>> {
+pub struct Runner<EK, C: CasualRouter<EK>>
+where
+    EK: KvEngine,
+{
+    _s: PhantomData<EK>,
     router: C,
 }
 
-impl<C: CasualRouter<RocksSnapshot>> Runner<C> {
-    pub fn new(router: C) -> Runner<C> {
-        Runner { router }
+impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
+    pub fn new(router: C) -> Runner<EK, C> {
+        Runner {
+            _s: Default::default(),
+            router,
+        }
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash<S>(&mut self, region: Region, index: u64, snap: S)
-    where
-        S: Snapshot,
-    {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: EK::Snapshot) {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -127,18 +131,18 @@ impl<C: CasualRouter<RocksSnapshot>> Runner<C> {
     }
 }
 
-impl<C, S> Runnable<Task<S>> for Runner<C>
+impl<EK, C> Runnable<Task<EK::Snapshot>> for Runner<EK, C>
 where
-    C: CasualRouter<RocksSnapshot>,
-    S: Snapshot,
+    EK: KvEngine,
+    C: CasualRouter<EK>,
 {
-    fn run(&mut self, task: Task<S>) {
+    fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::ComputeHash {
                 region,
                 index,
                 snap,
-            } => self.compute_hash::<S>(region, index, snap),
+            } => self.compute_hash(region, index, snap),
         }
     }
 }
@@ -148,7 +152,7 @@ mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_rocks::util::new_engine;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::mpsc;
@@ -171,7 +175,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut runner = Runner::new(tx);
+        let mut runner = Runner::<RocksEngine, _>::new(tx);
         let mut digest = crc32fast::Hasher::new();
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {
