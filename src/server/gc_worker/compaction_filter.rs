@@ -153,8 +153,10 @@ impl WriteCompactionFilter {
                 break;
             }
             let write = WriteRef::parse(value).unwrap();
-            let def_key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
-            self.delete_default_key(def_key.as_encoded());
+            if write.short_value.is_none() && write.write_type == WriteType::Put {
+                let def_key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
+                self.delete_default_key(def_key.as_encoded());
+            }
             self.delete_write_key(key);
             valid = iter.next().unwrap();
         }
