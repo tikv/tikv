@@ -1055,28 +1055,41 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
-        let status = match self.reader.load_lock(&key)? {
+        let (status, need_rollback) = match self.reader.load_lock(&key)? {
             Some(lock) if lock.ts == start_ts => {
-                if lock.lock_type == LockType::Pessimistic {
+                let status = if lock.lock_type == LockType::Pessimistic {
                     released_lock = self.unlock_key(key.clone(), true);
                     SecondaryLockStatus::RolledBack
                 } else {
                     SecondaryLockStatus::Locked(lock)
-                }
+                };
+                (status, true)
             }
             _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
-                Some((commit_ts, write_type)) if write_type != WriteType::Rollback => {
-                    SecondaryLockStatus::Committed(commit_ts)
+                Some((commit_ts, write_type)) => {
+                    let status = if write_type != WriteType::Rollback {
+                        SecondaryLockStatus::Committed(commit_ts)
+                    } else {
+                        SecondaryLockStatus::RolledBack
+                    };
+                    // We needn't write a rollback once there is a write record for it:
+                    // If it's a committed record, it cannot be changed.
+                    // If it's a rollback record, it either comes from another check_secondary_lock
+                    // (thus protected) or the client stops commit actively. So we don't need
+                    // to make it protected again.
+                    (status, false)
                 }
-                _ => SecondaryLockStatus::RolledBack,
+                None => (SecondaryLockStatus::RolledBack, true),
             },
         };
-        // We must protect this rollback in case this rollback is collapsed and a stale
-        // acquire_pessimistic_lock and prewrite succeed again.
-        let write = Write::new_rollback(self.start_ts, true);
-        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key.clone())?;
+        if need_rollback {
+            // We must protect this rollback in case this rollback is collapsed and a stale
+            // acquire_pessimistic_lock and prewrite succeed again.
+            let write = Write::new_rollback(self.start_ts, true);
+            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
+            if self.collapse_rollback {
+                self.collapse_prev_rollback(key.clone())?;
+            }
         }
         Ok((status, released_lock))
     }
@@ -3421,6 +3434,7 @@ mod tests {
             check_secondary(b"k1", 7),
             (SecondaryLockStatus::Committed(9.into()), None)
         );
+        must_get_commit_ts(&engine, b"k1", 7, 9);
         assert_eq!(
             check_secondary(b"k1", 5),
             (SecondaryLockStatus::RolledBack, None)
