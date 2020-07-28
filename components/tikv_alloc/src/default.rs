@@ -9,3 +9,7 @@ pub fn dump_prof(_path: Option<&str>) {}
 pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
     Ok(None)
 }
+
+pub fn add_thread_memory_accessor() {}
+
+pub fn remove_thread_memory_accessor() {}

@@ -82,6 +82,9 @@
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+extern crate lazy_static;
+
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
 

@@ -9,6 +9,8 @@ use super::metrics::*;
 pub struct Builder {
     inner_builder: TokioBuilder,
     name_prefix: Option<String>,
+    after_start: Option<Box<dyn Fn() + Send + Sync>>,
+    before_stop: Option<Box<dyn Fn() + Send + Sync>>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
@@ -17,6 +19,8 @@ impl Builder {
         Self {
             inner_builder: TokioBuilder::new(),
             name_prefix: None,
+            after_start: None,
+            before_stop: None,
             on_tick: None,
         }
     }
@@ -50,7 +54,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.before_stop(f);
+        self.before_stop = Some(Box::new(f));
         self
     }
 
@@ -58,7 +62,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.after_start(f);
+        self.after_start = Some(Box::new(f));
         self
     }
 
@@ -75,6 +79,20 @@ impl Builder {
             metrics_pool_schedule_duration: FUTUREPOOL_SCHEDULE_DURATION_VEC
                 .with_label_values(&[name]),
         });
+        let before_stop = self.before_stop.take();
+        let after_start = self.after_start.take();
+        self.inner_builder.before_stop(Box::new(move || {
+            if let Some(f) = &before_stop {
+                f();
+            }
+            tikv_alloc::remove_thread_memory_accessor();
+        }));
+        self.inner_builder.after_start(Box::new(move || {
+            tikv_alloc::add_thread_memory_accessor();
+            if let Some(f) = &after_start {
+                f();
+            }
+        }));
         let pool = Arc::new(self.inner_builder.build());
         super::FuturePool { pool, env }
     }

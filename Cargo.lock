@@ -131,6 +131,7 @@ dependencies = [
  "derive_more 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=91904ade)",
+ "tikv_alloc 0.1.0",
  "tikv_util 0.1.0",
 ]
 
@@ -2935,6 +2936,7 @@ dependencies = [
  "jemalloc-ctl 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemalloc-sys 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "tcmalloc 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",

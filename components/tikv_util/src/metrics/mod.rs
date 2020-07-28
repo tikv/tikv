@@ -43,20 +43,23 @@ pub fn run_prometheus(
     let address = address.to_owned();
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
-        .spawn(move || loop {
-            let metric_familys = prometheus::gather();
+        .spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
+            loop {
+                let metric_familys = prometheus::gather();
 
-            let res = prometheus::push_metrics(
-                &job,
-                prometheus::hostname_grouping_key(),
-                &address,
-                metric_familys,
-            );
-            if let Err(e) = res {
-                error!("fail to push metrics"; "err" => ?e);
+                let res = prometheus::push_metrics(
+                    &job,
+                    prometheus::hostname_grouping_key(),
+                    &address,
+                    metric_familys,
+                );
+                if let Err(e) = res {
+                    error!("fail to push metrics"; "err" => ?e);
+                }
+
+                thread::sleep(interval);
             }
-
-            thread::sleep(interval);
         })
         .unwrap();
 

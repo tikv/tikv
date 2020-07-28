@@ -405,7 +405,11 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || poller.poll())
+                .spawn(move || {
+                    tikv_alloc::add_thread_memory_accessor();
+                    poller.poll();
+                    tikv_alloc::remove_thread_memory_accessor();
+                })
                 .unwrap();
             self.workers.push(t);
         }
