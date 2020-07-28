@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{mem, thread};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{Instant, Duration};
+use tikv_util::time::{Duration, Instant};
 use tikv_util::Either;
 
 enum CheckDoResult<T> {

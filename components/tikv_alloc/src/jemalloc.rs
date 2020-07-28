@@ -5,6 +5,7 @@ use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
 use std::collections::HashMap;
+use std::io::Write;
 use std::thread::ThreadId;
 use std::{io, ptr, slice, sync::Mutex, thread};
 
@@ -51,31 +52,20 @@ pub fn dump_stats() -> String {
             ptr::null(),
         );
     }
-    let mut memory_stats = format!(
-        "Memory stats summary: {}\n",
-        String::from_utf8_lossy(&buf).into_owned()
-    );
-    memory_stats.push_str("Memory stats by thread:\n");
-
+    writeln!(buf, "Memory stats by thread:\n").unwrap();
+    writeln!(buf, "Allocated\tDeallocated\tThread\n").unwrap();
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     for (_, accessor) in thread_memory_map.iter() {
-        memory_stats.push_str(format!("Thread [{}]: ", accessor.thread_name).as_str());
-        memory_stats.push_str(
-            format!(
-                "allocated: {}, ",
-                accessor.allocated.get().unwrap().get().to_string()
-            )
-            .as_str(),
-        );
-        memory_stats.push_str(
-            format!(
-                "deallocated: {}.\n",
-                accessor.deallocated.get().unwrap().get().to_string()
-            )
-            .as_str(),
-        );
+        let allocated = accessor.allocated.get().unwrap().get();
+        let deallocated = accessor.deallocated.get().unwrap().get();
+        writeln!(
+            buf,
+            "{}\t{}\t{}\n",
+            allocated, deallocated, accessor.thread_name
+        )
+        .unwrap();
     }
-    memory_stats
+    String::from_utf8(buf).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 pub fn fetch_stats() -> io::Result<Option<AllocStats>> {

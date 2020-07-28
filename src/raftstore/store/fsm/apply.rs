@@ -2721,6 +2721,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
+    #[allow(irrefutable_let_patterns)]
     fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
         self.apply_ctx.flush();
         self.apply_ctx.router.dump_stats("apply");
