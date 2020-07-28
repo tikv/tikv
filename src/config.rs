@@ -25,7 +25,7 @@ use engine_rocks::raw::{
 
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::gc_worker::{DefaultCompactionFilterFactory, WriteCompactionFilterFactory};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -488,6 +488,12 @@ impl DefaultCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+            .set_compaction_filter_factory(
+                "default_compaction_filter_factory",
+                Box::new(DefaultCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+            )
+            .unwrap();
         cf_opts
     }
 }

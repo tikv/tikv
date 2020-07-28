@@ -12,8 +12,8 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, SeekKey, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_WRITE,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_LOCK, CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -144,7 +144,7 @@ impl WriteCompactionFilter {
         let mut valid = iter.seek(SeekKey::Key(delete)).unwrap()
             && (iter.key() != delete || iter.next().unwrap());
         while valid {
-            let (key, value) = (iter.key(), iter.value());
+            let key = iter.key();
             let key_prefix = match Key::split_on_ts_for(key) {
                 Ok((key, _)) => key,
                 Err(_) => continue,
@@ -152,20 +152,10 @@ impl WriteCompactionFilter {
             if key_prefix != prefix {
                 break;
             }
-            let write = WriteRef::parse(value).unwrap();
-            if write.short_value.is_none() && write.write_type == WriteType::Put {
-                let def_key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
-                self.delete_default_key(def_key.as_encoded());
-            }
             self.delete_write_key(key);
             valid = iter.next().unwrap();
         }
         self.write_iter = Some(iter);
-    }
-
-    fn delete_default_key(&mut self, key: &[u8]) {
-        self.write_batch.delete(key).unwrap();
-        self.flush_pending_writes_if_need();
     }
 
     fn delete_write_key(&mut self, key: &[u8]) {
@@ -263,14 +253,168 @@ impl CompactionFilter for WriteCompactionFilter {
         }
 
         if filtered {
-            if write.short_value.is_none() && write.write_type == WriteType::Put {
-                let key = Key::from_encoded_slice(key_prefix).append_ts(write.start_ts);
-                self.delete_default_key(key.as_encoded());
-            }
             self.deleted += 1;
         }
-
         filtered
+    }
+}
+
+pub struct DefaultCompactionFilterFactory;
+
+impl CompactionFilterFactory for DefaultCompactionFilterFactory {
+    fn create_compaction_filter(
+        &self,
+        _context: &CompactionFilterContext,
+    ) -> *mut DBCompactionFilter {
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context = match *gc_context_option {
+            Some(ref ctx) => ctx,
+            None => return std::ptr::null_mut(),
+        };
+
+        let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
+        if safe_point == 0 {
+            // Safe point has not been initialized yet.
+            return std::ptr::null_mut();
+        }
+
+        let name = CString::new("default_compaction_filter").unwrap();
+        let db = Arc::clone(&gc_context.db);
+        let filter = Box::new(DefaultCompactionFilter::new(db, safe_point));
+        unsafe { new_compaction_filter_raw(name, filter) }
+    }
+}
+
+pub struct DefaultCompactionFilter {
+    safe_point: u64,
+    engine: RocksEngine,
+
+    key_prefix: Vec<u8>,
+    // Valid transactions for `key_prefix`.
+    valid_transactions: Vec<u64>,
+    is_locked: bool,
+
+    write_iter: RocksEngineIterator,
+
+    // For metrics about (versions, deleted_versions) for every MVCC key.
+    versions: usize,
+    deleted: usize,
+    // Total versions and deleted versions in the compaction.
+    total_versions: usize,
+    total_deleted: usize,
+}
+
+impl DefaultCompactionFilter {
+    fn new(db: Arc<DB>, safe_point: u64) -> Self {
+        // Safe point must have been initialized.
+        assert!(safe_point > 0);
+        let engine = RocksEngine::from_db(db.clone());
+        let write_iter = {
+            // TODO: give lower bound and upper bound to the iterator.
+            let opts = IterOptions::default();
+            engine.iterator_cf_opt(CF_WRITE, opts).unwrap()
+        };
+
+        DefaultCompactionFilter {
+            safe_point,
+            engine,
+            key_prefix: vec![],
+            valid_transactions: vec![],
+            is_locked: false,
+            write_iter,
+            versions: 0,
+            deleted: 0,
+            total_versions: 0,
+            total_deleted: 0,
+        }
+    }
+
+    fn switch_key_metrics(&mut self) {
+        if self.versions != 0 {
+            self.total_versions += self.versions;
+            self.versions = 0;
+        }
+        if self.deleted != 0 {
+            self.total_deleted += self.deleted;
+            self.deleted = 0;
+        }
+    }
+
+    fn key_is_locked(&self, key_prefix: &[u8]) -> bool {
+        self.engine
+            .get_value_cf(CF_LOCK, key_prefix)
+            .unwrap()
+            .is_some()
+    }
+}
+
+impl CompactionFilter for DefaultCompactionFilter {
+    fn filter(
+        &mut self,
+        _start_level: usize,
+        key: &[u8],
+        _value: &[u8],
+        _: &mut Vec<u8>,
+        _: &mut bool,
+    ) -> bool {
+        if key.starts_with(b"zm") {
+            // TODO: some metadata is raw key/value pairs instead of MVCC data.
+            return false;
+        }
+
+        let (key_prefix, start_ts) = match Key::split_on_ts_for(key) {
+            Ok((key, ts)) => (key, ts.into_inner()),
+            // Invalid MVCC keys, don't touch them.
+            Err(_) => return false,
+        };
+
+        if self.key_prefix != key_prefix {
+            self.key_prefix.clear();
+            self.key_prefix.extend_from_slice(key_prefix);
+            self.valid_transactions.clear();
+            self.is_locked = false;
+            self.switch_key_metrics();
+
+            if self.key_is_locked(key_prefix) {
+                self.is_locked = true;
+            } else {
+                let mut valid = self.write_iter.seek(SeekKey::Key(key_prefix)).unwrap();
+                while valid {
+                    let (key, value) = (self.write_iter.key(), self.write_iter.value());
+                    if !key.starts_with(key_prefix) {
+                        // All versions in write cf are scaned.
+                        break;
+                    }
+                    let write = WriteRef::parse(value).unwrap();
+                    self.valid_transactions.push(write.start_ts.into_inner());
+                    valid = self.write_iter.next().unwrap();
+                }
+                self.valid_transactions.sort();
+            }
+        }
+
+        self.versions += 1;
+        if start_ts > self.safe_point || self.is_locked {
+            return false;
+        }
+
+        if self.valid_transactions.binary_search(&start_ts).is_err() {
+            // The version can be filtered if it's not in valid transactions.
+            self.deleted += 1;
+            return true;
+        }
+        false
+    }
+}
+
+impl Drop for DefaultCompactionFilter {
+    fn drop(&mut self) {
+        self.switch_key_metrics();
+        info!(
+            "DefaultCompactionFilter has filtered all key/value pairs";
+            "versions" => self.total_versions,
+            "deleted" => self.total_deleted,
+        );
     }
 }
 
@@ -290,12 +434,12 @@ pub mod tests {
     use crate::config::DbConfig;
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::{
-        must_commit, must_get_none, must_prewrite_delete, must_prewrite_put,
+        must_commit, must_get, must_get_none, must_prewrite_delete, must_prewrite_put,
     };
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
-    use engine_traits::{MiscExt, Peekable, SyncMutable};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT};
     use txn_types::TimeStamp;
 
     // Use a lock to protect concurrent compactions.
@@ -330,6 +474,23 @@ pub mod tests {
         db.compact_range_cf_opt(handle, &compact_opts, start, end);
     }
 
+    fn gc_default_cf(engine: &RocksEngine, safe_point: u64) {
+        let _guard = LOCK.lock().unwrap();
+        let safe_point = Arc::new(AtomicU64::new(safe_point));
+        let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
+        cfg.0.update(|v| v.enable_compaction_filter = true);
+        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        init_compaction_filter(engine.clone(), safe_point, cfg, cluster_version);
+
+        let db = engine.as_inner();
+        let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+
+        let mut compact_opts = CompactOptions::new();
+        compact_opts.set_exclusive_manual_compaction(false);
+        compact_opts.set_max_subcompactions(1);
+        db.compact_range_cf_opt(handle, &compact_opts, None, None);
+    }
+
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
@@ -362,6 +523,24 @@ pub mod tests {
         let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
         cfg_value.compaction_filter_skip_version_check = false;
         assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
+    }
+
+    #[test]
+    fn test_compaction_filter_on_default() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let large_value = vec![b'x'; 1024];
+        must_prewrite_put(&engine, b"key", &large_value, b"key", 100);
+        must_commit(&engine, b"key", 100, 110);
+        must_prewrite_put(&engine, b"key", &large_value, b"key", 120);
+        must_commit(&engine, b"key", 120, 130);
+        must_prewrite_put(&engine, b"key", &large_value, b"key", 140);
+        gc_by_compact(&engine, b"", 200);
+        gc_default_cf(&raw_engine, 200);
+        must_commit(&engine, b"key", 140, 150);
+        must_get_none(&engine, b"key", 110);
+        must_get(&engine, b"key", 130, &large_value);
+        must_get(&engine, b"key", 150, &large_value);
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
