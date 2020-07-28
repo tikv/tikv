@@ -51,6 +51,7 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
+use futures_executor::block_on;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -442,18 +443,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             let mut tctx = self.inner.dequeue_task_context(cid);
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             let cb = tctx.cb.take();
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(cmds.len());
             self.inner
                 .worker_pool
                 .pool
                 .spawn(async move {
                     for _ in 0..cmd_count {
-                        let response = rx.recv();
-                        if let Err(_e) = response {
+                        let response = rx.recv().await;
+                        if response.is_none() {
                             return cb.unwrap().execute(ProcessResult::Failed {
                                 err: StorageError::from(StorageErrorInner::Closed),
                             });
-                        } else if let Ok(Err(e)) = response {
+                        } else if let Some(Err(e)) = response {
                             return cb.unwrap().execute(ProcessResult::Failed { err: e });
                         }
                     }
@@ -461,8 +462,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 })
                 .unwrap();
             for cmd in cmds {
-                let tx = tx.clone();
-                let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
+                let mut tx = tx.clone();
+                let callback = StorageCallback::Boolean(Box::new(move |r| {
+                    // won't be really blocked since we have enough buffer
+                    block_on(tx.send(r)).unwrap();
+                }));
                 self.schedule_command(cmd, callback);
             }
             self.release_lock(&tctx.lock, cid);
@@ -505,14 +509,13 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             let cb = tctx.cb;
             let lock = tctx.lock;
             if let Some(cb) = cb {
-                let (tx, rx) = std::sync::mpsc::channel();
+                let (tx, mut rx) = tokio::sync::mpsc::channel(cmds.len());
                 self.inner
                     .worker_pool
                     .pool
                     .spawn(async move {
                         for _ in 0..cmd_count {
-                            let response = rx.recv();
-                            if let Err(_e) = response {
+                            if let Err(_e) = rx.recv().await.unwrap() {
                                 return cb.execute(ProcessResult::Failed {
                                     err: StorageError::from(StorageErrorInner::Closed),
                                 });
@@ -523,8 +526,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     .unwrap();
 
                 for cmd in cmds {
-                    let tx = tx.clone();
-                    let callback = StorageCallback::Boolean(Box::new(move |r| tx.send(r).unwrap()));
+                    let mut tx = tx.clone();
+                    let callback = StorageCallback::Boolean(Box::new(move |r| {
+                        // won't be really blocked since we have enough buffer
+                        block_on(tx.send(r)).unwrap();
+                    }));
                     self.schedule_command(cmd, callback);
                 }
             } else {
