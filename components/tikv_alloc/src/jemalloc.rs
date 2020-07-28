@@ -19,19 +19,62 @@ lazy_static! {
 }
 
 struct MemoryStatsAccessor {
-    allocated: jemalloc_ctl::thread::AllocatedP,
-    deallocated: jemalloc_ctl::thread::DeallocatedP,
+    // Hack: thread local is expected to be accessed in the same thread. Hence
+    // should not be Send. We violate the assumption by send the pointer to
+    // other thread.
+    // > When the address-of operator is applied to a thread-local variable,
+    // > it is evaluated at run time and returns the address of the current
+    // > thread’s instance of that variable. An address so obtained may be used
+    // > by any thread. When a thread terminates, any pointers to thread-local
+    // > variables in that thread become invalid.
+    // Referenced from https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html.
+    // However it's not guaranteed to work the same way in rust or llvm backend.
+    allocatedp: usize,
+    deallocatedp: usize,
+    arena: u32,
     thread_name: String,
+}
+
+impl MemoryStatsAccessor {
+    fn allocated(&self) -> u64 {
+        unsafe { *(self.allocatedp as *const u64) }
+    }
+
+    fn deallocated(&self) -> u64 {
+        unsafe { *(self.deallocatedp as *const u64) }
+    }
 }
 
 pub fn add_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    let thread_name = thread::current().name().unwrap_or("unknown").to_string();
+    let mut allocatedp = 0;
+    let mut deallocatedp = 0;
+    let mut arena = 0;
+    unsafe {
+        if let Err(e) = jemallocator::mallctl_fetch(b"thread.allocatedp\0", &mut allocatedp) {
+            eprintln!("failed to get thread.allocatedp for {}: {}", thread_name, e);
+            return;
+        }
+        if let Err(e) = jemallocator::mallctl_fetch(b"thread.deallocatedp\0", &mut deallocatedp) {
+            eprintln!(
+                "failed to get thread.deallocatedp for {}: {}",
+                thread_name, e
+            );
+            return;
+        }
+        if let Err(e) = jemallocator::mallctl_fetch(b"thread.arena\0", &mut arena) {
+            eprintln!("failed to get thread.arena for {}: {}", thread_name, e);
+            return;
+        }
+    }
     thread_memory_map.insert(
         thread::current().id(),
         MemoryStatsAccessor {
-            allocated: jemalloc_ctl::thread::AllocatedP::new().unwrap(),
-            deallocated: jemalloc_ctl::thread::DeallocatedP::new().unwrap(),
-            thread_name: thread::current().name().unwrap().to_string(),
+            allocatedp,
+            deallocatedp,
+            thread_name,
+            arena,
         },
     );
 }
@@ -52,16 +95,16 @@ pub fn dump_stats() -> String {
             ptr::null(),
         );
     }
-    writeln!(buf, "Memory stats by thread:\n").unwrap();
-    writeln!(buf, "Allocated\tDeallocated\tThread\n").unwrap();
+    writeln!(buf, "Memory stats by thread:").unwrap();
+    writeln!(buf, "Allocated\tDeallocated\tArena\tThread").unwrap();
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    for (_, accessor) in thread_memory_map.iter() {
-        let allocated = accessor.allocated.get().unwrap().get();
-        let deallocated = accessor.deallocated.get().unwrap().get();
+    for accessor in thread_memory_map.values() {
+        let allocated = accessor.allocated();
+        let deallocated = accessor.deallocated();
         writeln!(
             buf,
-            "{}\t{}\t{}\n",
-            allocated, deallocated, accessor.thread_name
+            "{}\t{}\t{}\t{}",
+            allocated, deallocated, accessor.arena, accessor.thread_name
         )
         .unwrap();
     }
@@ -92,14 +135,6 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         let len = libc::strlen(msg);
         let bytes = slice::from_raw_parts(msg as *const u8, len);
         buf.extend_from_slice(bytes);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn dump_stats() {
-        assert_ne!(super::dump_stats().len(), 0);
     }
 }
 
@@ -230,4 +265,37 @@ mod profiling {
 #[cfg(not(feature = "mem-profiling"))]
 mod profiling {
     pub fn dump_prof(_path: Option<&str>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn dump_stats() {
+        assert_ne!(super::dump_stats().len(), 0);
+    }
+
+    #[test]
+    fn test_aggr_stats() {
+        let (tx1, rx1) = mpsc::channel();
+        let (_tx2, rx2) = mpsc::channel::<()>();
+        let j = thread::spawn(move || {
+            super::add_thread_memory_accessor();
+            drop(Vec::<usize>::with_capacity(10200));
+            let _ = tx1.send(());
+            let _ = rx2.recv();
+            super::remove_thread_memory_accessor();
+        });
+        let id = j.thread().id();
+        rx1.recv().unwrap();
+        let thread_memory_map = super::THREAD_MEMORY_MAP.lock().unwrap();
+        let accessor = thread_memory_map.get(&id).unwrap();
+        assert!(accessor.allocated() >= 10200);
+        assert!(accessor.deallocated() >= 10200);
+        // Arena is about multiple times of core count.
+        assert!(accessor.arena < 10200);
+        assert_eq!(accessor.thread_name, "unknown");
+    }
 }
