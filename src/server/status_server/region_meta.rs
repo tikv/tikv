@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::PlainPeer;
+use raftstore::store::AbstractPeer;
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -170,9 +170,9 @@ pub struct RegionMeta {
 }
 
 impl RegionMeta {
-    pub fn new(plain_peer: &dyn PlainPeer) -> Self {
-        let region = plain_peer.region();
-        let apply_state = plain_peer.apply_state();
+    pub fn new(abstract_peer: &dyn AbstractPeer) -> Self {
+        let region = abstract_peer.region();
+        let apply_state = abstract_peer.apply_state();
         let epoch = region.get_region_epoch();
         let start_key = region.get_start_key();
         let end_key = region.get_end_key();
@@ -195,15 +195,14 @@ impl RegionMeta {
                 version: epoch.get_version(),
             },
             peers,
-            merge_state: plain_peer
-                .pending_merge_state()
-                .as_ref()
-                .map(|state| RegionMergeState {
+            merge_state: abstract_peer.pending_merge_state().as_ref().map(|state| {
+                RegionMergeState {
                     min_index: state.get_min_index(),
                     commit: state.get_commit(),
                     region_id: state.get_target().get_id(),
-                }),
-            raft_status: plain_peer.raft_status().into(),
+                }
+            }),
+            raft_status: abstract_peer.raft_status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
                 last_commit_index: apply_state.get_last_commit_index(),

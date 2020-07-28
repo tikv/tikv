@@ -3116,7 +3116,7 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 }
 
 /// A poor version of `Peer` to avoid port generic variables everywhere.
-pub trait PlainPeer {
+pub trait AbstractPeer {
     fn meta_peer(&self) -> &metapb::Peer;
     fn region(&self) -> &metapb::Region;
     fn apply_state(&self) -> &RaftApplyState;
@@ -3126,7 +3126,7 @@ pub trait PlainPeer {
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 
-impl<EK: KvEngine, ER: KvEngine> PlainPeer for Peer<EK, ER> {
+impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
     fn meta_peer(&self) -> &metapb::Peer {
         &self.peer
     }

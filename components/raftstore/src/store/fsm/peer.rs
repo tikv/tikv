@@ -54,7 +54,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, PlainPeer, RaftCommand,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
     SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -565,7 +565,7 @@ where
                 self.fsm.peer.ping();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn PlainPeer),
+            CasualMessage::AccessPeer(cb) => cb(&mut self.fsm.peer as &mut dyn AbstractPeer),
         }
     }
 

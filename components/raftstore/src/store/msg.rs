@@ -23,7 +23,7 @@ use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
-use super::{PlainPeer, RegionSnapshot};
+use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -275,7 +275,7 @@ pub enum CasualMessage<EK: KvEngine> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut dyn PlainPeer) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
