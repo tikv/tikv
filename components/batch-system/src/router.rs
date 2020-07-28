@@ -1,14 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::fsm::{Fsm, FsmScheduler};
+use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crate::mailbox::{BasicMailbox, Mailbox};
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{mem, thread};
 use tikv_util::collections::HashMap;
+use tikv_util::time::{Instant, Duration};
 use tikv_util::Either;
 
 enum CheckDoResult<T> {
@@ -71,13 +71,15 @@ where
             return;
         }
         *last_dump = now;
-        let cache_len = map.len();
-        let cache_capacity = map.capacity();
+        let (cache_len, cache_capacity) = (map.len(), map.capacity());
+        // hashbrown uses 7/8 of allocated memory.
+        let memory_size = cache_capacity * mem::size_of::<(u64, BasicMailbox<N>)>() * 8 / 7
+            + mem::size_of::<FsmState<N>>() * cache_len;
         let (alive_len, alive_capacity) = {
             let boxes = self.normals.lock().unwrap();
             (boxes.len(), boxes.capacity())
         };
-        info!("router stats"; "tag" => tag, "thread" => thread::current().name(), "cache_len" => cache_len, "cache_capacity" => cache_capacity, "alive_len" => alive_len, "alive_capacity" => alive_capacity);
+        info!("router stats"; "tag" => tag, "thread" => thread::current().name(), "approximate_cache_size" => memory_size, "cache_len" => cache_len, "cache_capacity" => cache_capacity, "alive_len" => alive_len, "alive_capacity" => alive_capacity);
     }
 
     /// The `Router` has been already shutdown or not.
