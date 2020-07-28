@@ -983,14 +983,9 @@ impl PeerStorage {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-<<<<<<< HEAD
         kv_wb: &mut RocksWriteBatch,
         raft_wb: &mut RocksWriteBatch,
-=======
-        kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::WriteBatch,
         destroy_regions: &[metapb::Region],
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -1271,13 +1266,8 @@ impl PeerStorage {
         }
 
         // only when apply snapshot
-<<<<<<< HEAD
-        if snapshot_index != 0 {
-            ctx.save_apply_state_to(&mut ready_ctx.kv_wb_mut())?;
-=======
         if snapshot_index > 0 {
             ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
         }
 
         Ok(ctx)
@@ -2304,15 +2294,9 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-<<<<<<< HEAD
         let mut kv_wb = s2.engines.kv.c().write_batch();
         let mut raft_wb = s2.engines.raft.c().write_batch();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
-=======
-        let mut kv_wb = s2.engines.kv.write_batch();
-        let mut raft_wb = s2.engines.raft.write_batch();
         s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
@@ -2328,15 +2312,9 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-<<<<<<< HEAD
         let mut kv_wb = s3.engines.kv.c().write_batch();
         let mut raft_wb = s3.engines.raft.c().write_batch();
-        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
-=======
-        let mut kv_wb = s3.engines.kv.write_batch();
-        let mut raft_wb = s3.engines.raft.write_batch();
         s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb, &[])
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);

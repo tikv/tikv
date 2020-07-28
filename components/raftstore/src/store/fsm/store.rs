@@ -59,13 +59,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-<<<<<<< HEAD
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, StoreMsg,
     StoreTick,
-=======
-    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
-    SignificantMsg, SnapManager, StoreMsg, StoreTick,
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
 };
 
 use crate::Result;

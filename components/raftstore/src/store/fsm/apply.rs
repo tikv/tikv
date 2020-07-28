@@ -2436,11 +2436,7 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-<<<<<<< HEAD
-    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
-=======
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg<E> {
->>>>>>> 8311f26... raftstore: make destroy overlapped regions and apply snapshot atomically (#7027)
+    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
