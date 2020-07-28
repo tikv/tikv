@@ -308,7 +308,7 @@ impl DefaultCompactionFilter {
     fn new(db: Arc<DB>, safe_point: u64) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
-        let engine = RocksEngine::from_db(db.clone());
+        let engine = RocksEngine::from_db(db);
         let write_iter = {
             // TODO: give lower bound and upper bound to the iterator.
             let opts = IterOptions::default();
