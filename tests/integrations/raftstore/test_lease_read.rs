@@ -284,14 +284,17 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
 
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(100), None);
+    let election_timeout = configure_for_lease_read(cluster, Some(500), Some(6));
     cluster.run();
 
+    // Sleep to make sure leader could win election.
+    thread::sleep(election_timeout);
     let (split_key1, split_key2) = (b"k22", b"k44");
     let keys = vec![b"k11", b"k33", b"k55"];
     let _ = keys.iter().map(|key| {
         cluster.must_put(*key, b"v1");
     });
+
     let region = pd_client.get_region(keys[0]).unwrap();
     cluster.must_split(&region, split_key1);
     let region = pd_client.get_region(keys[1]).unwrap();
@@ -315,7 +318,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
     // Sleep to make sure lease expired
-    thread::sleep(election_timeout * 2);
+    thread::sleep(election_timeout + Duration::from_secs(1));
 
     // Send request to region 0 and 1 to renew their lease.
     cluster.must_put(b"k11", b"v2");
@@ -351,6 +354,9 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         snaps[0].get_snapshot(),
         snaps[2].get_snapshot()
     ));
+
+    // Sleep to make sure that region 2 could renew lease.
+    thread::sleep(Duration::from_millis(200));
     let responses = batch_read_on_peer(cluster, &requests);
     let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()
