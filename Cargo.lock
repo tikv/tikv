@@ -605,6 +605,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "toml",
  "txn_types",
@@ -3005,7 +3006,12 @@ dependencies = [
  "sst_importer",
  "tempfile",
  "test_sst_importer",
+<<<<<<< HEAD
  "tidb_query",
+=======
+ "tidb_query_datatype",
+ "tikv_alloc",
+>>>>>>> 0389f39... tikv_alloc: collect per thread memory allocation for debugging (#8277)
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
@@ -4572,6 +4578,7 @@ dependencies = [
  "jemalloc-ctl",
  "jemalloc-sys",
  "jemallocator",
+ "lazy_static",
  "libc",
  "log",
  "mimallocator",

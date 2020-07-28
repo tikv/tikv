@@ -73,7 +73,12 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
+<<<<<<< HEAD
 tidb_query = { path = "../tidb_query" }
+=======
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tikv_alloc = { path = "../tikv_alloc" }
+>>>>>>> 0389f39... tikv_alloc: collect per thread memory allocation for debugging (#8277)
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync"] }

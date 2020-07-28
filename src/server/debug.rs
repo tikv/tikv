@@ -439,6 +439,7 @@ impl Debugger {
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
+                    tikv_alloc::add_thread_memory_accessor();
                     v1!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
@@ -446,7 +447,19 @@ impl Debugger {
                         hex::encode_upper(&end_key)
                     );
 
+<<<<<<< HEAD
                     recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
+=======
+                    let result = recover_mvcc_for_range(
+                        db.as_inner(),
+                        &start_key,
+                        &end_key,
+                        read_only,
+                        thread_index,
+                    );
+                    tikv_alloc::remove_thread_memory_accessor();
+                    result
+>>>>>>> 0389f39... tikv_alloc: collect per thread memory allocation for debugging (#8277)
                 })
                 .unwrap();
 

@@ -603,13 +603,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             if branges.is_empty() {
                 return;
             }
+
+            tikv_alloc::add_thread_memory_accessor();
+
             // Storage backend has been checked in `Task::new()`.
             let backend = create_storage(&request.backend).unwrap();
             let storage = LimitedStorage {
                 limiter: request.limiter.clone(),
                 storage: backend,
             };
-
             for brange in branges {
                 if request.cancel.load(Ordering::SeqCst) {
                     warn!("backup task has canceled"; "range" => ?brange);
@@ -689,6 +691,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return;
                 }
             }
+
+            tikv_alloc::remove_thread_memory_accessor();
         });
     }
 

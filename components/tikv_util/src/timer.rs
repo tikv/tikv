@@ -88,6 +88,7 @@ fn start_global_timer() -> Handle {
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {

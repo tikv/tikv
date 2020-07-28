@@ -616,6 +616,7 @@ where
                 let ctx = self.ctx.clone();
 
                 self.pool.spawn(async move {
+                    tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
                         last_applied_index_term,
@@ -623,6 +624,7 @@ where
                         kv_snap,
                         notifier,
                     );
+                    tikv_alloc::remove_thread_memory_accessor();
                 });
             }
             task @ Task::Apply { .. } => {
