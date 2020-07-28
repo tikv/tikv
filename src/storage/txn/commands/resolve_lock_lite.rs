@@ -39,7 +39,7 @@ impl CommandExt for ResolveLockLite {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockLite {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -58,7 +58,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         // ti-client guarantees the size of resolve_keys will not too large, so no necessary
         // to control the write_size as ResolveLock.
         let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
-        for key in self.resolve_keys.clone() {
+        for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
                 txn.commit(key, self.commit_ts)?
             } else {
@@ -70,7 +70,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows,
             pr: ProcessResult::Res,

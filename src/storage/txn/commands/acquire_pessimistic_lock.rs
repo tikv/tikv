@@ -72,7 +72,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for AcquirePessimisticLock
 {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         _lock_mgr: &L,
         pd_client: Arc<P>,
@@ -80,23 +80,19 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
         statistics: &mut Statistics,
         _pipelined_pessimistic_lock: bool,
     ) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            pd_client,
-        );
-        let rows = self.keys.len();
+        let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
+        let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+        let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
         };
-        for (k, should_not_exist) in &self.keys {
+        for (k, should_not_exist) in keys {
             match txn.acquire_pessimistic_lock(
-                k.clone(),
+                k,
                 &self.primary,
-                *should_not_exist,
+                should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
@@ -120,13 +116,13 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
             let write_data = WriteData::from_modifies(txn.into_modifies());
-            (pr, write_data, rows, self.ctx.clone(), None)
+            (pr, write_data, rows, ctx, None)
         } else {
             let lock = extract_lock_from_result(&res);
             let pr = ProcessResult::PessimisticLockRes { res };
             let lock_info = Some((lock, self.is_first_lock, self.wait_timeout));
             // Wait for lock released
-            (pr, WriteData::default(), 0, self.ctx.clone(), lock_info)
+            (pr, WriteData::default(), 0, ctx, lock_info)
         };
         Ok(WriteResult {
             ctx,

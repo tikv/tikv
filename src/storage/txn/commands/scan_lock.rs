@@ -37,7 +37,7 @@ impl CommandExt for ScanLock {
 }
 
 impl<S: Snapshot> ReadCommand<S> for ScanLock {
-    fn process_read(&mut self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),

@@ -65,7 +65,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for PrewritePessimistic
 {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         _lock_mgr: &L,
         pd_client: Arc<P>,
@@ -114,7 +114,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             };
             let txn_extra = txn.take_extra();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx.clone(), None)
+            (pr, write_data, rows, self.ctx, None)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
@@ -123,7 +123,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                     min_commit_ts: TimeStamp::zero(),
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx.clone(), None)
+            (pr, WriteData::default(), 0, self.ctx, None)
         };
         Ok(WriteResult {
             ctx,

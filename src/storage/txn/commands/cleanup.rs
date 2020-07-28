@@ -40,7 +40,7 @@ impl CommandExt for Cleanup {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Cleanup {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -58,13 +58,13 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(txn.cleanup(self.key.clone(), self.current_ts, true)?);
+        released_locks.push(txn.cleanup(self.key, self.current_ts, true)?);
         released_locks.wake_up(lock_mgr);
 
         statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows: 1,
             pr: ProcessResult::Res,

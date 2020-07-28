@@ -41,7 +41,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for PessimisticRollback
 {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -58,15 +58,15 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
 
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
-        for k in &self.keys {
-            released_locks.push(txn.pessimistic_rollback(k.clone(), self.for_update_ts)?);
+        for k in self.keys {
+            released_locks.push(txn.pessimistic_rollback(k, self.for_update_ts)?);
         }
         released_locks.wake_up(lock_mgr);
 
         statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },

@@ -5,7 +5,6 @@ use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLoc
 use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
 use crate::storage::txn::{ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE};
 use crate::storage::{ScanMode, Snapshot, Statistics};
-use std::mem;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, TimeStamp};
 
@@ -34,21 +33,23 @@ impl CommandExt for ResolveLockReadPhase {
 }
 
 impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
-    fn process_read(&mut self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
+        let tag = self.tag();
+        let (ctx, txn_status) = (self.ctx, self.txn_status);
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),
-            !self.ctx.get_not_fill_cache(),
-            self.ctx.get_isolation_level(),
+            !ctx.get_not_fill_cache(),
+            ctx.get_isolation_level(),
         );
         let result = reader.scan_locks(
             self.scan_key.as_ref(),
-            |lock| self.txn_status.contains_key(&lock.ts),
+            |lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(reader.get_statistics());
         let (kv_pairs, has_remain) = result?;
-        tls_collect_keyread_histogram_vec(self.tag().get_str(), kv_pairs.len() as f64);
+        tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
         if kv_pairs.is_empty() {
             Ok(ProcessResult::Res)
@@ -61,13 +62,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
                 None
             };
             Ok(ProcessResult::NextCommand {
-                cmd: ResolveLock::new(
-                    mem::take(&mut self.txn_status),
-                    next_scan_key,
-                    kv_pairs,
-                    self.ctx.clone(),
-                )
-                .into(),
+                cmd: ResolveLock::new(txn_status, next_scan_key, kv_pairs, ctx).into(),
             })
         }
     }

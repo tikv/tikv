@@ -133,7 +133,7 @@ impl Prewrite {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
     fn process_write(
-        &mut self,
+        mut self,
         snapshot: S,
         _lock_mgr: &L,
         pd_client: Arc<P>,
@@ -190,7 +190,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let primary_key = Key::from_raw(&self.primary);
         let mut locks = vec![];
         let mut async_commit_ts = TimeStamp::zero();
-        for m in self.mutations.clone() {
+        for m in self.mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
             if m.key() == &primary_key {
@@ -231,7 +231,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             };
             let txn_extra = txn.take_extra();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
-            (pr, write_data, rows, self.ctx.clone(), None)
+            (pr, write_data, rows, self.ctx, None)
         } else {
             // Skip write stage if some keys are locked.
             let pr = ProcessResult::PrewriteResult {
@@ -240,7 +240,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                     min_commit_ts: async_commit_ts,
                 },
             };
-            (pr, WriteData::default(), 0, self.ctx.clone(), None)
+            (pr, WriteData::default(), 0, self.ctx, None)
         };
         Ok(WriteResult {
             ctx,
@@ -391,8 +391,8 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let mut cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
-        let ret = cmd.cmd.write_command_mut().process_write(
+        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
+        let ret = cmd.cmd.process_write(
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),
@@ -425,14 +425,14 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let mut cmd = Commit::new(
+        let cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
             TimeStamp::from(commit_ts),
             ctx,
         );
 
-        let ret = cmd.cmd.write_command_mut().process_write(
+        let ret = cmd.cmd.process_write(
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),

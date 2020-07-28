@@ -36,7 +36,7 @@ impl CommandExt for Pause {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Pause {
     fn process_write(
-        &mut self,
+        self,
         _snapshot: S,
         _lock_mgr: &L,
         _pd_client: Arc<P>,
@@ -46,7 +46,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
     ) -> Result<WriteResult> {
         thread::sleep(Duration::from_millis(self.duration));
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: WriteData::default(),
             rows: 0,
             pr: ProcessResult::Res,

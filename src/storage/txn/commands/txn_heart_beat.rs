@@ -41,7 +41,7 @@ impl CommandExt for TxnHeartBeat {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for TxnHeartBeat {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         _lock_mgr: &L,
         pd_client: Arc<P>,
@@ -56,7 +56,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             !self.ctx.get_not_fill_cache(),
             pd_client,
         );
-        let lock_ttl = txn.txn_heart_beat(self.primary_key.clone(), self.advise_ttl)?;
+        let lock_ttl = txn.txn_heart_beat(self.primary_key, self.advise_ttl)?;
 
         statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
@@ -64,7 +64,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows: 1,
             pr,

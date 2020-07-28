@@ -50,7 +50,7 @@ impl CommandExt for CheckTxnStatus {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for CheckTxnStatus {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -67,7 +67,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
 
         let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
         let (txn_status, released) = txn.check_txn_status(
-            self.primary_key.clone(),
+            self.primary_key,
             self.caller_start_ts,
             self.current_ts,
             self.rollback_if_not_exist,
@@ -82,7 +82,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let pr = ProcessResult::TxnStatus { txn_status };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows: 1,
             pr,

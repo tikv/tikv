@@ -40,7 +40,7 @@ impl CommandExt for Commit {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Commit {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -64,8 +64,8 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
-        for k in &self.keys {
-            released_locks.push(txn.commit(k.clone(), self.commit_ts)?);
+        for k in self.keys {
+            released_locks.push(txn.commit(k, self.commit_ts)?);
         }
         released_locks.wake_up(lock_mgr);
 
@@ -75,7 +75,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx: self.ctx,
             to_be_write: write_data,
             rows,
             pr,

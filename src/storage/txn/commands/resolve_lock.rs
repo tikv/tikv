@@ -66,7 +66,7 @@ impl CommandExt for ResolveLock {
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLock {
     fn process_write(
-        &mut self,
+        mut self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
@@ -74,21 +74,21 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         statistics: &mut Statistics,
         _pipelined_pessimistic_lock: bool,
     ) -> Result<WriteResult> {
+        let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),
-            !self.ctx.get_not_fill_cache(),
+            !ctx.get_not_fill_cache(),
             pd_client,
         );
 
         let mut scan_key = self.scan_key.take();
-        let rows = self.key_locks.len();
+        let rows = key_locks.len();
         // Map txn's start_ts to ReleasedLocks
         let mut released_locks = HashMap::default();
-        for (current_key, current_lock) in self.key_locks.clone() {
+        for (current_key, current_lock) in key_locks {
             txn.set_start_ts(current_lock.ts);
-            let commit_ts = *self
-                .txn_status
+            let commit_ts = *txn_status
                 .get(&current_lock.ts)
                 .expect("txn status not found");
 
@@ -121,17 +121,12 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             ProcessResult::Res
         } else {
             ProcessResult::NextCommand {
-                cmd: ResolveLockReadPhase::new(
-                    self.txn_status.clone(),
-                    scan_key.take(),
-                    self.ctx.clone(),
-                )
-                .into(),
+                cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
             }
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx: self.ctx.clone(),
+            ctx,
             to_be_write: write_data,
             rows,
             pr,

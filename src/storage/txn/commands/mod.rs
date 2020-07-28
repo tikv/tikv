@@ -452,32 +452,126 @@ impl Command {
             Command::MvccByStartTs(t) => t,
         }
     }
-    pub fn read_command_mut<S: Snapshot>(&mut self) -> &mut dyn ReadCommand<S> {
+    pub fn process_read<S: Snapshot>(
+        self,
+        snapshot: S,
+        statistics: &mut Statistics,
+    ) -> Result<ProcessResult> {
         match self {
-            Command::ScanLock(t) => t,
-            Command::ResolveLockReadPhase(t) => t,
-            Command::MvccByKey(t) => t,
-            Command::MvccByStartTs(t) => t,
+            Command::ScanLock(t) => t.process_read(snapshot, statistics),
+            Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
+            Command::MvccByKey(t) => t.process_read(snapshot, statistics),
+            Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
             _ => panic!("unsupported read command"),
         }
     }
 
-    pub(super) fn write_command_mut<S: Snapshot, L: LockManager, P: PdClient + 'static>(
-        &mut self,
-    ) -> &mut dyn WriteCommand<S, L, P> {
+    pub(super) fn process_write<S: Snapshot, L: LockManager, P: PdClient + 'static>(
+        self,
+        snapshot: S,
+        lock_mgr: &L,
+        pd_client: Arc<P>,
+        extra_op: ExtraOp,
+        statistics: &mut Statistics,
+        pipelined_pessimistic_lock: bool,
+    ) -> Result<WriteResult> {
         match self {
-            Command::Prewrite(t) => t,
-            Command::PrewritePessimistic(t) => t,
-            Command::AcquirePessimisticLock(t) => t,
-            Command::Commit(t) => t,
-            Command::Cleanup(t) => t,
-            Command::Rollback(t) => t,
-            Command::PessimisticRollback(t) => t,
-            Command::ResolveLock(t) => t,
-            Command::ResolveLockLite(t) => t,
-            Command::TxnHeartBeat(t) => t,
-            Command::CheckTxnStatus(t) => t,
-            Command::Pause(t) => t,
+            Command::Prewrite(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::PrewritePessimistic(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::AcquirePessimisticLock(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::Commit(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::Cleanup(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::Rollback(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::PessimisticRollback(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::ResolveLock(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::ResolveLockLite(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::TxnHeartBeat(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::CheckTxnStatus(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
+            Command::Pause(t) => t.process_write(
+                snapshot,
+                lock_mgr,
+                pd_client,
+                extra_op,
+                statistics,
+                pipelined_pessimistic_lock,
+            ),
             _ => panic!("unsupported write command"),
         }
     }
@@ -543,14 +637,14 @@ impl Debug for Command {
 }
 
 pub trait ReadCommand<S: Snapshot>: CommandExt {
-    fn process_read(&mut self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
 pub(super) trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static>:
     CommandExt
 {
     fn process_write(
-        &mut self,
+        self,
         snapshot: S,
         lock_mgr: &L,
         pd_client: Arc<P>,
