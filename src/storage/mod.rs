@@ -3363,7 +3363,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             true
         );
@@ -3375,7 +3375,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             true
         );
@@ -3387,7 +3387,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             false
         );
@@ -3400,7 +3400,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             false
         );
@@ -3412,7 +3412,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             true
         );
@@ -3424,7 +3424,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             true
         );
@@ -3436,7 +3436,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             false
         );
@@ -3448,7 +3448,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             false
         );

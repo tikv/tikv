@@ -4,8 +4,7 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{has_data_in_range, MvccTxn};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::commands::WriteCommand;
-use crate::storage::txn::process::WriteResult;
+use crate::storage::txn::commands::{WriteCommand, WriteResult};
 use crate::storage::txn::Error;
 use crate::storage::txn::Result;
 use crate::storage::Error as StorageError;
@@ -251,5 +250,199 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             pr,
             lock_info,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::commands::{Commit, Prewrite, FORWARD_MIN_MUTATIONS_NUM};
+    use crate::storage::txn::LockInfo;
+    use crate::storage::txn::{Error, ErrorInner, Result};
+    use crate::storage::DummyLockManager;
+    use crate::storage::{
+        Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
+    };
+    use engine_traits::CF_WRITE;
+    use kvproto::kvrpcpb::{Context, ExtraOp};
+    use pd_client::DummyPdClient;
+    use std::sync::Arc;
+    use txn_types::TimeStamp;
+    use txn_types::{Key, Mutation};
+
+    fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
+        let mut mutations = Vec::default();
+        let pri_key = &[pri_key_number];
+        for i in 0..write_num {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let mut statistic = Statistics::default();
+        let engine = TestEngineBuilder::new().build().unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            vec![Mutation::Put((
+                Key::from_raw(&[pri_key_number]),
+                b"100".to_vec(),
+            ))],
+            pri_key.to_vec(),
+            99,
+        )
+        .unwrap();
+        assert_eq!(1, statistic.write.seek);
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(2, statistic.write.seek);
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => (),
+            _ => panic!("error type not match"),
+        }
+        commit(
+            &engine,
+            &mut statistic,
+            vec![Key::from_raw(&[pri_key_number])],
+            99,
+            102,
+        )
+        .unwrap();
+        assert_eq!(2, statistic.write.seek);
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            101,
+        )
+        .err()
+        .unwrap();
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict {
+                ..
+            }))) => (),
+            _ => panic!("error type not match"),
+        }
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            104,
+        )
+        .err()
+        .unwrap();
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))) => (),
+            _ => panic!("error type not match"),
+        }
+
+        statistic.write.seek = 0;
+        let ctx = Context::default();
+        engine
+            .delete_cf(
+                &ctx,
+                CF_WRITE,
+                Key::from_raw(&[pri_key_number]).append_ts(102.into()),
+            )
+            .unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            104,
+        )
+        .unwrap();
+        // All keys are prewrited successful with only one seek operations.
+        assert_eq!(1, statistic.write.seek);
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
+        let snap = engine.snapshot(&ctx).unwrap();
+        for k in keys {
+            let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
+            assert!(v.is_some());
+        }
+    }
+
+    #[test]
+    fn test_prewrite_skip_constraint_check() {
+        inner_test_prewrite_skip_constraint_check(0, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(5, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(
+            FORWARD_MIN_MUTATIONS_NUM as u8,
+            FORWARD_MIN_MUTATIONS_NUM + 1,
+        );
+    }
+
+    fn prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let mut cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
+        let ret = cmd.cmd.write_command_mut().process_write(
+            snap,
+            &DummyLockManager {},
+            Arc::new(DummyPdClient::new()),
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
+        if let ProcessResult::PrewriteResult {
+            result: PrewriteResult { locks, .. },
+        } = ret.pr
+        {
+            if !locks.is_empty() {
+                let info = LockInfo::default();
+                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(info),
+                ))));
+            }
+        }
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn commit<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        lock_ts: u64,
+        commit_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let mut cmd = Commit::new(
+            keys,
+            TimeStamp::from(lock_ts),
+            TimeStamp::from(commit_ts),
+            ctx,
+        );
+
+        let ret = cmd.cmd.write_command_mut().process_write(
+            snap,
+            &DummyLockManager {},
+            Arc::new(DummyPdClient::new()),
+            ExtraOp::Noop,
+            statistics,
+            false,
+        )?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
     }
 }

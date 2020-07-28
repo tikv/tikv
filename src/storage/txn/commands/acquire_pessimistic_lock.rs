@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::Lock;
 use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::mvcc::ErrorInner as MvccErrorInner;
 use crate::storage::mvcc::MvccTxn;
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand};
-use crate::storage::txn::process::{extract_lock_from_result, WriteResult};
-use crate::storage::txn::Error;
-use crate::storage::txn::Result;
+use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
+use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::Error as StorageError;
+use crate::storage::ErrorInner as StorageErrorInner;
 use crate::storage::Result as StorageResult;
 use crate::storage::{PessimisticLockRes, ProcessResult, Snapshot, Statistics};
 use kvproto::kvrpcpb::ExtraOp;
@@ -57,6 +57,18 @@ impl CommandExt for AcquirePessimisticLock {
     }
 
     gen_lock!(keys: multiple(|x| &x.0));
+}
+
+fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
+    match res {
+        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        )))))) => Lock {
+            ts: info.get_lock_version().into(),
+            hash: Key::from_raw(info.get_key()).gen_hash(),
+        },
+        _ => panic!("unexpected mvcc error"),
+    }
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
@@ -127,4 +139,23 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             lock_info,
         })
     }
+}
+
+#[test]
+fn test_extract_lock_from_result() {
+    use crate::storage::txn::LockInfo;
+
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    let ts = 100;
+    let mut info = LockInfo::default();
+    info.set_key(raw_key);
+    info.set_lock_version(ts);
+    info.set_lock_ttl(100);
+    let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+        MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+    ))));
+    let lock = extract_lock_from_result::<()>(&Err(case));
+    assert_eq!(lock.ts, ts.into());
+    assert_eq!(lock.hash, key.gen_hash());
 }

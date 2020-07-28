@@ -5,7 +5,7 @@ use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLoc
 use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
 use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use crate::storage::txn::{ProcessResult, Result};
-use crate::storage::{Engine, ScanMode, Statistics};
+use crate::storage::{ScanMode, Snapshot, Statistics};
 use std::mem;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, TimeStamp};
@@ -34,12 +34,8 @@ impl CommandExt for ResolveLockReadPhase {
     gen_lock!(empty);
 }
 
-impl<E: Engine> ReadCommand<E> for ResolveLockReadPhase {
-    fn process_read(
-        &mut self,
-        snapshot: E::Snap,
-        statistics: &mut Statistics,
-    ) -> Result<ProcessResult> {
+impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
+    fn process_read(&mut self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),

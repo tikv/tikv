@@ -7,7 +7,6 @@ pub mod sched_pool;
 pub mod scheduler;
 
 mod latch;
-mod process;
 mod store;
 
 use crate::storage::{
@@ -21,7 +20,7 @@ use std::io::Error as IoError;
 use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;
-pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
+pub use self::commands::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::Scheduler;
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};

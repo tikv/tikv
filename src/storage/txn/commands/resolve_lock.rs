@@ -4,9 +4,9 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, MAX_TXN_WRITE_SIZE};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ResolveLockReadPhase, TypedCommand, WriteCommand,
+    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, TypedCommand, WriteCommand,
+    WriteResult,
 };
-use crate::storage::txn::process::{ReleasedLocks, WriteResult};
 use crate::storage::txn::Result;
 use crate::storage::txn::{Error, ErrorInner};
 use crate::storage::{ProcessResult, Snapshot, Statistics};
@@ -140,3 +140,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         })
     }
 }
+
+// To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
+// The write batch will be around 32KB if we scan 256 keys each time.
+pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;

@@ -40,10 +40,10 @@ use crate::storage::metrics::{
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
+use crate::storage::txn::commands::WriteResult;
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    process::WriteResult,
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
@@ -575,14 +575,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         let tag = task.cmd.tag();
 
-        let pr = match task
+        let pr = task
             .cmd
-            .read_command_mut::<E>()
+            .read_command_mut::<E::Snap>()
             .process_read(snapshot, statistics)
-        {
-            Err(e) => ProcessResult::Failed { err: e.into() },
-            Ok(pr) => pr,
-        };
+            .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
         self.on_read_finished(task.cid, pr, tag);
     }
 
