@@ -406,6 +406,7 @@ pub mod tests {
         key: &[u8],
         value: &[u8],
         pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
         ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
         lock_ttl: u64,
@@ -422,7 +423,7 @@ pub mod tests {
             txn.prewrite(
                 mutation,
                 pk,
-                &None,
+                &secondary_keys,
                 false,
                 lock_ttl,
                 txn_size,
@@ -430,6 +431,9 @@ pub mod tests {
             )
             .unwrap();
         } else {
+            if secondary_keys.is_some() {
+                panic!("async commit not yet implemented for pessimistic transactions");
+            }
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
@@ -457,6 +461,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             false,
             0,
@@ -481,6 +486,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             0,
@@ -505,6 +511,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             0,
@@ -530,6 +537,7 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             is_pessimistic_lock,
             lock_ttl,
@@ -558,12 +566,38 @@ pub mod tests {
             key,
             value,
             pk,
+            &None,
             ts,
             !for_update_ts.is_zero(),
             lock_ttl,
             for_update_ts,
             0,
             min_commit_ts,
+            false,
+        );
+    }
+
+    pub fn must_prewrite_put_async_commit<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
+        ts: impl Into<TimeStamp>,
+    ) {
+        assert!(secondary_keys.is_some());
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            secondary_keys,
+            ts,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
             false,
         );
     }
@@ -991,27 +1025,7 @@ pub mod tests {
             true,
             Arc::new(DummyPdClient::new()),
         );
-        txn.commit(Key::from_raw(key), commit_ts.into(), false)
-            .unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    pub fn must_commit_maybe_overlay<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        commit_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-        );
-        txn.commit(Key::from_raw(key), commit_ts.into(), true)
-            .unwrap();
+        txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -1029,9 +1043,7 @@ pub mod tests {
             true,
             Arc::new(DummyPdClient::new()),
         );
-        assert!(txn
-            .commit(Key::from_raw(key), commit_ts.into(), false)
-            .is_err());
+        assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {

@@ -716,12 +716,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
     }
 
-    pub fn commit(
-        &mut self,
-        key: Key,
-        commit_ts: TimeStamp,
-        check_overlay_rollback: bool,
-    ) -> Result<Option<ReleasedLock>> {
+    pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<Option<ReleasedLock>> {
         fail_point!("commit", |err| Err(make_txn_error(
             err,
             &key,
@@ -729,86 +724,88 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
         .into()));
 
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
-                // A lock with larger min_commit_ts than current commit_ts can't be committed
-                if commit_ts < lock.min_commit_ts {
-                    info!(
-                        "trying to commit with smaller commit_ts than min_commit_ts";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                        "min_commit_ts" => lock.min_commit_ts,
-                    );
-                    return Err(ErrorInner::CommitTsExpired {
-                        start_ts: self.start_ts,
-                        commit_ts,
-                        key: key.into_raw()?,
-                        min_commit_ts: lock.min_commit_ts,
-                    }
-                    .into());
-                }
-
-                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-                // transaction model. But a pessimistic lock will be left if the pessimistic
-                // rollback request fails to send and the transaction need not to acquire
-                // this lock again(due to WriteConflict). If the transaction is committed, we
-                // should commit this pessimistic lock too.
-                if lock.lock_type == LockType::Pessimistic {
-                    warn!(
-                        "commit a pessimistic lock with Lock type";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                    );
-                    // Commit with WriteType::Lock.
-                    lock.lock_type = LockType::Lock;
-                }
-                (
-                    lock.lock_type,
-                    lock.short_value.take(),
-                    !lock.for_update_ts.is_zero(),
-                )
-            }
-            _ => {
-                return match self
-                    .reader
-                    .get_txn_commit_record(&key, self.start_ts)?
-                    .info()
-                {
-                    Some((_, WriteType::Rollback)) | None => {
-                        MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
-                        // None: related Rollback has been collapsed.
-                        // Rollback: rollback by concurrent transaction.
+        let (lock_type, short_value, is_pessimistic_txn, use_async_commit) =
+            match self.reader.load_lock(&key)? {
+                Some(ref mut lock) if lock.ts == self.start_ts => {
+                    // A lock with larger min_commit_ts than current commit_ts can't be committed
+                    if commit_ts < lock.min_commit_ts {
                         info!(
-                            "txn conflict (lock not found)";
+                            "trying to commit with smaller commit_ts than min_commit_ts";
+                            "key" => %key,
+                            "start_ts" => self.start_ts,
+                            "commit_ts" => commit_ts,
+                            "min_commit_ts" => lock.min_commit_ts,
+                        );
+                        return Err(ErrorInner::CommitTsExpired {
+                            start_ts: self.start_ts,
+                            commit_ts,
+                            key: key.into_raw()?,
+                            min_commit_ts: lock.min_commit_ts,
+                        }
+                        .into());
+                    }
+
+                    // It's an abnormal routine since pessimistic locks shouldn't be committed in our
+                    // transaction model. But a pessimistic lock will be left if the pessimistic
+                    // rollback request fails to send and the transaction need not to acquire
+                    // this lock again(due to WriteConflict). If the transaction is committed, we
+                    // should commit this pessimistic lock too.
+                    if lock.lock_type == LockType::Pessimistic {
+                        warn!(
+                            "commit a pessimistic lock with Lock type";
                             "key" => %key,
                             "start_ts" => self.start_ts,
                             "commit_ts" => commit_ts,
                         );
-                        Err(ErrorInner::TxnLockNotFound {
-                            start_ts: self.start_ts,
-                            commit_ts,
-                            key: key.into_raw()?,
+                        // Commit with WriteType::Lock.
+                        lock.lock_type = LockType::Lock;
+                    }
+                    (
+                        lock.lock_type,
+                        lock.short_value.take(),
+                        !lock.for_update_ts.is_zero(),
+                        lock.use_async_commit,
+                    )
+                }
+                _ => {
+                    return match self
+                        .reader
+                        .get_txn_commit_record(&key, self.start_ts)?
+                        .info()
+                    {
+                        Some((_, WriteType::Rollback)) | None => {
+                            MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
+                            // None: related Rollback has been collapsed.
+                            // Rollback: rollback by concurrent transaction.
+                            info!(
+                                "txn conflict (lock not found)";
+                                "key" => %key,
+                                "start_ts" => self.start_ts,
+                                "commit_ts" => commit_ts,
+                            );
+                            Err(ErrorInner::TxnLockNotFound {
+                                start_ts: self.start_ts,
+                                commit_ts,
+                                key: key.into_raw()?,
+                            }
+                            .into())
                         }
-                        .into())
-                    }
-                    // Committed by concurrent transaction.
-                    Some((_, WriteType::Put))
-                    | Some((_, WriteType::Delete))
-                    | Some((_, WriteType::Lock)) => {
-                        MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                        Ok(None)
-                    }
-                };
-            }
-        };
+                        // Committed by concurrent transaction.
+                        Some((_, WriteType::Put))
+                        | Some((_, WriteType::Delete))
+                        | Some((_, WriteType::Lock)) => {
+                            MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
+                            Ok(None)
+                        }
+                    };
+                }
+            };
         let mut write = Write::new(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
         );
-        if check_overlay_rollback {
+        if use_async_commit {
             // The write cursor shouldn't have been used until here.
             if let Some(overlay_write) = self.reader.load_write(&key, commit_ts)? {
                 assert_eq!(overlay_write.write_type, WriteType::Rollback);
@@ -1584,16 +1581,16 @@ mod tests {
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
 
-        must_prewrite_put(&engine, k1, v1, k2, 10);
-        must_prewrite_put(&engine, k2, v2, k2, 10);
+        must_prewrite_put_async_commit(&engine, k1, v1, k2, &Some(vec![]), 10);
+        must_prewrite_put_async_commit(&engine, k2, v2, k2, &Some(vec![k1.to_vec()]), 10);
 
         // Write a protected rollback on k1.
         must_cleanup(&engine, k1, 20, 0);
         // Write a non-protected rollback on k2.
         must_rollback(&engine, k2, 20);
 
-        must_commit_maybe_overlay(&engine, k2, 10, 20);
-        must_commit_maybe_overlay(&engine, k1, 10, 20);
+        must_commit(&engine, k2, 10, 20);
+        must_commit(&engine, k1, 10, 20);
 
         let w1 = must_written(&engine, k1, 10, 20, WriteType::Put);
         let w2 = must_written(&engine, k2, 10, 20, WriteType::Put);
@@ -1602,6 +1599,15 @@ mod tests {
         assert!(w1.has_overlay_rollback);
         // Non-protected rollback can be freely overwritten.
         assert!(!w2.has_overlay_rollback);
+
+        // Committing non-async-commit transactions doesn't checking overlay to avoid additional
+        // overhead. But the case that non-async-commit overwrites a rollback record never happen
+        // in production since the commit ts is guaranteed to be globally unique.
+        must_prewrite_put(&engine, k1, v1, k1, 30);
+        must_cleanup(&engine, k1, 40, 0);
+        must_commit(&engine, k1, 30, 40);
+        let w3 = must_written(&engine, k1, 30, 40, WriteType::Put);
+        assert!(!w3.has_overlay_rollback);
     }
 
     #[test]
@@ -1760,6 +1766,7 @@ mod tests {
             k,
             v,
             k,
+            &None,
             ts(60, 0),
             true,
             50,
@@ -2012,7 +2019,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
-        txn.commit(key, 15.into(), false).unwrap();
+        txn.commit(key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -2898,6 +2905,7 @@ mod tests {
             k,
             v,
             k,
+            &None,
             ts(300, 0),
             false,
             100,
@@ -2997,6 +3005,7 @@ mod tests {
                     expected_lock_info.get_key(),
                     v,
                     expected_lock_info.get_primary_lock(),
+                    &None,
                     expected_lock_info.get_lock_version(),
                     false,
                     expected_lock_info.get_lock_ttl(),
@@ -3357,7 +3366,7 @@ mod tests {
             }
             write(WriteData::from_modifies(txn.into_modifies()));
             let mut txn = new_txn(start_ts.into());
-            txn.commit(key.clone(), commit_ts.into(), false).unwrap();
+            txn.commit(key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
                 .unwrap();

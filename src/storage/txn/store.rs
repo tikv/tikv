@@ -657,7 +657,7 @@ mod tests {
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(Key::from_raw(key), COMMIT_TS, false).unwrap();
+                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();

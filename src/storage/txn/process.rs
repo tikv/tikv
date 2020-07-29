@@ -470,7 +470,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             // Pessimistic txn needs key_hashes to wake up waiters
             let mut released_locks = ReleasedLocks::new(lock_ts, commit_ts);
             for k in keys {
-                released_locks.push(txn.commit(k, commit_ts, false)?);
+                released_locks.push(txn.commit(k, commit_ts)?);
             }
             released_locks.wake_up(lock_mgr);
 
@@ -570,7 +570,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                 let released = if commit_ts.is_zero() {
                     txn.rollback(current_key.clone())?
                 } else if commit_ts > current_lock.ts {
-                    txn.commit(current_key.clone(), commit_ts, false)?
+                    txn.commit(current_key.clone(), commit_ts)?
                 } else {
                     return Err(Error::from(ErrorInner::InvalidTxnTso {
                         start_ts: current_lock.ts,
@@ -616,7 +616,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             let mut released_locks = ReleasedLocks::new(start_ts, commit_ts);
             for key in resolve_keys {
                 released_locks.push(if !commit_ts.is_zero() {
-                    txn.commit(key, commit_ts, false)?
+                    txn.commit(key, commit_ts)?
                 } else {
                     txn.rollback(key)?
                 });

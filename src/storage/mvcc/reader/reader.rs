@@ -650,8 +650,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true, Arc::new(DummyPdClient::new()));
-            txn.commit(Key::from_raw(pk), commit_ts.into(), false)
-                .unwrap();
+            txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
 
