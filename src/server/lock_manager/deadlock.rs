@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::{self, Client};
+use super::client::Client;
 use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
@@ -507,12 +507,13 @@ where
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
+        env: Arc<Environment>,
         cfg: &Config,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
             store_id,
-            env: client::env(),
+            env,
             leader_info: None,
             leader_client: None,
             pd_client,

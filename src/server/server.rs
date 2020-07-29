@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::Stream;
-use grpcio::{ChannelBuilder, EnvBuilder, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
 use pd_client::PdClient;
 use tokio_timer::timer::Handle;
@@ -38,7 +38,6 @@ const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(1000);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
-pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 /// The TiKV server
 ///
@@ -71,18 +70,13 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
         snap_mgr: SnapManager<RocksEngine>,
         gc_worker: GcWorker<E>,
         yatp_read_pool: Option<YatpReadPool>,
+        env: Arc<Environment>,
         common_worker: Worker,
     ) -> Result<Self> {
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
         let readpool_normal_thread_load =
             Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .build(),
-        );
         let snap_runner = SnapHandler::new(
             Arc::clone(&env),
             snap_mgr.clone(),

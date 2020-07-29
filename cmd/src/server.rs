@@ -14,6 +14,7 @@ use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
+use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -54,7 +55,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+        Node, RaftKv, Server, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{self, config::StorageConfigManger},
 };
@@ -126,6 +127,7 @@ struct TiKVServer {
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     shared_worker: Worker,
+    env: Arc<Environment>,
 }
 
 struct Engines {
@@ -152,7 +154,14 @@ impl TiKVServer {
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
-        let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(config.server.grpc_concurrency)
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .build(),
+        );
+        let pd_client =
+            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
@@ -190,6 +199,7 @@ impl TiKVServer {
             coprocessor_host,
             to_stop: vec![Box::new(shared_worker)],
             lock_files: vec![],
+            env,
         }
     }
 
@@ -229,10 +239,11 @@ impl TiKVServer {
 
     fn connect_to_pd_cluster(
         config: &mut TiKvConfig,
+        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
         let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr)
+            RpcClient::new(&config.pd, security_mgr, env)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
@@ -528,6 +539,7 @@ impl TiKVServer {
             snap_mgr.clone(),
             gc_worker.clone(),
             Some(unified_read_pool),
+            self.env.clone(),
             self.shared_worker.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
@@ -597,7 +609,7 @@ impl TiKVServer {
             node.id(),
             self.config.gc.ratio_threshold,
         );
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, &self.shared_worker) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
@@ -686,6 +698,7 @@ impl TiKVServer {
                 self.pd_client.clone(),
                 self.resolver.clone(),
                 self.security_mgr.clone(),
+                self.env.clone(),
                 &self.config.pessimistic_txn,
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));

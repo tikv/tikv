@@ -27,6 +27,7 @@ use crate::storage::{
 use raftstore::coprocessor::CoprocessorHost;
 
 use engine_rocks::RocksEngine;
+use grpcio::Environment;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
@@ -96,6 +97,7 @@ impl LockManager {
         pd_client: Arc<P>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
         cfg: &Config,
     ) -> Result<()>
     where
@@ -103,7 +105,7 @@ impl LockManager {
         P: PdClient + 'static,
     {
         self.start_waiter_manager(cfg)?;
-        self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, cfg)?;
+        self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, env, cfg)?;
         Ok(())
     }
 
@@ -146,6 +148,7 @@ impl LockManager {
         pd_client: Arc<P>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
         cfg: &Config,
     ) -> Result<()>
     where
@@ -158,6 +161,7 @@ impl LockManager {
             resolver,
             security_mgr,
             self.waiter_mgr_scheduler.clone(),
+            env,
             cfg,
         );
         self.detector_worker

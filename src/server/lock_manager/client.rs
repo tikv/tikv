@@ -3,7 +3,7 @@
 use super::{Error, Result};
 use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
+use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
 use std::sync::Arc;
@@ -12,19 +12,6 @@ use std::time::Duration;
 type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
 
 pub type Callback = Box<dyn Fn(DeadlockResponse)>;
-
-const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &str = "deadlock";
-
-/// Builds the `Environment` of deadlock clients. All clients should use the same instance.
-pub fn env() -> Arc<Environment> {
-    Arc::new(
-        EnvBuilder::new()
-            .cq_count(CQ_COUNT)
-            .name_prefix(thd_name!(CLIENT_PREFIX))
-            .build(),
-    )
-}
 
 #[derive(Clone)]
 pub struct Client {

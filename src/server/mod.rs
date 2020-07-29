@@ -25,5 +25,5 @@ pub use self::node::{create_raft_storage, Node};
 pub use self::raft_client::RaftClient;
 pub use self::raftkv::RaftKv;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
-pub use self::server::Server;
+pub use self::server::{Server, GRPC_THREAD_PREFIX};
 pub use self::transport::ServerTransport;

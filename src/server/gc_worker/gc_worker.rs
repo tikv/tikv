@@ -163,8 +163,6 @@ impl<E: Engine> GcRunner<E> {
         }
     }
 
-
-
     /// Cleans up outdated data.
     fn gc_key(
         &mut self,

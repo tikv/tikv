@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_rocks::RocksEngine;
+use engine_traits::{TablePropertiesExt, CF_WRITE};
 use pd_client::ClusterVersion;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
-use engine_rocks::RocksEngine;
-use engine_traits::{CF_WRITE, TablePropertiesExt};
-use tikv_util::worker::{FutureScheduler, Scheduler, Runnable};
+use tikv_util::worker::{FutureScheduler, Runnable, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -16,7 +16,7 @@ use raftstore::store::util::find_peer;
 
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowd};
+use super::is_compaction_filter_allowd;
 use crate::storage::mvcc::check_need_gc;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
@@ -50,7 +50,12 @@ pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a new config.
-    pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64, ratio_threshold: f64) -> Self {
+    pub fn new(
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+        ratio_threshold: f64,
+    ) -> Self {
         Self {
             safe_point_provider,
             region_info_provider,
@@ -76,7 +81,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
             poll_safe_point_interval: Duration::from_millis(100),
             always_check_safe_point: true,
             post_a_round_of_gc: None,
-            ratio_threshold: 0.1
+            ratio_threshold: 0.1,
         }
     }
 }
@@ -200,8 +205,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> Runnable<GcMsg> for GcManage
                         }
                     }
                 }
-                self.scheduler.as_ref().unwrap().register_timeout(GcMsg::Timeout, self.cfg.poll_safe_point_interval);
-            },
+                self.scheduler
+                    .as_ref()
+                    .unwrap()
+                    .register_timeout(GcMsg::Timeout, self.cfg.poll_safe_point_interval);
+            }
             GcMsg::Tick => {
                 if self.tick_gc() {
                     self.ctx.working = false;
@@ -264,7 +272,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.curr_safe_point());
     }
-
 
     /// Tries to update the safe point. Returns true if safe point has been updated to a greater
     /// value. Returns false if safe point didn't change or we encountered an error.
@@ -371,10 +378,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
     /// Does GC on the next region after `from_key`. Returns the end key of the region it processed.
     /// If we have processed to the end of all regions, returns `None`.
-    fn gc_next_region(
-        &mut self,
-        from_key: Key,
-    ) {
+    fn gc_next_region(&mut self, from_key: Key) {
         // Get the information of the next region to do GC.
         let (range, next_key) = self.get_next_gc_context(from_key);
         let (region_id, start_key, end_key) = match range {
@@ -382,7 +386,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => {
                 self.ctx.progress = None;
                 return;
-            },
+            }
         };
 
         let hex_start = hex::encode_upper(&start_key);
@@ -404,13 +408,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             GC_SKIPPED_COUNTER.inc();
             return;
         }
-        self.worker_scheduler.schedule(GcTask::Gc {
+        self.worker_scheduler
+            .schedule(GcTask::Gc {
                 region_id,
                 start_key,
                 end_key,
                 safe_point,
                 callback,
-            }).unwrap();
+            })
+            .unwrap();
     }
 
     /// Check need gc without getting snapshot.
@@ -419,8 +425,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let start = keys::data_key(start_key);
         let end = keys::data_end_key(end_key);
-        let collection = match self.engine
-            .get_range_properties_cf(CF_WRITE, &start, &end) {
+        let collection = match self.engine.get_range_properties_cf(CF_WRITE, &start, &end) {
             Ok(c) => c,
             Err(_) => return true,
         };

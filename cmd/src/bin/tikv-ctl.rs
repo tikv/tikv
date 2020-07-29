@@ -459,12 +459,13 @@ trait DebugExecutor {
     fn set_region_tombstone_after_remove_peer(
         &self,
         mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
         cfg: &PdConfig,
         region_ids: Vec<u64>,
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, mgr, env).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -492,7 +493,13 @@ trait DebugExecutor {
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
-    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
+    fn recreate_region(
+        &self,
+        sec_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+        pd_cfg: &PdConfig,
+        region_id: u64,
+    );
 
     fn check_region_consistency(&self, _: u64);
 
@@ -501,13 +508,14 @@ trait DebugExecutor {
     fn recover_regions_mvcc(
         &self,
         mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
         cfg: &PdConfig,
         region_ids: Vec<u64>,
         read_only: bool,
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, mgr, env).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -733,7 +741,7 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
-    fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
+    fn recreate_region(&self, _: Arc<SecurityManager>, _: Arc<Environment>, _: &PdConfig, _: u64) {
         self.check_local_mode();
     }
 
@@ -919,9 +927,15 @@ impl DebugExecutor for Debugger {
         v1!("success");
     }
 
-    fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client =
-            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+    fn recreate_region(
+        &self,
+        mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+        pd_cfg: &PdConfig,
+        region_id: u64,
+    ) {
+        let rpc_client = RpcClient::new(pd_cfg, mgr, env)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match rpc_client.get_region_by_id(region_id).wait() {
             Ok(Some(region)) => region,
@@ -1947,9 +1961,10 @@ fn main() {
         return;
     }
 
+    let env = Arc::new(Environment::new(2));
     // Deal with all subcommands needs PD.
     if let Some(pd) = matches.value_of("pd") {
-        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+        let pd_client = get_pd_rpc_client(pd, env.clone(), Arc::clone(&mgr));
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
             let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
@@ -1965,7 +1980,7 @@ fn main() {
         if let Some(matches) = matches.subcommand_matches("split-region") {
             let region_id = value_t_or_exit!(matches.value_of("region"), u64);
             let key = unescape(matches.value_of("key").unwrap());
-            return split_region(&pd_client, mgr, region_id, key);
+            return split_region(&pd_client, mgr, env, region_id, key);
         }
 
         let _ = app.print_help();
@@ -2085,7 +2100,7 @@ fn main() {
             if let Err(e) = cfg.validate() {
                 panic!("invalid pd configuration: {:?}", e);
             }
-            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+            debug_executor.set_region_tombstone_after_remove_peer(mgr, env, &cfg, regions);
         } else {
             assert!(matches.is_present("force"));
             debug_executor.set_region_tombstone_force(regions);
@@ -2126,7 +2141,7 @@ fn main() {
             if let Err(e) = cfg.validate() {
                 panic!("invalid pd configuration: {:?}", e);
             }
-            debug_executor.recover_regions_mvcc(mgr, &cfg, regions, read_only);
+            debug_executor.recover_regions_mvcc(mgr, env, &cfg, regions, read_only);
         }
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
@@ -2144,7 +2159,7 @@ fn main() {
         let mut pd_cfg = PdConfig::default();
         pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
-        debug_executor.recreate_region(mgr, &pd_cfg, region_id);
+        debug_executor.recreate_region(mgr, env, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.check_region_consistency(region_id);
@@ -2291,14 +2306,20 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
-fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
+fn get_pd_rpc_client(pd: &str, env: Arc<Environment>, mgr: Arc<SecurityManager>) -> RpcClient {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, mgr, env).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
-fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
+fn split_region(
+    pd_client: &RpcClient,
+    mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    region_id: u64,
+    key: Vec<u8>,
+) {
     let region = pd_client
         .get_region_by_id(region_id)
         .wait()
@@ -2314,9 +2335,8 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
     let store = pd_client
         .get_store(leader.get_store_id())
         .expect("get_store should success");
-
     let tikv_client = {
-        let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
+        let cb = ChannelBuilder::new(env.clone());
         let channel = mgr.connect(cb, store.get_address());
         TikvClient::new(channel)
     };

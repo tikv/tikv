@@ -11,7 +11,7 @@ use futures::{future, Future, Sink, Stream};
 use futures03::compat::{Compat, Future01CompatExt};
 use futures03::executor::block_on;
 use futures03::future::FutureExt;
-use grpcio::{CallOption, EnvBuilder, WriteFlags};
+use grpcio::{CallOption, Environment, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -26,23 +26,17 @@ use super::{ClusterVersion, Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
-const CQ_COUNT: usize = 1;
-const CLIENT_PREFIX: &str = "pd";
-
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: Arc<LeaderClient>,
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(CQ_COUNT)
-                .name_prefix(thd_name!(CLIENT_PREFIX))
-                .build(),
-        );
-
+    pub fn new(
+        cfg: &Config,
+        security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+    ) -> Result<RpcClient> {
         // -1 means the max.
         let retries = match cfg.retry_max_count {
             -1 => std::isize::MAX,
