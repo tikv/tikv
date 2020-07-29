@@ -627,13 +627,14 @@ mod tests {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
+                let cm = DefaultConcurrencyManager::new(START_TS);
                 let mut txn = MvccTxn::new(
                     self.snapshot.clone(),
                     START_TS,
                     true,
                     Arc::new(DummyPdClient::new()),
+                    cm,
                 );
-                let cm = DefaultConcurrencyManager::new(1.into());
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -644,7 +645,6 @@ mod tests {
                         0,
                         0,
                         TimeStamp::default(),
-                        &cm,
                     )
                     .unwrap();
                 }
@@ -654,11 +654,13 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
+                let cm = DefaultConcurrencyManager::new(START_TS);
                 let mut txn = MvccTxn::new(
                     self.snapshot.clone(),
                     START_TS,
                     true,
                     Arc::new(DummyPdClient::new()),
+                    cm,
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();

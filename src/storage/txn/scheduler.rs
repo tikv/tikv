@@ -602,7 +602,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             snapshot,
             &self.inner.lock_mgr,
             self.inner.pd_client.clone(),
-            &self.inner.concurrency_manager,
+            self.inner.concurrency_manager.clone(),
             task.extra_op,
             statistics,
             self.inner.pipelined_pessimistic_lock,

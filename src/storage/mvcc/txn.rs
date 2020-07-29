@@ -82,6 +82,7 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     collapse_rollback: bool,
     pub extra_op: ExtraOp,
     _pd_client: Arc<P>,
+    concurrency_manager: DefaultConcurrencyManager,
 }
 
 impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
@@ -90,6 +91,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
         fill_cache: bool,
         pd_client: Arc<P>,
+        concurrency_manager: DefaultConcurrencyManager,
     ) -> MvccTxn<S, P> {
         // FIXME: use session variable to indicate fill cache or not.
 
@@ -102,6 +104,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
             start_ts,
             pd_client,
+            concurrency_manager,
         )
     }
 
@@ -115,15 +118,22 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
         fill_cache: bool,
         pd_client: Arc<P>,
+        concurrency_manager: DefaultConcurrencyManager,
     ) -> MvccTxn<S, P> {
         Self::from_reader(
             MvccReader::new(snapshot, scan_mode, fill_cache, IsolationLevel::Si),
             start_ts,
             pd_client,
+            concurrency_manager,
         )
     }
 
-    fn from_reader(reader: MvccReader<S>, start_ts: TimeStamp, pd_client: Arc<P>) -> MvccTxn<S, P> {
+    fn from_reader(
+        reader: MvccReader<S>,
+        start_ts: TimeStamp,
+        pd_client: Arc<P>,
+        concurrency_manager: DefaultConcurrencyManager,
+    ) -> MvccTxn<S, P> {
         MvccTxn {
             reader,
             start_ts,
@@ -132,6 +142,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
             _pd_client: pd_client,
+            concurrency_manager,
         }
     }
 
@@ -214,7 +225,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
-        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<TimeStamp> {
         let mut lock = Lock::new(
             lock_type,
@@ -249,10 +259,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
             // This operation should not block because the latch makes sure only one thread
             // is operating on this key.
-            let key_guard = ::futures_executor::block_on(concurrency_manager.lock_key(&key));
+            let key_guard = ::futures_executor::block_on(self.concurrency_manager.lock_key(&key));
 
             let ts = key_guard.with_lock(|l| {
-                let ts = concurrency_manager.max_read_ts().next();
+                let ts = self.concurrency_manager.max_read_ts().next();
                 lock.min_commit_ts = ts;
                 *l = Some(lock.clone());
                 ts
@@ -478,7 +488,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
-        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<()> {
         if mutation.should_not_write() {
             return Err(box_err!(
@@ -541,7 +550,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             for_update_ts,
             txn_size,
             min_commit_ts,
-            concurrency_manager,
         )?;
         Ok(())
     }
@@ -610,7 +618,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         lock_ttl: u64,
         txn_size: u64,
         min_commit_ts: TimeStamp,
-        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<TimeStamp> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert/checkNotExists operation, the old key should not be in the system.
@@ -682,7 +689,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             TimeStamp::zero(),
             txn_size,
             min_commit_ts,
-            concurrency_manager,
         )
     }
 
@@ -1232,12 +1238,13 @@ fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInn
 /// Intended to only be used in test code.
 #[macro_export]
 macro_rules! new_txn {
-    ($ss: expr, $ts: literal, $fill_cache: expr) => {
+    ($ss: expr, $ts: literal, $fill_cache: expr, $cm: expr) => {
         $crate::storage::mvcc::MvccTxn::new(
             $ss,
             $ts.into(),
             $fill_cache,
             ::std::sync::Arc::new(::pd_client::DummyPdClient::new()),
+            $cm,
         )
     };
 }
@@ -1886,8 +1893,8 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 10, true);
         let cm = DefaultConcurrencyManager::new(10.into());
+        let mut txn = new_txn!(snapshot, 10, true, cm.clone());
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
 
@@ -1899,7 +1906,6 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
-            &cm,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1908,7 +1914,7 @@ mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 10, true);
+        let mut txn = new_txn!(snapshot, 10, true, cm);
         txn.commit(key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
@@ -1934,8 +1940,8 @@ mod tests {
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 5, true);
         let cm = DefaultConcurrencyManager::new(10.into());
+        let mut txn = new_txn!(snapshot, 5, true, cm.clone());
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -1945,13 +1951,12 @@ mod tests {
                 0,
                 0,
                 TimeStamp::default(),
-                &cm
             )
             .is_err());
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 5, true);
+        let mut txn = new_txn!(snapshot, 5, true, cm.clone());
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -1961,7 +1966,6 @@ mod tests {
                 0,
                 0,
                 TimeStamp::default(),
-                &cm
             )
             .is_ok());
     }
@@ -3193,21 +3197,23 @@ mod tests {
             engine.write(&ctx, modifies).unwrap();
         };
 
-        let new_txn = |start_ts| {
+        let new_txn = |start_ts, cm| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             MvccTxn::new(
                 snapshot,
                 start_ts,
                 true,
                 Arc::new(::pd_client::DummyPdClient::new()),
+                cm,
             )
         };
 
         for case in cases {
             let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
             let mutation_type = mutation.mutation_type();
-            let mut txn = new_txn(start_ts.into());
             let cm = DefaultConcurrencyManager::new(start_ts.into());
+            let mut txn = new_txn(start_ts.into(), cm.clone());
+
             txn.extra_op = ExtraOp::ReadOldValue;
             if is_pessimistic {
                 txn.acquire_pessimistic_lock(
@@ -3221,7 +3227,7 @@ mod tests {
                 )
                 .unwrap();
                 write(WriteData::from_modifies(txn.into_modifies()));
-                txn = new_txn(start_ts.into());
+                txn = new_txn(start_ts.into(), cm.clone());
                 txn.extra_op = ExtraOp::ReadOldValue;
                 txn.pessimistic_prewrite(
                     mutation,
@@ -3232,21 +3238,11 @@ mod tests {
                     0,
                     TimeStamp::zero(),
                     false,
-                    &cm,
                 )
                 .unwrap();
             } else {
-                txn.prewrite(
-                    mutation,
-                    b"key",
-                    &None,
-                    false,
-                    0,
-                    0,
-                    TimeStamp::default(),
-                    &cm,
-                )
-                .unwrap();
+                txn.prewrite(mutation, b"key", &None, false, 0, 0, TimeStamp::default())
+                    .unwrap();
             }
             if check_old_value {
                 let extra = txn.take_extra();
@@ -3259,7 +3255,7 @@ mod tests {
                 assert_eq!(extra.get_old_values()[&ts_key], (old_value, mutation_type));
             }
             write(WriteData::from_modifies(txn.into_modifies()));
-            let mut txn = new_txn(start_ts.into());
+            let mut txn = new_txn(start_ts.into(), cm);
             txn.commit(key.clone(), commit_ts.into()).unwrap();
             engine
                 .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -3276,8 +3272,8 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
         let cm = DefaultConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client), cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3287,7 +3283,6 @@ mod tests {
             0,
             4,
             TimeStamp::zero(),
-            &cm,
         )
         .unwrap();
         engine
@@ -3317,8 +3312,15 @@ mod tests {
         let pd_client = Arc::new(pd_client);
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
         let cm = DefaultConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(
+            snapshot,
+            TimeStamp::new(2),
+            true,
+            pd_client.clone(),
+            cm.clone(),
+        );
+
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3328,7 +3330,6 @@ mod tests {
             0,
             4,
             TimeStamp::zero(),
-            &cm,
         )
         .unwrap();
         engine
@@ -3337,7 +3338,7 @@ mod tests {
 
         let do_check_txn_status = |rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone(), cm);
             let (txn_status, released_lock) = txn
                 .check_txn_status(
                     Key::from_raw(b"key"),
