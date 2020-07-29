@@ -8,8 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
 use engine::rocks::DBCompressionType;
+use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
