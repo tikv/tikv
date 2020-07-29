@@ -1851,6 +1851,44 @@ mod tests {
                 )
                 .wait(),
         );
+        // Forward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"a".to_vec(), b"aa".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
         // Forward with bound
         expect_multi_values(
             vec![

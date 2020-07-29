@@ -60,10 +60,10 @@ pub trait Scanner: Send {
             match self.next() {
                 Ok(Some((k, v))) => {
                     if sample_step > 0 {
-                        if row_count % sample_step != 0 {
+                        row_count += 1;
+                        if (row_count - 1) % sample_step != 0 {
                             continue;
                         }
-                        row_count += 1;
                     }
                     results.push(Ok((k.to_raw()?, v)));
                 }
