@@ -3,7 +3,7 @@
 use protobuf::Message;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
@@ -11,6 +11,7 @@ use tikv_util::deadline::Deadline;
 use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
@@ -367,7 +368,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut time_slice_start = Instant::now();
         loop {
+            let time_slice_len = time_slice_start.elapsed();
+            // Check whether we should yield from the execution
+            if time_slice_len > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
+            }
+
             let mut chunk = Chunk::default();
 
             let (drained, record_len) = self.internal_handle_request(
