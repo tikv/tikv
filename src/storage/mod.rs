@@ -486,10 +486,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    if sample_step > 0 {
-                        limit *= sample_step;
-                    }
-
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -1855,6 +1851,38 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    2,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), b"aa".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), b"cc".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1,
                     2,
                     5.into(),
                     false,
