@@ -82,6 +82,7 @@
 #[macro_use]
 extern crate log;
 
+#[allow(unused_imports)]
 #[macro_use]
 extern crate lazy_static;
 
