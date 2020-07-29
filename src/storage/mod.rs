@@ -445,7 +445,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         mut ctx: Context,
         start_key: Key,
         end_key: Option<Key>,
-        mut limit: usize,
+        limit: usize,
         sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
