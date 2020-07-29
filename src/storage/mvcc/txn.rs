@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
-use crate::storage::types::TxnStatus;
+use crate::storage::{concurrency_manager::DefaultConcurrencyManager, types::TxnStatus};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures03::compat::Compat01As03;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -215,6 +215,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
+        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<TimeStamp> {
         let mut lock = Lock::new(
             lock_type,
@@ -474,6 +475,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
+        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<()> {
         if mutation.should_not_write() {
             return Err(box_err!(
@@ -536,6 +538,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             for_update_ts,
             txn_size,
             min_commit_ts,
+            concurrency_manager,
         )?;
         Ok(())
     }
@@ -604,6 +607,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         lock_ttl: u64,
         txn_size: u64,
         min_commit_ts: TimeStamp,
+        concurrency_manager: &DefaultConcurrencyManager,
     ) -> Result<TimeStamp> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert/checkNotExists operation, the old key should not be in the system.
@@ -675,6 +679,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             TimeStamp::zero(),
             txn_size,
             min_commit_ts,
+            concurrency_manager,
         )
     }
 
@@ -1879,6 +1884,7 @@ mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
+        let cm = DefaultConcurrencyManager::new(10.into());
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
 
@@ -1890,6 +1896,7 @@ mod tests {
             0,
             0,
             TimeStamp::default(),
+            &cm,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1925,6 +1932,7 @@ mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 5, true);
+        let cm = DefaultConcurrencyManager::new(10.into());
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -1934,6 +1942,7 @@ mod tests {
                 0,
                 0,
                 TimeStamp::default(),
+                &cm
             )
             .is_err());
 
@@ -1949,6 +1958,7 @@ mod tests {
                 0,
                 0,
                 TimeStamp::default(),
+                &cm
             )
             .is_ok());
     }
@@ -3194,6 +3204,7 @@ mod tests {
             let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
             let mutation_type = mutation.mutation_type();
             let mut txn = new_txn(start_ts.into());
+            let cm = DefaultConcurrencyManager::new(start_ts.into());
             txn.extra_op = ExtraOp::ReadOldValue;
             if is_pessimistic {
                 txn.acquire_pessimistic_lock(
@@ -3218,11 +3229,21 @@ mod tests {
                     0,
                     TimeStamp::zero(),
                     false,
+                    &cm,
                 )
                 .unwrap();
             } else {
-                txn.prewrite(mutation, b"key", &None, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                txn.prewrite(
+                    mutation,
+                    b"key",
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                    &cm,
+                )
+                .unwrap();
             }
             if check_old_value {
                 let extra = txn.take_extra();
@@ -3253,6 +3274,7 @@ mod tests {
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
+        let cm = DefaultConcurrencyManager::new(42.into());
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3262,6 +3284,7 @@ mod tests {
             0,
             4,
             TimeStamp::zero(),
+            &cm,
         )
         .unwrap();
         engine
@@ -3292,6 +3315,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+        let cm = DefaultConcurrencyManager::new(42.into());
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3301,6 +3325,7 @@ mod tests {
             0,
             4,
             TimeStamp::zero(),
+            &cm,
         )
         .unwrap();
         engine

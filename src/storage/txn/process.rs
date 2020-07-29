@@ -26,6 +26,7 @@ use crate::storage::txn::{
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager,
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
@@ -223,6 +224,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
     snapshot: S,
     lock_mgr: &L,
     pd_client: Arc<P>,
+    concurrency_manager: &DefaultConcurrencyManager,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -297,6 +299,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     lock_ttl,
                     txn_size,
                     min_commit_ts,
+                    &concurrency_manager,
                 ) {
                     Ok(ts) => {
                         if secondaries.is_some() {
@@ -363,6 +366,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     txn_size,
                     min_commit_ts,
                     pipelined_pessimistic_lock,
+                    &concurrency_manager,
                 ) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -865,11 +869,13 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
+        let cm = DefaultConcurrencyManager::new(start_ts.into());
         let ret = process_write_impl(
             cmd,
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),
+            &cm,
             ExtraOp::Noop,
             statistics,
             false,
@@ -905,12 +911,13 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
-
+        let cm = DefaultConcurrencyManager::new(commit_ts.into());
         let ret = process_write_impl(
             cmd.into(),
             snap,
             &DummyLockManager {},
             Arc::new(DummyPdClient::new()),
+            &cm,
             ExtraOp::Noop,
             statistics,
             false,

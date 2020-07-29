@@ -276,7 +276,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::types::TxnStatus;
+    use crate::storage::{concurrency_manager::DefaultConcurrencyManager, types::TxnStatus};
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use pd_client::DummyPdClient;
@@ -344,7 +344,9 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
+        let ts = ts.into();
+        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()));
+        let cm = DefaultConcurrencyManager::new(ts);
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
@@ -353,6 +355,7 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            &cm,
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -366,7 +369,9 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
+        let ts = ts.into();
+        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()));
+        let cm = DefaultConcurrencyManager::new(ts);
         txn.prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
@@ -375,6 +380,7 @@ pub mod tests {
             0,
             0,
             TimeStamp::default(),
+            &cm,
         )?;
         Ok(())
     }
@@ -387,7 +393,9 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
+        let ts = ts.into();
+        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()));
+        let cm = DefaultConcurrencyManager::new(ts);
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
@@ -397,6 +405,7 @@ pub mod tests {
             0,
             TimeStamp::default(),
             false,
+            &cm,
         )?;
         Ok(())
     }
@@ -417,6 +426,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
+        let cm = DefaultConcurrencyManager::new(min_commit_ts);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
             txn.prewrite(
@@ -427,6 +437,7 @@ pub mod tests {
                 lock_ttl,
                 txn_size,
                 min_commit_ts,
+                &cm,
             )
             .unwrap();
         } else {
@@ -439,6 +450,7 @@ pub mod tests {
                 txn_size,
                 min_commit_ts,
                 pipelined_pessimistic_lock,
+                &cm,
             )
             .unwrap();
         }
@@ -583,8 +595,9 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         let for_update_ts = for_update_ts.into();
+        let cm = DefaultConcurrencyManager::new(for_update_ts);
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default(), &cm)
                 .unwrap_err()
         } else {
             txn.pessimistic_prewrite(
@@ -596,6 +609,7 @@ pub mod tests {
                 0,
                 TimeStamp::default(),
                 pipelined_pessimistic_lock,
+                &cm,
             )
             .unwrap_err()
         }
@@ -666,8 +680,9 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let mutation = Mutation::Delete(Key::from_raw(key));
         let for_update_ts = for_update_ts.into();
+        let cm = DefaultConcurrencyManager::new(for_update_ts);
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default(), &cm)
                 .unwrap();
         } else {
             txn.pessimistic_prewrite(
@@ -679,6 +694,7 @@ pub mod tests {
                 0,
                 TimeStamp::default(),
                 false,
+                &cm,
             )
             .unwrap();
         }
@@ -719,9 +735,10 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let for_update_ts = for_update_ts.into();
+        let cm = DefaultConcurrencyManager::new(for_update_ts);
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default(), &cm)
                 .unwrap();
         } else {
             txn.pessimistic_prewrite(
@@ -733,6 +750,7 @@ pub mod tests {
                 0,
                 TimeStamp::default(),
                 false,
+                &cm,
             )
             .unwrap();
         }
@@ -758,7 +776,9 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
+        let ts = ts.into();
+        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()));
+        let cm = DefaultConcurrencyManager::new(ts);
         assert!(txn
             .prewrite(
                 Mutation::Lock(Key::from_raw(key)),
@@ -767,7 +787,8 @@ pub mod tests {
                 false,
                 0,
                 0,
-                TimeStamp::default()
+                TimeStamp::default(),
+                &cm
             )
             .is_err());
     }

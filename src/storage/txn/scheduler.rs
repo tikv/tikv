@@ -48,8 +48,8 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    concurrency_manager::DefaultConcurrencyManager, get_priority_tag, types::StorageCallback,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -160,6 +160,8 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
 
     pd_client: Arc<P>,
 
+    concurrency_manager: DefaultConcurrencyManager,
+
     pipelined_pessimistic_lock: bool,
 }
 
@@ -255,6 +257,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         engine: E,
         lock_mgr: L,
         pd_client: Arc<P>,
+        concurrency_manager: DefaultConcurrencyManager,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -282,6 +285,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             ),
             lock_mgr,
             pd_client,
+            concurrency_manager,
             pipelined_pessimistic_lock,
         });
 
@@ -598,6 +602,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             snapshot,
             &self.inner.lock_mgr,
             self.inner.pd_client.clone(),
+            &self.inner.concurrency_manager,
             task.extra_op,
             statistics,
             self.inner.pipelined_pessimistic_lock,

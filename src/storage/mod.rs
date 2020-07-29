@@ -167,6 +167,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             engine.clone(),
             lock_mgr,
             pd_client,
+            concurrency_manager.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,

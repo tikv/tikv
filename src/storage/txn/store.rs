@@ -581,7 +581,10 @@ mod tests {
         Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
         TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::{
+        concurrency_manager::DefaultConcurrencyManager,
+        mvcc::{Mutation, MvccTxn},
+    };
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
@@ -630,6 +633,7 @@ mod tests {
                     true,
                     Arc::new(DummyPdClient::new()),
                 );
+                let cm = DefaultConcurrencyManager::new(1.into());
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -640,6 +644,7 @@ mod tests {
                         0,
                         0,
                         TimeStamp::default(),
+                        &cm,
                     )
                     .unwrap();
                 }

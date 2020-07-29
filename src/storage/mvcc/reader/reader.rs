@@ -438,7 +438,10 @@ mod tests {
     use super::*;
 
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{
+        concurrency_manager::DefaultConcurrencyManager,
+        mvcc::{MvccReader, MvccTxn},
+    };
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
@@ -507,8 +510,10 @@ mod tests {
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true, Arc::new(DummyPdClient::new()));
-            txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
+            let start_ts = start_ts.into();
+            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()));
+            let cm = DefaultConcurrencyManager::new(start_ts);
+            txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default(), &cm)
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -521,7 +526,10 @@ mod tests {
         ) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true, Arc::new(DummyPdClient::new()));
+            let start_ts = start_ts.into();
+            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()));
+            let cm = DefaultConcurrencyManager::new(start_ts);
+
             txn.pessimistic_prewrite(
                 m,
                 pk,
@@ -531,6 +539,7 @@ mod tests {
                 0,
                 TimeStamp::default(),
                 false,
+                &cm,
             )
             .unwrap();
             self.write(txn.into_modifies());

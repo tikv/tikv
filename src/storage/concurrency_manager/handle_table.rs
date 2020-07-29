@@ -29,9 +29,6 @@ impl<M: OrderedMap> HandleTable<M> {
                     return guard;
                 }
             }
-            // If the program goes here, the handle is about to be removed from the map.
-            // We should retry and get or insert the new handle.
-            // Question: should we yield here?
         }
     }
 
