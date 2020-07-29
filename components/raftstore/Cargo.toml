@@ -72,6 +72,7 @@ smallvec = "1.4"
 sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
+tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync"] }
@@ -91,3 +92,4 @@ git = "https://github.com/tikv/yatp.git"
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
+engine_panic = { path = "../engine_panic" }

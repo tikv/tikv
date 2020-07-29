@@ -36,7 +36,6 @@ impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    command_method!(requires_pessimistic_txn, bool, true);
     command_method!(can_be_pipelined, bool, true);
 
     fn write_bytes(&self) -> usize {

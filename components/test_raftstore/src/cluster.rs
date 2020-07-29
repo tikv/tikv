@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -23,7 +23,8 @@ use engine_traits::{
     CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
-use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
@@ -51,6 +52,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
@@ -125,6 +127,7 @@ pub struct Cluster<T: Simulator> {
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -149,6 +152,7 @@ impl<T: Simulator> Cluster<T> {
             count,
             paths: vec![],
             dbs: vec![],
+            store_metas: HashMap::default(),
             key_managers: vec![],
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
@@ -209,17 +213,20 @@ impl<T: Simulator> Cluster<T> {
 
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
                 self.cfg.clone(),
                 engines.clone(),
+                store_meta.clone(),
                 key_mgr.clone(),
                 router,
                 system,
             )?;
             self.engines.insert(node_id, engines);
+            self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
         }
         Ok(())
@@ -262,11 +269,13 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        self.store_metas.insert(node_id, store_meta.clone());
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, cfg, engines, key_mgr, router, system)?;
+            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -521,6 +530,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
         }
@@ -552,6 +563,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
         }
@@ -659,6 +672,7 @@ impl<T: Simulator> Cluster<T> {
             self.stop_node(id);
         }
         self.leaders.clear();
+        self.store_metas.clear();
         debug!("all nodes are shut down.");
     }
 
@@ -1348,14 +1362,12 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(
-                move |peer: &mut PeerFsm<RocksEngine, RocksEngine>| {
-                    let idx = peer.peer.raft_group.store().committed_index();
-                    peer.peer.raft_group.request_snapshot(idx).unwrap();
-                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                    request_tx.send(idx).unwrap();
-                },
-            )),
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
+                let idx = peer.raft_committed_index();
+                peer.raft_request_snapshot(idx);
+                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
+                request_tx.send(idx).unwrap();
+            })),
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()

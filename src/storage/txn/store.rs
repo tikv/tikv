@@ -583,7 +583,7 @@ mod tests {
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use engine_traits::CfName;
-    use engine_traits::IterOptions;
+    use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
     use pd_client::DummyPdClient;
     use std::sync::Arc;
@@ -738,6 +738,9 @@ mod tests {
             Ok(None)
         }
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
         fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {

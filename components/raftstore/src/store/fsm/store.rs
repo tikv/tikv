@@ -556,7 +556,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 pub struct RaftPoller<T: 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<RocksEngine, RocksEngine>>,
+    peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<RocksEngine, RocksEngine, T, C>,

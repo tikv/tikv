@@ -24,7 +24,6 @@ impl CommandExt for PessimisticRollback {
     ctx!();
     tag!(pessimistic_rollback);
     ts!(start_ts);
-    command_method!(requires_pessimistic_txn, bool, true);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
