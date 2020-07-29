@@ -13,6 +13,8 @@
 
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate slog_global;
 
 mod cf_handle;
 pub use crate::cf_handle::*;

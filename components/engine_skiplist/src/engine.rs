@@ -108,6 +108,7 @@ impl Peekable for SkiplistEngine {
         key: &[u8],
     ) -> Result<Option<Self::DBVector>> {
         let engine = self.get_cf_engine(cf)?;
+        info!("get key"; "cf" => cf, "key" => hex::encode_upper(key));
         Ok(engine
             .get(key)
             .map(|e| SkiplistDBVector(e.value().to_vec())))
@@ -121,6 +122,7 @@ impl SyncMutable for SkiplistEngine {
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.total_bytes.fetch_add(key.len(), Ordering::Relaxed);
         self.total_bytes.fetch_add(value.len(), Ordering::Relaxed);
+        info!("put key"; "cf" => cf, "key" => hex::encode_upper(key));
         let engine = self.get_cf_engine(cf)?;
         engine.insert(key.to_vec(), value.to_vec());
         Ok(())
@@ -131,6 +133,7 @@ impl SyncMutable for SkiplistEngine {
     }
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let engine = self.get_cf_engine(cf)?;
+        info!("delete key"; "cf" => cf, "key" => hex::encode_upper(key));
         if let Some(e) = engine.remove(key) {
             self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
             self.total_bytes
@@ -145,6 +148,7 @@ impl SyncMutable for SkiplistEngine {
         };
         let engine = self.get_cf_engine(cf)?;
         engine.range(range).for_each(|e| {
+            info!("delete key"; "cf" => cf, "key" => hex::encode_upper(e.key()));
             e.remove();
             self.total_bytes.fetch_sub(e.key().len(), Ordering::Relaxed);
             self.total_bytes
@@ -325,6 +329,7 @@ impl Iterator for SkiplistEngineIterator {
     fn prev(&mut self) -> Result<bool> {
         self.valid = match self.cursor.as_mut() {
             Some(e) => {
+                info!("cursor indicates a key prev"; "key" => hex::encode_upper(e.key()));
                 e.move_prev()
                     && check_in_range(
                         e.key(),
@@ -334,11 +339,13 @@ impl Iterator for SkiplistEngineIterator {
             }
             None => false,
         };
+        info!("not valied prev");
         Ok(self.valid)
     }
     fn next(&mut self) -> Result<bool> {
         self.valid = match self.cursor.as_mut() {
             Some(e) => {
+                info!("cursor indicates a key next"; "key" => hex::encode_upper(e.key()));
                 e.move_next()
                     && check_in_range(
                         e.key(),
@@ -346,8 +353,12 @@ impl Iterator for SkiplistEngineIterator {
                         self.lower_bound.as_ref().map(|e| e.key()),
                     )
             }
-            None => false,
+            None => {
+                info!("cursor is none next");
+                false
+            }
         };
+        info!("not valied next");
         Ok(self.valid)
     }
 
