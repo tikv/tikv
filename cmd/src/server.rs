@@ -595,6 +595,7 @@ impl TiKVServer {
             self.pd_client.clone(),
             self.region_info_accessor.clone(),
             node.id(),
+            self.config.gc.ratio_threshold,
         );
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
             fatal!("failed to start auto_gc on storage, error: {}", e);

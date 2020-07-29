@@ -163,19 +163,7 @@ impl<E: Engine> GcRunner<E> {
         }
     }
 
-    /// Check need gc without getting snapshot.
-    /// If this is not supported or any error happens, returns true to do further check after
-    /// getting snapshot.
-    fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
-        let collection = match self
-            .engine
-            .get_properties_cf(CF_WRITE, &start_key, &end_key)
-        {
-            Ok(c) => c,
-            Err(_) => return true,
-        };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, &collection)
-    }
+
 
     /// Cleans up outdated data.
     fn gc_key(
@@ -506,15 +494,7 @@ fn schedule_gc(
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
-    scheduler
-        .schedule(GcTask::Gc {
-            region_id,
-            start_key,
-            end_key,
-            safe_point,
-            callback,
-        })
-        .or_else(handle_gc_task_schedule_error)
+
 }
 
 /// Does GC synchronously.
@@ -525,11 +505,7 @@ pub fn sync_gc(
     end_key: Vec<u8>,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, region_id, start_key, end_key, safe_point, callback))
-        .unwrap_or_else(|| {
-            error!("failed to receive result of gc");
-            Err(box_err!("gc_worker: failed to receive result of gc"))
-        })
+    schedule_gc(scheduler, region_id, start_key, end_key, safe_point, callback)
 }
 
 /// Used to schedule GC operations.
@@ -552,7 +528,6 @@ pub struct GcWorker<E: Engine> {
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
-    gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     cluster_version: ClusterVersion,
 }
 
@@ -570,7 +545,6 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
             applied_lock_collector: self.applied_lock_collector.clone(),
-            gc_manager_handle: self.gc_manager_handle.clone(),
             cluster_version: self.cluster_version.clone(),
         }
     }
@@ -610,7 +584,6 @@ impl<E: Engine> GcWorker<E> {
             worker,
             worker_scheduler,
             applied_lock_collector: None,
-            gc_manager_handle: Arc::new(Mutex::new(None)),
             cluster_version,
         }
     }
@@ -618,6 +591,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGcConfig<S, R>,
+        worker: Worker,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
 
@@ -626,17 +600,17 @@ impl<E: Engine> GcWorker<E> {
         let cluster_version = self.cluster_version.clone();
         init_compaction_filter(kvdb, safe_point.clone(), cfg_mgr, cluster_version);
 
-        let mut handle = self.gc_manager_handle.lock().unwrap();
-        assert!(handle.is_none());
-        let new_handle = GcManager::new(
+        let mut manager = GcManager::new(
             cfg,
             safe_point,
+            self.engine.kv_engine(),
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
             self.cluster_version.clone(),
-        )
-        .start()?;
-        *handle = Some(new_handle);
+        );
+        manager.initialize();
+        debug!("gc-manager is started");
+        worker.start(manager);
         Ok(())
     }
 
@@ -666,10 +640,6 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn stop(&self) -> Result<()> {
-        // Stop GcManager.
-        if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
-            h.stop()?;
-        }
         // Stop self.
         if let Some(h) = self.worker.lock().unwrap().stop() {
             if let Err(e) = h.join() {
