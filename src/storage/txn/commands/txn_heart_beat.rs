@@ -3,12 +3,12 @@
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
+use crate::storage::txn::commands::{
+    Command, CommandExt, StorageToWrite, TypedCommand, WriteCommand, WriteResult, WritingContext,
+};
 use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, Statistics, TxnStatus};
-use kvproto::kvrpcpb::ExtraOp;
+use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 use pd_client::PdClient;
-use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -40,25 +40,21 @@ impl CommandExt for TxnHeartBeat {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for TxnHeartBeat {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        _lock_mgr: &L,
-        pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         // TxnHeartBeat never remove locks. No need to wake up waiters.
         let mut txn = MvccTxn::new(
-            snapshot,
+            storage_to_write.snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            storage_to_write.pd_client,
         );
         let lock_ttl = txn.txn_heart_beat(self.primary_key, self.advise_ttl)?;
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero(), false, vec![]),
         };

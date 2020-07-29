@@ -2,12 +2,12 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
+use crate::storage::txn::commands::{
+    Command, CommandExt, StorageToWrite, TypedCommand, WriteCommand, WriteResult, WritingContext,
+};
 use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, Statistics};
-use kvproto::kvrpcpb::ExtraOp;
+use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use txn_types::Key;
@@ -35,14 +35,10 @@ impl CommandExt for Pause {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Pause {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        _snapshot: S,
-        _lock_mgr: &L,
-        _pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        _statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        _storage_to_write: StorageToWrite<'a, S, L, P>,
+        _context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         thread::sleep(Duration::from_millis(self.duration));
         Ok(WriteResult {

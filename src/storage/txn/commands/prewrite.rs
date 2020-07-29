@@ -1,22 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::CF_WRITE;
+use pd_client::PdClient;
+use txn_types::{Key, Mutation, TimeStamp};
+
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
-use crate::storage::txn::commands::{WriteCommand, WriteResult};
+use crate::storage::txn::commands::{StorageToWrite, WriteCommand, WriteResult, WritingContext};
 use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot, Statistics,
+    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
 };
-use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::{Key, Mutation, TimeStamp};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -132,14 +131,10 @@ impl Prewrite {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
-    fn process_write(
+    fn process_write<'a>(
         mut self,
-        snapshot: S,
-        _lock_mgr: &L,
-        pd_client: Arc<P>,
-        extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         let mut scan_mode = None;
         let rows = self.mutations.len();
@@ -154,11 +149,11 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 .clone()
                 .append_ts(TimeStamp::zero());
             if !has_data_in_range(
-                snapshot.clone(),
+                storage_to_write.snapshot.clone(),
                 CF_WRITE,
                 left_key,
                 &right_key,
-                &mut statistics.write,
+                &mut context.statistics.write,
             )? {
                 // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
                 // Because in most instances, there won't be more than one transaction write the same key. Seek
@@ -169,23 +164,23 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         }
         let mut txn = if scan_mode.is_some() {
             MvccTxn::for_scan(
-                snapshot,
+                storage_to_write.snapshot,
                 scan_mode,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                pd_client,
+                storage_to_write.pd_client,
             )
         } else {
             MvccTxn::new(
-                snapshot,
+                storage_to_write.snapshot,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                pd_client,
+                storage_to_write.pd_client,
             )
         };
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
-        txn.extra_op = extra_op;
+        txn.extra_op = context.extra_op;
 
         let primary_key = Key::from_raw(&self.primary);
         let mut locks = vec![];
@@ -221,7 +216,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             }
         }
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
@@ -254,6 +249,15 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use kvproto::kvrpcpb::{Context, ExtraOp};
+
+    use engine_traits::CF_WRITE;
+    use pd_client::DummyPdClient;
+    use txn_types::TimeStamp;
+    use txn_types::{Key, Mutation};
+
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::commands::{Commit, Prewrite, FORWARD_MIN_MUTATIONS_NUM};
     use crate::storage::txn::LockInfo;
@@ -262,12 +266,6 @@ mod tests {
     use crate::storage::{
         Engine, PrewriteResult, ProcessResult, Snapshot, Statistics, TestEngineBuilder,
     };
-    use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Context, ExtraOp};
-    use pd_client::DummyPdClient;
-    use std::sync::Arc;
-    use txn_types::TimeStamp;
-    use txn_types::{Key, Mutation};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();

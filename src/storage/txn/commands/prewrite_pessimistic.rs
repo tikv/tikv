@@ -1,17 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use pd_client::PdClient;
+use txn_types::{Mutation, TimeStamp};
+
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
+use crate::storage::txn::commands::{
+    Command, CommandExt, StorageToWrite, TypedCommand, WriteCommand, WriteResult, WritingContext,
+};
 use crate::storage::txn::{Error, Result};
 use crate::storage::types::PrewriteResult;
-use crate::storage::{Error as StorageError, ProcessResult, Snapshot, Statistics};
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::{Mutation, TimeStamp};
+use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
 
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -64,25 +65,21 @@ impl CommandExt for PrewritePessimistic {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for PrewritePessimistic
 {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        _lock_mgr: &L,
-        pd_client: Arc<P>,
-        extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
-            snapshot,
+            storage_to_write.snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            storage_to_write.pd_client,
         );
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
-        txn.extra_op = extra_op;
+        txn.extra_op = context.extra_op;
 
         let mut locks = vec![];
         for (m, is_pessimistic_lock) in self.mutations.clone().into_iter() {
@@ -94,7 +91,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                 self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
-                pipelined_pessimistic_lock,
+                context.pipelined_pessimistic_lock,
             ) {
                 Ok(_) => {}
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -103,8 +100,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
                 Err(e) => return Err(Error::from(e)),
             }
         }
-
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let (pr, to_be_write, rows, ctx, lock_info) = if locks.is_empty() {
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {

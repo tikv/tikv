@@ -1,18 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use pd_client::PdClient;
+use txn_types::{Key, TimeStamp};
+
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand, WriteCommand, WriteResult};
+use crate::storage::txn::commands::{
+    Command, CommandExt, StorageToWrite, TypedCommand, WriteCommand, WriteResult, WritingContext,
+};
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
-    Result as StorageResult, Snapshot, Statistics,
+    Result as StorageResult, Snapshot,
 };
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::{Key, TimeStamp};
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
@@ -71,17 +72,18 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for AcquirePessimisticLock
 {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        _lock_mgr: &L,
-        pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
-        let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+        let mut txn = MvccTxn::new(
+            storage_to_write.snapshot,
+            start_ts,
+            !ctx.get_not_fill_cache(),
+            storage_to_write.pd_client,
+        );
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
@@ -111,7 +113,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
             }
         }
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };

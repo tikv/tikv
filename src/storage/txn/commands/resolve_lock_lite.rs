@@ -4,13 +4,12 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteResult,
+    Command, CommandExt, ReleasedLocks, StorageToWrite, TypedCommand, WriteCommand, WriteResult,
+    WritingContext,
 };
 use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, Statistics};
-use kvproto::kvrpcpb::ExtraOp;
+use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -38,20 +37,16 @@ impl CommandExt for ResolveLockLite {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockLite {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        lock_mgr: &L,
-        pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
-            snapshot,
+            storage_to_write.snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            storage_to_write.pd_client,
         );
 
         let rows = self.resolve_keys.len();
@@ -65,9 +60,9 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 txn.rollback(key)?
             });
         }
-        released_locks.wake_up(lock_mgr);
+        released_locks.wake_up(storage_to_write.lock_mgr);
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,

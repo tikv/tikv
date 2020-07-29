@@ -1,17 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use pd_client::PdClient;
+use txn_types::{Key, TimeStamp};
+
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteResult,
+    Command, CommandExt, ReleasedLocks, StorageToWrite, TypedCommand, WriteCommand, WriteResult,
+    WritingContext,
 };
 use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, Statistics};
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::{Key, TimeStamp};
+use crate::storage::{ProcessResult, Snapshot};
 
 command! {
     /// Rollback mutations on a single key.
@@ -39,29 +39,25 @@ impl CommandExt for Cleanup {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Cleanup {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        lock_mgr: &L,
-        pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
-            snapshot,
+            storage_to_write.snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            storage_to_write.pd_client,
         );
 
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
         released_locks.push(txn.cleanup(self.key, self.current_ts, true)?);
-        released_locks.wake_up(lock_mgr);
+        released_locks.wake_up(storage_to_write.lock_mgr);
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,

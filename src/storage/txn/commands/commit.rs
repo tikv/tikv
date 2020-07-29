@@ -1,17 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use pd_client::PdClient;
+use txn_types::Key;
+
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteResult,
+    Command, CommandExt, ReleasedLocks, StorageToWrite, TypedCommand, WriteCommand, WriteResult,
+    WritingContext,
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
-use crate::storage::{ProcessResult, Snapshot, Statistics, TxnStatus};
-use kvproto::kvrpcpb::ExtraOp;
-use pd_client::PdClient;
-use std::sync::Arc;
-use txn_types::Key;
+use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -39,14 +39,10 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Commit {
-    fn process_write(
+    fn process_write<'a>(
         self,
-        snapshot: S,
-        lock_mgr: &L,
-        pd_client: Arc<P>,
-        _extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        _pipelined_pessimistic_lock: bool,
+        storage_to_write: StorageToWrite<'a, S, L, P>,
+        context: WritingContext<'a>,
     ) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
@@ -55,10 +51,10 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             }));
         }
         let mut txn = MvccTxn::new(
-            snapshot,
+            storage_to_write.snapshot,
             self.lock_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            storage_to_write.pd_client,
         );
 
         let rows = self.keys.len();
@@ -67,9 +63,9 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         for k in self.keys {
             released_locks.push(txn.commit(k, self.commit_ts)?);
         }
-        released_locks.wake_up(lock_mgr);
+        released_locks.wake_up(storage_to_write.lock_mgr);
 
-        statistics.add(&txn.take_statistics());
+        context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::committed(self.commit_ts),
         };
