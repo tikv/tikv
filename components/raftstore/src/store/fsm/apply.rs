@@ -270,24 +270,24 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<S>
+struct ApplyCallback<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<E::Snapshot>>, RaftCmdResponse)>,
 }
 
-impl<S> ApplyCallback<S>
+impl<E> ApplyCallback<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
-    fn new(region: Region) -> ApplyCallback<S> {
+    fn new(region: Region) -> Self {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost<RocksEngine>) {
+    fn invoke_all(self, host: &CoprocessorHost<E>) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -296,7 +296,7 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<E::Snapshot>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -345,13 +345,13 @@ where
 {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost<RocksEngine>,
+    host: CoprocessorHost<E>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
     router: ApplyRouter<RocksEngine>,
     notifier: Notifier<E>,
     engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
+    cbs: MustConsumeVec<ApplyCallback<E>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -384,7 +384,7 @@ where
 {
     pub fn new(
         tag: String,
-        host: CoprocessorHost<RocksEngine>,
+        host: CoprocessorHost<E>,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
@@ -508,7 +508,7 @@ where
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host
-            .on_flush_apply(std::mem::take(&mut self.txn_extras));
+            .on_flush_apply(std::mem::take(&mut self.txn_extras), self.engine.clone());
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -3922,7 +3922,7 @@ mod tests {
         }
     }
 
-    impl CmdObserver for ApplyObserver {
+    impl CmdObserver<RocksEngine> for ApplyObserver {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -3937,7 +3937,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, _: Vec<TxnExtra>) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {

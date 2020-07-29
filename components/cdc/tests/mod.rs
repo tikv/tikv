@@ -128,8 +128,13 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let mut cdc_endpoint =
-                cdc::Endpoint::new(pd_cli.clone(), worker.scheduler(), raft_router, cdc_ob);
+            let mut cdc_endpoint = cdc::Endpoint::new(
+                pd_cli.clone(),
+                worker.scheduler(),
+                raft_router,
+                cdc_ob,
+                cluster.store_metas[id].clone(),
+            );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
@@ -203,6 +208,27 @@ impl TestSuite {
             commit_resp.get_region_error()
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
+    pub fn must_kv_rollback(&mut self, region_id: u64, keys: Vec<Vec<u8>>, start_ts: TimeStamp) {
+        let mut rollback_req = BatchRollbackRequest::default();
+        rollback_req.set_context(self.get_context(region_id));
+        rollback_req.start_version = start_ts.into_inner();
+        rollback_req.set_keys(keys.into_iter().collect());
+        let rollback_resp = self
+            .get_tikv_client(region_id)
+            .kv_batch_rollback(&rollback_req)
+            .unwrap();
+        assert!(
+            !rollback_resp.has_region_error(),
+            "{:?}",
+            rollback_resp.get_region_error()
+        );
+        assert!(
+            !rollback_resp.has_error(),
+            "{:?}",
+            rollback_resp.get_error()
+        );
     }
 
     pub fn async_kv_commit(
