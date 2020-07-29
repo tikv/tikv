@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::mailbox::BasicMailbox;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::{ptr, usize};
+
+use crate::mailbox::BasicMailbox;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -46,16 +47,31 @@ pub trait Fsm {
     }
 }
 
+/// FsmOwner is used when handling active `Fsm`.
+pub trait FsmOwner {
+    type Fsm: Fsm;
+    fn from_pinned_fsm(inner: Box<Self::Fsm>) -> Box<Self>;
+    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm>;
+    fn fsm(&self) -> &Self::Fsm;
+    fn fsm_mut(&self) -> &mut Self::Fsm;
+}
+
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
 }
 
 impl<N: Fsm> FsmState<N> {
+    fn fsm_into_raw(mut fsm: Box<N>) -> *mut N {
+        let ptr = &mut *fsm.as_mut() as *mut N;
+        std::mem::forget(fsm);
+        ptr
+    }
+
     pub fn new(data: Box<N>) -> FsmState<N> {
         FsmState {
             status: AtomicUsize::new(NOTIFYSTATE_IDLE),
-            data: AtomicPtr::new(Box::into_raw(data)),
+            data: AtomicPtr::new(Self::fsm_into_raw(data)),
         }
     }
 
@@ -99,7 +115,7 @@ impl<N: Fsm> FsmState<N> {
     /// when new messages arrives after it's released.
     #[inline]
     pub fn release(&self, fsm: Box<N>) {
-        let previous = self.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
+        let previous = self.data.swap(Self::fsm_into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
             previous_status = self.status.compare_and_swap(
@@ -128,6 +144,7 @@ impl<N: Fsm> FsmState<N> {
             _ => {}
         }
 
+        // FIXME: avoid drop here.
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
             unsafe {

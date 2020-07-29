@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2018"
 
 [features]
-default = ["test-runner"]
+default = ["protobuf-codec", "test-runner"]
 test-runner = ["derive_more"]
+protobuf-codec = ["tikv_util/protobuf-codec"]
 
 [dependencies]
 crossbeam = "0.7"
