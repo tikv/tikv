@@ -783,10 +783,10 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 // convert BackupCompresionType to rocks db DBCompressionType
 fn to_sst_compression_type(ct: CompressionType) -> Option<DBCompressionType> {
     match ct {
-        CompressionType::Lz4 => Some(DBCompressionType::Lz4),
-        CompressionType::Snappy => Some(DBCompressionType::Snappy),
-        CompressionType::Zstd => Some(DBCompressionType::Zstd),
-        CompressionType::Unknown => None,
+        CompressionType::LZ4 => Some(DBCompressionType::Lz4),
+        CompressionType::SNAPPY => Some(DBCompressionType::Snappy),
+        CompressionType::ZSTD => Some(DBCompressionType::Zstd),
+        CompressionType::UNKNOWN => None,
     }
 }
 
@@ -961,7 +961,7 @@ pub mod tests {
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine::CF_DEFAULT,
-                        compress_type: CompressionType::Unknown,
+                        compress_type: CompressionType::UNKNOWN,
                     },
                     resp: tx,
                     concurrency: 4,
