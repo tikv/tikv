@@ -4237,6 +4237,7 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
+        let cm = &storage.concurrency_manager;
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
@@ -4327,8 +4328,8 @@ mod tests {
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(10, 0),
-                    ts(12, 0),
-                    ts(15, 0),
+                    0.into(),
+                    0.into(),
                     true,
                     Context::default(),
                 ),
@@ -4337,7 +4338,7 @@ mod tests {
                     0,
                     uncommitted(
                         100,
-                        TimeStamp::zero(),
+                        cm.max_read_ts().next(),
                         true,
                         vec![b"k1".to_vec(), b"k2".to_vec()],
                     ),

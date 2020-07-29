@@ -3300,7 +3300,8 @@ mod tests {
             lock.secondaries,
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
-        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+        // max_read_ts in the concurrency manager is 42, so the min_commit_ts is 43.
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
     }
 
     #[test]
@@ -3359,7 +3360,7 @@ mod tests {
                 txn_status,
                 TxnStatus::uncommitted(
                     0,
-                    42.into(), // min_commit_ts got from PD
+                    43.into(), // min_commit_ts calculated from max_read_ts
                     true,
                     vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
                 )
