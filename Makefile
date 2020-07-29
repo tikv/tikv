@@ -43,7 +43,6 @@ else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
 ENABLE_FEATURES += jemalloc
-ENABLE_FEATURES += mem-profiling
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
