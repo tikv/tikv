@@ -2,6 +2,8 @@
 
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
+use pd_client::DummyPdClient;
+use std::sync::Arc;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
@@ -20,7 +22,12 @@ where
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+    let mut txn = MvccTxn::new(
+        snapshot,
+        start_ts.into(),
+        true,
+        Arc::new(DummyPdClient::new()),
+    );
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
@@ -32,6 +39,7 @@ where
         txn.prewrite(
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
+            &None,
             false,
             0,
             0,
@@ -66,7 +74,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
                 let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
-                txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
+                txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
                     .unwrap();
             }
         },

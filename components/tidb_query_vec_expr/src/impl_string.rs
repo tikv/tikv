@@ -13,25 +13,25 @@ use tidb_query_shared_expr::string::{
 
 const SPACE: u8 = 0o40u8;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bin(num: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(num.map(|i| Bytes::from(format!("{:b}", i))))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn oct_int(num: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(num.map(|i| Bytes::from(format!("{:o}", i))))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn length(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| bytes.len() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     if let Some(content) = arg {
@@ -49,13 +49,13 @@ pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_length(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| bytes.len() as i64 * 8))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     let mut result = 0;
@@ -72,7 +72,7 @@ pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 pub fn concat(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut output = Bytes::new();
@@ -86,7 +86,7 @@ pub fn concat(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
@@ -102,7 +102,7 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| {
@@ -114,7 +114,7 @@ pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -123,13 +123,13 @@ pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn hex_int_arg(arg: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(arg.map(|i| format!("{:X}", i).into_bytes()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -142,7 +142,7 @@ pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -155,7 +155,7 @@ pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn lpad(
     arg: Option<BytesRef>,
@@ -186,7 +186,7 @@ pub fn lpad(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn lpad_utf8(
     arg: Option<BytesRef>,
@@ -225,7 +225,7 @@ pub fn lpad_utf8(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn rpad(
     arg: Option<BytesRef>,
@@ -252,7 +252,7 @@ pub fn rpad(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn replace(
     s: Option<BytesRef>,
@@ -279,7 +279,7 @@ pub fn replace(
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn left(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -298,7 +298,7 @@ pub fn left(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn left_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -322,7 +322,7 @@ pub fn left_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Byte
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn right(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -341,7 +341,7 @@ pub fn right(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> 
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn insert(
     s: Option<BytesRef>,
@@ -371,7 +371,7 @@ pub fn insert(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -401,7 +401,7 @@ pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Byt
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
@@ -413,19 +413,19 @@ pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn upper(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|b| b.to_vec()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn hex_str_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|b| hex::encode_upper(b).into_bytes()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Option<i64>> {
     let (substr, s) = match (substr, s) {
@@ -438,7 +438,7 @@ pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Op
         .or(Some(0)))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -448,7 +448,7 @@ pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn locate_3_args(
     substr: Option<BytesRef>,
@@ -467,7 +467,7 @@ pub fn locate_3_args(
     }
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 fn field<T: Evaluable + EvaluableRet + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
@@ -481,7 +481,7 @@ fn field<T: Evaluable + EvaluableRet + PartialEq>(args: &[Option<&T>]) -> Result
     }))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
@@ -495,7 +495,7 @@ fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     }))
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
 pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
@@ -530,7 +530,7 @@ pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
@@ -558,7 +558,7 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(match len.cloned() {
@@ -575,7 +575,7 @@ pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn substring_index(
     s: Option<BytesRef>,
@@ -621,7 +621,7 @@ pub fn substring_index(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn strcmp(left: Option<BytesRef>, right: Option<BytesRef>) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
@@ -635,7 +635,7 @@ pub fn strcmp(left: Option<BytesRef>, right: Option<BytesRef>) -> Result<Option<
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn instr_utf8(s: Option<BytesRef>, substr: Option<BytesRef>) -> Result<Option<Int>> {
     if let (Some(s), Some(substr)) = (s, substr) {
@@ -651,7 +651,7 @@ pub fn instr_utf8(s: Option<BytesRef>, substr: Option<BytesRef>) -> Result<Optio
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match (s, str_list) {
@@ -671,7 +671,7 @@ pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Op
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -685,7 +685,7 @@ pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn trim_3_args(
     arg: Option<BytesRef>,
@@ -706,13 +706,13 @@ pub fn trim_3_args(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn char_length(bs: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(bs.map(|b| b.len() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
     match bs {
@@ -724,7 +724,7 @@ pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     match bs {
@@ -747,7 +747,7 @@ pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     match bs {
@@ -769,7 +769,7 @@ pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     match input {
@@ -795,6 +795,21 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
         }
         _ => Ok(Some(Vec::from("NULL"))),
     }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let cnt = if *cnt > std::i32::MAX.into() {
+        std::i32::MAX.into()
+    } else {
+        *cnt
+    };
+    let mut writer = writer.begin();
+    for _i in 0..cnt {
+        writer.partial_write(input);
+    }
+    Ok(writer.finish())
 }
 
 #[cfg(test)]
@@ -2945,5 +2960,58 @@ mod tests {
         // check for null
         let got = quote(None).unwrap();
         assert_eq!(got, Some(Bytes::from("NULL")))
+    }
+
+    #[test]
+    fn test_repeat() {
+        let cases = vec![
+            ("hello, world!", -1, ""),
+            ("hello, world!", 0, ""),
+            ("hello, world!", 1, "hello, world!"),
+            (
+                "hello, world!",
+                3,
+                "hello, world!hello, world!hello, world!",
+            ),
+            ("你好世界", 3, "你好世界你好世界你好世界"),
+            ("こんにちは", 2, "こんにちはこんにちは"),
+            ("\x2f\x35", 5, "\x2f\x35\x2f\x35\x2f\x35\x2f\x35\x2f\x35"),
+        ];
+
+        for (input, cnt, expect) in cases {
+            let input = Bytes::from(input);
+            let expected_output = Bytes::from(expect);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(input))
+                .push_param(Some(cnt))
+                .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+                .unwrap();
+            assert_eq!(output, Some(expected_output));
+        }
+
+        let null_string: Option<Bytes> = None;
+        let null_cnt: Option<Int> = None;
+
+        // test NULL case
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string.clone())
+            .push_param(Some(42))
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"hi".to_vec()))
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string)
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }

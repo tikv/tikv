@@ -264,7 +264,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                             VectorValue::TT(dest_column) => {
                                 for item in &sorted_items {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &NotChunkedVec<TT> = TT::borrow_vector_value(src);
+                                    let src_ref: &ChunkedVecSized<TT> = TT::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
                                     dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }
@@ -272,7 +272,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                             VectorValue::Json(dest_column) => {
                                 for item in &sorted_items {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &NotChunkedVec<Json> = JsonRef::borrow_vector_value(src);
+                                    let src_ref: &ChunkedVecJson = JsonRef::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
                                     dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }
@@ -280,7 +280,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                             VectorValue::Bytes(dest_column) => {
                                 for item in &sorted_items {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &NotChunkedVec<Bytes> = BytesRef::borrow_vector_value(src);
+                                    let src_ref: &ChunkedVecBytes = BytesRef::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
                                     dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }

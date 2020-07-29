@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod not_chunked_vec;
+mod bit_vec;
+mod chunked_vec_bytes;
+mod chunked_vec_common;
+mod chunked_vec_json;
+mod chunked_vec_sized;
 mod scalar;
 mod vector;
 
@@ -10,7 +14,9 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
-pub use not_chunked_vec::NotChunkedVec;
+pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
+pub use chunked_vec_json::ChunkedVecJson;
+pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
@@ -137,15 +143,20 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Self>;
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Self>;
 }
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
-
+    type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(vec: NotChunkedVec<Self>) -> VectorValue;
+    fn into_vector_value(vec: Self::ChunkedType) -> VectorValue;
+}
+
+pub trait ChunkedVec<T> {
+    fn chunked_with_capacity(capacity: usize) -> Self;
+    fn chunked_push(&mut self, value: Option<T>);
 }
 
 macro_rules! impl_evaluable_type {
@@ -170,7 +181,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<$ty> {
+            fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<$ty> {
                 match v {
                     VectorValue::$ty(x) => x,
                     _ => unimplemented!(),
@@ -187,25 +198,26 @@ impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 
 macro_rules! impl_evaluable_ret {
-    ($ty:tt) => {
+    ($ty:tt, $chunk:ty) => {
         impl EvaluableRet for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
+            type ChunkedType = $chunk;
 
             #[inline]
-            fn into_vector_value(vec: NotChunkedVec<Self>) -> VectorValue {
+            fn into_vector_value(vec: $chunk) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
     };
 }
 
-impl_evaluable_ret! { Int }
-impl_evaluable_ret! { Real }
-impl_evaluable_ret! { Decimal }
-impl_evaluable_ret! { Bytes }
-impl_evaluable_ret! { DateTime }
-impl_evaluable_ret! { Duration }
-impl_evaluable_ret! { Json }
+impl_evaluable_ret! { Int, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Real, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Decimal, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Bytes, ChunkedVecBytes }
+impl_evaluable_ret! { DateTime, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Duration, ChunkedVecSized<Self> }
+impl_evaluable_ret! { Json, ChunkedVecJson }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
@@ -232,7 +244,7 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
 
 impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     const EVAL_TYPE: EvalType = <T as Evaluable>::EVAL_TYPE;
-    type ChunkedType = &'a NotChunkedVec<T>;
+    type ChunkedType = &'a ChunkedVecSized<T>;
     type EvaluableType = T;
 
     #[inline]
@@ -246,7 +258,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<T> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecSized<T> {
         Evaluable::borrow_vector_value(v)
     }
 
@@ -276,7 +288,7 @@ impl<'a, T: Evaluable + EvaluableRet> UnsafeRefInto<&'static T> for &'a T {
 impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Bytes;
     type EvaluableType = Bytes;
-    type ChunkedType = &'a NotChunkedVec<Bytes>;
+    type ChunkedType = &'a ChunkedVecBytes;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -295,7 +307,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &'a VectorValue) -> &'a NotChunkedVec<Bytes> {
+    fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecBytes {
         match v {
             VectorValue::Bytes(x) => x,
             _ => unimplemented!(),
@@ -328,7 +340,7 @@ impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
     type EvaluableType = Json;
-    type ChunkedType = &'a NotChunkedVec<Json>;
+    type ChunkedType = &'a ChunkedVecJson;
 
     #[inline]
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
@@ -347,7 +359,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn borrow_vector_value(v: &VectorValue) -> &NotChunkedVec<Json> {
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
             _ => unimplemented!(),
@@ -362,39 +374,6 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     #[inline]
     fn from_owned_value(value: &'a Json) -> Self {
         value.as_ref()
-    }
-}
-
-pub trait IntoEvaluableRef<T>: Sized {
-    /// Performs the conversion.
-    fn into_evaluable_ref(self) -> T;
-}
-
-macro_rules! impl_into_evaluable_ref {
-    ($ty:tt) => {
-        impl<'a> IntoEvaluableRef<Option<&'a $ty>> for Option<&'a $ty> {
-            fn into_evaluable_ref(self) -> Option<&'a $ty> {
-                self
-            }
-        }
-    };
-}
-
-impl_into_evaluable_ref! { Int }
-impl_into_evaluable_ref! { Real }
-impl_into_evaluable_ref! { Decimal }
-impl_into_evaluable_ref! { DateTime }
-impl_into_evaluable_ref! { Duration }
-
-impl<'a> IntoEvaluableRef<Option<BytesRef<'a>>> for Option<&'a Bytes> {
-    fn into_evaluable_ref(self) -> Option<BytesRef<'a>> {
-        self.map(|x| x.as_slice())
-    }
-}
-
-impl<'a> IntoEvaluableRef<Option<JsonRef<'a>>> for Option<&'a Json> {
-    fn into_evaluable_ref(self) -> Option<JsonRef<'a>> {
-        self.map(|x| x.as_ref())
     }
 }
 

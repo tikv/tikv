@@ -51,6 +51,11 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
+# Disable SSE on ARM
+ifeq ($(shell uname -p),aarch64)
+ROCKSDB_SYS_SSE=0
+endif
+
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable

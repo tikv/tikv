@@ -20,6 +20,7 @@ sse = ["rocksdb/sse"]
 [dependencies]
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
+hex = "0.4"
 keys = { path = "../keys" }
 num_cpus = "1"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
