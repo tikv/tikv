@@ -5,25 +5,80 @@ use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
-use std::{io, ptr, slice};
+use std::collections::HashMap;
+use std::{io, ptr, slice, sync::Mutex, thread};
 
 pub type Allocator = jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
     jemallocator::Jemalloc
 }
 
+lazy_static! {
+    static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
+        Mutex::new(HashMap::new());
+}
+
+struct MemoryStatsAccessor {
+    allocated: jemalloc_ctl::thread::AllocatedP,
+    deallocated: jemalloc_ctl::thread::DeallocatedP,
+    thread_name: String,
+}
+
+pub fn add_thread_memory_accessor() {
+    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    thread_memory_map.insert(
+        thread::current().id(),
+        MemoryStatsAccessor {
+            allocated: jemalloc_ctl::thread::AllocatedP::new().unwrap(),
+            deallocated: jemalloc_ctl::thread::DeallocatedP::new().unwrap(),
+            thread_name: thread::current().name().unwrap().to_string(),
+        },
+    );
+}
+
+pub fn remove_thread_memory_accessor() {
+    let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    thread_memory_map.remove(&thread::current().id());
+}
+
 pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
+use std::thread::ThreadId;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
+
     unsafe {
         malloc_stats_print(
             write_cb,
             &mut buf as *mut Vec<u8> as *mut c_void,
             ptr::null(),
-        )
+        );
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    let mut memory_stats = format!(
+        "Memory stats summary: {}\n",
+        String::from_utf8_lossy(&buf).into_owned()
+    );
+    memory_stats.push_str("Memory stats by thread:\n");
+
+    let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    for (_, accessor) in thread_memory_map.iter() {
+        memory_stats.push_str(format!("Thread [{}]: ", accessor.thread_name).as_str());
+        memory_stats.push_str(
+            format!(
+                "allocated: {}, ",
+                accessor.allocated.get().unwrap().get().to_string()
+            )
+            .as_str(),
+        );
+        memory_stats.push_str(
+            format!(
+                "deallocated: {}.\n",
+                accessor.deallocated.get().unwrap().get().to_string()
+            )
+            .as_str(),
+        );
+    }
+    memory_stats
 }
 
 pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
@@ -60,6 +115,7 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
 
 #[cfg(test)]
 mod tests {
+
     #[test]
     fn dump_stats() {
         assert_ne!(super::dump_stats().len(), 0);
