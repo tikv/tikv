@@ -14,7 +14,6 @@ mod key_handle;
 pub use self::handle_table::{HandleTable, OrderedMap};
 pub use self::key_handle::{KeyHandle, KeyHandleMutexGuard};
 
-use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
 use std::{
     collections::BTreeMap,
@@ -24,7 +23,7 @@ use std::{
         Arc,
     },
 };
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp};
 
 // TODO: Currently we are using a Mutex<BTreeMap> to implement the handle table.
 // In the future we should replace it with a concurrent ordered map.
@@ -61,7 +60,7 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
     /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
     /// out of scope, the mutex will be unlocked.
     ///
-    /// The guard can be used to store LockInfo in the table. The stored lock
+    /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
     pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, M> {
         self.handle_table.lock_key(key).await
@@ -70,7 +69,7 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
     /// Acquires mutexes of the keys and returns the RAII guards. The order of the
     /// guards is the same with the given keys.
     ///
-    /// The guards can be used to store LockInfo in the table. The stored lock
+    /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
     pub async fn lock_keys(
         &self,
@@ -99,8 +98,8 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
         &self,
         key: &Key,
         ts: TimeStamp,
-        check_fn: impl FnOnce(&LockInfo) -> bool,
-    ) -> Result<(), LockInfo> {
+        check_fn: impl FnOnce(&Lock) -> bool,
+    ) -> Result<(), Lock> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.handle_table.check_key(key, check_fn)
@@ -116,8 +115,8 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
         start_key: &Key,
         end_key: &Key,
         ts: TimeStamp,
-        check_fn: impl FnMut(&LockInfo) -> bool,
-    ) -> Result<(), LockInfo> {
+        check_fn: impl FnMut(&Lock) -> bool,
+    ) -> Result<(), Lock> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.handle_table.check_range(start_key, end_key, check_fn)

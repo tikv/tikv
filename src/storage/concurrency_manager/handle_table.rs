@@ -2,10 +2,9 @@
 
 use super::key_handle::{KeyHandle, KeyHandleMutexGuard, KeyHandleRef};
 
-use kvproto::kvrpcpb::LockInfo;
 use parking_lot::Mutex;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
-use txn_types::Key;
+use txn_types::{Key, Lock};
 
 #[derive(Default)]
 pub struct HandleTable<M>(Arc<M>);
@@ -32,16 +31,12 @@ impl<M: OrderedMap> HandleTable<M> {
         }
     }
 
-    pub fn check_key(
-        &self,
-        key: &Key,
-        check_fn: impl FnOnce(&LockInfo) -> bool,
-    ) -> Result<(), LockInfo> {
+    pub fn check_key(&self, key: &Key, check_fn: impl FnOnce(&Lock) -> bool) -> Result<(), Lock> {
         if let Some(lock_ref) = self.0.get(key) {
-            return lock_ref.with_lock_info(|lock_info| {
-                if let Some(lock_info) = &*lock_info {
-                    if !check_fn(lock_info) {
-                        return Err(lock_info.clone());
+            return lock_ref.with_lock(|lock| {
+                if let Some(lock) = &*lock {
+                    if !check_fn(lock) {
+                        return Err(lock.clone());
                     }
                 }
                 Ok(())
@@ -54,15 +49,15 @@ impl<M: OrderedMap> HandleTable<M> {
         &self,
         start_key: &Key,
         end_key: &Key,
-        mut check_fn: impl FnMut(&LockInfo) -> bool,
-    ) -> Result<(), LockInfo> {
+        mut check_fn: impl FnMut(&Lock) -> bool,
+    ) -> Result<(), Lock> {
         let blocking_lock = self.0.find_first(start_key, end_key, |lock_ref| {
-            lock_ref.with_lock_info(|lock_info| {
-                lock_info.as_ref().and_then(|lock_info| {
-                    if check_fn(lock_info) {
+            lock_ref.with_lock(|lock| {
+                lock.as_ref().and_then(|lock| {
+                    if check_fn(lock) {
                         None
                     } else {
-                        Some(lock_info.clone())
+                        Some(lock.clone())
                     }
                 })
             })
@@ -146,6 +141,7 @@ mod test {
         time::Duration,
     };
     use tokio::time::delay_for;
+    use txn_types::LockType;
 
     #[tokio::test]
     async fn test_lock_key() {
@@ -180,21 +176,29 @@ mod test {
         // no lock found
         assert!(lock_table.check_key(&key_k, |_| false).is_ok());
 
-        let mut lock_info = LockInfo::default();
-        lock_info.set_lock_version(10);
-        lock_table.lock_key(&key_k).await.with_lock_info(|l| {
-            *l = Some(lock_info.clone());
+        let lock = Lock::new(
+            LockType::Lock,
+            b"k".to_vec(),
+            10.into(),
+            100,
+            None,
+            10.into(),
+            1,
+            10.into(),
+        );
+        lock_table.lock_key(&key_k).await.with_lock(|l| {
+            *l = Some(lock.clone());
         });
 
         // lock passes check_fn
         assert!(lock_table
-            .check_key(&key_k, |l| l.get_lock_version() < 20)
+            .check_key(&key_k, |l| l.ts.into_inner() < 20)
             .is_ok());
 
         // lock does not pass check_fn
         assert_eq!(
-            lock_table.check_key(&key_k, |l| l.get_lock_version() < 5),
-            Err(lock_info)
+            lock_table.check_key(&key_k, |l| l.ts.into_inner() < 5),
+            Err(lock)
         );
     }
 
@@ -202,21 +206,37 @@ mod test {
     async fn test_check_range() {
         let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
 
-        let mut lock_k = LockInfo::default();
-        lock_k.set_lock_version(10);
+        let lock_k = Lock::new(
+            LockType::Lock,
+            b"k".to_vec(),
+            10.into(),
+            100,
+            None,
+            10.into(),
+            1,
+            10.into(),
+        );
         lock_table
             .lock_key(&Key::from_raw(b"k"))
             .await
-            .with_lock_info(|l| {
+            .with_lock(|l| {
                 *l = Some(lock_k.clone());
             });
 
-        let mut lock_l = LockInfo::default();
-        lock_l.set_lock_version(20);
+        let mut lock_l = Lock::new(
+            LockType::Lock,
+            b"l".to_vec(),
+            20.into(),
+            100,
+            None,
+            20.into(),
+            1,
+            20.into(),
+        );
         lock_table
             .lock_key(&Key::from_raw(b"l"))
             .await
-            .with_lock_info(|l| {
+            .with_lock(|l| {
                 *l = Some(lock_l.clone());
             });
 
@@ -228,14 +248,16 @@ mod test {
         // lock passes check_fn
         assert!(lock_table
             .check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .get_lock_version()
+                .ts
+                .into_inner()
                 < 50)
             .is_ok());
 
         // first lock does not pass check_fn
         assert_eq!(
             lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .get_lock_version()
+                .ts
+                .into_inner()
                 < 5),
             Err(lock_k)
         );
@@ -243,7 +265,8 @@ mod test {
         // first lock passes check_fn but the second does not
         assert_eq!(
             lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .get_lock_version()
+                .ts
+                .into_inner()
                 < 15),
             Err(lock_l)
         );

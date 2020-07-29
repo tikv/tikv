@@ -6,7 +6,6 @@ mod lock_store;
 use self::{key_mutex::KeyMutex, lock_store::LockStore};
 use super::handle_table::OrderedMap;
 
-use kvproto::kvrpcpb::LockInfo;
 use std::{
     ops::Deref,
     sync::{
@@ -14,7 +13,7 @@ use std::{
         Arc,
     },
 };
-use txn_types::Key;
+use txn_types::{Key, Lock};
 
 const INIT_REF_COUNT: usize = usize::MAX;
 
@@ -84,7 +83,7 @@ impl<'m, M: OrderedMap> KeyHandleRef<'m, M> {
         KeyHandleMutexGuard(self)
     }
 
-    pub fn with_lock_info<T>(&self, f: impl FnOnce(&Option<LockInfo>) -> T) -> T {
+    pub fn with_lock<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
         self.lock_store.read(f)
     }
 }
@@ -113,7 +112,7 @@ impl<'m, M: OrderedMap> KeyHandleMutexGuard<'m, M> {
         &self.0.key()
     }
 
-    pub fn with_lock_info<T>(&self, f: impl FnOnce(&mut Option<LockInfo>) -> T) -> T {
+    pub fn with_lock<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T) -> T {
         self.0.lock_store.write(f, &self.0.ref_count)
     }
 }
@@ -130,6 +129,7 @@ mod tests {
     use parking_lot::Mutex;
     use std::{collections::BTreeMap, time::Duration};
     use tokio::time::delay_for;
+    use txn_types::LockType;
 
     #[tokio::test]
     async fn test_key_mutex() {
@@ -178,13 +178,24 @@ mod tests {
         // should not removed it from the table if a lock is stored in it
         map.insert_if_not_exist(k.clone(), Arc::new(KeyHandle::new(k.clone())));
         let guard = map.get(&k).unwrap().mutex_lock().await;
-        guard.with_lock_info(|lock_info| *lock_info = Some(LockInfo::default()));
+        guard.with_lock(|lock| {
+            *lock = Some(Lock::new(
+                LockType::Lock,
+                b"k".to_vec(),
+                1.into(),
+                100,
+                None,
+                1.into(),
+                1,
+                1.into(),
+            ))
+        });
         drop(guard);
         assert!(map.get(&k).is_some());
 
         // remove the lock stored in, then the handle should be removed from the table
         let guard = map.get(&k).unwrap().mutex_lock().await;
-        guard.with_lock_info(|lock_info| *lock_info = None);
+        guard.with_lock(|lock| *lock = None);
         drop(guard);
         assert!(map.get(&k).is_some());
     }

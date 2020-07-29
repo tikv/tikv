@@ -248,12 +248,20 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 "async commit is not yet compatible with large transactions"
             );
 
-            // TODO(nrc) this is going to block all the other keys' processing and writing, we should
-            // do it async.
-            // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
-            // node gets a start ts to read the key, it can violate the snapshot property.
-            let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
-            lock.min_commit_ts = ts;
+            // This operation should not block because the latch makes sure only one thread
+            // is operating on this key.
+            let key_guard = ::futures_executor::block_on(concurrency_manager.lock_key(&key));
+
+            let ts = key_guard.with_lock(|l| {
+                // TODO(nrc) this is going to block all the other keys' processing and writing, we should
+                // do it async.
+                // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
+                // node gets a start ts to read the key, it can violate the snapshot property.
+                let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
+                lock.min_commit_ts = ts;
+                *l = Some(lock.clone());
+                Ok::<_, ErrorInner>(ts)
+            })?;
             async_commit_ts = ts;
         }
 
