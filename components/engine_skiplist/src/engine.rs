@@ -168,7 +168,7 @@ impl Iterable for SkiplistEngine {
             .unwrap_or_else(|| Bound::Unbounded);
         let upper_bound = opts
             .upper_bound()
-            .map(|e| Bound::Included(e))
+            .map(|e| Bound::Excluded(e))
             .unwrap_or_else(|| Bound::Unbounded);
         Ok(SkiplistEngineIterator::new(
             engine,
@@ -202,102 +202,263 @@ impl SkiplistEngineIterator {
     }
 }
 
+fn check_in_range(
+    key: &Vec<u8>,
+    upper_bound: Option<&Vec<u8>>,
+    lower_bound: Option<&Vec<u8>>,
+) -> bool {
+    if let Some(upper) = upper_bound {
+        if upper < key {
+            return false;
+        }
+    }
+    if let Some(lower) = lower_bound {
+        if lower > key {
+            return false;
+        }
+    }
+    true
+}
+
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
+        use std::cmp::Ordering;
+
         let cursor = match self.cursor.as_mut() {
             Some(c) => c,
             None => return Ok(false),
         };
-        match key {
-            SeekKey::Start => self.cursor = self.lower_bound.clone(),
-            SeekKey::End => self.cursor = self.upper_bound.clone(),
-            SeekKey::Key(key) => {
-                if key < cursor.key().as_slice() {
-                    while key < cursor.key().as_slice() {
-                        if !cursor.move_next() {
-                            break;
+        self.valid = match key {
+            SeekKey::Start => {
+                self.cursor = self.lower_bound.clone();
+                true
+            }
+            SeekKey::End => {
+                self.cursor = self.upper_bound.clone();
+                true
+            }
+            SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
+                Ordering::Less => loop {
+                    if let Some(upper) = self.upper_bound.as_ref() {
+                        if cursor.key() > upper.key() {
+                            break false;
                         }
                     }
-                } else if key > cursor.key().as_slice() {
-                    while let Some(e) = cursor.prev() {
+                    if cursor.key().as_slice() < key {
+                        if !cursor.move_next() {
+                            break false;
+                        }
+                    } else {
+                        break true;
+                    }
+                },
+                Ordering::Greater => loop {
+                    if let Some(e) = cursor.prev() {
+                        if let Some(lower) = self.lower_bound.as_ref() {
+                            if e.key() < lower.key() {
+                                break true;
+                            }
+                        }
                         if e.key().as_slice() >= key {
                             cursor.move_prev();
-                        } else {
-                            break;
+                            continue;
                         }
                     }
-                }
-            }
-        }
-        Ok(true)
+                    break true;
+                },
+                Ordering::Equal => true,
+            },
+        };
+        Ok(self.valid)
     }
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+        use std::cmp::Ordering;
+
         let cursor = match self.cursor.as_mut() {
             Some(c) => c,
             None => return Ok(false),
         };
-        match key {
-            SeekKey::Start => self.cursor = self.lower_bound.clone(),
-            SeekKey::End => self.cursor = self.upper_bound.clone(),
-            SeekKey::Key(key) => {
-                if key < cursor.key().as_slice() {
-                    while let Some(e) = cursor.next() {
-                        if e.key().as_slice() <= key {
-                            cursor.move_next();
-                        } else {
-                            break;
-                        }
-                    }
-                } else if key > cursor.key().as_slice() {
-                    while key > cursor.key().as_slice() {
-                        if !cursor.move_prev() {
-                            break;
-                        }
-                    }
-                }
+        let valid = match key {
+            SeekKey::Start => {
+                self.cursor = self.lower_bound.clone();
+                true
             }
-        }
-        Ok(true)
+            SeekKey::End => {
+                self.cursor = self.upper_bound.clone();
+                true
+            }
+            SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
+                Ordering::Less => loop {
+                    if let Some(e) = cursor.next() {
+                        if let Some(upper) = self.upper_bound.as_ref() {
+                            if e.key() > upper.key() {
+                                break true;
+                            }
+                        }
+                        if e.key().as_slice() < key {
+                            cursor.move_next();
+                            continue;
+                        }
+                    }
+                    break true;
+                },
+                Ordering::Greater => loop {
+                    if let Some(lower) = self.lower_bound.as_ref() {
+                        if cursor.key() < lower.key() {
+                            break false;
+                        }
+                    }
+                    if cursor.key().as_slice() >= key {
+                        if !cursor.move_prev() {
+                            break false;
+                        }
+                    } else {
+                        break true;
+                    }
+                },
+                Ordering::Equal => true,
+            },
+        };
+        Ok(valid)
     }
 
     fn prev(&mut self) -> Result<bool> {
         self.valid = match self.cursor.as_mut() {
-            Some(e) => e.move_prev(),
+            Some(e) => {
+                e.move_prev()
+                    && check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref().map(|e| e.key()),
+                        self.lower_bound.as_ref().map(|e| e.key()),
+                    )
+            }
             None => false,
         };
         Ok(self.valid)
     }
     fn next(&mut self) -> Result<bool> {
         self.valid = match self.cursor.as_mut() {
-            Some(e) => e.move_next(),
+            Some(e) => {
+                e.move_next()
+                    && check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref().map(|e| e.key()),
+                        self.lower_bound.as_ref().map(|e| e.key()),
+                    )
+            }
             None => false,
         };
         Ok(self.valid)
     }
 
     fn key(&self) -> &[u8] {
-        match self.cursor.as_ref() {
-            Some(e) => e.key(),
-            None => &[],
-        }
+        self.cursor.as_ref().unwrap().key()
     }
     fn value(&self) -> &[u8] {
-        match self.cursor.as_ref() {
-            Some(e) => e.value(),
-            None => &[],
-        }
+        self.cursor.as_ref().unwrap().value()
     }
 
     fn valid(&self) -> Result<bool> {
-        Ok(self.valid)
+        Ok(self.valid
+            && self
+                .cursor
+                .as_ref()
+                .map(|e| {
+                    check_in_range(
+                        e.key(),
+                        self.upper_bound.as_ref().map(|e| e.key()),
+                        self.lower_bound.as_ref().map(|e| e.key()),
+                    )
+                })
+                .unwrap_or_default())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use engine_traits::{ALL_CFS, CF_WRITE};
+    use tikv_util::keybuilder::KeyBuilder;
+
     #[test]
-    fn test_get_engine() {
-        let engine = SkiplistEngineBuilder::new().build();
-        let _ = engine.get_cf_engine(CF_DEFAULT);
+    fn test_skiplist_seek() {
+        let engine = SkiplistEngineBuilder::new().cf_names(ALL_CFS).build();
+        let _ = engine.get_cf_engine(CF_WRITE);
+        let data = vec![
+            (b"k0", b"v0"),
+            (b"k1", b"v1"),
+            (b"k3", b"v3"),
+            (b"k5", b"v5"),
+            (b"k7", b"v7"),
+            (b"k8", b"v8"),
+        ];
+        for (k, v) in data {
+            engine.put_cf(CF_WRITE, k, v).unwrap();
+        }
+        let start = KeyBuilder::from_slice(b"k1", 2, 0);
+        let end = KeyBuilder::from_slice(b"k8", 2, 0);
+        let opts = IterOptions::new(Some(start), Some(end), false);
+        let mut iter = engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+        assert!(!iter.seek(SeekKey::Key(b"k8")).unwrap());
+
+        assert!(iter.seek(SeekKey::Key(b"k0")).unwrap());
+        assert_eq!(iter.key(), b"k1");
+        assert!(!iter.prev().unwrap());
+
+        assert!(iter.seek(SeekKey::Key(b"k7")).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+
+        assert!(!iter.next().unwrap());
+
+        assert!(iter.seek(SeekKey::Key(b"k2")).unwrap());
+        assert_eq!(iter.key(), b"k3");
+        assert_eq!(iter.value(), b"v3");
+
+        assert!(iter.seek(SeekKey::Key(b"k6")).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+    }
+
+    #[test]
+    fn test_skiplist_seek_for_prev() {
+        let engine = SkiplistEngineBuilder::new().cf_names(ALL_CFS).build();
+        let _ = engine.get_cf_engine(CF_WRITE);
+        let data = vec![
+            (b"k0", b"v0"),
+            (b"k1", b"v1"),
+            (b"k3", b"v3"),
+            (b"k5", b"v5"),
+            (b"k7", b"v7"),
+            (b"k8", b"v8"),
+        ];
+        for (k, v) in data {
+            engine.put_cf(CF_WRITE, k, v).unwrap();
+        }
+        let start = KeyBuilder::from_slice(b"k1", 2, 0);
+        let end = KeyBuilder::from_slice(b"k8", 2, 0);
+        let opts = IterOptions::new(Some(start), Some(end), false);
+        let mut iter = engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+        assert!(iter.seek_for_prev(SeekKey::Key(b"k9")).unwrap());
+        assert_eq!(iter.key(), b"k7");
+        assert_eq!(iter.value(), b"v7");
+
+        assert!(!iter.seek_for_prev(SeekKey::Key(b"k0")).unwrap());
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"k7")).unwrap());
+        assert_eq!(iter.key(), b"k5");
+        assert_eq!(iter.value(), b"v5");
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"k2")).unwrap());
+        assert_eq!(iter.key(), b"k1");
+        assert_eq!(iter.value(), b"v1");
+
+        assert!(iter.seek_for_prev(SeekKey::Key(b"k6")).unwrap());
+        assert_eq!(iter.key(), b"k5");
+        assert_eq!(iter.value(), b"v5");
     }
 }

@@ -5,6 +5,14 @@ description = "In-Memory TiKV storage engine built upon crossbeam skiplist"
 edition = "2018"
 publish = false
 
+[features]
+prost-codec = [
+  "txn_types/prost-codec",
+]
+protobuf-codec = [
+  "txn_types/protobuf-codec",
+]
+
 [dependencies]
 engine_traits = { path = "../engine_traits" }
 tikv_alloc = { path = "../tikv_alloc" }
