@@ -74,7 +74,8 @@ where
         let (cache_len, cache_capacity) = (map.len(), map.capacity());
         // hashbrown uses 7/8 of allocated memory.
         let memory_size = cache_capacity * mem::size_of::<(u64, BasicMailbox<N>)>() * 8 / 7
-            + mem::size_of::<FsmState<N>>() * cache_len;
+            + mem::size_of::<FsmState<N>>() * cache_len
+            + (mem::size_of::<N::Message>() + 8) * 31 * cache_len;
         let (alive_len, alive_capacity) = {
             let boxes = self.normals.lock().unwrap();
             (boxes.len(), boxes.capacity())
