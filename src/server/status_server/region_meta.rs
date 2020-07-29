@@ -195,13 +195,13 @@ impl RegionMeta {
                 version: epoch.get_version(),
             },
             peers,
-            merge_state: abstract_peer.pending_merge_state().as_ref().map(|state| {
-                RegionMergeState {
+            merge_state: abstract_peer
+                .pending_merge_state()
+                .map(|state| RegionMergeState {
                     min_index: state.get_min_index(),
                     commit: state.get_commit(),
                     region_id: state.get_target().get_id(),
-                }
-            }),
+                }),
             raft_status: abstract_peer.raft_status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
