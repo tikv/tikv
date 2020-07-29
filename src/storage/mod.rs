@@ -45,7 +45,7 @@ use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use pd_client::{DummyPdClient, PdClient};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -480,17 +480,14 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let isolation_level = if sample_step > 0 {
+                    if sample_step > 0 {
                         limit *= sample_step;
-                        IsolationLevel::Rc
-                    } else {
-                        ctx.get_isolation_level()
-                    };
+                    }
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
-                        isolation_level,
+                        ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
