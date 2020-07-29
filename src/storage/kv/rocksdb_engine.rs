@@ -12,7 +12,8 @@ use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, SeekKey, WriteBatchExt,
+    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, ReadOptions, SeekKey,
+    WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -20,6 +21,7 @@ use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
@@ -52,7 +54,9 @@ struct Runner(KvEngines<BaseRocksEngine, BaseRocksEngine>);
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
+            Task::Write(modifies, cb) => {
+                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
+            }
             Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
@@ -129,8 +133,12 @@ impl RocksEngine {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
-    pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(self.engines.kv.as_inner())
+    pub fn engines(&self) -> KvEngines<BaseRocksEngine, BaseRocksEngine> {
+        self.engines.clone()
+    }
+
+    pub fn get_rocksdb(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
     }
 
     pub fn stop(&self) {
@@ -213,13 +221,11 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(
-    engine: &KvEngines<BaseRocksEngine, BaseRocksEngine>,
-    modifies: Vec<Modify>,
-) -> Result<()> {
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Result<()> {
     fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
 
-    let mut wb = engine.kv.write_batch();
+    let mut wb = kv_engine.write_batch();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -260,12 +266,24 @@ fn write_modifies(
             return Err(box_err!("{}", msg));
         }
     }
-    engine.kv.write(&wb)?;
+    kv_engine.write(&wb)?;
     Ok(())
 }
 
 impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
+
+    fn kv_engine(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
+    }
+
+    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
+        self.snapshot(&Context::default())
+    }
+
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+        write_modifies(&self.engines.kv, modifies)
+    }
 
     fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
@@ -277,7 +295,12 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(
+        &self,
+        _: &Context,
+        _: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
@@ -309,6 +332,12 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

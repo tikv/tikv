@@ -10,6 +10,8 @@ pub trait WriteBatchExt {
     /// implement another kind of WriteBatch according to their needs.
     type WriteBatchVec: WriteBatch;
 
+    const WRITE_BATCH_MAX_KEYS: usize;
+
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()>;
     fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()>;
     fn support_write_batch_vec(&self) -> bool;

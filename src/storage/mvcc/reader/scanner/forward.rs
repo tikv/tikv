@@ -702,7 +702,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &mut cursors.write,
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
-                    start_ts,
+                    commit_ts,
                     statistics,
                 )?
             } else {

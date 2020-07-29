@@ -62,8 +62,6 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-request-batch-enable-cross-command = true
-request-batch-wait-duration = "10ms"
 
 [server.labels]
 a = "b"
@@ -165,6 +163,7 @@ region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
+consistency-check-method = "mvcc"
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -568,7 +567,7 @@ enable-compaction-filter = true
 compaction-filter-skip-version-check = true
 
 [pessimistic-txn]
-enabled = false
+enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatible
+wake-up-delay-duration = 100 # test backward compatibility
 pipelined = true

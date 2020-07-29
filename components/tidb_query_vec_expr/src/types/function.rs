@@ -7,7 +7,7 @@
 //! ```ignore
 //! use tidb_query_codegen::rpn_fn;
 //!
-//! #[rpn_fn]
+//! #[rpn_fn(nullable)]
 //! fn foo(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }

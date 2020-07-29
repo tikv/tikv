@@ -454,6 +454,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -596,6 +597,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "toml",
  "txn_types",
@@ -2992,6 +2994,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -3026,6 +3029,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "tidb_query_datatype",
+ "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
@@ -4272,6 +4276,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio 0.2.13",
@@ -4624,6 +4629,7 @@ dependencies = [
  "jemalloc-ctl",
  "jemalloc-sys",
  "jemallocator",
+ "lazy_static",
  "libc",
  "log",
  "mimallocator",

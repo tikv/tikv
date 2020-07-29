@@ -296,7 +296,7 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
-        let engine = RocksEngine::from_db(engine.get_rocksdb());
+        let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.put_cf("write", b"k1", b"v1").unwrap();
         do_gc_by_compact(&engine, None, None, safe_point);
@@ -331,7 +331,7 @@ pub mod tests {
     #[test]
     fn test_compaction_filter_tail_data() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let raw_engine = RocksEngine::from_db(engine.get_rocksdb());
+        let raw_engine = engine.get_rocksdb();
 
         let split_key = Key::from_raw(b"key")
             .append_ts(TimeStamp::from(135))

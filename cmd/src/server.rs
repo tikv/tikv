@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine, RocksSnapshot};
+use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -112,7 +112,7 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksSnapshot>,
+    router: RaftRouter<RocksEngine, RocksEngine>,
     system: Option<RaftBatchSystem>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -408,9 +408,7 @@ impl TiKVServer {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
-            Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
-            Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );
@@ -607,6 +605,7 @@ impl TiKVServer {
             cdc_worker.scheduler(),
             raft_router,
             cdc_ob,
+            engines.store_meta.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
@@ -649,6 +648,8 @@ impl TiKVServer {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
+            .after_start(|| tikv_alloc::add_thread_memory_accessor())
+            .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
             .create();
 
         // Debug service.

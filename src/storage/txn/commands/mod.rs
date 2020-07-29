@@ -319,10 +319,6 @@ pub trait CommandExt: Display {
         false
     }
 
-    fn requires_pessimistic_txn(&self) -> bool {
-        false
-    }
-
     fn can_be_pipelined(&self) -> bool {
         false
     }
@@ -410,10 +406,6 @@ impl Command {
 
     pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
         self.command_ext().gen_lock(latches)
-    }
-
-    pub fn requires_pessimistic_txn(&self) -> bool {
-        self.command_ext().requires_pessimistic_txn()
     }
 
     pub fn can_be_pipelined(&self) -> bool {

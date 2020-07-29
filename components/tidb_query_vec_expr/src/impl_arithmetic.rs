@@ -8,13 +8,13 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use tidb_query_datatype::expr::EvalContext;
 
-#[rpn_fn(nonnull)]
+#[rpn_fn]
 #[inline]
 pub fn arithmetic<A: ArithmeticOp>(lhs: &A::T, rhs: &A::T) -> Result<Option<A::T>> {
     A::calc(lhs, rhs)
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     ctx: &mut EvalContext,
@@ -28,7 +28,7 @@ pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     }
 }
 
-#[rpn_fn(nonnull, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn arithmetic_with_ctx_nonnull<A: ArithmeticOpWithCtx>(
     ctx: &mut EvalContext,
@@ -457,7 +457,7 @@ impl ArithmeticOp for UintDivideInt {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn int_divide_decimal(
     ctx: &mut EvalContext,
