@@ -162,14 +162,8 @@ impl Iterable for SkiplistEngine {
     }
     fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let engine = self.get_cf_engine(cf)?.clone();
-        let lower_bound = opts
-            .lower_bound()
-            .map(|e| Bound::Included(e))
-            .unwrap_or_else(|| Bound::Unbounded);
-        let upper_bound = opts
-            .upper_bound()
-            .map(|e| Bound::Excluded(e))
-            .unwrap_or_else(|| Bound::Unbounded);
+        let lower_bound = opts.lower_bound().map(|e| e.to_vec());
+        let upper_bound = opts.upper_bound().map(|e| e.to_vec());
         Ok(SkiplistEngineIterator::new(
             engine,
             lower_bound,
@@ -178,10 +172,12 @@ impl Iterable for SkiplistEngine {
     }
 }
 
+static ITERATOR_ID: AtomicUsize = AtomicUsize::new(0);
+
 pub struct SkiplistEngineIterator {
     engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
-    lower_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
-    upper_bound: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
+    lower_bound: Option<Vec<u8>>,
+    upper_bound: Option<Vec<u8>>,
     cursor: Option<SkipEntry<'static, Vec<u8>, Vec<u8>>>,
     valid: bool,
 }
@@ -189,15 +185,28 @@ pub struct SkiplistEngineIterator {
 impl SkiplistEngineIterator {
     fn new(
         engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
-        lower_bound: Bound<&[u8]>,
-        upper_bound: Bound<&[u8]>,
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
     ) -> Self {
+        let mut cursor = unsafe {
+            (*Arc::downgrade(&engine).as_ptr()).lower_bound(
+                lower_bound
+                    .as_ref()
+                    .map(|e| Bound::Included(e.as_slice()))
+                    .unwrap_or_else(|| Bound::Unbounded),
+            )
+        };
         Self {
-            lower_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
-            upper_bound: unsafe { (*Arc::downgrade(&engine).as_ptr()).upper_bound(upper_bound) },
-            cursor: unsafe { (*Arc::downgrade(&engine).as_ptr()).lower_bound(lower_bound) },
+            valid: cursor.is_some()
+                && check_in_range(
+                    cursor.as_ref().unwrap().key(),
+                    upper_bound.as_ref(),
+                    lower_bound.as_ref(),
+                ),
+            cursor,
+            lower_bound,
+            upper_bound,
             engine,
-            valid: true,
         }
     }
 }
@@ -208,7 +217,7 @@ fn check_in_range(
     lower_bound: Option<&Vec<u8>>,
 ) -> bool {
     if let Some(upper) = upper_bound {
-        if upper < key {
+        if upper <= key {
             return false;
         }
     }
@@ -222,25 +231,58 @@ fn check_in_range(
 
 impl Iterator for SkiplistEngineIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
-        use std::cmp::Ordering;
-
+        if !self.valid {
+            self.cursor = unsafe {
+                (*Arc::downgrade(&self.engine).as_ptr()).lower_bound(
+                    self.lower_bound
+                        .as_ref()
+                        .map(|e| Bound::Included(e.as_slice()))
+                        .unwrap_or_else(|| Bound::Unbounded),
+                )
+            };
+        }
         let cursor = match self.cursor.as_mut() {
-            Some(c) => c,
+            Some(e) => {
+                if !check_in_range(
+                    e.key(),
+                    self.upper_bound.as_ref(),
+                    self.lower_bound.as_ref(),
+                ) {
+                    return Ok(false);
+                }
+                e
+            }
             None => return Ok(false),
         };
+
+        use std::cmp::Ordering;
         self.valid = match key {
             SeekKey::Start => {
-                self.cursor = self.lower_bound.clone();
-                true
+                self.cursor = unsafe {
+                    (*Arc::downgrade(&self.engine).as_ptr()).lower_bound(
+                        self.lower_bound
+                            .as_ref()
+                            .map(|e| Bound::Included(e.as_slice()))
+                            .unwrap_or_else(|| Bound::Unbounded),
+                    )
+                };
+                self.cursor.is_some()
             }
             SeekKey::End => {
-                self.cursor = self.upper_bound.clone();
-                true
+                self.cursor = unsafe {
+                    (*Arc::downgrade(&self.engine).as_ptr()).upper_bound(
+                        self.upper_bound
+                            .as_ref()
+                            .map(|e| Bound::Excluded(e.as_slice()))
+                            .unwrap_or_else(|| Bound::Unbounded),
+                    )
+                };
+                self.cursor.is_some()
             }
             SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
                 Ordering::Less => loop {
                     if let Some(upper) = self.upper_bound.as_ref() {
-                        if cursor.key() > upper.key() {
+                        if cursor.key() >= upper {
                             break false;
                         }
                     }
@@ -255,7 +297,7 @@ impl Iterator for SkiplistEngineIterator {
                 Ordering::Greater => loop {
                     if let Some(e) = cursor.prev() {
                         if let Some(lower) = self.lower_bound.as_ref() {
-                            if e.key() < lower.key() {
+                            if e.key() < lower {
                                 break true;
                             }
                         }
@@ -272,26 +314,59 @@ impl Iterator for SkiplistEngineIterator {
         Ok(self.valid)
     }
     fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
-        use std::cmp::Ordering;
-
+        if !self.valid {
+            self.cursor = unsafe {
+                (*Arc::downgrade(&self.engine).as_ptr()).lower_bound(
+                    self.lower_bound
+                        .as_ref()
+                        .map(|e| Bound::Included(e.as_slice()))
+                        .unwrap_or_else(|| Bound::Unbounded),
+                )
+            };
+        }
         let cursor = match self.cursor.as_mut() {
-            Some(c) => c,
+            Some(e) => {
+                if !check_in_range(
+                    e.key(),
+                    self.upper_bound.as_ref(),
+                    self.lower_bound.as_ref(),
+                ) {
+                    return Ok(false);
+                }
+                e
+            }
             None => return Ok(false),
         };
-        let valid = match key {
+
+        use std::cmp::Ordering;
+        self.valid = match key {
             SeekKey::Start => {
-                self.cursor = self.lower_bound.clone();
-                true
+                self.cursor = unsafe {
+                    (*Arc::downgrade(&self.engine).as_ptr()).lower_bound(
+                        self.lower_bound
+                            .as_ref()
+                            .map(|e| Bound::Included(e.as_slice()))
+                            .unwrap_or_else(|| Bound::Unbounded),
+                    )
+                };
+                self.cursor.is_some()
             }
             SeekKey::End => {
-                self.cursor = self.upper_bound.clone();
-                true
+                self.cursor = unsafe {
+                    (*Arc::downgrade(&self.engine).as_ptr()).upper_bound(
+                        self.upper_bound
+                            .as_ref()
+                            .map(|e| Bound::Excluded(e.as_slice()))
+                            .unwrap_or_else(|| Bound::Unbounded),
+                    )
+                };
+                self.cursor.is_some()
             }
             SeekKey::Key(key) => match cursor.key().as_slice().cmp(key) {
                 Ordering::Less => loop {
                     if let Some(e) = cursor.next() {
                         if let Some(upper) = self.upper_bound.as_ref() {
-                            if e.key() > upper.key() {
+                            if e.key() >= upper {
                                 break true;
                             }
                         }
@@ -304,7 +379,7 @@ impl Iterator for SkiplistEngineIterator {
                 },
                 Ordering::Greater => loop {
                     if let Some(lower) = self.lower_bound.as_ref() {
-                        if cursor.key() < lower.key() {
+                        if cursor.key() < lower {
                             break false;
                         }
                     }
@@ -319,58 +394,48 @@ impl Iterator for SkiplistEngineIterator {
                 Ordering::Equal => true,
             },
         };
-        Ok(valid)
+        Ok(self.valid)
     }
 
     fn prev(&mut self) -> Result<bool> {
-        self.valid = match self.cursor.as_mut() {
-            Some(e) => {
-                e.move_prev()
-                    && check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
-            }
-            None => false,
-        };
+        if !self.valid {
+            return Ok(false);
+        }
+        let cursor = self.cursor.as_mut().unwrap();
+        self.valid = cursor.move_prev()
+            && check_in_range(
+                cursor.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            );
         Ok(self.valid)
     }
     fn next(&mut self) -> Result<bool> {
-        self.valid = match self.cursor.as_mut() {
-            Some(e) => {
-                e.move_next()
-                    && check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
-            }
-            None => false,
-        };
+        if !self.valid {
+            return Ok(false);
+        }
+        let cursor = self.cursor.as_mut().unwrap();
+        self.valid = cursor.move_next()
+            && check_in_range(
+                cursor.key(),
+                self.upper_bound.as_ref(),
+                self.lower_bound.as_ref(),
+            );
         Ok(self.valid)
     }
 
     fn key(&self) -> &[u8] {
-        self.cursor.as_ref().unwrap().key()
+        assert!(self.valid);
+        let key = self.cursor.as_ref().unwrap().key();
+        key
     }
     fn value(&self) -> &[u8] {
+        assert!(self.valid);
         self.cursor.as_ref().unwrap().value()
     }
 
     fn valid(&self) -> Result<bool> {
-        Ok(self.valid
-            && self
-                .cursor
-                .as_ref()
-                .map(|e| {
-                    check_in_range(
-                        e.key(),
-                        self.upper_bound.as_ref().map(|e| e.key()),
-                        self.lower_bound.as_ref().map(|e| e.key()),
-                    )
-                })
-                .unwrap_or_default())
+        Ok(self.valid)
     }
 }
 

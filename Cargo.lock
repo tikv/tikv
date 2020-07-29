@@ -1121,6 +1121,9 @@ version = "0.0.1"
 dependencies = [
  "crossbeam-skiplist",
  "engine_traits",
+ "hex 0.3.2",
+ "slog",
+ "slog-global",
  "tikv_alloc",
  "tikv_util",
  "txn_types",
