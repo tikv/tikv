@@ -223,7 +223,7 @@ mod test {
                 *l = Some(lock_k.clone());
             });
 
-        let mut lock_l = Lock::new(
+        let lock_l = Lock::new(
             LockType::Lock,
             b"l".to_vec(),
             20.into(),

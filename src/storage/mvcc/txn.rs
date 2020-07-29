@@ -4,7 +4,6 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::{concurrency_manager::DefaultConcurrencyManager, types::TxnStatus};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures03::compat::Compat01As03;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use pd_client::PdClient;
 use std::{fmt, sync::Arc};
@@ -82,7 +81,7 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     // collapse continuous rollbacks.
     collapse_rollback: bool,
     pub extra_op: ExtraOp,
-    pd_client: Arc<P>,
+    _pd_client: Arc<P>,
 }
 
 impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
@@ -132,7 +131,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             writes: WriteData::default(),
             collapse_rollback: true,
             extra_op: ExtraOp::Noop,
-            pd_client,
+            _pd_client: pd_client,
         }
     }
 
@@ -253,15 +252,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             let key_guard = ::futures_executor::block_on(concurrency_manager.lock_key(&key));
 
             let ts = key_guard.with_lock(|l| {
-                // TODO(nrc) this is going to block all the other keys' processing and writing, we should
-                // do it async.
-                // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
-                // node gets a start ts to read the key, it can violate the snapshot property.
-                let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
+                let ts = concurrency_manager.max_read_ts().next();
                 lock.min_commit_ts = ts;
                 *l = Some(lock.clone());
-                Ok::<_, ErrorInner>(ts)
-            })?;
+                ts
+            });
             async_commit_ts = ts;
         }
 
