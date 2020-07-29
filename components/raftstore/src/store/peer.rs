@@ -3115,6 +3115,41 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     resp
 }
 
+/// A poor version of `Peer` to avoid port generic variables everywhere.
+pub trait AbstractPeer {
+    fn meta_peer(&self) -> &metapb::Peer;
+    fn region(&self) -> &metapb::Region;
+    fn apply_state(&self) -> &RaftApplyState;
+    fn raft_status(&self) -> raft::Status;
+    fn raft_committed_index(&self) -> u64;
+    fn raft_request_snapshot(&mut self, index: u64);
+    fn pending_merge_state(&self) -> Option<&MergeState>;
+}
+
+impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+    fn meta_peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+    fn region(&self) -> &metapb::Region {
+        self.raft_group.store().region()
+    }
+    fn apply_state(&self) -> &RaftApplyState {
+        self.raft_group.store().apply_state()
+    }
+    fn raft_status(&self) -> raft::Status {
+        self.raft_group.status()
+    }
+    fn raft_committed_index(&self) -> u64 {
+        self.raft_group.store().committed_index()
+    }
+    fn raft_request_snapshot(&mut self, index: u64) {
+        self.raft_group.request_snapshot(index).unwrap();
+    }
+    fn pending_merge_state(&self) -> Option<&MergeState> {
+        self.pending_merge_state.as_ref()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
