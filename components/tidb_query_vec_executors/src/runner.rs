@@ -134,7 +134,7 @@ pub fn build_executors<S: Storage + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
-    is_streaming: bool,
+    is_scanned_range_aware: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -160,7 +160,7 @@ pub fn build_executors<S: Storage + 'static>(
                     ranges,
                     primary_column_ids,
                     descriptor.get_desc(),
-                    is_streaming,
+                    is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
             );
@@ -180,7 +180,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_column_ids_len,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
-                    is_streaming,
+                    is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
             );
@@ -314,7 +314,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
-        streaming_batch_limit: usize,
+        stream_row_limit: usize,
         is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
@@ -326,7 +326,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming,
+            is_streaming, //for streaming request, executors will continue scan from range end where last scan is finished
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -358,7 +358,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
-            stream_row_limit: streaming_batch_limit,
+            stream_row_limit,
         })
     }
 
