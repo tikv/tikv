@@ -3338,7 +3338,13 @@ mod tests {
 
         let do_check_txn_status = |rollback_if_not_exist| {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone(), cm);
+            let mut txn = MvccTxn::new(
+                snapshot,
+                TimeStamp::new(2),
+                true,
+                pd_client.clone(),
+                cm.clone(),
+            );
             let (txn_status, released_lock) = txn
                 .check_txn_status(
                     Key::from_raw(b"key"),

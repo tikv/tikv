@@ -25,7 +25,10 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager,
+    mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn},
+};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
@@ -196,12 +199,14 @@ impl<E: Engine> GcRunner<E> {
     fn new_txn(snap: E::Snap) -> MvccTxn<E::Snap, DummyPdClient> {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
         let pd_client = Arc::new(DummyPdClient::new());
+        let concurrency_manager = DefaultConcurrencyManager::new(1.into());
         MvccTxn::for_scan(
             snap,
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             false,
             pd_client,
+            concurrency_manager,
         )
     }
 
