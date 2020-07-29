@@ -445,11 +445,7 @@ impl ArithmeticOp for UintDivideInt {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn int_divide_decimal(
-    ctx: &mut EvalContext,
-    lhs: &Decimal,
-    rhs: &Decimal,
-) -> Result<Option<Int>> {
+fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Int>> {
     let result = arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)?;
     if let Some(result) = result {
         let result = result.as_i64();
@@ -459,10 +455,7 @@ fn int_divide_decimal(
             result
                 .into_result_with_overflow_err(
                     ctx,
-                    Error::overflow(
-                        "BIGINT",
-                        format!("({} / {})", lhs, rhs),
-                    ),
+                    Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)),
                 )
                 .map(Some)?
         })
