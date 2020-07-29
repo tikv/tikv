@@ -31,13 +31,15 @@ impl<M: OrderedMap> HandleTable<M> {
         }
     }
 
-    pub fn check_key(&self, key: &Key, check_fn: impl FnOnce(&Lock) -> bool) -> Result<(), Lock> {
+    pub fn check_key<E>(
+        &self,
+        key: &Key,
+        check_fn: impl FnOnce(&Lock) -> Result<(), E>,
+    ) -> Result<(), E> {
         if let Some(lock_ref) = self.0.get(key) {
             return lock_ref.with_lock(|lock| {
                 if let Some(lock) = &*lock {
-                    if !check_fn(lock) {
-                        return Err(lock.clone());
-                    }
+                    return check_fn(lock);
                 }
                 Ok(())
             });
@@ -45,25 +47,25 @@ impl<M: OrderedMap> HandleTable<M> {
         Ok(())
     }
 
-    pub fn check_range(
+    pub fn check_range<E>(
         &self,
         start_key: &Key,
         end_key: &Key,
-        mut check_fn: impl FnMut(&Lock) -> bool,
-    ) -> Result<(), Lock> {
-        let blocking_lock = self.0.find_first(start_key, end_key, |lock_ref| {
+        mut check_fn: impl FnMut(&Lock) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let e = self.0.find_first(start_key, end_key, |lock_ref| {
             lock_ref.with_lock(|lock| {
                 lock.as_ref().and_then(|lock| {
-                    if check_fn(lock) {
-                        None
+                    if let Err(e) = check_fn(lock) {
+                        Some(e)
                     } else {
-                        Some(lock.clone())
+                        None
                     }
                 })
             })
         });
-        if let Some(lock) = blocking_lock {
-            Err(lock)
+        if let Some(e) = e {
+            Err(e)
         } else {
             Ok(())
         }
@@ -168,13 +170,21 @@ mod test {
         assert_eq!(counter.load(Ordering::SeqCst), 100);
     }
 
+    fn ts_check(lock: &Lock, ts: u64) -> Result<(), Lock> {
+        if lock.ts.into_inner() < ts {
+            Err(lock.clone())
+        } else {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_check_key() {
         let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
         let key_k = Key::from_raw(b"k");
 
         // no lock found
-        assert!(lock_table.check_key(&key_k, |_| false).is_ok());
+        assert!(lock_table.check_key(&key_k, |_| Err(())).is_ok());
 
         let lock = Lock::new(
             LockType::Lock,
@@ -191,15 +201,10 @@ mod test {
         });
 
         // lock passes check_fn
-        assert!(lock_table
-            .check_key(&key_k, |l| l.ts.into_inner() < 20)
-            .is_ok());
+        assert!(lock_table.check_key(&key_k, |l| ts_check(l, 5)).is_ok());
 
         // lock does not pass check_fn
-        assert_eq!(
-            lock_table.check_key(&key_k, |l| l.ts.into_inner() < 5),
-            Err(lock)
-        );
+        assert_eq!(lock_table.check_key(&key_k, |l| ts_check(l, 20)), Err(lock));
     }
 
     #[tokio::test]
@@ -209,12 +214,12 @@ mod test {
         let lock_k = Lock::new(
             LockType::Lock,
             b"k".to_vec(),
-            10.into(),
+            20.into(),
             100,
             None,
-            10.into(),
+            20.into(),
             1,
-            10.into(),
+            20.into(),
         );
         lock_table
             .lock_key(&Key::from_raw(b"k"))
@@ -226,12 +231,12 @@ mod test {
         let lock_l = Lock::new(
             LockType::Lock,
             b"l".to_vec(),
-            20.into(),
+            10.into(),
             100,
             None,
-            20.into(),
+            10.into(),
             1,
-            20.into(),
+            10.into(),
         );
         lock_table
             .lock_key(&Key::from_raw(b"l"))
@@ -242,32 +247,29 @@ mod test {
 
         // no lock found
         assert!(lock_table
-            .check_range(&Key::from_raw(b"m"), &Key::from_raw(b"n"), |_| false)
+            .check_range(&Key::from_raw(b"m"), &Key::from_raw(b"n"), |_| Err(()))
             .is_ok());
 
         // lock passes check_fn
         assert!(lock_table
-            .check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .ts
-                .into_inner()
-                < 50)
+            .check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
+                l, 5
+            ))
             .is_ok());
 
         // first lock does not pass check_fn
         assert_eq!(
-            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .ts
-                .into_inner()
-                < 5),
+            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
+                l, 25
+            )),
             Err(lock_k)
         );
 
         // first lock passes check_fn but the second does not
         assert_eq!(
-            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| l
-                .ts
-                .into_inner()
-                < 15),
+            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
+                l, 15
+            )),
             Err(lock_l)
         );
     }

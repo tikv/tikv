@@ -94,12 +94,12 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
     /// blocks the read.
     ///
     /// It will also updates the max_read_ts.
-    pub fn read_key_check(
+    pub fn read_key_check<E>(
         &self,
         key: &Key,
         ts: TimeStamp,
-        check_fn: impl FnOnce(&Lock) -> bool,
-    ) -> Result<(), Lock> {
+        check_fn: impl FnOnce(&Lock) -> Result<(), E>,
+    ) -> Result<(), E> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.handle_table.check_key(key, check_fn)
@@ -110,13 +110,13 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
     /// blocks the read.
     ///
     /// It will also updates the max_read_ts.
-    pub fn read_range_check(
+    pub fn read_range_check<E>(
         &self,
         start_key: &Key,
         end_key: &Key,
         ts: TimeStamp,
-        check_fn: impl FnMut(&Lock) -> bool,
-    ) -> Result<(), Lock> {
+        check_fn: impl FnMut(&Lock) -> Result<(), E>,
+    ) -> Result<(), E> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.handle_table.check_range(start_key, end_key, check_fn)
@@ -148,22 +148,22 @@ mod tests {
         let key_b = Key::from_raw(b"b");
 
         assert!(concurrency_manager
-            .read_key_check(&key_k, 15.into(), |_| false)
+            .read_key_check(&key_k, 15.into(), |_| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_key_check(&key_k, 5.into(), |_| false)
+            .read_key_check(&key_k, 5.into(), |_| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(&key_a, &key_b, 10.into(), |_| false)
+            .read_range_check(&key_a, &key_b, 10.into(), |_| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(&key_a, &key_b, 20.into(), |_| false)
+            .read_range_check(&key_a, &key_b, 20.into(), |_| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }

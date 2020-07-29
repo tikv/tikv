@@ -179,6 +179,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
+        ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
+            .with_lock(|l| *l = None);
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
