@@ -171,7 +171,7 @@ where
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::DAGHandleBencher::new(|| {
-            crate::util::build_dag_handler::<T>(executors, ranges, store, self.batch)
+            crate::util::build_dag_handler::<T>(executors, ranges, store)
         })
         .bench(b);
     }

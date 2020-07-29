@@ -111,14 +111,14 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     type P = IndexScanParam;
 
     fn build(
-        batch: bool,
+        _batch: bool,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Box<dyn RequestHandler> {
         let exec = index_scan(columns, unique);
-        crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
+        crate::util::build_dag_handler::<T>(&[exec], ranges, store)
     }
 }
 
