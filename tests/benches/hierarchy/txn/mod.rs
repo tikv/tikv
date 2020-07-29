@@ -6,7 +6,10 @@ use pd_client::DummyPdClient;
 use std::sync::Arc;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
-use tikv::storage::mvcc::{self, MvccTxn};
+use tikv::storage::{
+    concurrency_manager::DefaultConcurrencyManager,
+    mvcc::{self, MvccTxn},
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
@@ -23,12 +26,9 @@ where
     let ctx = Context::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(
-        snapshot,
-        start_ts.into(),
-        true,
-        Arc::new(DummyPdClient::new()),
-    );
+    let start_ts = start_ts.into();
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()));
+    let cm = DefaultConcurrencyManager::new(start_ts);
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(
@@ -39,6 +39,7 @@ where
             0,
             0,
             TimeStamp::default(),
+            &cm,
         )
         .unwrap();
     }
@@ -51,6 +52,7 @@ where
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
+    let cm = DefaultConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
@@ -65,8 +67,17 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
-                txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                txn.prewrite(
+                    mutation,
+                    &primary,
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                    &cm,
+                )
+                .unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }
