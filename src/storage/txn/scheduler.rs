@@ -52,6 +52,20 @@ use crate::storage::{
     ErrorInner as StorageErrorInner,
 };
 
+use crate::storage::metrics::SCHED_POST_HANDLE_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_POST_WRITE_DURATIONS_VEC;
+
+// Scheduler command duration == ASYNC_WRITE_DURATIONS_VEC +
+//   ASYNC_WRITE_DURATIONS_VEC +
+//   sum duration of below:
+use crate::storage::metrics::SCHED_WAIT_HISTOGRAM_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_1_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_2_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_3_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_BEFORE_WRITE_1_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_BEFORE_WRITE_2_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_EXEC_CALLBACK_DURATIONS_VEC;
+
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 /// Task is a running command.
@@ -93,9 +107,7 @@ struct TaskContext {
     cb: Option<StorageCallback>,
     write_bytes: usize,
     tag: metrics::CommandKind,
-    // How long it waits on latches.
-    // latch_timer: Option<Instant>,
-    latch_timer: Instant,
+    wait_timer: Instant,
     // Total duration of a command.
     _cmd_timer: CmdTimer,
 }
@@ -120,7 +132,7 @@ impl TaskContext {
             cb: Some(cb),
             write_bytes,
             tag,
-            latch_timer: Instant::now_coarse(),
+            wait_timer: Instant::now_coarse(),
             _cmd_timer: CmdTimer {
                 tag,
                 begin: Instant::now_coarse(),
@@ -129,9 +141,10 @@ impl TaskContext {
     }
 
     fn on_schedule(&mut self) {
-        SCHED_LATCH_HISTOGRAM_VEC
+        SCHED_WAIT_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(self.latch_timer.elapsed_secs());
+            .observe(self.wait_timer.elapsed_secs());
+        self.wait_timer = Instant::now_coarse();
     }
 }
 
@@ -232,8 +245,11 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
     fn acquire_lock(&self, cid: u64) -> bool {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
+        tctx.on_schedule();
         if self.latches.acquire(&mut tctx.lock, cid) {
-            tctx.on_schedule();
+            SCHED_LATCH_HISTOGRAM_VEC
+                .get(tctx.tag)
+                .observe(tctx.wait_timer.elapsed_secs());
             return true;
         }
         false
@@ -349,6 +365,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&self, cid: u64) {
+        let timer = Instant::now_coarse();
+
         let mut task = self.inner.dequeue_task(cid);
         let tag = task.cmd.tag();
         let ctx = task.cmd.ctx().clone();
@@ -374,7 +392,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                             "process cmd with snapshot";
                             "cid" => task.cid, "cb_ctx" => ?cb_ctx
                         );
+                        SCHED_PRE_HANDLE_1_DURATIONS_VEC
+                            .get(tag)
+                            .observe(timer.elapsed_secs());
                         sched.process_by_worker(snapshot, task);
+
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
@@ -527,6 +549,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
+        let timer = Instant::now_coarse();
         let tag = task.cmd.tag();
         SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
@@ -534,18 +557,26 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
             .clone()
             .pool
             .spawn(async move {
+                SCHED_PRE_HANDLE_3_DURATIONS_VEC
+                    .get(tag)
+                    .observe(timer.elapsed_secs());
+                let mut timer = Instant::now_coarse();
+
                 fail_point!("scheduler_async_snapshot_finish");
 
                 let read_duration = Instant::now_coarse();
 
                 let region_id = task.cmd.ctx().get_region_id();
                 let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
                 let mut statistics = Statistics::default();
 
                 if task.cmd.readonly() {
                     self.process_read(snapshot, task, &mut statistics);
                 } else {
+                    SCHED_PRE_HANDLE_2_DURATIONS_VEC
+                        .get(tag)
+                        .observe(timer.elapsed_secs());
+                    timer = Instant::now_coarse();
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
                     unsafe {
                         with_tls_engine(|engine| {
@@ -563,6 +594,10 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 );
 
                 tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+
+                SCHED_POST_HANDLE_DURATIONS_VEC
+                    .get(tag)
+                    .observe(timer.elapsed_secs());
             })
             .unwrap();
     }
@@ -585,6 +620,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+        let timer = Instant::now_coarse();
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -611,6 +647,10 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 pr,
                 lock_info,
             }) => {
+                SCHED_BEFORE_WRITE_1_DURATIONS_VEC
+                    .get(tag)
+                    .observe(timer.elapsed_secs());
+                let timer = Instant::now_coarse();
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
@@ -633,7 +673,8 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        sched
+                        let timer_callback = Instant::now_coarse();
+                        let res = sched
                             .get_sched_pool(priority)
                             .clone()
                             .pool
@@ -652,10 +693,19 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                                     .observe(rows as f64);
                                 future::ok::<_, ()>(())
                             })
-                            .unwrap()
+                            .unwrap();
+                        SCHED_EXEC_CALLBACK_DURATIONS_VEC
+                            .get(tag)
+                            .observe(timer_callback.elapsed_secs());
+                        res
                     });
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                    SCHED_BEFORE_WRITE_2_DURATIONS_VEC
+                        .get(tag)
+                        .observe(timer.elapsed_secs());
+                    let timer = Instant::now_coarse();
+
+                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb, Some(tag)) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
@@ -667,6 +717,10 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                         // Respond to client early.
                         scheduler.on_pipelined_write(cid, pipelined_write_pr, tag);
                     }
+
+                    SCHED_POST_WRITE_DURATIONS_VEC
+                        .get(tag)
+                        .observe(timer.elapsed_secs());
                 }
             }
             // Write prepare failure typically means conflicting transactions are detected. Delivers the

@@ -17,6 +17,7 @@ use crate::storage::kv::{
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
     WriteData,
 };
+use crate::storage::metrics::CommandKind;
 use tikv_util::time::ThreadReadId;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
@@ -89,6 +90,7 @@ impl Engine for BTreeEngine {
         _ctx: &Context,
         batch: WriteData,
         cb: EngineCallback<()>,
+        _tag: Option<CommandKind>,
     ) -> EngineResult<()> {
         if batch.modifies.is_empty() {
             return Err(EngineError::from(EngineErrorInner::EmptyRequest));

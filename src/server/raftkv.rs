@@ -22,6 +22,7 @@ use crate::storage::kv::{
     ErrorInner as KvErrorInner, Iterator as EngineIterator, Modify, ScanMode,
     Snapshot as EngineSnapshot, WriteData,
 };
+
 use crate::storage::{self, kv};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::router::RaftStoreRouter;
@@ -29,6 +30,10 @@ use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{RegionIterator, RegionSnapshot};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
+
+use crate::storage::metrics::CommandKind;
+use crate::storage::metrics::ASYNC_WRITE_DURATIONS_VEC;
+use crate::storage::metrics::PRE_ASYNC_WRITE_DURATIONS_VEC;
 
 quick_error! {
     #[derive(Debug)]
@@ -312,7 +317,8 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         write_modifies(&self.engine, modifies)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> kv::Result<()> {
+    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>, tag: Option<CommandKind>) -> kv::Result<()> {
+        let pre_begin_instant = Instant::now_coarse();
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
@@ -355,6 +361,12 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         }
 
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+
+        if let Some(tag) = tag {
+            PRE_ASYNC_WRITE_DURATIONS_VEC
+                .get(tag)
+                .observe(pre_begin_instant.elapsed_secs());
+        }
         let begin_instant = Instant::now_coarse();
 
         self.exec_write_requests(
@@ -367,6 +379,12 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
                         .observe(begin_instant.elapsed_secs());
+                    if let Some(tag) = tag {
+                        ASYNC_WRITE_DURATIONS_VEC
+                            .get(tag)
+                            .observe(begin_instant.elapsed_secs());
+                    }
+
                     fail_point!("raftkv_async_write_finish");
                     cb((cb_ctx, Ok(())))
                 }
