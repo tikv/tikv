@@ -8,7 +8,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::{name_to_cf, CfName, IterOption, SstCompressionType, DATA_KEY_PREFIX_LEN, DB};
+use engine::{name_to_cf, CfName, IterOption, DATA_KEY_PREFIX_LEN, DB};
+use engine::rocks::DBCompressionType;
 use external_storage::*;
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -26,7 +27,6 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use crate::metrics::*;
 use crate::*;
-use engine::rocks::DBCompressionType;
 
 const WORKER_TAKE_RANGE: usize = 6;
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -263,7 +263,7 @@ impl BackupRange {
         file_name: String,
         backup_ts: u64,
         start_ts: u64,
-        compression_type: Option<SstCompressionType>,
+        compression_type: Option<DBCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer =
             match BackupWriter::new(db, &file_name, storage.limiter.clone(), compression_type) {
@@ -294,7 +294,7 @@ impl BackupRange {
         storage: &LimitedStorage,
         file_name: String,
         cf: CfName,
-        ct: Option<SstCompressionType>,
+        ct: Option<DBCompressionType>,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer =
             match BackupRawKVWriter::new(db, &file_name, cf, storage.limiter.clone(), ct) {

@@ -49,8 +49,9 @@ impl SstWriterBuilder {
     }
 
     /// Set SST compression algorithm
-    pub fn set_compression_type(mut self, compression_type: Option<DBCompressionType>) {
+    pub fn set_compression_type(mut self, compression_type: Option<DBCompressionType>) -> Self {
         self.compression_type = compression_type;
+        self
     }
 
     /// Builder a SstWriter.
