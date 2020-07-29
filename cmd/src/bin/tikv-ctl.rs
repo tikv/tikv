@@ -2366,6 +2366,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
         let h = thread::spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
@@ -2378,6 +2379,7 @@ fn compact_whole_cluster(
                     bottommost,
                 );
             }
+            tikv_alloc::remove_thread_memory_accessor();
         });
         handles.push(h);
     }
