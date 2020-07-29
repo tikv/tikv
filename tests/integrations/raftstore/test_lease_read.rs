@@ -287,7 +287,6 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let election_timeout = configure_for_lease_read(cluster, Some(100), None);
     cluster.run();
 
-    // Sleep to make sure leader could win election.
     let (split_key1, split_key2) = (b"k22", b"k44");
     let keys = vec![b"k11", b"k33", b"k55"];
     let _ = keys.iter().map(|key| {
