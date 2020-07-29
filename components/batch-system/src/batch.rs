@@ -6,9 +6,9 @@
 //! that controls how the former is created or metrics are collected.
 
 use std::borrow::Cow;
+use std::marker::PhantomData;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use std::marker::PhantomData;
 
 use crossbeam::channel::{self, SendError};
 use tikv_util::mpsc;
@@ -122,7 +122,7 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
     /// further notification. This function may fail if channel length is
     /// larger than the given value before FSM is released.
     pub fn release(&mut self, index: usize, checked_len: usize) {
-        let fsm_owner = self.normals.swap_remove(index);
+        let mut fsm_owner = self.normals.swap_remove(index);
         let mailbox = fsm_owner.fsm_mut().take_mailbox().unwrap();
         mailbox.release(fsm_owner.into_pinned_fsm());
         if mailbox.len() == checked_len {
@@ -146,7 +146,7 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
     /// If there are still messages in channel, the FSM is untouched and
     /// the function will return false to let caller to keep polling.
     pub fn remove(&mut self, index: usize) {
-        let fsm_owner = self.normals.swap_remove(index);
+        let mut fsm_owner = self.normals.swap_remove(index);
         let mailbox = fsm_owner.fsm_mut().take_mailbox().unwrap();
         if mailbox.is_empty() {
             mailbox.release(NO::into_pinned_fsm(fsm_owner));
@@ -163,7 +163,9 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
     pub fn reschedule(&mut self, router: &BatchRouter<NO::Fsm, C>, index: usize) {
         let fsm_owner = self.normals.swap_remove(index);
         self.timers.swap_remove(index);
-        router.normal_scheduler.schedule(NO::into_pinned_fsm(fsm_owner));
+        router
+            .normal_scheduler
+            .schedule(NO::into_pinned_fsm(fsm_owner));
     }
 
     /// Same as `release`, but working on control FSM.
@@ -235,6 +237,7 @@ pub trait PollHandler<NO, C> {
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
 struct Poller<NO: FsmOwner, C: Fsm, Handler> {
+    #[allow(clippy::type_complexity)]
     router: Router<NO::Fsm, C, NormalScheduler<NO::Fsm, C>, ControlScheduler<NO::Fsm, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<NO::Fsm, C>>,
     handler: Handler,
@@ -377,7 +380,6 @@ where
     NO: FsmOwner + Send + 'static,
     NO::Fsm: Send + 'static,
     C: Fsm + Send + 'static,
-
 {
     pub fn router(&self) -> &BatchRouter<NO::Fsm, C> {
         &self.router

@@ -132,7 +132,7 @@ where
     pub fn register(&self, addr: u64, mailbox: BasicMailbox<N>) {
         let mut normals = self.normals.lock().unwrap();
         if let Some(mailbox) = normals.insert(addr, mailbox) {
-            mailbox.close();
+            mailbox.close(&self.normal_scheduler);
         }
     }
 
@@ -141,7 +141,7 @@ where
         normals.reserve(mailboxes.len());
         for (addr, mailbox) in mailboxes {
             if let Some(m) = normals.insert(addr, mailbox) {
-                m.close();
+                m.close(&self.normal_scheduler);
             }
         }
     }
@@ -253,9 +253,9 @@ where
         let mut mailboxes = self.normals.lock().unwrap();
         for (addr, mailbox) in mailboxes.drain() {
             debug!("[region {}] shutdown mailbox", addr);
-            mailbox.close();
+            mailbox.close(&self.normal_scheduler);
         }
-        self.control_box.close();
+        self.control_box.close(&self.control_scheduler);
         self.normal_scheduler.shutdown();
         self.control_scheduler.shutdown();
     }
@@ -266,7 +266,7 @@ where
         unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
         let mut mailboxes = self.normals.lock().unwrap();
         if let Some(mb) = mailboxes.remove(&addr) {
-            mb.close();
+            mb.close(&self.normal_scheduler);
         }
     }
 }

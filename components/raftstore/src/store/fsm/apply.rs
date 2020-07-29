@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, FsmOwner, HandlerBuilder, PollHandler,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -3070,6 +3072,22 @@ where
         Self: Sized,
     {
         self.mailbox.take()
+    }
+}
+
+impl<E: KvEngine> FsmOwner for ApplyFsm<E> {
+    type Fsm = ApplyFsm<E>;
+    fn from_pinned_fsm(inner: Box<Self::Fsm>) -> Box<Self> {
+        inner
+    }
+    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm> {
+        self
+    }
+    fn fsm(&self) -> &Self::Fsm {
+        self
+    }
+    fn fsm_mut(&mut self) -> &mut Self::Fsm {
+        self
     }
 }
 

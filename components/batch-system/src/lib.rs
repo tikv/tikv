@@ -21,6 +21,6 @@ pub mod test_runner;
 
 pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, PollHandler};
 pub use self::config::Config;
-pub use self::fsm::Fsm;
+pub use self::fsm::{Fsm, FsmOwner};
 pub use self::mailbox::{BasicMailbox, Mailbox};
 pub use self::router::Router;

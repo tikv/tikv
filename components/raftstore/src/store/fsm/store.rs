@@ -1,6 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, FsmOwner, HandlerBuilder, PollHandler,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{
@@ -38,7 +40,7 @@ use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
-    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, PeerFsmHook, SenderFsmPair,
 };
 use crate::store::fsm::ApplyNotifier;
 #[cfg(feature = "failpoints")]
@@ -155,7 +157,9 @@ where
     EK: KvEngine,
     ER: KvEngine,
 {
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
+    pub router: BatchRouter<PeerFsmHook<EK>, StoreFsm>,
+    // TODO: remove the generic variable.
+    pub _phantom: std::marker::PhantomData<ER>,
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -166,6 +170,7 @@ where
     fn clone(&self) -> Self {
         RaftRouter {
             router: self.router.clone(),
+            _phantom: Default::default(),
         }
     }
 }
@@ -175,9 +180,9 @@ where
     EK: KvEngine,
     ER: KvEngine,
 {
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm>;
+    type Target = BatchRouter<PeerFsmHook<EK>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsmHook<EK>, StoreFsm> {
         &self.router
     }
 }
@@ -1205,8 +1210,10 @@ impl RaftBatchSystem {
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
-            address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            let region_id = fsm.region_id();
+            address.push(region_id);
+            let fsm = FsmOwner::into_pinned_fsm(fsm);
+            mailboxes.push((region_id, BasicMailbox::new(tx, fsm)));
         }
         self.router.register_all(mailboxes);
 
@@ -1303,7 +1310,10 @@ pub fn create_raft_batch_system(
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
-    let raft_router = RaftRouter { router };
+    let raft_router = RaftRouter {
+        router,
+        _phantom: Default::default(),
+    };
     let system = RaftBatchSystem {
         system,
         workers: None,
@@ -1620,7 +1630,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
-        let mailbox = BasicMailbox::new(tx, peer);
+        let mailbox = BasicMailbox::new(tx, FsmOwner::into_pinned_fsm(peer));
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router

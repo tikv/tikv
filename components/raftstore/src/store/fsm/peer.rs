@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use batch_system::{BasicMailbox, Fsm};
+use batch_system::{BasicMailbox, Fsm, FsmOwner};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
@@ -101,16 +101,16 @@ where
     /// This will be reset to 0 once it receives any messages from leader.
     missing_ticks: usize,
     group_state: GroupState,
-    stopped: bool,
     has_ready: bool,
     early_apply: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK::Snapshot>,
+
+    pub hook: PeerFsmHook<EK>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<S>
@@ -190,14 +190,16 @@ where
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
-                stopped: false,
                 has_ready: false,
-                mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                hook: PeerFsmHook {
+                    stopped: false,
+                    mailbox: None,
+                },
             }),
         ))
     }
@@ -232,14 +234,16 @@ where
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
-                stopped: false,
                 has_ready: false,
-                mailbox: None,
                 receiver: rx,
                 skip_split_count: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                hook: PeerFsmHook {
+                    stopped: false,
+                    mailbox: None,
+                },
             }),
         ))
     }
@@ -261,7 +265,7 @@ where
 
     #[inline]
     pub fn stop(&mut self) {
-        self.stopped = true;
+        self.hook.stopped = true;
     }
 
     pub fn set_pending_merge_state(&mut self, state: MergeState) {
@@ -385,11 +389,45 @@ where
     }
 }
 
-impl<EK, ER> Fsm for PeerFsm<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<EK: KvEngine, ER: KvEngine> PeerFsm<EK, ER> {
+    const fn hook_offset() -> isize {
+        let ptr = std::ptr::null_mut() as *mut PeerFsm<EK, ER>;
+        unsafe {
+            let hook = &mut (*ptr).hook as *mut PeerFsmHook<EK>;
+            (hook as *mut u8).offset_from(ptr as *mut u8)
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: KvEngine> FsmOwner for PeerFsm<EK, ER> {
+    type Fsm = PeerFsmHook<EK>;
+    fn from_pinned_fsm(fsm: Box<Self::Fsm>) -> Box<Self> {
+        let ptr: *mut u8 = unsafe { std::mem::transmute(&*fsm) };
+        let ptr = unsafe { ptr.offset(-Self::hook_offset()) } as *mut Self;
+        std::mem::forget(fsm);
+        unsafe { Box::from_raw(ptr) }
+    }
+    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm> {
+        let ptr: *mut u8 = unsafe { std::mem::transmute(&*self) };
+        let ptr = unsafe { ptr.offset(Self::hook_offset()) } as *mut Self::Fsm;
+        std::mem::forget(self);
+        unsafe { Box::from_raw(ptr) }
+    }
+
+    fn fsm(&self) -> &Self::Fsm {
+        &self.hook
+    }
+    fn fsm_mut(&mut self) -> &mut Self::Fsm {
+        &mut self.hook
+    }
+}
+
+pub struct PeerFsmHook<EK: KvEngine> {
+    pub stopped: bool,
+    pub mailbox: Option<BasicMailbox<PeerFsmHook<EK>>>,
+}
+
+impl<EK: KvEngine> Fsm for PeerFsmHook<EK> {
     type Message = PeerMsg<EK>;
 
     #[inline]
@@ -570,7 +608,7 @@ where
     }
 
     fn on_tick(&mut self, tick: PeerTicks) {
-        if self.fsm.stopped {
+        if self.fsm.hook.stopped {
             return;
         }
         trace!(
@@ -837,7 +875,7 @@ where
     pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
-        if !has_ready || self.fsm.stopped {
+        if !has_ready || self.fsm.hook.stopped {
             return;
         }
         self.ctx.pending_count += 1;
@@ -1073,7 +1111,7 @@ where
                     "res" => ?res,
                 );
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
-                if self.fsm.stopped {
+                if self.fsm.hook.stopped {
                     return;
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
@@ -1127,7 +1165,7 @@ where
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove || self.fsm.hook.stopped {
             return Ok(());
         }
 
@@ -2014,7 +2052,7 @@ where
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
-            let mailbox = BasicMailbox::new(sender, new_peer);
+            let mailbox = BasicMailbox::new(sender, PeerFsm::into_pinned_fsm(new_peer));
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
@@ -2264,7 +2302,7 @@ where
     }
 
     fn on_check_merge(&mut self) {
-        if self.fsm.stopped
+        if self.fsm.hook.stopped
             || self.fsm.peer.pending_remove
             || self.fsm.peer.pending_merge_state.is_none()
         {
@@ -2976,7 +3014,7 @@ where
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
-        debug_assert!(!self.fsm.stopped);
+        debug_assert!(!self.fsm.hook.stopped);
         fail_point!("on_raft_gc_log_tick", |_| {});
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the

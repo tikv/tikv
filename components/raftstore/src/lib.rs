@@ -4,6 +4,11 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
+#![feature(ptr_offset_from)]
+#![feature(const_raw_ptr_deref)]
+#![feature(const_ptr_offset_from)]
+#![feature(const_mut_refs)]
+#![feature(const_fn)]
 
 #[macro_use]
 extern crate bitflags;

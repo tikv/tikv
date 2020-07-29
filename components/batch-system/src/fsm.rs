@@ -50,10 +50,10 @@ pub trait Fsm {
 /// FsmOwner is used when handling active `Fsm`.
 pub trait FsmOwner {
     type Fsm: Fsm;
-    fn from_pinned_fsm(inner: Box<Self::Fsm>) -> Box<Self>;
+    fn from_pinned_fsm(fsm: Box<Self::Fsm>) -> Box<Self>;
     fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm>;
     fn fsm(&self) -> &Self::Fsm;
-    fn fsm_mut(&self) -> &mut Self::Fsm;
+    fn fsm_mut(&mut self) -> &mut Self::Fsm;
 }
 
 pub struct FsmState<N> {
@@ -135,30 +135,13 @@ impl<N: Fsm> FsmState<N> {
         }
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }
-
-    /// Clear the fsm.
-    #[inline]
-    pub fn clear(&self) {
-        match self.status.swap(NOTIFYSTATE_DROP, Ordering::AcqRel) {
-            NOTIFYSTATE_NOTIFIED | NOTIFYSTATE_DROP => return,
-            _ => {}
-        }
-
-        // FIXME: avoid drop here.
-        let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
-        if !ptr.is_null() {
-            unsafe {
-                Box::from_raw(ptr);
-            }
-        }
-    }
 }
 
 impl<N> Drop for FsmState<N> {
     fn drop(&mut self) {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe { Box::from_raw(ptr) };
+            panic!("drop fsm state with pending fsm");
         }
     }
 }

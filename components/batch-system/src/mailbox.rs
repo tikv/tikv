@@ -79,11 +79,11 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         Ok(())
     }
 
-    /// Close the mailbox explicitly.
+    /// Close the mailbox explicitly and notify the `FsmScheduler` to recycle the `Fsm`.
     #[inline]
-    pub(crate) fn close(&self) {
+    pub(crate) fn close<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
         self.sender.close_sender();
-        self.state.clear();
+        self.state.notify(scheduler, Cow::Borrowed(self));
     }
 }
 
