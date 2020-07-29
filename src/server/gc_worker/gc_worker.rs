@@ -25,11 +25,11 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
+use super::gc_manager::{AutoGcConfig, GcManager};
 use super::{init_compaction_filter, Callback, Error, ErrorInner, Result};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -208,11 +208,6 @@ impl<E: Engine> GcRunner<E> {
     }
 
     fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
-        if !self.need_gc(start_key, end_key, safe_point) {
-            GC_SKIPPED_COUNTER.inc();
-            return Ok(());
-        }
-
         let mut reader = MvccReader::new(
             self.engine.snapshot_on_kv_engine(start_key, end_key)?,
             Some(ScanMode::Forward),
@@ -485,29 +480,6 @@ fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
-/// Schedules a `GcTask` to the `GcRunner`.
-fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask>,
-    region_id: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    safe_point: TimeStamp,
-    callback: Callback<()>,
-) -> Result<()> {
-
-}
-
-/// Does GC synchronously.
-pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask>,
-    region_id: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    safe_point: TimeStamp,
-) -> Result<()> {
-    schedule_gc(scheduler, region_id, start_key, end_key, safe_point, callback)
-}
-
 /// Used to schedule GC operations.
 pub struct GcWorker<E: Engine> {
     engine: E,
@@ -591,7 +563,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGcConfig<S, R>,
-        worker: Worker,
+        worker: &Worker,
     ) -> Result<()> {
         let safe_point = Arc::new(AtomicU64::new(0));
 

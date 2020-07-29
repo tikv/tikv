@@ -4,10 +4,9 @@ use pd_client::ClusterVersion;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
-use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 use engine_rocks::RocksEngine;
-use engine_traits::{CF_WRITE, TableProperties};
+use engine_traits::{CF_WRITE, TablePropertiesExt};
 use tikv_util::worker::{FutureScheduler, Scheduler, Runnable};
 use txn_types::{Key, TimeStamp};
 
@@ -16,8 +15,8 @@ use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
 use super::config::GcWorkerConfigManager;
-use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowd, Result};
+use super::gc_worker::{GcSafePointProvider, GcTask};
+use super::{is_compaction_filter_allowd};
 use crate::storage::mvcc::check_need_gc;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
@@ -77,18 +76,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
             poll_safe_point_interval: Duration::from_millis(100),
             always_check_safe_point: true,
             post_a_round_of_gc: None,
+            ratio_threshold: 0.1
         }
     }
 }
-
-/// The only error that will break `GcManager`'s process is that the `GcManager` is interrupted by
-/// others, maybe due to TiKV shutting down.
-#[derive(Debug)]
-enum GcManagerError {
-    Stopped,
-}
-
-type GcManagerResult<T> = std::result::Result<T, GcManagerError>;
 
 /// Used to check if `GcManager` should be stopped.
 ///
@@ -97,9 +88,7 @@ type GcManagerResult<T> = std::result::Result<T, GcManagerError>;
 pub(super) struct GcManagerContext {
     /// Whether an stop signal is received.
     progress: Option<Key>,
-    end: Option<Key>,
     processed_regions: usize,
-    need_rewind: bool,
     working: bool,
 }
 
@@ -107,8 +96,6 @@ impl GcManagerContext {
     pub fn new() -> Self {
         Self {
             progress: None,
-            end: None,
-            need_rewind: false,
             processed_regions: 0,
             working: false,
         }
@@ -149,7 +136,7 @@ fn set_status_metrics(state: GcManagerState) {
 }
 
 #[derive(Display)]
-enum GcMsg {
+pub enum GcMsg {
     Timeout,
     Tick,
 }
@@ -178,8 +165,8 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     cluster_version: ClusterVersion,
 }
 impl<S: GcSafePointProvider, R: RegionInfoProvider> Runnable<GcMsg> for GcManager<S, R> {
-    fn register_scheduler(&mut self, scheduler: Scheduler<GsMsg>) {
-        scheduler.register_timeout(GsMsg::Timeout, self.cfg.poll_safe_point_interval);
+    fn register_scheduler(&mut self, scheduler: Scheduler<GcMsg>) {
+        scheduler.register_timeout(GcMsg::Timeout, self.cfg.poll_safe_point_interval);
         self.scheduler = Some(scheduler);
     }
 
@@ -213,7 +200,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> Runnable<GcMsg> for GcManage
                         }
                     }
                 }
-                self.scheduler.as_ref().register_timeout(GsMsg::Timeout, self.cfg.poll_safe_point_interval);
+                self.scheduler.as_ref().unwrap().register_timeout(GcMsg::Timeout, self.cfg.poll_safe_point_interval);
             },
             GcMsg::Tick => {
                 if self.tick_gc() {
@@ -356,8 +343,6 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     /// may never stop, but it doesn't matter.
     fn start_gc_round(&mut self) -> bool {
         // Represents where we should stop doing GC. `None` means the very end of the TiKV.
-        let mut end = None;
-        // Represents where we have GC-ed to. `None` means the very end of the TiKV.
         self.ctx.progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
         // Records how many region we have GC-ed.
         self.ctx.processed_regions = 0;
@@ -372,8 +357,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // At the same time, check whether safe_point is updated periodically. If it's updated,
         // rewinding will happen.
         // We are not going to rewind, So we will stop if `progress` reaches `end`.
-        if let Some(from_key) = self.ctx.progress.as_ref() {
-            self.gc_next_region(from_key.clone());
+        if let Some(progress) = self.ctx.progress.as_ref() {
+            let from_key = progress.clone();
+            drop(progress);
+            self.gc_next_region(from_key);
             return false;
         }
         // We have worked to the end of the TiKV or our progress has reached `end`, and we
@@ -390,7 +377,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     ) {
         // Get the information of the next region to do GC.
         let (range, next_key) = self.get_next_gc_context(from_key);
-        let (region_id, start, end) = match range {
+        let (region_id, start_key, end_key) = match range {
             Some((r, s, e)) => (r, s, e),
             None => {
                 self.ctx.progress = None;
@@ -398,8 +385,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             },
         };
 
-        let hex_start = hex::encode_upper(&start);
-        let hex_end = hex::encode_upper(&end);
+        let hex_start = hex::encode_upper(&start_key);
+        let hex_end = hex::encode_upper(&end_key);
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
         self.ctx.processed_regions += 1;
         AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
@@ -408,9 +395,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
         self.ctx.progress = next_key;
 
-        let scheduler = self.scheduler.clone();
+        let scheduler = self.scheduler.as_ref().unwrap().clone();
         let callback = Box::new(move |_| {
-            scheduler.scheduler(GcMsg::Tick);
+            scheduler.schedule(GcMsg::Tick).unwrap();
         });
         let safe_point = self.curr_safe_point();
         if !self.need_gc(&start_key, &end_key, safe_point) {
@@ -423,8 +410,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 end_key,
                 safe_point,
                 callback,
-            })
-            .or_else(handle_gc_task_schedule_error);
+            }).unwrap();
     }
 
     /// Check need gc without getting snapshot.
@@ -434,7 +420,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         let start = keys::data_key(start_key);
         let end = keys::data_end_key(end_key);
         let collection = match self.engine
-            .get_range_properties_cf(cf, &start, &end) {
+            .get_range_properties_cf(CF_WRITE, &start, &end) {
             Ok(c) => c,
             Err(_) => return true,
         };
