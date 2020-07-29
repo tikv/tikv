@@ -127,6 +127,11 @@ fn test_stream_batch_row_limit() {
 
     // only ignore first 7 bytes of the row id
     let ignored_suffix_len = tidb_query_datatype::codec::table::RECORD_ROW_KEY_LEN - 1;
+
+    // `expected_ranges_last_bytes` checks those assert:
+    // 1. We always fetch no more than stream_row_limit rows.
+    // 2. The responses' key ranges are disjoint.
+    // 3. Each returned key range should cover the returned rows.
     let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
         (b"\x00", b"\x02\x00"),
         (b"\x02\x00", b"\x05\x00"),
