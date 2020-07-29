@@ -407,10 +407,10 @@ impl<EK: KvEngine, ER: KvEngine> FsmOwner for PeerFsm<EK, ER> {
         std::mem::forget(fsm);
         unsafe { Box::from_raw(ptr) }
     }
-    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm> {
-        let ptr: *mut u8 = unsafe { std::mem::transmute(&*self) };
+    fn into_pinned_fsm(owner: Box<Self>) -> Box<Self::Fsm> {
+        let ptr: *mut u8 = unsafe { std::mem::transmute(&*owner) };
         let ptr = unsafe { ptr.offset(Self::hook_offset()) } as *mut Self::Fsm;
-        std::mem::forget(self);
+        std::mem::forget(owner);
         unsafe { Box::from_raw(ptr) }
     }
 

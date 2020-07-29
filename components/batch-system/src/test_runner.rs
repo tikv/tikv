@@ -5,7 +5,7 @@
 use crate::*;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
-use tikv_util::mpsc;
+use tikv_util::mpsc::{self, TryRecvError};
 
 /// Message `Runner` can accepts.
 pub enum Message {
@@ -39,6 +39,22 @@ impl Fsm for Runner {
 
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
         self.mailbox.take()
+    }
+}
+
+impl FsmOwner for Runner {
+    type Fsm = Runner;
+    fn from_pinned_fsm(fsm: Box<Self::Fsm>) -> Box<Self> {
+        fsm
+    }
+    fn into_pinned_fsm(owner: Box<Self>) -> Box<Self::Fsm> {
+        owner
+    }
+    fn fsm(&self) -> &Self::Fsm {
+        self
+    }
+    fn fsm_mut(&mut self) -> &mut Self::Fsm {
+        self
     }
 }
 
@@ -80,8 +96,17 @@ impl Handler {
                     }
                 }
                 Ok(Message::Callback(cb)) => cb(r),
-                Err(_) => break,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    r.is_stopped = true;
+                    break;
+                }
             }
+        }
+        if !r.recv.is_sender_connected() {
+            // TODO: calling `Sender::close_sender` on the respective `sender` can't
+            // notifies the `receiver`. Waiting crossbeam-rs/crossbeam#236 to get resoved.
+            r.is_stopped = true;
         }
         Some(0)
     }

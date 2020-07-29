@@ -124,7 +124,7 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
     pub fn release(&mut self, index: usize, checked_len: usize) {
         let mut fsm_owner = self.normals.swap_remove(index);
         let mailbox = fsm_owner.fsm_mut().take_mailbox().unwrap();
-        mailbox.release(fsm_owner.into_pinned_fsm());
+        mailbox.release(FsmOwner::into_pinned_fsm(fsm_owner));
         if mailbox.len() == checked_len {
             self.timers.swap_remove(index);
         } else {
@@ -149,7 +149,7 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
         let mut fsm_owner = self.normals.swap_remove(index);
         let mailbox = fsm_owner.fsm_mut().take_mailbox().unwrap();
         if mailbox.is_empty() {
-            mailbox.release(NO::into_pinned_fsm(fsm_owner));
+            drop(fsm_owner);
             self.timers.swap_remove(index);
         } else {
             fsm_owner.fsm_mut().set_mailbox(Cow::Owned(mailbox));
@@ -188,8 +188,7 @@ impl<NO: FsmOwner, C: Fsm> Batch<NO, C> {
     /// Same as `remove`, but working on control FSM.
     pub fn remove_control(&mut self, control_box: &BasicMailbox<C>) {
         if control_box.is_empty() {
-            let s = self.control.take().unwrap();
-            control_box.release(s);
+            self.control.take().unwrap();
         }
     }
 }

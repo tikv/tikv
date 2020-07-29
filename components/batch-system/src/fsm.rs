@@ -50,8 +50,10 @@ pub trait Fsm {
 /// FsmOwner is used when handling active `Fsm`.
 pub trait FsmOwner {
     type Fsm: Fsm;
+    /// Convert a `Fsm` to a `FsmOwner`. `fsm` is pinned in batch-system actually.
     fn from_pinned_fsm(fsm: Box<Self::Fsm>) -> Box<Self>;
-    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm>;
+    /// Convert a `FsmOwner` to a `Fsm`. `owner` is pinned in batch-system actually.
+    fn into_pinned_fsm(owner: Box<Self>) -> Box<Self::Fsm>;
     fn fsm(&self) -> &Self::Fsm;
     fn fsm_mut(&mut self) -> &mut Self::Fsm;
 }
@@ -134,14 +136,5 @@ impl<N: Fsm> FsmState<N> {
             }
         }
         panic!("invalid release state: {:?} {}", previous, previous_status);
-    }
-}
-
-impl<N> Drop for FsmState<N> {
-    fn drop(&mut self) {
-        let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
-        if !ptr.is_null() {
-            panic!("drop fsm state with pending fsm");
-        }
     }
 }

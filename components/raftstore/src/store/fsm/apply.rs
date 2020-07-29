@@ -3080,8 +3080,8 @@ impl<E: KvEngine> FsmOwner for ApplyFsm<E> {
     fn from_pinned_fsm(inner: Box<Self::Fsm>) -> Box<Self> {
         inner
     }
-    fn into_pinned_fsm(self: Box<Self>) -> Box<Self::Fsm> {
-        self
+    fn into_pinned_fsm(owner: Box<Self>) -> Box<Self::Fsm> {
+        owner
     }
     fn fsm(&self) -> &Self::Fsm {
         self
@@ -3149,7 +3149,8 @@ where
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
-        unimplemented!()
+        // control fsm can only be notified when shutdown.
+        None
     }
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm<E>) -> Option<usize> {
@@ -3189,6 +3190,10 @@ where
                     break;
                 }
             }
+        }
+        if !normal.receiver.is_sender_connected() {
+            normal.delegate.stopped = true;
+            expected_msg_count = Some(0);
         }
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.wait_merge_state.is_some() {

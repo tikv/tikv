@@ -40,8 +40,8 @@ fn test_batch() {
         .unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));
     system.shutdown();
-    expected_metrics.control = 1;
-    expected_metrics.normal = 1;
-    expected_metrics.begin = 2;
+    expected_metrics.control = 2;
+    expected_metrics.normal = 2;
+    expected_metrics.begin = 4;
     assert_eq!(*metrics.lock().unwrap(), expected_metrics);
 }

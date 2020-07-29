@@ -9,9 +9,9 @@ supports closed detection and try operations.
 */
 pub mod batch;
 
-use crossbeam::channel::{
-    self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
-};
+use crossbeam::channel;
+pub use crossbeam::channel::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
+
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
@@ -160,6 +160,11 @@ impl<T> Receiver<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         self.receiver.recv_timeout(timeout)
+    }
+
+    /// Check whether the channel is still connected or not.
+    pub fn is_sender_connected(&self) -> bool {
+        self.state.is_sender_connected()
     }
 }
 

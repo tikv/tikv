@@ -728,6 +728,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
                 }
             }
         }
+        if !store.receiver.is_sender_connected() {
+            // TODO: remove the check after crossbeam-rs/crossbeam#236 is resolved.
+            store.store.stopped = true;
+            expected_msg_count = Some(0);
+        }
         let mut delegate = StoreFsmDelegate {
             fsm: store,
             ctx: &mut self.poll_ctx,
@@ -772,6 +777,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
                     break;
                 }
             }
+        }
+        if !peer.receiver.is_sender_connected() {
+            // TODO: remove the check after crossbeam-rs/crossbeam#236 is resolved.
+            peer.stop();
+            expected_msg_count = Some(0);
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
