@@ -23,7 +23,6 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     batch_row_limit: usize,
     is_streaming: bool,
     is_cache_enabled: bool,
-    enable_batch_if_possible: bool,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -45,17 +44,11 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             batch_row_limit,
             is_streaming,
             is_cache_enabled,
-            enable_batch_if_possible: true,
         }
     }
 
     pub fn data_version(mut self, data_version: Option<u64>) -> Self {
         self.data_version = data_version;
-        self
-    }
-
-    pub fn enable_batch_if_possible(mut self, enable_batch_if_possible: bool) -> Self {
-        self.enable_batch_if_possible = enable_batch_if_possible;
         self
     }
 
