@@ -1958,7 +1958,7 @@ mod tests {
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = new_txn!(snapshot, 5, true, cm.clone());
+        let mut txn = new_txn!(snapshot, 5, true, cm);
         assert!(txn
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
