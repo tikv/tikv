@@ -162,7 +162,8 @@ where
             batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
             db.write(&wb)?;
             wb.clear();
-            callback(batch.drain(..).as_slice());
+            callback(batch);
+            batch.clear();
             Ok(())
         };
 
