@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
-use tikv_util::worker::{FutureScheduler, Runnable, Scheduler};
+use tikv_util::worker::{Runnable, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -159,7 +159,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GcTask`s.
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker_scheduler: Scheduler<GcTask>,
     engine: RocksEngine,
     scheduler: Option<Scheduler<GcMsg>>,
 
@@ -234,7 +234,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
         engine: RocksEngine,
-        worker_scheduler: FutureScheduler<GcTask>,
+        worker_scheduler: Scheduler<GcTask>,
         cfg_tracker: GcWorkerConfigManager,
         cluster_version: ClusterVersion,
     ) -> GcManager<S, R> {

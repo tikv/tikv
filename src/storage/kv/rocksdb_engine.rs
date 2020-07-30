@@ -141,7 +141,7 @@ impl RocksEngine {
     }
 
     pub fn stop(&self) {
-        let mut core = self.core.lock().unwrap();
+        let core = self.core.lock().unwrap();
         if let Some(h) = core.worker.stop() {
             h.join().unwrap();
         }

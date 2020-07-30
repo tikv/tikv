@@ -4,7 +4,7 @@ use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
@@ -17,10 +17,7 @@ use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
-use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped, Worker,
-};
-use tokio_core::reactor::Handle;
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler, Worker};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -389,9 +386,9 @@ impl<E: Engine> GcRunner<E> {
     }
 }
 
-impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
+impl<E: Engine> Runnable<GcTask> for GcRunner<E> {
     #[inline]
-    fn run(&mut self, task: GcTask, _handle: &Handle) {
+    fn run(&mut self, task: GcTask) {
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -473,7 +470,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
     error!("failed to schedule gc task: {:?}", e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
@@ -493,8 +490,8 @@ pub struct GcWorker<E: Engine> {
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask>>>,
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker: Option<Worker>,
+    worker_scheduler: Option<Scheduler<GcTask>>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -543,16 +540,14 @@ impl<E: Engine> GcWorker<E> {
         cfg: GcConfig,
         cluster_version: ClusterVersion,
     ) -> GcWorker<E> {
-        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {
             engine,
             raft_store_router,
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
-            worker,
-            worker_scheduler,
+            worker: None,
+            worker_scheduler: None,
             applied_lock_collector: None,
             cluster_version,
         }
@@ -574,7 +569,7 @@ impl<E: Engine> GcWorker<E> {
             cfg,
             safe_point,
             self.engine.kv_engine(),
-            self.worker_scheduler.clone(),
+            self.worker_scheduler.as_ref().unwrap().clone(),
             self.config_manager.clone(),
             self.cluster_version.clone(),
         );
@@ -584,18 +579,15 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self, worker: Option<Worker>) {
         let runner = GcRunner::new(
             self.engine.clone(),
             self.raft_store_router.take(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        self.worker
-            .lock()
-            .unwrap()
-            .start(runner)
-            .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+        self.worker = worker.or_else(|| Some(Worker::new("gc-worker")));
+        self.worker_scheduler = Some(self.worker.as_ref().unwrap().start(runner));
     }
 
     pub fn start_observe_lock_apply(
@@ -611,7 +603,7 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn stop(&self) -> Result<()> {
         // Stop self.
-        if let Some(h) = self.worker.lock().unwrap().stop() {
+        if let Some(h) = self.worker.as_ref().unwrap().stop() {
             if let Err(e) = h.join() {
                 return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
             }
@@ -619,8 +611,8 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask> {
-        self.worker_scheduler.clone()
+    pub fn scheduler(&self) -> Scheduler<GcTask> {
+        self.worker_scheduler.as_ref().unwrap().clone()
     }
 
     /// Check whether GCWorker is busy. If busy, callback will be invoked with an error that
@@ -645,6 +637,8 @@ impl<E: Engine> GcWorker<E> {
             let start_key = vec![];
             let end_key = vec![];
             self.worker_scheduler
+                .as_ref()
+                .unwrap()
                 .schedule(GcTask::Gc {
                     region_id: 0,
                     start_key,
@@ -671,6 +665,8 @@ impl<E: Engine> GcWorker<E> {
         GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.check_is_busy(callback).map_or(Ok(()), |callback| {
             self.worker_scheduler
+                .as_ref()
+                .unwrap()
                 .schedule(GcTask::UnsafeDestroyRange {
                     ctx,
                     start_key,
@@ -696,6 +692,8 @@ impl<E: Engine> GcWorker<E> {
         GC_COMMAND_COUNTER_VEC_STATIC.physical_scan_lock.inc();
         self.check_is_busy(callback).map_or(Ok(()), |callback| {
             self.worker_scheduler
+                .as_ref()
+                .unwrap()
                 .schedule(GcTask::PhysicalScanLock {
                     ctx,
                     max_ts,

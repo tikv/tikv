@@ -1131,6 +1131,7 @@ impl RaftBatchSystem {
         pd_client: Arc<C>,
         mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        worker: Option<Worker>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
@@ -1146,8 +1147,10 @@ impl RaftBatchSystem {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let common_worker = worker.unwrap_or_else(|| Worker::new("store-worker"));
+
         let workers = Workers {
-            common_worker: Worker::new("store-worker"),
+            common_worker,
             pd_worker,
             coprocessor_host,
         };

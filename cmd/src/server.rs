@@ -427,9 +427,12 @@ impl TiKVServer {
             self.config.gc.clone(),
             self.pd_client.cluster_version(),
         );
-        gc_worker
-            .start()
-            .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+        let worker = if self.config.gc.enable_compaction_filter {
+            Some(self.shared_worker.clone())
+        } else {
+            None
+        };
+        gc_worker.start(worker);
         gc_worker
             .start_observe_lock_apply(
                 &mut self.shared_worker,
@@ -587,11 +590,18 @@ impl TiKVServer {
             self.state.clone(),
         );
 
+        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let worker = if cpu_num > 8 {
+            None
+        } else {
+            Some(self.shared_worker.clone())
+        };
         node.start(
             engines.engines.clone(),
             server.transport(),
             snap_mgr,
             pd_worker,
+            worker,
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),

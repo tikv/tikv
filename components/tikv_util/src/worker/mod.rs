@@ -251,7 +251,7 @@ impl Worker {
         scheduler
     }
 
-    pub fn stop(&mut self) -> Option<JoinHandle<()>> {
+    pub fn stop(&self) -> Option<JoinHandle<()>> {
         self.sender.send(WorkerMsg::Stop).unwrap();
         self.handle.lock().unwrap().take()
     }
