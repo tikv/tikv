@@ -21,7 +21,7 @@ use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::Statistics;
+use tikv::storage::{concurrency_manager::DefaultConcurrencyManager, Statistics};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
@@ -142,6 +142,7 @@ impl BackupRange {
         &self,
         writer: &mut BackupWriter,
         engine: &E,
+        concurrency_manager: DefaultConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
     ) -> Result<Statistics> {
@@ -165,6 +166,7 @@ impl BackupRange {
             false, /* fill_cache */
             Default::default(),
             false,
+            concurrency_manager,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
@@ -263,6 +265,7 @@ impl BackupRange {
         engine: &E,
         db: Arc<DB>,
         storage: &LimitedStorage,
+        concurrency_manager: DefaultConcurrencyManager,
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
@@ -276,7 +279,13 @@ impl BackupRange {
                     return Err(e);
                 }
             };
-        let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
+        let stat = match self.backup(
+            &mut writer,
+            engine,
+            concurrency_manager,
+            backup_ts,
+            start_ts,
+        ) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
@@ -348,6 +357,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
     pool_idle_threshold: u64,
     db: Arc<DB>,
     config_manager: ConfigManager,
+    concurrency_manager: DefaultConcurrencyManager,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -553,6 +563,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         region_info: R,
         db: Arc<DB>,
         config: BackupConfig,
+        concurrency_manager: DefaultConcurrencyManager,
     ) -> Endpoint<E, R> {
         Endpoint {
             store_id,
@@ -562,6 +573,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
+            concurrency_manager,
         }
     }
 
@@ -587,6 +599,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let engine = self.engine.clone();
         let db = self.db.clone();
         let store_id = self.store_id;
+        let concurrency_manager = self.concurrency_manager.clone();
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || loop {
             let (branges, is_raw_kv, cf) = {
@@ -644,6 +657,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             &engine,
                             db.clone(),
                             &storage,
+                            concurrency_manager.clone(),
                             name,
                             backup_ts,
                             start_ts,
@@ -900,6 +914,7 @@ pub mod tests {
             ])
             .build()
             .unwrap();
+        let concurrency_manager = DefaultConcurrencyManager::new(1.into());
         let db = rocks.get_rocksdb().get_sync_db();
         (
             temp,
@@ -909,6 +924,7 @@ pub mod tests {
                 MockRegionInfoProvider::new(),
                 db,
                 BackupConfig { num_threads: 4 },
+                concurrency_manager,
             ),
         )
     }

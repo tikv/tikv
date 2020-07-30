@@ -28,7 +28,9 @@ use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager, Snapshot, SnapshotStore, Statistics,
+};
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -44,6 +46,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         ranges: Vec<KeyRange>,
         start_ts: u64,
         snap: S,
+        concurrency_manager: DefaultConcurrencyManager,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
@@ -53,6 +56,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
             false,
+            concurrency_manager,
         );
         Ok(Self {
             req,

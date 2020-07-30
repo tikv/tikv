@@ -9,7 +9,9 @@ use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::storage::{
+    concurrency_manager::DefaultConcurrencyManager, Snapshot, SnapshotStore, Statistics,
+};
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
@@ -23,6 +25,7 @@ impl<S: Snapshot> ChecksumContext<S> {
         ranges: Vec<KeyRange>,
         start_ts: u64,
         snap: S,
+        concurrency_manager: DefaultConcurrencyManager,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
@@ -32,6 +35,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
             false,
+            concurrency_manager,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::new(store, false),

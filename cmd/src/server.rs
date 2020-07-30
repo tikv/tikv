@@ -41,6 +41,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
+use storage::concurrency_manager::DefaultConcurrencyManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -125,6 +126,7 @@ struct TiKVServer {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
+    concurrency_manager: DefaultConcurrencyManager,
 }
 
 struct Engines {
@@ -170,6 +172,13 @@ impl TiKVServer {
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
+        // Initialize concurrency manager
+        let latest_ts = pd_client
+            .get_tso()
+            .wait()
+            .expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -187,6 +196,7 @@ impl TiKVServer {
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
             lock_files: vec![],
+            concurrency_manager,
         }
     }
 
@@ -469,19 +479,12 @@ impl TiKVServer {
             storage_read_pools.handle()
         };
 
-        let latest_ts = self
-            .pd_client
-            .get_tso()
-            .wait()
-            .expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts.into());
-
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
-            concurrency_manager,
+            self.concurrency_manager.clone(),
             self.pd_client.clone(),
             self.config.pessimistic_txn.pipelined,
         )
@@ -529,7 +532,11 @@ impl TiKVServer {
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(&server_config, cop_read_pool_handle),
+            coprocessor::Endpoint::new(
+                &server_config,
+                cop_read_pool_handle,
+                self.concurrency_manager.clone(),
+            ),
             engines.raft_router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -732,6 +739,7 @@ impl TiKVServer {
             self.region_info_accessor.clone(),
             engines.engines.kv.as_inner().clone(),
             self.config.backup.clone(),
+            self.concurrency_manager.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,

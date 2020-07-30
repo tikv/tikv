@@ -211,7 +211,7 @@ impl Simulator for ServerCluster {
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
-            concurrency_manager,
+            concurrency_manager.clone(),
             Arc::new(DummyPdClient::new()),
             false,
         )?;
@@ -258,7 +258,8 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle());
+        let cop =
+            coprocessor::Endpoint::new(&server_cfg, cop_read_pool.handle(), concurrency_manager);
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(

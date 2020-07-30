@@ -49,14 +49,14 @@ impl<M: OrderedMap> HandleTable<M> {
 
     pub fn check_range<E>(
         &self,
-        start_key: &Key,
-        end_key: &Key,
-        mut check_fn: impl FnMut(&Lock) -> Result<(), E>,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        mut check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
         let e = self.0.find_first(start_key, end_key, |lock_ref| {
             lock_ref.with_lock(|lock| {
                 lock.as_ref().and_then(|lock| {
-                    if let Err(e) = check_fn(lock) {
+                    if let Err(e) = check_fn(lock_ref.key(), lock) {
                         Some(e)
                     } else {
                         None
@@ -85,8 +85,8 @@ pub trait OrderedMap: Default + Send + Sync + 'static {
     /// The `Some` return value of `pred` will be returned by `find_first`.
     fn find_first<'m, T>(
         &'m self,
-        start_key: &Key,
-        end_key: &Key,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
         pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
     ) -> Option<T>;
 
@@ -115,14 +115,17 @@ impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
 
     fn find_first<'m, T>(
         &'m self,
-        start_key: &Key,
-        end_key: &Key,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
         mut pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
     ) -> Option<T> {
-        for (_, handle) in self
-            .lock()
-            .range::<Key, _>((Bound::Included(start_key), Bound::Excluded(end_key)))
-        {
+        let lower_bound = start_key
+            .map(|k| Bound::Included(k))
+            .unwrap_or(Bound::Unbounded);
+        let upper_bound = end_key
+            .map(|k| Bound::Excluded(k))
+            .unwrap_or(Bound::Unbounded);
+        for (_, handle) in self.lock().range::<Key, _>((lower_bound, upper_bound)) {
             if let Some(v) = handle.clone().get_ref(self).and_then(&mut pred) {
                 return Some(v);
             }
@@ -247,29 +250,27 @@ mod test {
 
         // no lock found
         assert!(lock_table
-            .check_range(&Key::from_raw(b"m"), &Key::from_raw(b"n"), |_| Err(()))
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(())
+            )
             .is_ok());
 
         // lock passes check_fn
         assert!(lock_table
-            .check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
-                l, 5
-            ))
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
             .is_ok());
 
         // first lock does not pass check_fn
         assert_eq!(
-            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
-                l, 25
-            )),
+            lock_table.check_range(Some(&Key::from_raw(b"a")), None, |_, l| ts_check(l, 25)),
             Err(lock_k)
         );
 
         // first lock passes check_fn but the second does not
         assert_eq!(
-            lock_table.check_range(&Key::from_raw(b"a"), &Key::from_raw(b"z"), |l| ts_check(
-                l, 15
-            )),
+            lock_table.check_range(None, None, |_, l| ts_check(l, 15)),
             Err(lock_l)
         );
     }

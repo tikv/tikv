@@ -112,10 +112,10 @@ impl<M: OrderedMap> ConcurrencyManager<M> {
     /// It will also updates the max_read_ts.
     pub fn read_range_check<E>(
         &self,
-        start_key: &Key,
-        end_key: &Key,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
         ts: TimeStamp,
-        check_fn: impl FnMut(&Lock) -> Result<(), E>,
+        check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
@@ -158,12 +158,12 @@ mod tests {
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(&key_a, &key_b, 10.into(), |_| Err(()))
+            .read_range_check(Some(&key_a), Some(&key_b), 10.into(), |_, _| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 15.into());
 
         assert!(concurrency_manager
-            .read_range_check(&key_a, &key_b, 20.into(), |_| Err(()))
+            .read_range_check(Some(&key_a), Some(&key_b), 20.into(), |_, _| Err(()))
             .is_ok());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }

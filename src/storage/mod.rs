@@ -191,6 +191,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         self.engine.clone()
     }
 
+    #[cfg(test)]
+    pub fn get_concurrency_manager(&self) -> DefaultConcurrencyManager {
+        self.concurrency_manager.clone()
+    }
+
     /// Get a snapshot of `engine`.
     fn snapshot(
         engine: &E,
@@ -227,6 +232,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -256,6 +262,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
+                        concurrency_manager,
                     );
                     let result = snap_store
                         .get(&key, &mut statistics)
@@ -296,6 +303,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
+        let concurrency_manager = self.concurrency_manager.clone();
         let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -322,12 +330,16 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                     match snap.await {
                         Ok(snapshot) => {
-                            match PointGetterBuilder::new(snapshot, req.get_version().into())
-                                .fill_cache(fill_cache)
-                                .isolation_level(isolation_level)
-                                .multi(false)
-                                .bypass_locks(bypass_locks)
-                                .build()
+                            match PointGetterBuilder::new(
+                                snapshot,
+                                req.get_version().into(),
+                                concurrency_manager.clone(),
+                            )
+                            .fill_cache(fill_cache)
+                            .isolation_level(isolation_level)
+                            .multi(false)
+                            .bypass_locks(bypass_locks)
+                            .build()
                             {
                                 Ok(mut point_getter) => {
                                     let v = point_getter.get(&key);
@@ -369,6 +381,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -401,6 +414,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
+                        concurrency_manager,
                     );
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
@@ -461,6 +475,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -500,6 +515,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
+                        concurrency_manager,
                     );
 
                     let mut scanner;
