@@ -1174,6 +1174,7 @@ fn future_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
             Key::from_raw(req.get_start_key()),
             end_key,
             req.get_limit() as usize,
+            req.get_sample_step() as usize,
             req.get_version().into(),
             req.get_key_only(),
             req.get_reverse(),
