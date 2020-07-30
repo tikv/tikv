@@ -17,7 +17,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    Storage, TxnStatus,
+    SecondaryLocksStatus, Storage, TxnStatus,
 };
 use engine_rocks::RocksEngine;
 use futures::executor::{self, Notify, Spawn};
@@ -223,6 +223,12 @@ impl<
         future_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
+    );
+    handle_request!(
+        kv_check_secondary_locks,
+        future_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
     );
     handle_request!(
         kv_scan_lock,
@@ -1086,6 +1092,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, P: PdClient + 'stati
         BatchRollback, future_batch_rollback(storage), kv_batch_rollback;
         TxnHeartBeat, future_txn_heart_beat(storage), kv_txn_heart_beat;
         CheckTxnStatus, future_check_txn_status(storage), kv_check_txn_status;
+        CheckSecondaryLocks, future_check_secondary_locks(storage), kv_check_secondary_locks;
         ScanLock, future_scan_lock(storage), kv_scan_lock;
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
@@ -1617,6 +1624,18 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
+});
+txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, CheckSecondaryLocksResponse, (status, resp) {
+    match status {
+        Ok(SecondaryLocksStatus::Locked(locks)) => {
+            resp.set_locks(locks.into());
+        },
+        Ok(SecondaryLocksStatus::Committed(ts)) => {
+            resp.set_commit_ts(ts.into_inner());
+        },
+        Ok(SecondaryLocksStatus::RolledBack) => {},
+        Err(e) => resp.set_error(extract_key_error(&e)),
+    }
 });
 txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
     match v {
