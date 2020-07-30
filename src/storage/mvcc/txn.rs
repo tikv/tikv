@@ -3437,12 +3437,13 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let pd_client = Arc::new(DummyPdClient::new());
+        let cm = DefaultConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
-            let mut txn = MvccTxn::new(snapshot, ts, true, pd_client.clone());
+            let mut txn = MvccTxn::new(snapshot, ts, true, pd_client.clone(), cm.clone());
             let res = txn.check_secondary_lock(&key, ts).unwrap();
             let modifies = txn.into_modifies();
             if !modifies.is_empty() {
