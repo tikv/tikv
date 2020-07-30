@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::key_handle::{KeyHandle, KeyHandleMutexGuard, KeyHandleRef};
+use super::key_handle::{KeyHandle, KeyHandleGuard, KeyHandleRef};
 
 use parking_lot::Mutex;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use txn_types::{Key, Lock};
 
 #[derive(Clone, Default)]
-pub struct HandleTable(pub Arc<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>);
+pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>);
 
-impl HandleTable {
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_> {
+impl LockTable {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard<'_> {
         loop {
             if let Some(handle) = self.get(key) {
                 return handle.mutex_lock().await;
@@ -121,7 +121,7 @@ mod test {
 
     #[tokio::test]
     async fn test_lock_key() {
-        let lock_table = HandleTable::default();
+        let lock_table = LockTable::default();
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -154,7 +154,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_key() {
-        let lock_table = HandleTable::default();
+        let lock_table = LockTable::default();
         let key_k = Key::from_raw(b"k");
 
         // no lock found
@@ -183,7 +183,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_range() {
-        let lock_table = HandleTable::default();
+        let lock_table = LockTable::default();
 
         let lock_k = Lock::new(
             LockType::Lock,

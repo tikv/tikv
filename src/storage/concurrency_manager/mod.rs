@@ -8,11 +8,11 @@
 //! to ensure serializability. Lock information can be also stored in the
 //! manager and reading requests can check if these locks block the read.
 
-mod handle_table;
 mod key_handle;
+mod lock_table;
 
-pub use self::handle_table::HandleTable;
-pub use self::key_handle::{KeyHandle, KeyHandleMutexGuard};
+pub use self::key_handle::{KeyHandle, KeyHandleGuard};
+pub use self::lock_table::LockTable;
 
 use std::{
     mem::{self, MaybeUninit},
@@ -29,14 +29,14 @@ use txn_types::{Key, Lock, TimeStamp};
 // the mutex.
 pub struct ConcurrencyManager {
     max_read_ts: Arc<AtomicU64>,
-    handle_table: HandleTable,
+    lock_table: LockTable,
 }
 
 impl Clone for ConcurrencyManager {
     fn clone(&self) -> Self {
         ConcurrencyManager {
             max_read_ts: self.max_read_ts.clone(),
-            handle_table: self.handle_table.clone(),
+            lock_table: self.lock_table.clone(),
         }
     }
 }
@@ -45,7 +45,7 @@ impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
         ConcurrencyManager {
             max_read_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
-            handle_table: HandleTable::default(),
+            lock_table: LockTable::default(),
         }
     }
 
@@ -58,8 +58,8 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_> {
-        self.handle_table.lock_key(key).await
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard<'_> {
+        self.lock_table.lock_key(key).await
     }
 
     /// Acquires mutexes of the keys and returns the RAII guards. The order of the
@@ -67,17 +67,14 @@ impl ConcurrencyManager {
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_keys(
-        &self,
-        keys: impl Iterator<Item = &Key>,
-    ) -> Vec<KeyHandleMutexGuard<'_>> {
+    pub async fn lock_keys(&self, keys: impl Iterator<Item = &Key>) -> Vec<KeyHandleGuard<'_>> {
         let mut keys_with_index: Vec<_> = keys.enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
-        let mut result: Vec<MaybeUninit<KeyHandleMutexGuard<'_>>> = Vec::new();
+        let mut result: Vec<MaybeUninit<KeyHandleGuard<'_>>> = Vec::new();
         result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
         for (index, key) in keys_with_index {
-            result[index] = MaybeUninit::new(self.handle_table.lock_key(key).await);
+            result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
         #[allow(clippy::unsound_collection_transmute)]
         unsafe {
@@ -98,7 +95,7 @@ impl ConcurrencyManager {
     ) -> Result<(), E> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.handle_table.check_key(key, check_fn)
+        self.lock_table.check_key(key, check_fn)
     }
 
     /// Checks if there is a memory lock in the range which blocks the read.
@@ -115,7 +112,7 @@ impl ConcurrencyManager {
     ) -> Result<(), E> {
         self.max_read_ts
             .fetch_max(ts.into_inner(), Ordering::SeqCst);
-        self.handle_table.check_range(start_key, end_key, check_fn)
+        self.lock_table.check_range(start_key, end_key, check_fn)
     }
 }
 

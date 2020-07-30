@@ -3,7 +3,7 @@
 mod lock_store;
 
 use self::lock_store::LockStore;
-use super::handle_table::HandleTable;
+use super::lock_table::LockTable;
 
 use std::{
     mem,
@@ -29,7 +29,7 @@ pub struct KeyHandle {
 }
 
 impl KeyHandle {
-    pub fn new_with_ref(key: Key, table: &HandleTable) -> KeyHandleWithRef<'_> {
+    pub fn new_with_ref(key: Key, table: &LockTable) -> KeyHandleWithRef<'_> {
         let key_handle = Arc::new(KeyHandle {
             key,
             ref_count: AtomicUsize::new(1),
@@ -46,7 +46,7 @@ impl KeyHandle {
         }
     }
 
-    pub fn get_ref<'m>(self: Arc<Self>, table: &'m HandleTable) -> Option<KeyHandleRef<'m>> {
+    pub fn get_ref<'m>(self: Arc<Self>, table: &'m LockTable) -> Option<KeyHandleRef<'m>> {
         let mut ref_count = self.ref_count.load(Ordering::SeqCst);
         loop {
             // It is possible that the reference count has just decreased to zero and not
@@ -75,7 +75,7 @@ impl KeyHandle {
 
 pub struct KeyHandleRef<'m> {
     handle: Arc<KeyHandle>,
-    table: &'m HandleTable,
+    table: &'m LockTable,
 }
 
 impl<'m> KeyHandleRef<'m> {
@@ -83,12 +83,12 @@ impl<'m> KeyHandleRef<'m> {
         &self.key
     }
 
-    pub async fn mutex_lock(self) -> KeyHandleMutexGuard<'m> {
-        // Safety: `_mutex_guard` is declared after `handle_ref` in `KeyHandleMutexGuard`.
+    pub async fn mutex_lock(self) -> KeyHandleGuard<'m> {
+        // Safety: `_mutex_guard` is declared after `handle_ref` in `KeyHandleGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
         let mutex_guard = unsafe { mem::transmute(self.key_mutex.lock().await) };
-        KeyHandleMutexGuard {
+        KeyHandleGuard {
             handle_ref: self,
             _mutex_guard: mutex_guard,
         }
@@ -121,14 +121,14 @@ pub struct KeyHandleWithRef<'m> {
 }
 
 /// A `KeyHandleRef` with its mutex locked.
-pub struct KeyHandleMutexGuard<'m> {
+pub struct KeyHandleGuard<'m> {
     // It must be declared before `handle_ref` so it will be dropped before
     // `handle_ref`.
     _mutex_guard: AsyncMutexGuard<'m, ()>,
     handle_ref: KeyHandleRef<'m>,
 }
 
-impl<'m> KeyHandleMutexGuard<'m> {
+impl<'m> KeyHandleGuard<'m> {
     pub fn key(&self) -> &Key {
         &self.handle_ref.key()
     }
@@ -150,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let table = HandleTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
         let handle_with_ref = KeyHandle::new_with_ref(Key::from_raw(b"k"), &table);
         table.insert_if_not_exist(Key::from_raw(b"k"), handle_with_ref.key_handle.clone());
 
@@ -179,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ref_count() {
-        let table = HandleTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let table = LockTable(Arc::new(Mutex::new(BTreeMap::new())));
 
         let k = Key::from_raw(b"k");
 
