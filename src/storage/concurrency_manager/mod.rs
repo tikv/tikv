@@ -27,18 +27,10 @@ use txn_types::{Key, Lock, TimeStamp};
 // In the future we should replace it with a concurrent ordered map.
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
+#[derive(Clone)]
 pub struct ConcurrencyManager {
     max_read_ts: Arc<AtomicU64>,
     lock_table: LockTable,
-}
-
-impl Clone for ConcurrencyManager {
-    fn clone(&self) -> Self {
-        ConcurrencyManager {
-            max_read_ts: self.max_read_ts.clone(),
-            lock_table: self.lock_table.clone(),
-        }
-    }
 }
 
 impl ConcurrencyManager {
