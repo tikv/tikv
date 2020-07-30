@@ -280,6 +280,9 @@ where
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+    /// Whether this peer is created by replication and is the first
+    /// one of this region on local store.
+    pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
@@ -369,6 +372,7 @@ where
             replication_sync: false,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
@@ -383,7 +387,7 @@ where
     /// Sets commit group to the peer.
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
-        if !self.get_store().region().get_peers().is_empty() {
+        if self.is_initialized() {
             let version = state.status().get_dr_auto_sync().state_id;
             let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
             self.raft_group.raft.assign_commit_groups(gb);
@@ -933,6 +937,15 @@ where
             if id == self.peer.get_id() {
                 continue;
             }
+            // The `matched` is 0 only in these two cases:
+            // 1. Current leader hasn't communicated with this peer.
+            // 2. This peer does not exist yet(maybe it is created but not initialized)
+            //
+            // The correctness of region merge depends on the fact that all target peers must exist during merging.
+            // (PD rely on `pending_peers` to check whether all target peers exist)
+            //
+            // So if the `matched` is 0, it must be a pending peer.
+            // It can be ensured because `truncated_index` must be greater than `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
@@ -3113,6 +3126,41 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::default();
     resp.set_admin_response(response);
     resp
+}
+
+/// A poor version of `Peer` to avoid port generic variables everywhere.
+pub trait AbstractPeer {
+    fn meta_peer(&self) -> &metapb::Peer;
+    fn region(&self) -> &metapb::Region;
+    fn apply_state(&self) -> &RaftApplyState;
+    fn raft_status(&self) -> raft::Status;
+    fn raft_committed_index(&self) -> u64;
+    fn raft_request_snapshot(&mut self, index: u64);
+    fn pending_merge_state(&self) -> Option<&MergeState>;
+}
+
+impl<EK: KvEngine, ER: KvEngine> AbstractPeer for Peer<EK, ER> {
+    fn meta_peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+    fn region(&self) -> &metapb::Region {
+        self.raft_group.store().region()
+    }
+    fn apply_state(&self) -> &RaftApplyState {
+        self.raft_group.store().apply_state()
+    }
+    fn raft_status(&self) -> raft::Status {
+        self.raft_group.status()
+    }
+    fn raft_committed_index(&self) -> u64 {
+        self.raft_group.store().committed_index()
+    }
+    fn raft_request_snapshot(&mut self, index: u64) {
+        self.raft_group.request_snapshot(index).unwrap();
+    }
+    fn pending_merge_state(&self) -> Option<&MergeState> {
+        self.pending_merge_state.as_ref()
+    }
 }
 
 #[cfg(test)]
