@@ -58,7 +58,7 @@ impl ConcurrencyManager {
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard<'_> {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         self.lock_table.lock_key(key).await
     }
 
@@ -67,11 +67,11 @@ impl ConcurrencyManager {
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
-    pub async fn lock_keys(&self, keys: impl Iterator<Item = &Key>) -> Vec<KeyHandleGuard<'_>> {
+    pub async fn lock_keys(&self, keys: impl Iterator<Item = &Key>) -> Vec<KeyHandleGuard> {
         let mut keys_with_index: Vec<_> = keys.enumerate().collect();
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
-        let mut result: Vec<MaybeUninit<KeyHandleGuard<'_>>> = Vec::new();
+        let mut result: Vec<MaybeUninit<KeyHandleGuard>> = Vec::new();
         result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);

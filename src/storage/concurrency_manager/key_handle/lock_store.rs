@@ -1,35 +1,37 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::KeyHandle;
+
 use parking_lot::Mutex;
 use txn_types::Lock;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 pub struct LockStore {
-    lock: Mutex<Option<Lock>>,
+    lock: Mutex<(Option<Lock>, Option<Arc<KeyHandle>>)>,
 }
 
 impl LockStore {
     pub fn new() -> Self {
         LockStore {
-            lock: Mutex::new(None),
+            lock: Mutex::new((None, None)),
         }
     }
 
     pub fn read<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
-        f(&*self.lock.lock())
+        f(&self.lock.lock().0)
     }
 
-    pub fn write<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T, ref_count: &AtomicUsize) -> T {
-        let mut lock = self.lock.lock();
-        let has_lock_before = lock.is_some();
-        let ret = f(&mut *lock);
-        let has_lock_after = lock.is_some();
+    pub fn write<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T, handle: &Arc<KeyHandle>) -> T {
+        let mut guard = self.lock.lock();
+        let has_lock_before = guard.0.is_some();
+        let ret = f(&mut guard.0);
+        let has_lock_after = guard.0.is_some();
         match (has_lock_before, has_lock_after) {
             (false, true) => {
                 // A new lock is stored, increase the reference count by one to prevent
                 // it from being removed from the table.
-                ref_count.fetch_add(1, Ordering::SeqCst);
+                guard.1 = Some(handle.clone());
             }
             (true, false) => {
                 // TODO: wake up tasks waiting for releasing the lock

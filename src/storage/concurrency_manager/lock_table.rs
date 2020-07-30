@@ -1,23 +1,28 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::key_handle::{KeyHandle, KeyHandleGuard, KeyHandleRef};
+use super::key_handle::{KeyHandle, KeyHandleGuard};
 
 use parking_lot::Mutex;
-use std::{collections::BTreeMap, ops::Bound, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ops::Bound,
+    sync::{Arc, Weak},
+};
 use txn_types::{Key, Lock};
 
 #[derive(Clone, Default)]
-pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>);
+pub struct LockTable(pub Arc<Mutex<BTreeMap<Key, Weak<KeyHandle>>>>);
 
 impl LockTable {
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard<'_> {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
             if let Some(handle) = self.get(key) {
-                return handle.mutex_lock().await;
+                return handle.lock().await;
             } else {
-                let handle_with_ref = KeyHandle::new_with_ref(key.clone(), self);
-                let guard = handle_with_ref.key_handle_ref.mutex_lock().await;
-                if self.insert_if_not_exist(key.clone(), handle_with_ref.key_handle) {
+                let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
+                let weak = Arc::downgrade(&handle);
+                let guard = handle.lock().await;
+                if self.insert_if_not_exist(key.clone(), weak) {
                     return guard;
                 }
             }
@@ -46,10 +51,10 @@ impl LockTable {
         end_key: Option<&Key>,
         mut check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        let e = self.find_first(start_key, end_key, |lock_ref| {
-            lock_ref.with_lock(|lock| {
+        let e = self.find_first(start_key, end_key, |handle| {
+            handle.with_lock(|lock| {
                 lock.as_ref()
-                    .and_then(|lock| check_fn(lock_ref.key(), lock).err())
+                    .and_then(|lock| check_fn(&handle.key, lock).err())
             })
         });
         if let Some(e) = e {
@@ -61,7 +66,7 @@ impl LockTable {
 
     /// Inserts a key handle to the map if the key does not exists in the map.
     /// Returns whether the handle is successfully inserted into the map.
-    pub fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool {
+    pub fn insert_if_not_exist(&self, key: Key, handle: Weak<KeyHandle>) -> bool {
         use std::collections::btree_map::Entry;
 
         match self.0.lock().entry(key) {
@@ -74,11 +79,8 @@ impl LockTable {
     }
 
     /// Gets the handle of the key.
-    pub fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m>> {
-        self.0
-            .lock()
-            .get(key)
-            .and_then(|handle| handle.clone().get_ref(self))
+    pub fn get<'m>(&'m self, key: &Key) -> Option<Arc<KeyHandle>> {
+        self.0.lock().get(key).and_then(|handle| handle.upgrade())
     }
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
@@ -87,7 +89,7 @@ impl LockTable {
         &'m self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
-        mut pred: impl FnMut(KeyHandleRef<'m>) -> Option<T>,
+        mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
     ) -> Option<T> {
         let lower_bound = start_key
             .map(|k| Bound::Included(k))
@@ -96,7 +98,7 @@ impl LockTable {
             .map(|k| Bound::Excluded(k))
             .unwrap_or(Bound::Unbounded);
         for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
-            if let Some(v) = handle.clone().get_ref(self).and_then(&mut pred) {
+            if let Some(v) = handle.upgrade().and_then(&mut pred) {
                 return Some(v);
             }
         }
