@@ -398,7 +398,7 @@ mod tests {
         };
         assert_eq!(expected, point_getter.met_newer_ts_data());
 
-        let mut point_getter = PointGetterBuilder::new(snapshot, ts, cm.clone())
+        let mut point_getter = PointGetterBuilder::new(snapshot, ts, cm)
             .isolation_level(IsolationLevel::Si)
             .check_has_newer_ts_data(false)
             .build()
@@ -806,7 +806,7 @@ mod tests {
         must_get_value(&mut getter, key, val);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut getter = PointGetterBuilder::new(snapshot, 60.into(), cm.clone())
+        let mut getter = PointGetterBuilder::new(snapshot, 60.into(), cm)
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))
             .build()
