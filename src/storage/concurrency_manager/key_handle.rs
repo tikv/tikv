@@ -3,7 +3,7 @@
 mod lock_store;
 
 use self::lock_store::LockStore;
-use super::handle_table::OrderedMap;
+use super::handle_table::HandleTable;
 
 use std::{
     mem,
@@ -29,7 +29,7 @@ pub struct KeyHandle {
 }
 
 impl KeyHandle {
-    pub fn new_with_ref<M: OrderedMap>(key: Key, map: &M) -> KeyHandleWithRef<'_, M> {
+    pub fn new_with_ref(key: Key, table: &HandleTable) -> KeyHandleWithRef<'_> {
         let key_handle = Arc::new(KeyHandle {
             key,
             ref_count: AtomicUsize::new(1),
@@ -38,7 +38,7 @@ impl KeyHandle {
         });
         let key_handle_ref = KeyHandleRef {
             handle: key_handle.clone(),
-            map,
+            table,
         };
         KeyHandleWithRef {
             key_handle_ref,
@@ -46,7 +46,7 @@ impl KeyHandle {
         }
     }
 
-    pub fn get_ref<'m, M: OrderedMap>(self: Arc<Self>, map: &'m M) -> Option<KeyHandleRef<'m, M>> {
+    pub fn get_ref<'m>(self: Arc<Self>, table: &'m HandleTable) -> Option<KeyHandleRef<'m>> {
         let mut ref_count = self.ref_count.load(Ordering::SeqCst);
         loop {
             // It is possible that the reference count has just decreased to zero and not
@@ -62,7 +62,10 @@ impl KeyHandle {
                 Ordering::SeqCst,
             ) {
                 Ok(_) => {
-                    return Some(KeyHandleRef { handle: self, map });
+                    return Some(KeyHandleRef {
+                        handle: self,
+                        table,
+                    });
                 }
                 Err(n) => ref_count = n,
             }
@@ -70,17 +73,17 @@ impl KeyHandle {
     }
 }
 
-pub struct KeyHandleRef<'m, M: OrderedMap> {
+pub struct KeyHandleRef<'m> {
     handle: Arc<KeyHandle>,
-    map: &'m M,
+    table: &'m HandleTable,
 }
 
-impl<'m, M: OrderedMap> KeyHandleRef<'m, M> {
+impl<'m> KeyHandleRef<'m> {
     pub fn key(&self) -> &Key {
         &self.key
     }
 
-    pub async fn mutex_lock(self) -> KeyHandleMutexGuard<'m, M> {
+    pub async fn mutex_lock(self) -> KeyHandleMutexGuard<'m> {
         // Safety: `_mutex_guard` is declared after `handle_ref` in `KeyHandleMutexGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
@@ -96,7 +99,7 @@ impl<'m, M: OrderedMap> KeyHandleRef<'m, M> {
     }
 }
 
-impl<'m, M: OrderedMap> Deref for KeyHandleRef<'m, M> {
+impl<'m> Deref for KeyHandleRef<'m> {
     type Target = Arc<KeyHandle>;
 
     fn deref(&self) -> &Arc<KeyHandle> {
@@ -104,28 +107,28 @@ impl<'m, M: OrderedMap> Deref for KeyHandleRef<'m, M> {
     }
 }
 
-impl<'m, M: OrderedMap> Drop for KeyHandleRef<'m, M> {
+impl<'m> Drop for KeyHandleRef<'m> {
     fn drop(&mut self) {
         if self.handle.ref_count.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.map.remove(&self.key);
+            self.table.remove(&self.key);
         }
     }
 }
 
-pub struct KeyHandleWithRef<'m, M: OrderedMap> {
-    pub(super) key_handle_ref: KeyHandleRef<'m, M>,
+pub struct KeyHandleWithRef<'m> {
+    pub(super) key_handle_ref: KeyHandleRef<'m>,
     pub(super) key_handle: Arc<KeyHandle>,
 }
 
 /// A `KeyHandleRef` with its mutex locked.
-pub struct KeyHandleMutexGuard<'m, M: OrderedMap> {
+pub struct KeyHandleMutexGuard<'m> {
     // It must be declared before `handle_ref` so it will be dropped before
     // `handle_ref`.
     _mutex_guard: AsyncMutexGuard<'m, ()>,
-    handle_ref: KeyHandleRef<'m, M>,
+    handle_ref: KeyHandleRef<'m>,
 }
 
-impl<'m, M: OrderedMap> KeyHandleMutexGuard<'m, M> {
+impl<'m> KeyHandleMutexGuard<'m> {
     pub fn key(&self) -> &Key {
         &self.handle_ref.key()
     }
@@ -147,18 +150,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let handle_with_ref = KeyHandle::new_with_ref(Key::from_raw(b"k"), &*map);
-        map.insert_if_not_exist(Key::from_raw(b"k"), handle_with_ref.key_handle.clone());
+        let table = HandleTable(Arc::new(Mutex::new(BTreeMap::new())));
+        let handle_with_ref = KeyHandle::new_with_ref(Key::from_raw(b"k"), &table);
+        table.insert_if_not_exist(Key::from_raw(b"k"), handle_with_ref.key_handle.clone());
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
         for _ in 0..100 {
-            let map = map.clone();
+            let table = table.clone();
             let handle = handle_with_ref.key_handle.clone();
             let counter = counter.clone();
             let handle = tokio::spawn(async move {
-                let lock_ref = handle.get_ref(&*map).unwrap();
+                let lock_ref = handle.get_ref(&table).unwrap();
                 let _guard = lock_ref.mutex_lock().await;
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.
@@ -176,25 +179,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_ref_count() {
-        let map = Mutex::new(BTreeMap::new());
+        let table = HandleTable(Arc::new(Mutex::new(BTreeMap::new())));
 
         let k = Key::from_raw(b"k");
 
         // simple case
-        let with_ref = KeyHandle::new_with_ref(k.clone(), &map);
-        map.insert_if_not_exist(k.clone(), with_ref.key_handle);
-        let lock_ref1 = map.get(&k).unwrap();
-        let lock_ref2 = map.get(&k).unwrap();
+        let with_ref = KeyHandle::new_with_ref(k.clone(), &table);
+        table.insert_if_not_exist(k.clone(), with_ref.key_handle);
+        let lock_ref1 = table.get(&k).unwrap();
+        let lock_ref2 = table.get(&k).unwrap();
         drop(with_ref.key_handle_ref);
         drop(lock_ref1);
-        assert!(map.get(&k).is_some());
+        assert!(table.get(&k).is_some());
         drop(lock_ref2);
-        assert!(map.get(&k).is_none());
+        assert!(table.get(&k).is_none());
 
         // should not removed it from the table if a lock is stored in it
-        let with_ref = KeyHandle::new_with_ref(k.clone(), &map);
-        map.insert_if_not_exist(k.clone(), with_ref.key_handle);
-        let guard = map.get(&k).unwrap().mutex_lock().await;
+        let with_ref = KeyHandle::new_with_ref(k.clone(), &table);
+        table.insert_if_not_exist(k.clone(), with_ref.key_handle);
+        let guard = table.get(&k).unwrap().mutex_lock().await;
         guard.with_lock(|lock| {
             *lock = Some(Lock::new(
                 LockType::Lock,
@@ -209,12 +212,12 @@ mod tests {
         });
         drop(with_ref.key_handle_ref);
         drop(guard);
-        assert!(map.get(&k).is_some());
+        assert!(table.get(&k).is_some());
 
         // remove the lock stored in, then the handle should be removed from the table
-        let guard = map.get(&k).unwrap().mutex_lock().await;
+        let guard = table.get(&k).unwrap().mutex_lock().await;
         guard.with_lock(|lock| *lock = None);
         drop(guard);
-        assert!(map.get(&k).is_some());
+        assert!(table.get(&k).is_some());
     }
 }

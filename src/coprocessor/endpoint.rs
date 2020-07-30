@@ -30,7 +30,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::prelude::*;
-use storage::concurrency_manager::DefaultConcurrencyManager;
+use storage::concurrency_manager::ConcurrencyManager;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -44,7 +44,7 @@ pub struct Endpoint<E: Engine> {
     /// The concurrency limiter of the coprocessor.
     semaphore: Option<Arc<Semaphore>>,
 
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
@@ -79,7 +79,7 @@ impl<E: Engine> Endpoint<E> {
     pub fn new(
         cfg: &Config,
         read_pool: ReadPoolHandle,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -777,7 +777,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // a normal request
@@ -815,7 +815,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
         cop.recursion_limit = 100;
 
@@ -852,7 +852,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();
@@ -872,7 +872,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let mut req = coppb::Request::default();
@@ -914,7 +914,7 @@ mod tests {
             .collect::<Vec<_>>(),
         );
 
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let (tx, rx) = mpsc::channel();
@@ -956,7 +956,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let handler_builder =
@@ -976,7 +976,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // Fail immediately
@@ -1023,7 +1023,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1045,7 +1045,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
 
         // handler returns `finished == true` should not be called again.
@@ -1135,7 +1135,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
@@ -1201,7 +1201,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
 
         let (tx, rx) = std::sync::mpsc::channel();

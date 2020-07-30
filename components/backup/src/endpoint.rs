@@ -21,7 +21,7 @@ use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::{concurrency_manager::DefaultConcurrencyManager, Statistics};
+use tikv::storage::{concurrency_manager::ConcurrencyManager, Statistics};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
@@ -142,7 +142,7 @@ impl BackupRange {
         &self,
         writer: &mut BackupWriter,
         engine: &E,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
     ) -> Result<Statistics> {
@@ -265,7 +265,7 @@ impl BackupRange {
         engine: &E,
         db: Arc<DB>,
         storage: &LimitedStorage,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
@@ -357,7 +357,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
     pool_idle_threshold: u64,
     db: Arc<DB>,
     config_manager: ConfigManager,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -563,7 +563,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         region_info: R,
         db: Arc<DB>,
         config: BackupConfig,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<E, R> {
         Endpoint {
             store_id,
@@ -914,7 +914,7 @@ pub mod tests {
             ])
             .build()
             .unwrap();
-        let concurrency_manager = DefaultConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new(1.into());
         let db = rocks.get_rocksdb().get_sync_db();
         (
             temp,

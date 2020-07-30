@@ -7,7 +7,7 @@ use std::sync::Arc;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::{
-    concurrency_manager::DefaultConcurrencyManager,
+    concurrency_manager::ConcurrencyManager,
     mvcc::{self, MvccReader, MvccTxn},
 };
 use txn_types::{Key, Mutation, TimeStamp};
@@ -26,7 +26,7 @@ where
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let start_ts = start_ts.into();
-    let cm = DefaultConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
 
     let kvs = KvGenerator::with_seed(
@@ -57,7 +57,7 @@ where
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -85,7 +85,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
@@ -103,7 +103,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
@@ -121,7 +121,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 2),
         |(snapshot, keys)| {
@@ -140,7 +140,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let kvs = KvGenerator::with_seed(

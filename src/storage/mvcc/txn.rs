@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
-use crate::storage::{concurrency_manager::DefaultConcurrencyManager, types::TxnStatus};
+use crate::storage::{concurrency_manager::ConcurrencyManager, types::TxnStatus};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use pd_client::PdClient;
@@ -89,7 +89,7 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     collapse_rollback: bool,
     pub extra_op: ExtraOp,
     _pd_client: Arc<P>,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
@@ -98,7 +98,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
         fill_cache: bool,
         pd_client: Arc<P>,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> MvccTxn<S, P> {
         // FIXME: use session variable to indicate fill cache or not.
 
@@ -125,7 +125,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
         fill_cache: bool,
         pd_client: Arc<P>,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> MvccTxn<S, P> {
         Self::from_reader(
             MvccReader::new(snapshot, scan_mode, fill_cache, IsolationLevel::Si),
@@ -139,7 +139,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         reader: MvccReader<S>,
         start_ts: TimeStamp,
         pd_client: Arc<P>,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> MvccTxn<S, P> {
         MvccTxn {
             reader,
@@ -1956,7 +1956,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = DefaultConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new(10.into());
         let mut txn = new_txn!(snapshot, 10, true, cm.clone());
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
@@ -2003,7 +2003,7 @@ mod tests {
 
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = DefaultConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new(10.into());
         let mut txn = new_txn!(snapshot, 5, true, cm.clone());
         assert!(txn
             .prewrite(
@@ -3274,7 +3274,7 @@ mod tests {
         for case in cases {
             let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
             let mutation_type = mutation.mutation_type();
-            let cm = DefaultConcurrencyManager::new(start_ts.into());
+            let cm = ConcurrencyManager::new(start_ts.into());
             let mut txn = new_txn(start_ts.into(), cm.clone());
 
             txn.extra_op = ExtraOp::ReadOldValue;
@@ -3335,7 +3335,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
-        let cm = DefaultConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new(42.into());
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client), cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
@@ -3376,7 +3376,7 @@ mod tests {
         let pd_client = Arc::new(pd_client);
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = DefaultConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new(42.into());
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::new(2),
@@ -3437,7 +3437,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let pd_client = Arc::new(DummyPdClient::new());
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
             let snapshot = engine.snapshot(&ctx).unwrap();

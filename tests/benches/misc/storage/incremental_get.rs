@@ -6,7 +6,7 @@ use std::sync::Arc;
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{
-    concurrency_manager::DefaultConcurrencyManager, Engine, SnapshotStore, Statistics, Store,
+    concurrency_manager::ConcurrencyManager, Engine, SnapshotStore, Statistics, Store,
 };
 use txn_types::{Key, Mutation};
 
@@ -37,7 +37,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     let snapshot = engine.snapshot(&Context::default()).unwrap();
-    let cm = DefaultConcurrencyManager::new(10.into());
+    let cm = ConcurrencyManager::new(10.into());
     let store = SnapshotStore::new(
         snapshot,
         10.into(),

@@ -41,7 +41,6 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
-use storage::concurrency_manager::DefaultConcurrencyManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
@@ -126,7 +125,7 @@ struct TiKVServer {
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 }
 
 struct Engines {

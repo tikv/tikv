@@ -6,27 +6,18 @@ use parking_lot::Mutex;
 use std::{collections::BTreeMap, ops::Bound, sync::Arc};
 use txn_types::{Key, Lock};
 
-#[derive(Default)]
-pub struct HandleTable<M>(Arc<M>);
+#[derive(Clone, Default)]
+pub struct HandleTable(pub Arc<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>);
 
-impl<M: OrderedMap> Clone for HandleTable<M> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<M: OrderedMap> HandleTable<M> {
-    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_, M> {
+impl HandleTable {
+    pub async fn lock_key(&self, key: &Key) -> KeyHandleMutexGuard<'_> {
         loop {
-            if let Some(handle) = self.0.get(key) {
+            if let Some(handle) = self.get(key) {
                 return handle.mutex_lock().await;
             } else {
-                let handle_with_ref = KeyHandle::new_with_ref(key.clone(), &*self.0);
+                let handle_with_ref = KeyHandle::new_with_ref(key.clone(), self);
                 let guard = handle_with_ref.key_handle_ref.mutex_lock().await;
-                if self
-                    .0
-                    .insert_if_not_exist(key.clone(), handle_with_ref.key_handle)
-                {
+                if self.insert_if_not_exist(key.clone(), handle_with_ref.key_handle) {
                     return guard;
                 }
             }
@@ -38,7 +29,7 @@ impl<M: OrderedMap> HandleTable<M> {
         key: &Key,
         check_fn: impl FnOnce(&Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        if let Some(lock_ref) = self.0.get(key) {
+        if let Some(lock_ref) = self.get(key) {
             return lock_ref.with_lock(|lock| {
                 if let Some(lock) = &*lock {
                     return check_fn(lock);
@@ -55,7 +46,7 @@ impl<M: OrderedMap> HandleTable<M> {
         end_key: Option<&Key>,
         mut check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        let e = self.0.find_first(start_key, end_key, |lock_ref| {
+        let e = self.find_first(start_key, end_key, |lock_ref| {
             lock_ref.with_lock(|lock| {
                 lock.as_ref()
                     .and_then(|lock| check_fn(lock_ref.key(), lock).err())
@@ -67,35 +58,13 @@ impl<M: OrderedMap> HandleTable<M> {
             Ok(())
         }
     }
-}
 
-/// A concurrent ordered map which maps encoded keys to key handle.
-pub trait OrderedMap: Default + Send + Sync + 'static {
     /// Inserts a key handle to the map if the key does not exists in the map.
     /// Returns whether the handle is successfully inserted into the map.
-    fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool;
-
-    /// Gets the handle of the key.
-    fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m, Self>>;
-
-    /// Finds the first handle in the given range that `pred` returns `Some`.
-    /// The `Some` return value of `pred` will be returned by `find_first`.
-    fn find_first<'m, T>(
-        &'m self,
-        start_key: Option<&Key>,
-        end_key: Option<&Key>,
-        pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
-    ) -> Option<T>;
-
-    /// Removes the key and its key handle from the map.
-    fn remove(&self, key: &Key);
-}
-
-impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
-    fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool {
+    pub fn insert_if_not_exist(&self, key: Key, handle: Arc<KeyHandle>) -> bool {
         use std::collections::btree_map::Entry;
 
-        match self.lock().entry(key) {
+        match self.0.lock().entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(handle);
                 true
@@ -104,17 +73,21 @@ impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
         }
     }
 
-    fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m, Self>> {
-        self.lock()
+    /// Gets the handle of the key.
+    pub fn get<'m>(&'m self, key: &Key) -> Option<KeyHandleRef<'m>> {
+        self.0
+            .lock()
             .get(key)
             .and_then(|handle| handle.clone().get_ref(self))
     }
 
-    fn find_first<'m, T>(
+    /// Finds the first handle in the given range that `pred` returns `Some`.
+    /// The `Some` return value of `pred` will be returned by `find_first`.
+    pub fn find_first<'m, T>(
         &'m self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
-        mut pred: impl FnMut(KeyHandleRef<'m, Self>) -> Option<T>,
+        mut pred: impl FnMut(KeyHandleRef<'m>) -> Option<T>,
     ) -> Option<T> {
         let lower_bound = start_key
             .map(|k| Bound::Included(k))
@@ -122,7 +95,7 @@ impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
         let upper_bound = end_key
             .map(|k| Bound::Excluded(k))
             .unwrap_or(Bound::Unbounded);
-        for (_, handle) in self.lock().range::<Key, _>((lower_bound, upper_bound)) {
+        for (_, handle) in self.0.lock().range::<Key, _>((lower_bound, upper_bound)) {
             if let Some(v) = handle.clone().get_ref(self).and_then(&mut pred) {
                 return Some(v);
             }
@@ -130,8 +103,9 @@ impl OrderedMap for Mutex<BTreeMap<Key, Arc<KeyHandle>>> {
         None
     }
 
-    fn remove(&self, key: &Key) {
-        self.lock().remove(key);
+    /// Removes the key and its key handle from the map.
+    pub fn remove(&self, key: &Key) {
+        self.0.lock().remove(key);
     }
 }
 
@@ -147,7 +121,7 @@ mod test {
 
     #[tokio::test]
     async fn test_lock_key() {
-        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
+        let lock_table = HandleTable::default();
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -180,7 +154,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_key() {
-        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
+        let lock_table = HandleTable::default();
         let key_k = Key::from_raw(b"k");
 
         // no lock found
@@ -209,7 +183,7 @@ mod test {
 
     #[tokio::test]
     async fn test_check_range() {
-        let lock_table = HandleTable::<Mutex<BTreeMap<Key, Arc<KeyHandle>>>>::default();
+        let lock_table = HandleTable::default();
 
         let lock_k = Lock::new(
             LockType::Lock,

@@ -6,7 +6,7 @@ use super::{Error, ErrorInner, Result};
 use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::{
-    concurrency_manager::DefaultConcurrencyManager,
+    concurrency_manager::ConcurrencyManager,
     mvcc::{
         EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
         PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
@@ -215,7 +215,7 @@ pub struct SnapshotStore<S: Snapshot> {
     fill_cache: bool,
     bypass_locks: TsSet,
     check_has_newer_ts_data: bool,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     point_getter_cache: Option<PointGetter<S>>,
 }
@@ -391,7 +391,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         fill_cache: bool,
         bypass_locks: TsSet,
         check_has_newer_ts_data: bool,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -633,7 +633,7 @@ mod tests {
         TestEngineBuilder, WriteData,
     };
     use crate::storage::{
-        concurrency_manager::DefaultConcurrencyManager,
+        concurrency_manager::ConcurrencyManager,
         mvcc::{Mutation, MvccTxn},
     };
     use engine_traits::CfName;
@@ -652,7 +652,7 @@ mod tests {
         snapshot: Arc<RocksSnapshot>,
         ctx: Context,
         engine: RocksEngine,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
     }
 
     impl TestStore {
@@ -663,7 +663,7 @@ mod tests {
                 .collect();
             let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let concurrency_manager = DefaultConcurrencyManager::new(START_TS);
+            let concurrency_manager = ConcurrencyManager::new(START_TS);
             let mut store = TestStore {
                 keys,
                 snapshot,
@@ -681,7 +681,7 @@ mod tests {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let cm = DefaultConcurrencyManager::new(START_TS);
+                let cm = ConcurrencyManager::new(START_TS);
                 let mut txn = MvccTxn::new(
                     self.snapshot.clone(),
                     START_TS,
@@ -708,7 +708,7 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let cm = DefaultConcurrencyManager::new(START_TS);
+                let cm = ConcurrencyManager::new(START_TS);
                 let mut txn = MvccTxn::new(
                     self.snapshot.clone(),
                     START_TS,
@@ -958,7 +958,7 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let concurrency_manager = DefaultConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new(1.into());
         let store = SnapshotStore::new(
             snap,
             TimeStamp::zero(),

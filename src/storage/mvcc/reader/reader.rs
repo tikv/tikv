@@ -439,7 +439,7 @@ mod tests {
 
     use crate::storage::kv::Modify;
     use crate::storage::{
-        concurrency_manager::DefaultConcurrencyManager,
+        concurrency_manager::ConcurrencyManager,
         mvcc::{MvccReader, MvccTxn},
     };
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -511,7 +511,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
-            let cm = DefaultConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
 
             txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
@@ -528,7 +528,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
-            let cm = DefaultConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
 
             txn.pessimistic_prewrite(
@@ -555,7 +555,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let for_update_ts = for_update_ts.into();
-            let cm = DefaultConcurrencyManager::new(for_update_ts);
+            let cm = ConcurrencyManager::new(for_update_ts);
             let mut txn = MvccTxn::new(
                 snap,
                 start_ts.into(),
@@ -577,7 +577,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
-            let cm = DefaultConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
@@ -587,7 +587,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
-            let cm = DefaultConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
@@ -595,7 +595,7 @@ mod tests {
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
-            let cm = DefaultConcurrencyManager::new(safe_point.into());
+            let cm = ConcurrencyManager::new(safe_point.into());
             loop {
                 let snap = RegionSnapshot::<RocksSnapshot>::from_raw(
                     self.db.c().clone(),

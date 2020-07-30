@@ -30,7 +30,7 @@ use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
-use tikv::storage::concurrency_manager::DefaultConcurrencyManager;
+use tikv::storage::concurrency_manager::ConcurrencyManager;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
@@ -45,7 +45,7 @@ struct TestSuite {
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     _env: Arc<Environment>,
 }
@@ -78,7 +78,7 @@ impl TestSuite {
         cluster.run();
 
         let concurrency_manager =
-            DefaultConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
+            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso().compat()).unwrap());
         let mut endpoints = HashMap::default();
         for (id, engines) in &cluster.engines {
             // Create and run backup endpoints.

@@ -12,7 +12,7 @@ use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
-use tikv::storage::{concurrency_manager::DefaultConcurrencyManager, Engine, SnapshotStore};
+use tikv::storage::{concurrency_manager::ConcurrencyManager, Engine, SnapshotStore};
 use txn_types::TimeStamp;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
@@ -66,7 +66,7 @@ fn test_checksum() {
 
 fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(10.into());
+    let cm = ConcurrencyManager::new(10.into());
     let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
         TimeStamp::max(),

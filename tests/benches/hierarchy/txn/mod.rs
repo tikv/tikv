@@ -7,7 +7,7 @@ use std::sync::Arc;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::{
-    concurrency_manager::DefaultConcurrencyManager,
+    concurrency_manager::ConcurrencyManager,
     mvcc::{self, MvccTxn},
 };
 use txn_types::{Key, Mutation, TimeStamp};
@@ -27,7 +27,7 @@ where
 
     let snapshot = engine.snapshot(&ctx).unwrap();
     let start_ts = start_ts.into();
-    let cm = DefaultConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
 
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
@@ -52,7 +52,7 @@ where
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
@@ -80,7 +80,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
 fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
@@ -99,7 +99,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
 fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
@@ -118,7 +118,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || setup_prewrite(&engine, &config, 2),
         |keys| {
@@ -140,7 +140,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let cm = DefaultConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)

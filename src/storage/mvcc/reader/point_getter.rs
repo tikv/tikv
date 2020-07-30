@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::{
-    concurrency_manager::DefaultConcurrencyManager,
+    concurrency_manager::ConcurrencyManager,
     mvcc::{default_not_found_error, NewerTsCheckState, Result},
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -19,12 +19,12 @@ pub struct PointGetterBuilder<S: Snapshot> {
     ts: TimeStamp,
     bypass_locks: TsSet,
     check_has_newer_ts_data: bool,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
     /// Initialize a new `PointGetterBuilder`.
-    pub fn new(snapshot: S, ts: TimeStamp, concurrency_manager: DefaultConcurrencyManager) -> Self {
+    pub fn new(snapshot: S, ts: TimeStamp, concurrency_manager: ConcurrencyManager) -> Self {
         Self {
             snapshot,
             multi: true,
@@ -144,7 +144,7 @@ pub struct PointGetter<S: Snapshot> {
     ts: TimeStamp,
     bypass_locks: TsSet,
     met_newer_ts_data: NewerTsCheckState,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     statistics: Statistics,
 
@@ -348,7 +348,7 @@ mod tests {
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         PointGetterBuilder::new(snapshot, ts, cm)
             .isolation_level(IsolationLevel::Si)
             .build()
@@ -357,7 +357,7 @@ mod tests {
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         PointGetterBuilder::new(snapshot, ts, cm)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
@@ -382,7 +382,7 @@ mod tests {
         expected_met_newer_ts_data: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let ts = getter_ts.into();
         let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts, cm.clone())
             .isolation_level(IsolationLevel::Si)
@@ -715,7 +715,7 @@ mod tests {
         let engine = new_sample_engine_2();
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
 
         let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into(), cm)
             .isolation_level(IsolationLevel::Si)
@@ -731,7 +731,7 @@ mod tests {
             snapshot: Arc<RocksSnapshot>,
             ts: TimeStamp,
         ) -> PointGetter<Arc<RocksSnapshot>> {
-            let cm = DefaultConcurrencyManager::new(1.into());
+            let cm = ConcurrencyManager::new(1.into());
             PointGetterBuilder::new(snapshot, ts, cm)
                 .isolation_level(IsolationLevel::Si)
                 .omit_value(true)
@@ -797,7 +797,7 @@ mod tests {
         must_prewrite_delete(&engine, key, key, 30);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = DefaultConcurrencyManager::new(30.into());
+        let cm = ConcurrencyManager::new(30.into());
         let mut getter = PointGetterBuilder::new(snapshot, 60.into(), cm.clone())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))

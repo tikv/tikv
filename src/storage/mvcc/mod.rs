@@ -276,7 +276,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot, WriteData};
-    use crate::storage::{concurrency_manager::DefaultConcurrencyManager, types::TxnStatus};
+    use crate::storage::{concurrency_manager::ConcurrencyManager, types::TxnStatus};
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use pd_client::DummyPdClient;
@@ -345,7 +345,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
-        let cm = DefaultConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
 
         txn.prewrite(
@@ -370,7 +370,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
-        let cm = DefaultConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
 
         txn.prewrite(
@@ -394,7 +394,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
-        let cm = DefaultConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
 
         txn.pessimistic_prewrite(
@@ -425,7 +425,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = DefaultConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new(min_commit_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             ts.into(),
@@ -598,7 +598,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
-        let cm = DefaultConcurrencyManager::new(for_update_ts);
+        let cm = ConcurrencyManager::new(for_update_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             ts.into(),
@@ -689,7 +689,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
-        let cm = DefaultConcurrencyManager::new(for_update_ts);
+        let cm = ConcurrencyManager::new(for_update_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             ts.into(),
@@ -751,7 +751,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
-        let cm = DefaultConcurrencyManager::new(for_update_ts);
+        let cm = ConcurrencyManager::new(for_update_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             ts.into(),
@@ -800,7 +800,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
-        let cm = DefaultConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
 
         assert!(txn
@@ -840,7 +840,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let min_commit_ts = min_commit_ts.into();
-        let cm = DefaultConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new(min_commit_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts.into(),
@@ -988,7 +988,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let min_commit_ts = min_commit_ts.into();
-        let cm = DefaultConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new(min_commit_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts.into(),
@@ -1017,7 +1017,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
-        let cm = DefaultConcurrencyManager::new(for_update_ts);
+        let cm = ConcurrencyManager::new(for_update_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts.into(),
@@ -1039,7 +1039,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -1054,7 +1054,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
     }
@@ -1063,7 +1063,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         txn.collapse_rollback(false);
         txn.rollback(Key::from_raw(key)).unwrap();
@@ -1078,7 +1078,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -1088,7 +1088,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
@@ -1102,7 +1102,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
-        let cm = DefaultConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts.into(),
@@ -1123,7 +1123,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
-        let cm = DefaultConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             start_ts.into(),
@@ -1145,7 +1145,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         let ttl = txn
             .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
@@ -1163,7 +1163,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
-        let cm = DefaultConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
         txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap_err();
@@ -1181,7 +1181,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
-        let cm = DefaultConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             lock_ts.into(),
@@ -1212,7 +1212,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
-        let cm = DefaultConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new(current_ts);
         let mut txn = MvccTxn::new(
             snapshot,
             lock_ts.into(),
@@ -1232,7 +1232,7 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let cm = DefaultConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let mut txn = MvccTxn::for_scan(
             snapshot,
             Some(ScanMode::Forward),

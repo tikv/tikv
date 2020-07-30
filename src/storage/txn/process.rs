@@ -26,7 +26,7 @@ use crate::storage::txn::{
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
-    concurrency_manager::DefaultConcurrencyManager,
+    concurrency_manager::ConcurrencyManager,
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
     SecondaryLocksStatus,
@@ -225,7 +225,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
     snapshot: S,
     lock_mgr: &L,
     pd_client: Arc<P>,
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -975,7 +975,7 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
-        let cm = DefaultConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new(start_ts.into());
         let ret = process_write_impl(
             cmd,
             snap,
@@ -1017,7 +1017,7 @@ mod tests {
             TimeStamp::from(commit_ts),
             ctx,
         );
-        let cm = DefaultConcurrencyManager::new(lock_ts.into());
+        let cm = ConcurrencyManager::new(lock_ts.into());
         let ret = process_write_impl(
             cmd.into(),
             snap,

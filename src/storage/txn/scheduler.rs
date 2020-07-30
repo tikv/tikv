@@ -48,7 +48,7 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    concurrency_manager::DefaultConcurrencyManager, get_priority_tag, types::StorageCallback,
+    concurrency_manager::ConcurrencyManager, get_priority_tag, types::StorageCallback,
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
@@ -160,7 +160,7 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
 
     pd_client: Arc<P>,
 
-    concurrency_manager: DefaultConcurrencyManager,
+    concurrency_manager: ConcurrencyManager,
 
     pipelined_pessimistic_lock: bool,
 }
@@ -257,7 +257,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         engine: E,
         lock_mgr: L,
         pd_client: Arc<P>,
-        concurrency_manager: DefaultConcurrencyManager,
+        concurrency_manager: ConcurrencyManager,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
