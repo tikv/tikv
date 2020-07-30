@@ -29,7 +29,7 @@ pub struct KeyHandle {
 }
 
 impl KeyHandle {
-    pub fn new_with_ref<'m, M: OrderedMap>(key: Key, map: &'m M) -> KeyHandleWithRef<'m, M> {
+    pub fn new_with_ref<M: OrderedMap>(key: Key, map: &M) -> KeyHandleWithRef<'_, M> {
         let key_handle = Arc::new(KeyHandle {
             key,
             ref_count: AtomicUsize::new(1),
