@@ -600,7 +600,7 @@ where
         match router.send(
             id,
             CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(&peer.peer)) {
+                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),
@@ -985,11 +985,7 @@ mod tests {
     struct MockRouter;
 
     impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(
-            &self,
-            region_id: u64,
-            _: CasualMessage<RocksEngine, RocksEngine>,
-        ) -> raftstore::Result<()> {
+        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
