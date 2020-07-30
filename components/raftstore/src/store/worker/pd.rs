@@ -11,7 +11,7 @@ use futures::Future;
 use tokio_core::reactor::Handle;
 
 use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, KvEngines, MiscExt};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -405,15 +405,11 @@ where
     }
 }
 
-pub struct Runner<EK, T>
-where
-    EK: KvEngine,
-    T: PdClient,
-{
+pub struct Runner<E: KvEngines, T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<EK, RocksEngine>,
-    db: EK,
+    router: RaftRouter<E>,
+    db: E::Kv,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -423,26 +419,22 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<EK>>,
-    stats_monitor: StatsMonitor<EK>,
+    scheduler: Scheduler<Task<E::Kv>>,
+    stats_monitor: StatsMonitor<E::Kv>,
 }
 
-impl<EK, T> Runner<EK, T>
-where
-    EK: KvEngine,
-    T: PdClient,
-{
+impl<E: KvEngines + 'static, T: PdClient> Runner<E, T> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<EK, RocksEngine>,
-        db: EK,
-        scheduler: Scheduler<Task<EK>>,
+        router: RaftRouter<E>,
+        db: E::Kv,
+        scheduler: Scheduler<Task<E::Kv>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<EK, T> {
+    ) -> Runner<E, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -471,7 +463,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<<E::Kv as KvEngine>::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -515,7 +507,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<EK::Snapshot>,
+        callback: Callback<<E::Kv as KvEngine>::Snapshot>,
         task: String,
     ) {
         if split_keys.is_empty() {
@@ -632,7 +624,7 @@ where
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<EK>,
+        store_info: StoreInfo<E::Kv>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -925,12 +917,8 @@ where
     }
 }
 
-impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
-where
-    EK: KvEngine,
-    T: PdClient,
-{
-    fn run(&mut self, task: Task<EK>, handle: &Handle) {
+impl<E: KvEngines + 'static, T: PdClient> Runnable<Task<E::Kv>> for Runner<E, T> {
+    fn run(&mut self, task: Task<E::Kv>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -1134,16 +1122,14 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<EK>(
-    router: &RaftRouter<EK, RocksEngine>,
+fn send_admin_request<E: KvEngines>(
+    router: &RaftRouter<E>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<EK::Snapshot>,
-) where
-    EK: KvEngine,
-{
+    callback: Callback<<E::Kv as KvEngine>::Snapshot>,
+) {
     let cmd_type = request.get_cmd_type();
 
     let mut req = RaftCmdRequest::default();
@@ -1162,14 +1148,12 @@ fn send_admin_request<EK>(
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message<EK>(
-    router: &RaftRouter<EK, RocksEngine>,
+fn send_destroy_peer_message<E: KvEngines>(
+    router: &RaftRouter<E>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
-) where
-    EK: KvEngine,
-{
+) {
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());

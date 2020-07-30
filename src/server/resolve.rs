@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngines;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
@@ -43,14 +44,14 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient> {
+struct Runner<E: KvEngines, T: PdClient> {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    router: Option<RaftRouter<E>>,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<E: KvEngines, T: PdClient> Runner<E, T> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
@@ -103,7 +104,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<E: KvEngines, T: PdClient> Runnable<Task> for Runner<E, T> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -124,15 +125,16 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T>(
+pub fn new_resolver<E, T>(
     pd_client: Arc<T>,
-    router: RaftRouter<RocksEngine, RocksEngine>,
+    router: RaftRouter<E>,
 ) -> Result<(
     Worker<Task>,
     PdStoreAddrResolver,
     Arc<Mutex<GlobalReplicationState>>,
 )>
 where
+    E: KvEngines + 'static,
     T: PdClient + 'static,
 {
     let mut worker = Worker::new("addr-resolver");

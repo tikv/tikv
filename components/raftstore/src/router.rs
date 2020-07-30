@@ -1,26 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
 use crossbeam::{SendError, TrySendError};
+use engine_rocks::RocksEngine;
+use engine_traits::{KvEngine, KvEngines};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
+use raft::SnapshotStatus;
+use tikv_util::time::ThreadReadId;
+use txn_types::TxnExtra;
 
 use crate::store::fsm::RaftRouter;
 use crate::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use engine_rocks::RocksEngine;
-use engine_traits::KvEngine;
-use raft::SnapshotStatus;
-use std::cell::RefCell;
-use tikv_util::time::ThreadReadId;
-use txn_types::TxnExtra;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter<EK>: Send + Clone
-where
-    EK: KvEngine,
-{
+pub trait RaftStoreRouter<EK: KvEngine>: Send + Clone {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
@@ -124,18 +122,12 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
-    router: RaftRouter<EK, RocksEngine>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, RocksEngine>, EK>>,
+pub struct ServerRaftStoreRouter<E: KvEngines> {
+    router: RaftRouter<E>,
+    local_reader: RefCell<LocalReader<RaftRouter<E>, E::Kv>>,
 }
 
-impl<EK> Clone for ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<E: KvEngines> Clone for ServerRaftStoreRouter<E> {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -144,15 +136,12 @@ where
     }
 }
 
-impl<EK> ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<E: KvEngines> ServerRaftStoreRouter<E> {
     /// Creates a new router.
     pub fn new(
-        router: RaftRouter<EK, RocksEngine>,
-        reader: LocalReader<RaftRouter<EK, RocksEngine>, EK>,
-    ) -> ServerRaftStoreRouter<EK> {
+        router: RaftRouter<E>,
+        reader: LocalReader<RaftRouter<E>, E::Kv>,
+    ) -> ServerRaftStoreRouter<E> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -178,10 +167,7 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
     }
 }
 
-impl<EK> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK>
-where
-    EK: KvEngine,
-{
+impl<E: KvEngines> RaftStoreRouter<E::Kv> for ServerRaftStoreRouter<E> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.router
@@ -189,7 +175,11 @@ where
             .map_err(|e| handle_send_error(region_id, e))
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+    fn send_command(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<<E::Kv as KvEngine>::Snapshot>,
+    ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         let region_id = cmd.request.get_header().get_region_id();
         self.router
@@ -201,7 +191,7 @@ where
         &self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<<E::Kv as KvEngine>::Snapshot>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
         local_reader.read(read_id, req, cb);
@@ -217,7 +207,7 @@ where
         &self,
         req: RaftCmdRequest,
         txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
+        cb: Callback<<E::Kv as KvEngine>::Snapshot>,
     ) -> RaftStoreResult<()> {
         let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
         let region_id = cmd.request.get_header().get_region_id();
@@ -229,7 +219,7 @@ where
     fn significant_send(
         &self,
         region_id: u64,
-        msg: SignificantMsg<EK::Snapshot>,
+        msg: SignificantMsg<<E::Kv as KvEngine>::Snapshot>,
     ) -> RaftStoreResult<()> {
         if let Err(SendError(msg)) = self
             .router
@@ -243,7 +233,7 @@ where
         Ok(())
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<E::Kv>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))

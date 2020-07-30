@@ -11,15 +11,15 @@ use crate::*;
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
-pub struct MetricsFlusher<K: KvEngine, R: KvEngine> {
-    pub engines: KvEngines<K, R>,
+pub struct MetricsFlusher<E: KvEngines> {
+    pub engines: E,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
 }
 
-impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
-    pub fn new(engines: KvEngines<K, R>) -> Self {
+impl<E: KvEngines> MetricsFlusher<E> {
+    pub fn new(engines: E) -> Self {
         MetricsFlusher {
             engines,
             interval: DEFAULT_FLUSH_INTERVAL,
@@ -33,8 +33,8 @@ impl<K: KvEngine, R: KvEngine> MetricsFlusher<K, R> {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let (kv_db, raft_db) = (self.engines.kv.clone(), self.engines.raft.clone());
-        let shared_block_cache = self.engines.shared_block_cache;
+        let (kv_db, raft_db) = (self.engines.kv().clone(), self.engines.raft().clone());
+        let shared_block_cache = self.engines.shared_block_cache();
         let interval = self.interval;
         let (tx, rx) = mpsc::channel();
         self.sender = Some(tx);

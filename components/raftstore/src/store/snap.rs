@@ -16,9 +16,8 @@ use std::{error, result, str, thread, time, u64};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
-use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{EncryptionKeyManager, KvEngine, KvEngines};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -161,15 +160,12 @@ impl SnapshotStatistics {
     }
 }
 
-pub struct ApplyOptions<E>
-where
-    E: KvEngine,
-{
-    pub db: E,
+pub struct ApplyOptions<EK: KvEngine> {
+    pub db: EK,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    pub coprocessor_host: CoprocessorHost<EK>,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -179,16 +175,16 @@ where
 ///   3. receive snapshot from remote raftstore and write it to local storage
 ///   4. apply snapshot
 ///   5. snapshot gc
-pub trait Snapshot<E: KvEngine>: GenericSnapshot {
+pub trait Snapshot<EK: KvEngine>: GenericSnapshot {
     fn build(
         &mut self,
-        engine: &E,
-        kv_snap: &E::Snapshot,
+        engine: &EK,
+        kv_snap: &EK::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
     ) -> RaftStoreResult<()>;
-    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()>;
+    fn apply(&mut self, options: ApplyOptions<EK>) -> Result<()>;
 }
 
 /// `GenericSnapshot` is a snapshot not tied to any KV engines.
@@ -669,16 +665,13 @@ impl Snap {
         }
     }
 
-    fn do_build<E: KvEngine>(
+    fn do_build<EK: KvEngine>(
         &mut self,
-        engine: &E,
-        kv_snap: &E::Snapshot,
+        engine: &EK,
+        kv_snap: &EK::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
-    ) -> RaftStoreResult<()>
-    where
-        E: KvEngine,
-    {
+    ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
             match self.validate(engine, true) {
@@ -711,11 +704,11 @@ impl Snap {
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
                 let key_mgr = self.mgr.encryption_key_manager.as_ref();
-                snap_io::build_plain_cf_file::<E>(
+                snap_io::build_plain_cf_file::<EK>(
                     path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
                 )?
             } else {
-                snap_io::build_sst_cf_file::<E>(
+                snap_io::build_sst_cf_file::<EK>(
                     path,
                     engine,
                     kv_snap,
@@ -769,20 +762,18 @@ impl fmt::Debug for Snap {
     }
 }
 
-impl<E> Snapshot<E> for Snap
-where
-    E: KvEngine,
+impl<EK: KvEngine> Snapshot<EK> for Snap
 {
     fn build(
         &mut self,
-        engine: &E,
-        kv_snap: &E::Snapshot,
+        engine: &EK,
+        kv_snap: &EK::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<E>(engine, kv_snap, region, stat)?;
+        self.do_build::<EK>(engine, kv_snap, region, stat)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -804,7 +795,7 @@ where
         Ok(())
     }
 
-    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()> {
+    fn apply(&mut self, options: ApplyOptions<EK>) -> Result<()> {
         box_try!(self.validate(&options.db, false));
 
         let abort_checker = ApplyAbortChecker(options.abort);
@@ -1099,16 +1090,13 @@ struct SnapManagerCore {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-pub struct SnapManager<E: KvEngine> {
+pub struct SnapManager<E: KvEngines> {
     core: SnapManagerCore,
-    router: Option<RaftRouter<E, RocksEngine>>,
+    router: Option<RaftRouter<E>>,
     max_total_size: u64,
 }
 
-impl<E> Clone for SnapManager<E>
-where
-    E: KvEngine,
-{
+impl<E: KvEngines> Clone for SnapManager<E> {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
@@ -1118,8 +1106,8 @@ where
     }
 }
 
-impl<E: KvEngine> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E, RocksEngine>>) -> Self {
+impl<E: KvEngines> SnapManager<E> {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1225,7 +1213,7 @@ impl<E: KvEngine> SnapManager<E> {
     pub fn get_snapshot_for_building(
         &self,
         key: &SnapKey,
-    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot<E::Kv>>> {
         let mut old_snaps = None;
         while self.get_total_snap_size() > self.max_total_snap_size() {
             if old_snaps.is_none() {
@@ -1315,7 +1303,7 @@ impl<E: KvEngine> SnapManager<E> {
     pub fn get_snapshot_for_applying_to_engine(
         &self,
         key: &SnapKey,
-    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot<E::Kv>>> {
         Ok(self.get_concrete_snapshot_for_applying(key)?)
     }
 
@@ -1484,10 +1472,10 @@ impl SnapManagerBuilder {
         self.key_manager = m;
         self
     }
-    pub fn build<T: Into<String>, E: KvEngine>(
+    pub fn build<T: Into<String>, E: KvEngines>(
         self,
         path: T,
-        router: Option<RaftRouter<E, RocksEngine>>,
+        router: Option<RaftRouter<E>>,
     ) -> SnapManager<E> {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
@@ -1598,7 +1586,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<KvEngines<RocksEngine, RocksEngine>> {
+    ) -> Result<engine_rocks::TwoRocksEngines> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1627,11 +1615,7 @@ pub mod tests {
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(KvEngines {
-            kv: kv.c().clone(),
-            raft: raft.c().clone(),
-            shared_block_cache,
-        })
+        Ok(TwoRocksEngines::new(kv, raft, shared_block_cache))
     }
 
     pub fn get_kv_count(snap: &RocksSnapshot) -> usize {

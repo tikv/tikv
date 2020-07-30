@@ -13,7 +13,7 @@ use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, DummyPdClient, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
-use raftstore::router::ServerRaftStoreRouter;
+use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
@@ -127,10 +127,10 @@ impl Display for GcTask {
 }
 
 /// Used to perform GC operations on the engine.
-struct GcRunner<E: Engine> {
+struct GcRunner<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
     engine: E,
 
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    raft_store_router: Option<RR>,
 
     /// Used to limit the write flow of GC.
     limiter: Limiter,
@@ -141,10 +141,10 @@ struct GcRunner<E: Engine> {
     stats: Statistics,
 }
 
-impl<E: Engine> GcRunner<E> {
+impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcRunner<E, RR> {
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        raft_store_router: Option<RR>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
     ) -> Self {
@@ -408,7 +408,7 @@ impl<E: Engine> GcRunner<E> {
     }
 }
 
-impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
+impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> FutureRunnable<GcTask> for GcRunner<E, RR> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
         let enum_label = task.get_enum_label();
@@ -533,11 +533,11 @@ pub fn sync_gc(
 }
 
 /// Used to schedule GC operations.
-pub struct GcWorker<E: Engine> {
+pub struct GcWorker<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
     engine: E,
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+    raft_store_router: Option<RR>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -556,7 +556,7 @@ pub struct GcWorker<E: Engine> {
     cluster_version: ClusterVersion,
 }
 
-impl<E: Engine> Clone for GcWorker<E> {
+impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Clone for GcWorker<E, RR> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
@@ -576,7 +576,7 @@ impl<E: Engine> Clone for GcWorker<E> {
     }
 }
 
-impl<E: Engine> Drop for GcWorker<E> {
+impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Drop for GcWorker<E, RR> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -592,13 +592,13 @@ impl<E: Engine> Drop for GcWorker<E> {
     }
 }
 
-impl<E: Engine> GcWorker<E> {
+impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcWorker<E, RR> {
     pub fn new(
         engine: E,
-        raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
+        raft_store_router: Option<RR>,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
-    ) -> GcWorker<E> {
+    ) -> GcWorker<E, RR> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {

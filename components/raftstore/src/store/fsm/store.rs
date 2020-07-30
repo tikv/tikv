@@ -134,11 +134,11 @@ impl StoreMeta {
     }
 
     #[inline]
-    pub fn set_region(
+    pub fn set_region<E: KvEngines>(
         &mut self,
-        host: &CoprocessorHost<impl KvEngine>,
+        host: &CoprocessorHost<E::Kv>,
         region: Region,
-        peer: &mut crate::store::Peer<impl KvEngine, impl KvEngine>,
+        peer: &mut crate::store::Peer<E>,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
@@ -150,19 +150,11 @@ impl StoreMeta {
     }
 }
 
-pub struct RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
-    pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm>,
+pub struct RaftRouter<E: KvEngines> {
+    pub router: BatchRouter<PeerFsm<E>, StoreFsm>,
 }
 
-impl<EK, ER> Clone for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<E: KvEngines> Clone for RaftRouter<E> {
     fn clone(&self) -> Self {
         RaftRouter {
             router: self.router.clone(),
@@ -170,23 +162,15 @@ where
     }
 }
 
-impl<EK, ER> Deref for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
-    type Target = BatchRouter<PeerFsm<EK, ER>, StoreFsm>;
+impl<E: KvEngines> Deref for RaftRouter<E> {
+    type Target = BatchRouter<PeerFsm<E>, StoreFsm>;
 
-    fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm> {
+    fn deref(&self) -> &BatchRouter<PeerFsm<E>, StoreFsm> {
         &self.router
     }
 }
 
-impl<EK, ER> RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<E: KvEngines> RaftRouter<E> {
     pub fn send_raft_message(
         &self,
         mut msg: RaftMessage,
@@ -216,8 +200,8 @@ where
     #[inline]
     pub fn send_raft_command(
         &self,
-        cmd: RaftCommand<EK::Snapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
+        cmd: RaftCommand<<E::Kv as KvEngine>::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<<E::Kv as KvEngine>::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
         match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
@@ -247,22 +231,18 @@ where
     }
 }
 
-pub struct PollContext<EK, ER, T, C: 'static>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+pub struct PollContext<E: KvEngines, T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask<EK>>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
+    pub pd_scheduler: FutureScheduler<PdTask<E::Kv>>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<<E::Kv as KvEngine>::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
-    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub apply_router: ApplyRouter<EK>,
-    pub router: RaftRouter<EK, ER>,
+    pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<E::Raft>>,
+    pub region_scheduler: Scheduler<RegionTask<<E::Kv as KvEngine>::Snapshot>>,
+    pub apply_router: ApplyRouter<E::Kv>,
+    pub router: RaftRouter<E>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     /// region_id -> (peer_id, is_splitting)
@@ -277,18 +257,18 @@ where
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager<RocksEngine>,
+    pub snap_mgr: SnapManager<E>,
     pub applying_snap_count: Arc<AtomicUsize>,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    pub coprocessor_host: CoprocessorHost<E::Kv>,
     pub timer: SteadyTimer,
     pub trans: T,
     pub pd_client: Arc<C>,
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: KvEngines<EK, ER>,
-    pub kv_wb: EK::WriteBatch,
-    pub raft_wb: ER::WriteBatch,
+    pub engines: E,
+    pub kv_wb: <E::Kv as WriteBatchExt>::WriteBatch,
+    pub raft_wb: <E::Raft as WriteBatchExt>::WriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
@@ -299,23 +279,28 @@ where
     pub node_start_time: Option<Instant>,
 }
 
-impl<EK, ER, T, C> HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>
-    for PollContext<EK, ER, T, C>
-where
-    EK: KvEngine,
-    ER: KvEngine,
+impl<E: KvEngines, T, C>
+    HandleRaftReadyContext<
+        <E::Kv as WriteBatchExt>::WriteBatch,
+        <E::Raft as WriteBatchExt>::WriteBatch,
+    > for PollContext<E, T, C>
 {
-    fn wb_mut(&mut self) -> (&mut EK::WriteBatch, &mut ER::WriteBatch) {
+    fn wb_mut(
+        &mut self,
+    ) -> (
+        &mut <E::Kv as WriteBatchExt>::WriteBatch,
+        &mut <E::Raft as WriteBatchExt>::WriteBatch,
+    ) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
 
     #[inline]
-    fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
+    fn kv_wb_mut(&mut self) -> &mut <E::Kv as WriteBatchExt>::WriteBatch {
         &mut self.kv_wb
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut ER::WriteBatch {
+    fn raft_wb_mut(&mut self) -> &mut <E::Raft as WriteBatchExt>::WriteBatch {
         &mut self.raft_wb
     }
 
@@ -330,11 +315,7 @@ where
     }
 }
 
-impl<EK, ER, T, C> PollContext<EK, ER, T, C>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<E: KvEngines, T, C> PollContext<E, T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
@@ -355,11 +336,7 @@ where
     }
 }
 
-impl<EK, ER, T: Transport, C> PollContext<EK, ER, T, C>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<E: KvEngines + 'static, T: Transport, C> PollContext<E, T, C> {
     #[inline]
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
@@ -476,12 +453,12 @@ impl Fsm for StoreFsm {
     }
 }
 
-struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
+struct StoreFsmDelegate<'a, E: KvEngines, T: 'static, C: 'static> {
     fsm: &'a mut StoreFsm,
-    ctx: &'a mut PollContext<RocksEngine, RocksEngine, T, C>,
+    ctx: &'a mut PollContext<E, T, C>,
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, E: KvEngines + 'static, T: Transport, C: PdClient> StoreFsmDelegate<'a, E, T, C> {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
         match tick {
@@ -553,19 +530,19 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 }
 
-pub struct RaftPoller<T: 'static, C: 'static> {
+pub struct RaftPoller<E: KvEngines, T: 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
+    peer_msg_buf: Vec<PeerMsg<E::Kv>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
-    poll_ctx: PollContext<RocksEngine, RocksEngine, T, C>,
+    poll_ctx: PollContext<E, T, C>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
+impl<E: KvEngines + 'static, T: Transport, C: PdClient> RaftPoller<E, T, C> {
+    fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<E>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
@@ -599,14 +576,14 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             write_opts.set_sync(true);
             self.poll_ctx
                 .engines
-                .kv
+                .kv()
                 .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.write_batch_with_cap(4 * 1024);
+                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv().write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
@@ -622,14 +599,14 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
                 .engines
-                .raft
+                .raft()
                 .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.write_batch_with_cap(4 * 1024);
+                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft().write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -685,8 +662,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>
-    for RaftPoller<T, C>
+impl<E: KvEngines+ 'static, T: Transport, C: PdClient> PollHandler<PeerFsm<E>, StoreFsm>
+    for RaftPoller<E, T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -741,7 +718,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<RocksEngine, RocksEngine>) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm<E>) -> Option<usize> {
         let mut expected_msg_count = None;
 
         fail_point!(
@@ -784,7 +761,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
         expected_msg_count
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine, RocksEngine>>]) {
+    fn end(&mut self, peers: &mut [Box<PeerFsm<E>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -805,40 +782,40 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine, RocksEngine>, S
     }
 }
 
-pub struct RaftPollerBuilder<T, C> {
+pub struct RaftPollerBuilder<E: KvEngines, T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask<RocksEngine>>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksSnapshot>>,
+    pd_scheduler: FutureScheduler<PdTask<E::Kv>>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<<E::Kv as KvEngine>::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<RocksEngine>>,
-    pub region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    apply_router: ApplyRouter<RocksEngine>,
-    pub router: RaftRouter<RocksEngine, RocksEngine>,
+    raftlog_gc_scheduler: Scheduler<RaftlogGcTask<E::Raft>>,
+    pub region_scheduler: Scheduler<RegionTask<<E::Kv as KvEngine>::Snapshot>>,
+    apply_router: ApplyRouter<E::Kv>,
+    pub router: RaftRouter<E>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager<RocksEngine>,
-    pub coprocessor_host: CoprocessorHost<RocksEngine>,
+    snap_mgr: SnapManager<E>,
+    pub coprocessor_host: CoprocessorHost<E::Kv>,
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: KvEngines<RocksEngine, RocksEngine>,
+    pub engines: E,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<T, C> RaftPollerBuilder<T, C> {
+impl<E: KvEngines, T, C> RaftPollerBuilder<E, T, C> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
-    fn init(&mut self) -> Result<Vec<SenderFsmPair<RocksEngine, RocksEngine>>> {
+    fn init(&mut self) -> Result<Vec<SenderFsmPair<E>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let kv_engine = self.engines.kv.clone();
+        let kv_engine = self.engines.kv().clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -846,8 +823,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = self.engines.kv.write_batch();
-        let mut raft_wb = self.engines.raft.write_batch();
+        let mut kv_wb = self.engines.kv().write_batch();
+        let mut raft_wb = self.engines.raft().write_batch();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -910,12 +887,12 @@ impl<T, C> RaftPollerBuilder<T, C> {
         })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.write(&kv_wb).unwrap();
-            self.engines.kv.sync_wal().unwrap();
+            self.engines.kv().write(&kv_wb).unwrap();
+            self.engines.kv().sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.write(&raft_wb).unwrap();
-            self.engines.raft.sync_wal().unwrap();
+            self.engines.raft().write(&raft_wb).unwrap();
+            self.engines.raft().sync_wal().unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -953,13 +930,13 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     fn clear_stale_meta(
         &self,
-        kv_wb: &mut RocksWriteBatch,
-        raft_wb: &mut RocksWriteBatch,
+        kv_wb: &mut <E::Kv as WriteBatchExt>::WriteBatch,
+        raft_wb: &mut <E::Raft as WriteBatchExt>::WriteBatch,
         origin_state: &RegionLocalState,
     ) {
         let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state = match self.engines.raft.get_msg(&raft_key).unwrap() {
+        let raft_state = match self.engines.raft().get_msg(&raft_key).unwrap() {
             // it has been cleaned up.
             None => return,
             Some(value) => value,
@@ -985,7 +962,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        self.engines.kv.roughly_cleanup_ranges(&ranges)?;
+        self.engines.kv().roughly_cleanup_ranges(&ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -998,14 +975,15 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm<RocksEngine, RocksEngine>, StoreFsm> for RaftPollerBuilder<T, C>
+impl<E, T, C> HandlerBuilder<PeerFsm<E>, StoreFsm> for RaftPollerBuilder<E, T, C>
 where
+    E: KvEngines + 'static,
     T: Transport + 'static,
     C: PdClient + 'static,
 {
-    type Handler = RaftPoller<T, C>;
+    type Handler = RaftPoller<E, T, C>;
 
-    fn build(&mut self) -> RaftPoller<T, C> {
+    fn build(&mut self) -> RaftPoller<E, T, C> {
         let ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1032,8 +1010,8 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: self.engines.kv.write_batch(),
-            raft_wb: self.engines.raft.write_batch_with_cap(4 * 1024),
+            kv_wb: self.engines.kv().write_batch(),
+            raft_wb: self.engines.raft().write_batch_with_cap(4 * 1024),
             pending_count: 0,
             sync_log: false,
             has_ready: false,
@@ -1057,32 +1035,32 @@ where
     }
 }
 
-struct Workers {
-    pd_worker: FutureWorker<PdTask<RocksEngine>>,
-    consistency_check_worker: Worker<ConsistencyCheckTask<RocksSnapshot>>,
+struct Workers<E: KvEngines> {
+    pd_worker: FutureWorker<PdTask<E::Kv>>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<<E::Kv as KvEngine>::Snapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask<RocksEngine>>,
-    region_worker: Worker<RegionTask<RocksSnapshot>>,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    raftlog_gc_worker: Worker<RaftlogGcTask<E::Raft>>,
+    region_worker: Worker<RegionTask<<E::Kv as KvEngine>::Snapshot>>,
+    coprocessor_host: CoprocessorHost<E::Kv>,
     future_poller: ThreadPool,
 }
 
-pub struct RaftBatchSystem {
-    system: BatchSystem<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>,
-    apply_router: ApplyRouter<RocksEngine>,
-    apply_system: ApplyBatchSystem,
-    router: RaftRouter<RocksEngine, RocksEngine>,
-    workers: Option<Workers>,
+pub struct RaftBatchSystem<E: KvEngines> {
+    system: BatchSystem<PeerFsm<E>, StoreFsm>,
+    apply_router: ApplyRouter<E::Kv>,
+    apply_system: ApplyBatchSystem<E::Kv>,
+    router: RaftRouter<E>,
+    workers: Option<Workers<E>>,
 }
 
-impl RaftBatchSystem {
-    pub fn router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
+impl<E: KvEngines + 'static> RaftBatchSystem<E> {
+    pub fn router(&self) -> RaftRouter<E> {
         self.router.clone()
     }
 
-    pub fn apply_router(&self) -> ApplyRouter<RocksEngine> {
+    pub fn apply_router(&self) -> ApplyRouter<E::Kv> {
         self.apply_router.clone()
     }
 
@@ -1091,13 +1069,13 @@ impl RaftBatchSystem {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: E,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager<RocksEngine>,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        mgr: SnapManager<E>,
+        pd_worker: FutureWorker<PdTask<E::Kv>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        mut coprocessor_host: CoprocessorHost<RocksEngine>,
+        mut coprocessor_host: CoprocessorHost<E::Kv>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
@@ -1149,16 +1127,16 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
+        let engine = builder.engines.kv().clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C, RocksWriteBatchVec>(
+            self.start_system::<T, C>(
                 workers,
                 region_peers,
                 builder,
                 auto_split_controller,
             )?;
         } else {
-            self.start_system::<T, C, RocksWriteBatch>(
+            self.start_system::<T, C>(
                 workers,
                 region_peers,
                 builder,
@@ -1168,15 +1146,11 @@ impl RaftBatchSystem {
         Ok(())
     }
 
-    fn start_system<
-        T: Transport + 'static,
-        C: PdClient + 'static,
-        W: WriteBatch + WriteBatchVecExt<RocksEngine> + 'static,
-    >(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
-        mut workers: Workers,
-        region_peers: Vec<SenderFsmPair<RocksEngine, RocksEngine>>,
-        builder: RaftPollerBuilder<T, C>,
+        mut workers: Workers<E>,
+        region_peers: Vec<SenderFsmPair<E>>,
+        builder: RaftPollerBuilder<E, T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
@@ -1188,7 +1162,7 @@ impl RaftBatchSystem {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::new(
             &builder,
             ApplyNotifier::Router(self.router.clone()),
             self.apply_router.clone(),
@@ -1250,7 +1224,7 @@ impl RaftBatchSystem {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(engines.kv.clone());
+        let compact_runner = CompactRunner::new(engines.kv().clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             store.get_id(),
             self.router.clone(),
@@ -1264,7 +1238,7 @@ impl RaftBatchSystem {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-            engines.kv,
+            engines.kv().clone(),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
@@ -1272,7 +1246,7 @@ impl RaftBatchSystem {
         box_try!(workers.pd_worker.start(pd_runner));
 
         let consistency_check_runner =
-            ConsistencyCheckRunner::<RocksEngine, _>::new(self.router.clone());
+            ConsistencyCheckRunner::<E::Kv, _>::new(self.router.clone());
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -1309,9 +1283,9 @@ impl RaftBatchSystem {
     }
 }
 
-pub fn create_raft_batch_system(
+pub fn create_raft_batch_system<E: KvEngines>(
     cfg: &Config,
-) -> (RaftRouter<RocksEngine, RocksEngine>, RaftBatchSystem) {
+) -> (RaftRouter<E>, RaftBatchSystem<E>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -1339,7 +1313,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, E: KvEngines + 'static, T: Transport, C: PdClient> StoreFsmDelegate<'a, E, T, C> {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -1351,7 +1325,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
         let local_state: RegionLocalState =
-            match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
+            match self.ctx.engines.kv().get_msg_cf(CF_RAFT, &state_key)? {
                 Some(state) => state,
                 None => return Ok(CheckMsgStatus::NewPeerFirst),
             };
@@ -1590,7 +1564,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if self
                 .ctx
                 .engines
-                .kv
+                .kv()
                 .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
                 .is_some()
             {
@@ -1790,7 +1764,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if self
             .ctx
             .engines
-            .kv
+            .kv()
             .auto_compactions_is_disabled()
             .expect("cf")
         {
@@ -1915,7 +1889,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         );
 
         let store_info = StoreInfo {
-            engine: self.ctx.engines.kv.clone(),
+            engine: self.ctx.engines.kv().clone(),
             capacity: self.ctx.cfg.capacity.0,
         };
 
@@ -2066,7 +2040,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
+impl<'a, E: KvEngines + 'static, T: Transport, C: PdClient> StoreFsmDelegate<'a, E, T, C> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
@@ -2314,7 +2288,7 @@ fn size_change_filter(info: &RocksCompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(ch: RaftRouter<RocksEngine, RocksEngine>) -> CompactionListener {
+pub fn new_compaction_listener<E: KvEngines + 'static>(ch: RaftRouter<E>) -> CompactionListener {
     let ch = Mutex::new(ch);
     let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();

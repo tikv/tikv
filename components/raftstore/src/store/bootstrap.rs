@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::metapb;
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
+
+use crate::Result;
+
 use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 use super::util::new_peer;
-use crate::Result;
-use engine_rocks::RocksEngine;
-use engine_traits::{Iterable, KvEngines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{Iterable, KvEngine, KvEngines, Mutable, SyncMutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
-
-use kvproto::metapb;
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -24,8 +24,8 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(
-    engine: &RocksEngine,
+fn is_range_empty<E: KvEngine>(
+    engine: &E,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
@@ -40,18 +40,14 @@ fn is_range_empty(
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
-    cluster_id: u64,
-    store_id: u64,
-) -> Result<()> {
+pub fn bootstrap_store<E: KvEngines>(engines: E, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::default();
 
-    if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(engines.kv(), CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
     }
 
-    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(engines.raft(), CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!(
             "raft store is not empty and has already had data."
         ));
@@ -60,57 +56,51 @@ pub fn bootstrap_store(
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
-    engines.sync_kv()?;
+    engines.kv().put_msg(keys::STORE_IDENT_KEY, &ident)?;
+    engines.kv().sync()?;
     Ok(())
 }
 
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
-    region: &metapb::Region,
-) -> Result<()> {
+pub fn prepare_bootstrap_cluster<E: KvEngines>(engines: &E, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
-    let mut wb = engines.kv.write_batch();
+    let mut wb = engines.kv().write_batch();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
     write_initial_apply_state(&mut wb, region.get_id())?;
-    engines.kv.write(&wb)?;
-    engines.sync_kv()?;
+    engines.kv().write(&wb)?;
+    engines.kv().sync()?;
 
-    let mut raft_wb = engines.raft.write_batch();
+    let mut raft_wb = engines.raft().write_batch();
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
-    engines.raft.write(&raft_wb)?;
-    engines.sync_raft()?;
+    engines.raft().write(&raft_wb)?;
+    engines.raft().sync()?;
     Ok(())
 }
 
 // Clear first region meta and prepare key.
-pub fn clear_prepare_bootstrap_cluster(
-    engines: &KvEngines<RocksEngine, RocksEngine>,
-    region_id: u64,
-) -> Result<()> {
-    box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
-    engines.sync_raft()?;
+pub fn clear_prepare_bootstrap_cluster<E: KvEngines>(engines: &E, region_id: u64) -> Result<()> {
+    box_try!(engines.raft().delete(&keys::raft_state_key(region_id)));
+    engines.raft().sync()?;
 
-    let mut wb = engines.kv.write_batch();
+    let mut wb = engines.kv().write_batch();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
     box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-    engines.kv.write(&wb)?;
-    engines.sync_kv()?;
+    engines.kv().write(&wb)?;
+    engines.kv().sync()?;
     Ok(())
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<()> {
-    box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
-    engines.sync_kv()?;
+pub fn clear_prepare_bootstrap_key<E: KvEngines>(engines: &E) -> Result<()> {
+    box_try!(engines.kv().delete(keys::PREPARE_BOOTSTRAP_KEY));
+    engines.kv().sync()?;
     Ok(())
 }
 

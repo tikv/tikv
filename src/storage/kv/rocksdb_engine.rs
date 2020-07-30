@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
 use engine_rocks::raw_util::CFOptions;
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
+use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator, TwoRocksEngines};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, ReadOptions, SeekKey,
@@ -49,7 +49,7 @@ impl Display for Task {
     }
 }
 
-struct Runner(KvEngines<BaseRocksEngine, BaseRocksEngine>);
+struct Runner(TwoRocksEngines);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
@@ -86,7 +86,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: KvEngines<BaseRocksEngine, BaseRocksEngine>,
+    engines: TwoRocksEngines,
     not_leader: Arc<AtomicBool>,
 }
 
@@ -111,7 +111,7 @@ impl RocksEngine {
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = KvEngines::new(
+        let engines = TwoRocksEngines::new(
             BaseRocksEngine::from_db(db.clone()),
             BaseRocksEngine::from_db(db),
             shared_block_cache,
@@ -133,7 +133,7 @@ impl RocksEngine {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
-    pub fn engines(&self) -> KvEngines<BaseRocksEngine, BaseRocksEngine> {
+    pub fn engines(&self) -> TwoRocksEngines {
         self.engines.clone()
     }
 

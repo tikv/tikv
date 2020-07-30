@@ -43,6 +43,8 @@ mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
+mod engines;
+pub use crate::engines::*;
 mod import;
 pub use crate::import::*;
 mod logger;

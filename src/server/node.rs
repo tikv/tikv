@@ -57,29 +57,26 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<E: KvEngines, C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<E>,
     has_started: bool,
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<C> Node<C>
-where
-    C: PdClient,
-{
+impl<E: KvEngines, C: PdClient> Node<E, C> {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<E>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-    ) -> Node<C> {
+    ) -> Node<E, C> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -133,7 +130,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: E,
         trans: T,
         snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
@@ -195,7 +192,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<E> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
@@ -205,7 +202,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn check_store(&self, engines: &E) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -250,7 +247,7 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &KvEngines<RocksEngine, RocksEngine>) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &E) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -263,7 +260,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &E,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -287,7 +284,7 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &E,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -303,7 +300,7 @@ where
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &KvEngines<RocksEngine, RocksEngine>,
+        engines: &E,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -368,7 +365,7 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: KvEngines<RocksEngine, RocksEngine>,
+        engines: E,
         trans: T,
         snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
