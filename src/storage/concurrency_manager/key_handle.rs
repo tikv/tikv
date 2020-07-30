@@ -1,18 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod key_mutex;
 mod lock_store;
 
-use self::{key_mutex::KeyMutex, lock_store::LockStore};
+use self::lock_store::LockStore;
 use super::handle_table::OrderedMap;
 
 use std::{
+    mem,
     ops::Deref,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
 };
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
 
 const INIT_REF_COUNT: usize = usize::MAX;
@@ -25,7 +26,7 @@ const INIT_REF_COUNT: usize = usize::MAX;
 pub struct KeyHandle {
     key: Key,
     ref_count: AtomicUsize,
-    key_mutex: KeyMutex,
+    key_mutex: AsyncMutex<()>,
     lock_store: LockStore,
 }
 
@@ -34,7 +35,7 @@ impl KeyHandle {
         KeyHandle {
             key,
             ref_count: AtomicUsize::new(INIT_REF_COUNT),
-            key_mutex: KeyMutex::new(),
+            key_mutex: AsyncMutex::new(()),
             lock_store: LockStore::new(),
         }
     }
@@ -79,8 +80,14 @@ impl<'m, M: OrderedMap> KeyHandleRef<'m, M> {
     }
 
     pub async fn mutex_lock(self) -> KeyHandleMutexGuard<'m, M> {
-        self.key_mutex.mutex_lock().await;
-        KeyHandleMutexGuard(self)
+        // Safety: `_mutex_guard` is declared after `handle_ref` in `KeyHandleMutexGuard`.
+        // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
+        // Then we can make sure the mutex guard doesn't point to released memory.
+        let mutex_guard = unsafe { mem::transmute(self.key_mutex.lock().await) };
+        KeyHandleMutexGuard {
+            handle_ref: self,
+            _mutex_guard: mutex_guard,
+        }
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
@@ -105,21 +112,22 @@ impl<'m, M: OrderedMap> Drop for KeyHandleRef<'m, M> {
 }
 
 /// A `KeyHandleRef` with its mutex locked.
-pub struct KeyHandleMutexGuard<'m, M: OrderedMap>(KeyHandleRef<'m, M>);
+pub struct KeyHandleMutexGuard<'m, M: OrderedMap> {
+    // It must be declared before `handle_ref` so it will be dropped before
+    // `handle_ref`.
+    _mutex_guard: AsyncMutexGuard<'m, ()>,
+    handle_ref: KeyHandleRef<'m, M>,
+}
 
 impl<'m, M: OrderedMap> KeyHandleMutexGuard<'m, M> {
     pub fn key(&self) -> &Key {
-        &self.0.key()
+        &self.handle_ref.key()
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T) -> T {
-        self.0.lock_store.write(f, &self.0.ref_count)
-    }
-}
-
-impl<'m, M: OrderedMap> Drop for KeyHandleMutexGuard<'m, M> {
-    fn drop(&mut self) {
-        self.0.key_mutex.unlock();
+        self.handle_ref
+            .lock_store
+            .write(f, &self.handle_ref.ref_count)
     }
 }
 
