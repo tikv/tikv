@@ -38,7 +38,7 @@ coarsetime = "0.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/tabokie/rust-rocksdb.git"
-branch = "opt_refill
+branch = "opt_refill"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
