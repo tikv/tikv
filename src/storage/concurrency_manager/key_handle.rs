@@ -16,8 +16,6 @@ use std::{
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
 
-const INIT_REF_COUNT: usize = usize::MAX;
-
 /// An entry in the in-memory table providing functions related to a specific
 /// key.
 ///
@@ -31,12 +29,20 @@ pub struct KeyHandle {
 }
 
 impl KeyHandle {
-    pub fn new(key: Key) -> Self {
-        KeyHandle {
+    pub fn new_with_ref<'m, M: OrderedMap>(key: Key, map: &'m M) -> KeyHandleWithRef<'m, M> {
+        let key_handle = Arc::new(KeyHandle {
             key,
-            ref_count: AtomicUsize::new(INIT_REF_COUNT),
+            ref_count: AtomicUsize::new(1),
             key_mutex: AsyncMutex::new(()),
             lock_store: LockStore::new(),
+        });
+        let key_handle_ref = KeyHandleRef {
+            handle: key_handle.clone(),
+            map,
+        };
+        KeyHandleWithRef {
+            key_handle_ref,
+            key_handle,
         }
     }
 
@@ -49,14 +55,9 @@ impl KeyHandle {
             if ref_count == 0 {
                 return None;
             }
-            let new_value = if ref_count == INIT_REF_COUNT {
-                1
-            } else {
-                ref_count + 1
-            };
             match self.ref_count.compare_exchange(
                 ref_count,
-                new_value,
+                ref_count + 1,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             ) {
@@ -111,6 +112,11 @@ impl<'m, M: OrderedMap> Drop for KeyHandleRef<'m, M> {
     }
 }
 
+pub struct KeyHandleWithRef<'m, M: OrderedMap> {
+    pub(super) key_handle_ref: KeyHandleRef<'m, M>,
+    pub(super) key_handle: Arc<KeyHandle>,
+}
+
 /// A `KeyHandleRef` with its mutex locked.
 pub struct KeyHandleMutexGuard<'m, M: OrderedMap> {
     // It must be declared before `handle_ref` so it will be dropped before
@@ -142,14 +148,14 @@ mod tests {
     #[tokio::test]
     async fn test_key_mutex() {
         let map = Arc::new(Mutex::new(BTreeMap::new()));
-        let handle = Arc::new(KeyHandle::new(Key::from_raw(b"k")));
-        map.insert_if_not_exist(Key::from_raw(b"k"), handle.clone());
+        let handle_with_ref = KeyHandle::new_with_ref(Key::from_raw(b"k"), &*map);
+        map.insert_if_not_exist(Key::from_raw(b"k"), handle_with_ref.key_handle.clone());
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
         for _ in 0..100 {
             let map = map.clone();
-            let handle = handle.clone();
+            let handle = handle_with_ref.key_handle.clone();
             let counter = counter.clone();
             let handle = tokio::spawn(async move {
                 let lock_ref = handle.get_ref(&*map).unwrap();
@@ -175,16 +181,19 @@ mod tests {
         let k = Key::from_raw(b"k");
 
         // simple case
-        map.insert_if_not_exist(k.clone(), Arc::new(KeyHandle::new(k.clone())));
+        let with_ref = KeyHandle::new_with_ref(k.clone(), &map);
+        map.insert_if_not_exist(k.clone(), with_ref.key_handle);
         let lock_ref1 = map.get(&k).unwrap();
         let lock_ref2 = map.get(&k).unwrap();
+        drop(with_ref.key_handle_ref);
         drop(lock_ref1);
         assert!(map.get(&k).is_some());
         drop(lock_ref2);
         assert!(map.get(&k).is_none());
 
         // should not removed it from the table if a lock is stored in it
-        map.insert_if_not_exist(k.clone(), Arc::new(KeyHandle::new(k.clone())));
+        let with_ref = KeyHandle::new_with_ref(k.clone(), &map);
+        map.insert_if_not_exist(k.clone(), with_ref.key_handle);
         let guard = map.get(&k).unwrap().mutex_lock().await;
         guard.with_lock(|lock| {
             *lock = Some(Lock::new(
@@ -198,6 +207,7 @@ mod tests {
                 1.into(),
             ))
         });
+        drop(with_ref.key_handle_ref);
         drop(guard);
         assert!(map.get(&k).is_some());
 

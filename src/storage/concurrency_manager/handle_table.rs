@@ -21,10 +21,12 @@ impl<M: OrderedMap> HandleTable<M> {
             if let Some(handle) = self.0.get(key) {
                 return handle.mutex_lock().await;
             } else {
-                let handle = Arc::new(KeyHandle::new(key.clone()));
-                let handle_ref = handle.clone().get_ref(&*self.0).unwrap();
-                let guard = handle_ref.mutex_lock().await;
-                if self.0.insert_if_not_exist(key.clone(), handle) {
+                let handle_with_ref = KeyHandle::new_with_ref(key.clone(), &*self.0);
+                let guard = handle_with_ref.key_handle_ref.mutex_lock().await;
+                if self
+                    .0
+                    .insert_if_not_exist(key.clone(), handle_with_ref.key_handle)
+                {
                     return guard;
                 }
             }
@@ -55,13 +57,8 @@ impl<M: OrderedMap> HandleTable<M> {
     ) -> Result<(), E> {
         let e = self.0.find_first(start_key, end_key, |lock_ref| {
             lock_ref.with_lock(|lock| {
-                lock.as_ref().and_then(|lock| {
-                    if let Err(e) = check_fn(lock_ref.key(), lock) {
-                        Some(e)
-                    } else {
-                        None
-                    }
-                })
+                lock.as_ref()
+                    .and_then(|lock| check_fn(lock_ref.key(), lock).err())
             })
         });
         if let Some(e) = e {
