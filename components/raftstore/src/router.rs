@@ -86,11 +86,7 @@ where
         )
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, RocksEngine>,
-    ) -> RaftStoreResult<()>;
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
@@ -122,7 +118,7 @@ where
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage<EK, RocksEngine>) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
@@ -247,11 +243,7 @@ where
         Ok(())
     }
 
-    fn casual_send(
-        &self,
-        region_id: u64,
-        msg: CasualMessage<EK, RocksEngine>,
-    ) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_send_error(region_id, e))
