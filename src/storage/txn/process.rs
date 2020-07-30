@@ -742,7 +742,13 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             start_ts,
             ctx,
         }) => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut txn = MvccTxn::new(
+                snapshot,
+                start_ts,
+                !ctx.get_not_fill_cache(),
+                pd_client,
+                concurrency_manager,
+            );
             let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
             let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
