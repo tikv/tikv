@@ -17,14 +17,13 @@ use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
-use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
-use super::RegionSnapshot;
+use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -231,11 +230,7 @@ where
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+pub enum CasualMessage<EK: KvEngine> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -280,14 +275,10 @@ where
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<EK, ER>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
 
-impl<EK, ER> fmt::Debug for CasualMessage<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -358,11 +349,7 @@ impl<S: Snapshot> RaftCommand<S> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -384,18 +371,14 @@ where
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK, ER>),
+    CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
 }
 
-impl<EK, ER> fmt::Debug for PeerMsg<EK, ER>
-where
-    EK: KvEngine,
-    ER: KvEngine,
-{
+impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),

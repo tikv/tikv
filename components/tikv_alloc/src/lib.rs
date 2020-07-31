@@ -82,6 +82,7 @@
 #[macro_use]
 extern crate log;
 
+#[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
 

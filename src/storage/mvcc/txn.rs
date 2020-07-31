@@ -57,7 +57,7 @@ impl MissingLockAction {
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
 /// It's used by `LockManager` to wake up transactions waiting for locks.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
     /// The hash value of the lock.
     pub hash: u64,
@@ -72,6 +72,13 @@ impl ReleasedLock {
             pessimistic,
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SecondaryLockStatus {
+    Locked(Lock),
+    Committed(TimeStamp),
+    RolledBack,
 }
 
 pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
@@ -1030,6 +1037,60 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 )
                 .map(|s| (s, None)),
         }
+    }
+
+    /// Check the status of a secondary (optimistic) lock.
+    ///
+    /// It checks whether the given secondary lock exists. If the lock exists,
+    /// the lock information is returned. Otherwise, it searches the write CF
+    /// for the commit record of the lock and returns the commit timestamp
+    /// (0 if the lock is not committed).
+    ///
+    /// If the lock does not exist or is a pessimistic lock, to prevent the
+    /// status being changed, a rollback may be written and this rollback
+    /// needs to be protected.
+    pub fn check_secondary_lock(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+    ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
+        let mut released_lock = None;
+        let (status, need_rollback) = match self.reader.load_lock(&key)? {
+            Some(lock) if lock.ts == start_ts => {
+                if lock.lock_type == LockType::Pessimistic {
+                    released_lock = self.unlock_key(key.clone(), true);
+                    (SecondaryLockStatus::RolledBack, true)
+                } else {
+                    (SecondaryLockStatus::Locked(lock), false)
+                }
+            }
+            _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
+                Some((commit_ts, write_type)) => {
+                    let status = if write_type != WriteType::Rollback {
+                        SecondaryLockStatus::Committed(commit_ts)
+                    } else {
+                        SecondaryLockStatus::RolledBack
+                    };
+                    // We needn't write a rollback once there is a write record for it:
+                    // If it's a committed record, it cannot be changed.
+                    // If it's a rollback record, it either comes from another check_secondary_lock
+                    // (thus protected) or the client stops commit actively. So we don't need
+                    // to make it protected again.
+                    (status, false)
+                }
+                None => (SecondaryLockStatus::RolledBack, true),
+            },
+        };
+        if need_rollback {
+            // We must protect this rollback in case this rollback is collapsed and a stale
+            // acquire_pessimistic_lock and prewrite succeed again.
+            let write = Write::new_rollback(start_ts, true);
+            self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
+            if self.collapse_rollback {
+                self.collapse_prev_rollback(key.clone())?;
+            }
+        }
+        Ok((status, released_lock))
     }
 
     pub fn gc(&mut self, key: Key, safe_point: TimeStamp) -> Result<GcInfo> {
@@ -3331,5 +3392,98 @@ mod tests {
         };
         do_check_txn_status(true);
         do_check_txn_status(false);
+    }
+
+    #[test]
+    fn test_check_async_commit_secondary_locks() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let pd_client = Arc::new(DummyPdClient::new());
+
+        let check_secondary = |key, ts| {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let key = Key::from_raw(key);
+            let ts = TimeStamp::new(ts);
+            let mut txn = MvccTxn::new(snapshot, ts, true, pd_client.clone());
+            let res = txn.check_secondary_lock(&key, ts).unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            res
+        };
+
+        must_prewrite_lock(&engine, b"k1", b"key", 1);
+        must_commit(&engine, b"k1", 1, 3);
+        must_rollback(&engine, b"k1", 5);
+        must_prewrite_lock(&engine, b"k1", b"key", 7);
+        must_commit(&engine, b"k1", 7, 9);
+
+        // Lock CF has no lock
+        //
+        // LOCK CF       | WRITE CF
+        // --------------+---------------------
+        //               | 9: start_ts = 7
+        //               | 5: rollback
+        //               | 3: start_ts = 1
+
+        assert_eq!(
+            check_secondary(b"k1", 7),
+            (SecondaryLockStatus::Committed(9.into()), None)
+        );
+        must_get_commit_ts(&engine, b"k1", 7, 9);
+        assert_eq!(
+            check_secondary(b"k1", 5),
+            (SecondaryLockStatus::RolledBack, None)
+        );
+        must_get_rollback_ts(&engine, b"k1", 5);
+        assert_eq!(
+            check_secondary(b"k1", 1),
+            (SecondaryLockStatus::Committed(3.into()), None)
+        );
+        must_get_commit_ts(&engine, b"k1", 1, 3);
+        assert_eq!(
+            check_secondary(b"k1", 6),
+            (SecondaryLockStatus::RolledBack, None)
+        );
+        must_get_rollback_protected(&engine, b"k1", 6, true);
+
+        // ----------------------------
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"key", 11, 11);
+
+        // Lock CF has a pessimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        // ts = 11 (pes) | 9: start_ts = 7
+        //               | 5: rollback
+        //               | 3: start_ts = 1
+
+        let (status, released_lock) = check_secondary(b"k1", 11);
+        assert_eq!(status, SecondaryLockStatus::RolledBack);
+        assert!(released_lock.unwrap().pessimistic);
+        must_get_rollback_protected(&engine, b"k1", 11, true);
+
+        // ----------------------------
+
+        must_prewrite_lock(&engine, b"k1", b"key", 13);
+
+        // Lock CF has an optimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        // ts = 13 (opt) | 11: rollback
+        //               |  9: start_ts = 7
+        //               |  5: rollback
+        //               |  3: start_ts = 1
+
+        match check_secondary(b"k1", 13) {
+            (SecondaryLockStatus::Locked(_), None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_locked(&engine, b"k1", 13);
     }
 }

@@ -111,6 +111,7 @@ make_auto_flush_static_metric! {
         pessimistic_rollback,
         txn_heart_beat,
         check_txn_status,
+        check_secondary_locks,
         scan_lock,
         resolve_lock,
         resolve_lock_lite,
