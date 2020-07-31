@@ -1,5 +1,7 @@
 use super::ErrorCodeExt;
 use crate::codec::Error;
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use codec::Error as CodecError;
 
 define_error_codes!(

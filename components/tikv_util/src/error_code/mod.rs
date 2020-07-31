@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 macro_rules! define_error_codes {
     ($prefix:literal,
         $($name:ident => ($suffix:literal, $description:literal, $workaround:literal)),+
@@ -18,7 +20,6 @@ pub mod engine;
 pub mod pd;
 pub mod raft;
 pub mod raftstore;
-pub mod server;
 pub mod sst_importer;
 pub mod storage;
 
