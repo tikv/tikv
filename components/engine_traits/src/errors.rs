@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error, result};
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use std::{error, result};
 
 quick_error! {
     #[derive(Debug)]
@@ -55,7 +55,7 @@ impl ErrorCodeExt for Error {
             Error::Io(_) => error_code::engine::IO,
             Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
-            Error::Other(_) => error_code::engine::UNDETERMINED,
+            Error::Other(_) => error_code::engine::UNKNOWN,
         }
     }
 }

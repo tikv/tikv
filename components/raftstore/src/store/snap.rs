@@ -97,7 +97,7 @@ impl ErrorCodeExt for Error {
         match self {
             Error::Abort => error_code::raftstore::SNAP_ABORT,
             Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
-            Error::Other(_) => error_code::raftstore::SNAP_UNDETERMINED,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
         }
     }
 }

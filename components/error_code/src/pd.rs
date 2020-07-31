@@ -10,5 +10,5 @@ define_error_codes!(
     GRPC => ("gRPC", "", ""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),
-    UNDETERMINED => ("Undetermined", "", "")
+    UNKNOWN => ("Unknown", "", "")
 );

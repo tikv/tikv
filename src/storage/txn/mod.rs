@@ -204,7 +204,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Codec(e) => e.error_code(),
             ErrorInner::ProtoBuf(_) => error_code::storage::PROTOBUF,
             ErrorInner::Mvcc(e) => e.error_code(),
-            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::InvalidTxnTso { .. } => error_code::storage::INVALID_TXN_TSO,
             ErrorInner::InvalidReqRange { .. } => error_code::storage::INVALID_REQ_RANGE,

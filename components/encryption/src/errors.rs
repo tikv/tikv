@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
-use error_code::{self, ErrorCode, ErrorCodeExt};
 
 /// The error type for encryption.
 #[derive(Debug, Fail)]
@@ -74,7 +74,7 @@ impl ErrorCodeExt for Error {
             Error::UnknownEncryption => error_code::encryption::UNKNOWN_ENCRYPTION,
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
             Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
-            Error::Other(_) => error_code::encryption::UNDETERMINED,
+            Error::Other(_) => error_code::encryption::UNKNOWN,
         }
     }
 }

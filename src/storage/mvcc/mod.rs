@@ -275,7 +275,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::PessimisticLockNotFound { .. } => {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
-            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
 }

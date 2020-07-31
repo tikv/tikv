@@ -20,12 +20,12 @@ define_error_codes!(
     ADDR_PARSE => ("AddressParse", "", ""),
     TIMEOUT => ("Timeout", "", ""),
     EPOCH_NOT_MATCH => ("EpochNotMatch", "", ""),
-    UNDETERMINED => ("Undetermined", "", ""),
+    UNKNOWN => ("Unknown", "", ""),
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
-    SNAP_UNDETERMINED => ("SnapUndetermined", "", "")
+    SNAP_UNKNOWN => ("SnapUnknown", "", "")
 );
 
 impl ErrorCodeExt for errorpb::Error {
@@ -47,7 +47,7 @@ impl ErrorCodeExt for errorpb::Error {
         } else if self.has_raft_entry_too_large() {
             ENTRY_TOO_LARGE
         } else {
-            UNDETERMINED
+            UNKNOWN
         }
     }
 }

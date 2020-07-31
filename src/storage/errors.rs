@@ -102,7 +102,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Txn(e) => e.error_code(),
             ErrorInner::Mvcc(e) => e.error_code(),
             ErrorInner::Closed => error_code::storage::CLOSED,
-            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,

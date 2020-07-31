@@ -16,5 +16,5 @@ define_error_codes!(
     STORAGE_ERROR => ("StorageError", "", ""),
     INVALID_CHARACTER_STRING => ("InvalidCharacterString", "", ""),
 
-    UNDETERMINED => ("Undetermined", "", "")
+    UNKNOWN => ("Unknown", "", "")
 );

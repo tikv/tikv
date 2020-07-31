@@ -10,5 +10,5 @@ define_error_codes!(
     UNKNOWN_ENCRYPTION => ("UnknownEncryption", "", ""),
     WRONG_MASTER_KEY => ("WrongMasterKey", "", ""),
     BOTH_MASTER_KEY_FAIL => ("BothMasterKeyFail", "", ""),
-    UNDETERMINED => ("Undetermined", "","")
+    UNKNOWN => ("Unknown", "","")
 );

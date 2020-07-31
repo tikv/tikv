@@ -7,11 +7,11 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
 use tidb_query_common::error::EvaluateError;
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use tipb::{self, ScalarFuncSig};
 
 pub const ERR_M_BIGGER_THAN_D: i32 = 1427;
@@ -230,7 +230,7 @@ impl ErrorCodeExt for Error {
             Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
             Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
             Error::Eval(_, _) => error_code::coprocessor::EVAL,
-            Error::Other(_) => error_code::coprocessor::UNDETERMINED,
+            Error::Other(_) => error_code::coprocessor::UNKNOWN,
         }
     }
 }

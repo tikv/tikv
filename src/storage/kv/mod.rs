@@ -308,7 +308,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Request(e) => e.error_code(),
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
-            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
 }

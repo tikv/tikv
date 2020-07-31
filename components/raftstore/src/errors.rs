@@ -266,7 +266,7 @@ impl ErrorCodeExt for Error {
             #[cfg(feature = "prost-codec")]
             Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
 
-            Error::Other(_) => error_code::raftstore::UNDETERMINED,
+            Error::Other(_) => error_code::raftstore::UNKNOWN,
         }
     }
 }
