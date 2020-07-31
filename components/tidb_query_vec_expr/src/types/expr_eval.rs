@@ -8,51 +8,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub const BATCH_MAX_SIZE: usize = 1024;
-
-/// Identical logical row is a special case in expression evaluation that
-/// the rows in physical_value are continuous and in order.
-static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
-    let mut logical_rows = [0; BATCH_MAX_SIZE];
-    let mut row = 0;
-    while row < logical_rows.len() {
-        logical_rows[row] = row;
-        row += 1;
-    }
-    logical_rows
-};
-
-#[derive(Clone, Copy, Debug)]
-pub enum LogicalRows<'a> {
-    Identical { size: usize },
-    Ref { logical_rows: &'a [usize] },
-}
-
-impl<'a> LogicalRows<'a> {
-    pub fn as_slice(self) -> &'a [usize] {
-        match self {
-            LogicalRows::Identical { size } => &IDENTICAL_LOGICAL_ROWS[0..size],
-            LogicalRows::Ref { logical_rows } => logical_rows,
-        }
-    }
-
-    #[inline]
-    pub fn get_idx(self, idx: usize) -> usize {
-        match self {
-            LogicalRows::Identical { size: _ } => idx,
-            LogicalRows::Ref { logical_rows } => logical_rows[idx],
-        }
-    }
-
-    pub fn is_ident(self) -> bool {
-        match self {
-            LogicalRows::Identical { size: _ } => true,
-            LogicalRows::Ref { logical_rows: _ } => false,
-        }
-    }
-}
+pub use tidb_query_datatype::codec::data_type::{LogicalRows, BATCH_MAX_SIZE};
 
 /// Represents a vector value node in the RPN stack.
 ///
@@ -229,7 +185,7 @@ impl RpnExpression {
                 input_physical_columns[*offset].ensure_decoded(
                     ctx,
                     &schema[*offset],
-                    input_logical_rows,
+                    LogicalRows::from_slice(input_logical_rows),
                 )?;
             }
         }

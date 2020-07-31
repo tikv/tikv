@@ -7,6 +7,7 @@ mod chunked_vec_json;
 mod chunked_vec_sized;
 mod scalar;
 mod vector;
+mod logical_rows;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
@@ -18,6 +19,7 @@ pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_json::ChunkedVecJson;
 pub use chunked_vec_sized::ChunkedVecSized;
+pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
