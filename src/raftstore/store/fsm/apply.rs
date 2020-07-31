@@ -2211,7 +2211,6 @@ impl RegionProposal {
 pub struct Destroy {
     region_id: u64,
     async_remove: bool,
-    merge_from_snapshot: bool,
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2290,11 +2289,10 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64, async_remove: bool, merge_from_snapshot: bool) -> Msg {
+    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
         Msg::Destroy(Destroy {
             region_id,
             async_remove,
-            merge_from_snapshot,
         })
     }
 }
@@ -2348,8 +2346,6 @@ pub enum TaskRes {
         region_id: u64,
         // ID of peer that has been destroyed.
         peer_id: u64,
-        // Whether destroy request is from its target region's snapshot
-        merge_from_snapshot: bool,
     },
 }
 
@@ -2469,9 +2465,6 @@ impl ApplyFsm {
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy(&mut self, ctx: &mut ApplyContext, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
-        if d.merge_from_snapshot {
-            assert_eq!(self.delegate.stopped, false);
-        }
         if !self.delegate.stopped {
             self.destroy(ctx);
             if d.async_remove {
@@ -2481,7 +2474,6 @@ impl ApplyFsm {
                         res: TaskRes::Destroy {
                             region_id: self.delegate.region_id(),
                             peer_id: self.delegate.id,
-                            merge_from_snapshot: d.merge_from_snapshot,
                         },
                     },
                 );
@@ -3163,12 +3155,10 @@ mod tests {
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
         });
 
-        router.schedule_task(2, Msg::destroy(2, true, false));
+        router.schedule_task(2, Msg::destroy(2, true));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy {
-                    region_id, peer_id, ..
-                } => (region_id, peer_id),
+                TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
                 e => panic!("expected destroy result, but got {:?}", e),
             },
             e => panic!("expected destroy result, but got {:?}", e),
