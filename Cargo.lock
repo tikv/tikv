@@ -4671,6 +4671,7 @@ dependencies = [
  "prometheus",
  "protobuf",
  "quick-error",
+ "raft",
  "rand",
  "regex",
  "serde",

@@ -2,6 +2,7 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
+#![feature(box_patterns)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -45,6 +46,7 @@ pub mod future_pool;
 pub mod macros;
 pub mod callback;
 pub mod deadline;
+pub mod error_code;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;

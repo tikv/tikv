@@ -24,6 +24,8 @@ pub use types::{
 };
 pub use write::{Write, WriteRef, WriteType};
 
+use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+
 quick_error! {
     #[derive(Debug)]
     pub enum ErrorInner {
@@ -99,3 +101,15 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::BadFormatLock => error_code::storage::BAD_FORMAT_LOCK,
+            ErrorInner::BadFormatWrite => error_code::storage::BAD_FORMAT_WRITE,
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
+        }
+    }
+}

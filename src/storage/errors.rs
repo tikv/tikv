@@ -11,6 +11,7 @@ use crate::storage::{
     Result,
 };
 use kvproto::{errorpb, kvrpcpb};
+use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{KvPair, TimeStamp};
 
 quick_error! {
@@ -91,6 +92,23 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Txn(e) => e.error_code(),
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Closed => error_code::storage::CLOSED,
+            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
+            ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
+            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+        }
     }
 }
 

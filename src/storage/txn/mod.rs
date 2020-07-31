@@ -18,6 +18,7 @@ use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
+use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;
@@ -195,3 +196,18 @@ impl<T: Into<ErrorInner>> From<T> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::ProtoBuf(_) => error_code::storage::PROTOBUF,
+            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::InvalidTxnTso { .. } => error_code::storage::INVALID_TXN_TSO,
+            ErrorInner::InvalidReqRange { .. } => error_code::storage::INVALID_REQ_RANGE,
+        }
+    }
+}

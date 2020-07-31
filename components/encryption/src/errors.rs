@@ -4,6 +4,7 @@ use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
+use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
 
 /// The error type for encryption.
 #[derive(Debug, Fail)]
@@ -62,3 +63,18 @@ impl From<Error> for IoError {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Rocks(_) => error_code::encryption::ROCKS,
+            Error::Io(_) => error_code::encryption::IO,
+            Error::Crypter(_) => error_code::encryption::CRYPTER,
+            Error::Proto(_) => error_code::encryption::PROTO,
+            Error::UnknownEncryption => error_code::encryption::UNKNOWN_ENCRYPTION,
+            Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
+            Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
+            Error::Other(_) => error_code::encryption::UNDETERMINED,
+        }
+    }
+}

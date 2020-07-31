@@ -27,6 +27,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
+use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -298,6 +299,17 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
+    }
+}
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
+            ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Other(_) => error_code::storage::UNDETERMINED,
+        }
     }
 }
 
