@@ -141,6 +141,21 @@ pub fn to_days(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
+pub fn to_seconds(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    Ok(Some(t.second_number()))
+}
+
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
     arg.cloned().map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
@@ -646,6 +661,32 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_to_seconds() {
+        let cases = vec![
+            (Some("950501"), Some(62966505600)),
+            (Some("2009-11-29"), Some(63426672000)),
+            (Some("2009-11-29 13:43:32"), Some(63426721412)),
+            (Some("09-11-29 13:43:32"), Some(63426721412)),
+            (Some("99-11-29 13:43:32"), Some(63111102212)),
+            (Some("0000-00-00 00:00:00"), None),
+            (None, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = match arg {
+                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
+                None => None,
+            };
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::ToSeconds)
                 .unwrap();
             assert_eq!(output, exp);
         }
