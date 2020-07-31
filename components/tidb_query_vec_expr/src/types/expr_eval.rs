@@ -6,9 +6,9 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
+pub use tidb_query_datatype::codec::data_type::{LogicalRows, BATCH_MAX_SIZE};
 use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use tidb_query_datatype::expr::EvalContext;
-pub use tidb_query_datatype::codec::data_type::{LogicalRows, BATCH_MAX_SIZE};
 
 /// Represents a vector value node in the RPN stack.
 ///
