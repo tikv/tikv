@@ -19,7 +19,7 @@ define_error_codes!(
     KEY_IS_LOCKED=> ("KeyIsLocked", "", ""),
 
     COMMITTED => ("Committed", "", ""),
-    PESSIMISTIC_LOCK_ROLLEDBACK => ("PessimisticLockRolledBack", "", ""),
+    PESSIMISTIC_LOCK_ROLLED_BACK => ("PessimisticLockRolledBack", "", ""),
     TXN_LOCK_NOT_FOUND => ("TxnLockNotFound", "", ""),
     TXN_NOT_FOUND => ("TxnNotFound", "", ""),
     LOCK_TYPE_NOT_MATCH => ("LockTypeNotMatch", "", ""),

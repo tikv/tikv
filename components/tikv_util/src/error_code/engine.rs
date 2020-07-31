@@ -7,7 +7,7 @@ define_error_codes!(
     NOT_IN_RANGE => ("NotInRange", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     IO => ("IO", "", ""),
-    CFNAME => ("CFName", "", ""),
+    CF_NAME => ("CFName", "", ""),
     CODEC => ("Codec", "", ""),
 
     UNDETERMINED => ("Undetermined", "", "")

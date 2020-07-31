@@ -53,7 +53,7 @@ impl ErrorCodeExt for Error {
             Error::NotInRange(_, _, _, _) => error_code::engine::NOT_IN_RANGE,
             Error::Protobuf(_) => error_code::engine::PROTOBUF,
             Error::Io(_) => error_code::engine::IO,
-            Error::CFName(_) => error_code::engine::CFNAME,
+            Error::CFName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
             Error::Other(_) => error_code::engine::UNDETERMINED,
         }

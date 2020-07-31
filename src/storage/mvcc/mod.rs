@@ -261,7 +261,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::BadFormat(e) => e.error_code(),
             ErrorInner::Committed { .. } => error_code::storage::COMMITTED,
             ErrorInner::PessimisticLockRolledBack { .. } => {
-                error_code::storage::PESSIMISTIC_LOCK_ROLLEDBACK
+                error_code::storage::PESSIMISTIC_LOCK_ROLLED_BACK
             }
             ErrorInner::TxnLockNotFound { .. } => error_code::storage::TXN_LOCK_NOT_FOUND,
             ErrorInner::TxnNotFound { .. } => error_code::storage::TXN_NOT_FOUND,
