@@ -29,7 +29,7 @@
 //! - mem-profiling - compiles jemalloc and this crate with profiling
 //!   capability
 //!
-//! - jemalloc - compiles jemallocator (default)
+//! - jemalloc - compiles tikv-jemallocator (default)
 //!
 //! - tcmalloc - compiles tcmalloc
 //!
@@ -82,7 +82,7 @@
 #[macro_use]
 extern crate log;
 
-#[allow(unused_imports)]
+#[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
 

@@ -4,6 +4,7 @@
 #[macro_use]
 mod macros;
 mod acquire_pessimistic_lock;
+mod check_secondary_locks;
 mod check_txn_status;
 mod cleanup;
 mod commit;
@@ -21,6 +22,7 @@ mod scan_lock;
 mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
@@ -55,7 +57,8 @@ use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
 use crate::storage::txn::latch::{self, Latches};
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockRes, PrewriteResult, StorageCallbackType, TxnStatus,
+    MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
+    TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use pd_client::PdClient;
@@ -80,6 +83,7 @@ pub enum Command {
     PessimisticRollback(PessimisticRollback),
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
+    CheckSecondaryLocks(CheckSecondaryLocks),
     ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
@@ -242,6 +246,19 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_caller_start_ts().into(),
             req.get_current_ts().into(),
             req.get_rollback_if_not_exist(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<CheckSecondaryLocksRequest> for TypedCommand<SecondaryLocksStatus> {
+    fn from(mut req: CheckSecondaryLocksRequest) -> Self {
+        CheckSecondaryLocks::new(
+            req.take_keys()
+                .into_iter()
+                .map(|k| Key::from_raw(&k))
+                .collect(),
+            req.get_start_version().into(),
             req.take_context(),
         )
     }
@@ -422,6 +439,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
@@ -443,6 +461,7 @@ impl Command {
             Command::PessimisticRollback(t) => t,
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
+            Command::CheckSecondaryLocks(t) => t,
             Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,

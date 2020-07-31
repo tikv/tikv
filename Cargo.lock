@@ -1774,37 +1774,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
 
 [[package]]
-name = "jemalloc-ctl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e93b0f37e7d735c6b610176d5b1bde8e1621ff3f6f7ac23cdfa4e7f7d0111b5"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
-
-[[package]]
-name = "jemalloc-sys"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc62c8e50e381768ce8ee0428ee53741929f7ebd73e4d83f669bcf7693e00ae"
-dependencies = [
- "cc",
- "fs_extra",
- "libc",
-]
-
-[[package]]
-name = "jemallocator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f0cd42ac65f758063fea55126b0148b1ce0a6354ff78e07a4d6806bc65c4ab3"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
-
-[[package]]
 name = "jobserver"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1850,7 +1819,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#1e0910aabe6cffc721689606d88c8117d837d3cb"
+source = "git+https://github.com/pingcap/kvproto.git#3132349c113335cb670de2c81a74fc565b49f813"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1925,26 +1894,26 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
  "cc",
  "cmake",
- "jemalloc-sys",
  "libc",
  "libtitan_sys",
  "libz-sys",
  "lz4-sys",
  "openssl-sys",
  "snappy-sys",
+ "tikv-jemalloc-sys",
  "zstd-sys",
 ]
 
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2556,6 +2525,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "089a398ccdcdd77b8c38909d5a1e4b67da1bc4c9dbfe6d5b536c828eddb779e5"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "paste"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
+dependencies = [
+ "paste-impl",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "paste-impl"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
+dependencies = [
+ "proc-macro-hack",
 ]
 
 [[package]]
@@ -3289,7 +3277,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#45f4ffb9a2e86b5e42cdb496ef9498da8eb316c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4623,18 +4611,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.4.0+5.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f5230e450d11f3a5ba46e94073e6d4d2afcc26ecd47b80533420eed648b3084"
+dependencies = [
+ "cc",
+ "fs_extra",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90c7c5e31d05b8a79b7d4dd50d0ea4a57db4ed2bf694c66763d79cdb84045cc"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
- "jemalloc-ctl",
- "jemalloc-sys",
- "jemallocator",
  "lazy_static",
  "libc",
  "log",
  "mimallocator",
  "tcmalloc",
  "tempfile",
+ "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
+ "tikv-jemallocator",
 ]
 
 [[package]]
