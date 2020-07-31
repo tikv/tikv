@@ -10,7 +10,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::{ChunkRef, VectorValue};
+use crate::codec::data_type::{ChunkRef, LogicalRows, VectorValue};
 use crate::codec::datum;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::{
@@ -127,29 +127,32 @@ impl Column {
         logical_rows: LogicalRows,
     ) -> Result<Self> {
         use crate::codec::data_type::*;
-        for (idx, row) in logical_rows.iter().enumerate() {
-            if idx != *row {
-                return Self::from_vector_value_slowpath(field_type, &v, logical_rows);
+        if let LogicalRows::Identical { size } = logical_rows {
+            if size == v.len() {
+                match v {
+                    VectorValue::Bytes(vec) => Ok(Self {
+                        length: vec.len(),
+                        null_cnt: vec.bitmap.null_cnt(),
+                        null_bitmap: vec.bitmap.data.clone(),
+                        var_offsets: vec.var_offset.clone(),
+                        fixed_len: 0,
+                        data: vec.data.clone(),
+                    }),
+                    VectorValue::Json(vec) => Ok(Self {
+                        length: vec.len(),
+                        null_cnt: vec.bitmap.null_cnt(),
+                        null_bitmap: vec.bitmap.data.clone(),
+                        var_offsets: vec.var_offset.clone(),
+                        fixed_len: 0,
+                        data: vec.data.clone(),
+                    }),
+                    _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice()),
+                }
+            } else {
+                return Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice());
             }
-        }
-        match v {
-            VectorValue::Bytes(vec) => Ok(Self {
-                length: vec.len(),
-                null_cnt: vec.bitmap.null_cnt(),
-                null_bitmap: vec.bitmap.data.clone(),
-                var_offsets: vec.var_offset.clone(),
-                fixed_len: 0,
-                data: vec.data.clone(),
-            }),
-            VectorValue::Json(vec) => Ok(Self {
-                length: vec.len(),
-                null_cnt: vec.bitmap.null_cnt(),
-                null_bitmap: vec.bitmap.data.clone(),
-                var_offsets: vec.var_offset.clone(),
-                fixed_len: 0,
-                data: vec.data.clone(),
-            }),
-            _ => Self::from_vector_value_slowpath(field_type, &v, logical_rows),
+        } else {
+            return Self::from_vector_value_slowpath(field_type, &v, logical_rows.as_slice());
         }
     }
 
@@ -958,13 +961,13 @@ mod tests {
 
     macro_rules! test_column_encode {
         ($data_chunked:ident, $fields:ident) => {
-            let logical_rows: Vec<usize> = (1..$data_chunked.len()).collect();
-            let logical_rows_all: Vec<usize> = (0..$data_chunked.len()).collect();
+            let logical_rows_vec: Vec<usize> = (1..$data_chunked.len()).collect();
+            let logical_rows = LogicalRows::from_slice(logical_rows_vec.as_slice());
+            let logical_rows_all = LogicalRows::new_ident($data_chunked.len());
             let vec_value = VectorValue::from($data_chunked);
             for field in &$fields {
                 // test partial rows
-                let column =
-                    Column::from_vector_value(field, &vec_value, logical_rows.as_slice()).unwrap();
+                let column = Column::from_vector_value(field, &vec_value, logical_rows).unwrap();
                 let column_slowpath =
                     Column::from_vector_value_slowpath(field, &vec_value, logical_rows.as_slice())
                         .unwrap();
@@ -972,8 +975,7 @@ mod tests {
 
                 // test all rows
                 let column =
-                    Column::from_vector_value(field, &vec_value, logical_rows_all.as_slice())
-                        .unwrap();
+                    Column::from_vector_value(field, &vec_value, logical_rows_all).unwrap();
                 let column_slowpath = Column::from_vector_value_slowpath(
                     field,
                     &vec_value,
@@ -986,8 +988,12 @@ mod tests {
                 let column = Column::new(field.as_accessor().tp(), 0);
                 let mut truncated_vec_value = vec_value.clone();
                 truncated_vec_value.truncate(0);
-                let vec_column =
-                    Column::from_vector_value(field, &truncated_vec_value, &[]).unwrap();
+                let vec_column = Column::from_vector_value(
+                    field,
+                    &truncated_vec_value,
+                    LogicalRows::new_ident(0),
+                )
+                .unwrap();
                 test_column_eq(&column, &vec_column);
             }
         };
@@ -1017,7 +1023,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<Int>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_int().unwrap())
                 .collect(),
         );
@@ -1055,7 +1061,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<Real>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
                 .collect(),
         );
@@ -1076,7 +1082,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<Real>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
                 .collect(),
         );
@@ -1098,7 +1104,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<DateTime>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_time().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1115,7 +1121,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<Duration>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_duration().unwrap())
                 .collect(),
         );
@@ -1132,7 +1138,7 @@ mod tests {
         let data_chunked = ChunkedVecSized::<Decimal>::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_decimal().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1150,7 +1156,7 @@ mod tests {
         let data_chunked = ChunkedVecJson::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_json().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1174,7 +1180,7 @@ mod tests {
         let data_chunked = ChunkedVecBytes::from_vec(
             data.iter()
                 .cycle()
-                .take(2333)
+                .take(1000)
                 .map(|x| x.as_string().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );

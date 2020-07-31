@@ -314,7 +314,7 @@ mod test {
         }
         assert_eq!(cnt, size);
     }
-    
+
     fn test_null_cnt() {
         let mut x = BitVec::with_capacity(0);
         x.push(true);
