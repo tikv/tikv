@@ -1,5 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 macro_rules! define_error_codes {
     ($prefix:literal,
         $($name:ident => ($suffix:literal, $description:literal, $workaround:literal)),+
