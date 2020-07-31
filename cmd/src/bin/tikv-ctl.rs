@@ -351,13 +351,12 @@ trait DebugExecutor {
                         1 => block_on(future::poll_fn(|cx| mvcc_infos_1.poll_next_unpin(cx))),
                         _ => block_on(future::poll_fn(|cx| mvcc_infos_2.poll_next_unpin(cx))),
                     };
-                    match wait {
-                        Some(Err(e)) => {
+                    match wait? {
+                        Err(e) => {
                             v1!("db{} scan data in region {} fail: {}", i, region, e);
                             process::exit(-1);
                         }
-                        Some(Ok(s)) => Some(s),
-                        None => None,
+                        Ok(s) => Some(s),
                     }
                 };
 
@@ -653,7 +652,7 @@ impl DebugExecutor for DebugClient {
                 .compat()
                 .map_err(|e| e.to_string())
                 .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as MvccInfoStream
+        )
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -817,7 +816,7 @@ impl DebugExecutor for Debugger {
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         let stream = stream::iter(iter).map_err(|e| e.to_string());
-        Box::pin(stream) as MvccInfoStream
+        Box::pin(stream)
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
