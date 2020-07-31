@@ -198,7 +198,7 @@ impl Drop for WriteCompactionFilter {
         }
 
         self.switch_key_metrics();
-        debug!(
+        info!(
             "WriteCompactionFilter has filtered all key/value pairs";
             "bottommost_level" => self.bottommost_level,
             "versions" => self.total_versions,
@@ -275,6 +275,13 @@ impl CompactionFilterFactory for DefaultCompactionFilterFactory {
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         if safe_point == 0 {
             // Safe point has not been initialized yet.
+            return std::ptr::null_mut();
+        }
+
+        if !is_compaction_filter_allowd(
+            &*gc_context.cfg_tracker.value(),
+            &gc_context.cluster_version,
+        ) {
             return std::ptr::null_mut();
         }
 
@@ -357,7 +364,7 @@ impl CompactionFilter for DefaultCompactionFilter {
         _: &mut Vec<u8>,
         _: &mut bool,
     ) -> bool {
-        if key.starts_with(b"zm") {
+        if !key.starts_with(b"z") || key.starts_with(b"zm") {
             // TODO: some metadata is raw key/value pairs instead of MVCC data.
             return false;
         }
