@@ -326,7 +326,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming, //for streaming request, executors will continue scan from range end where last scan is finished
+            is_streaming, // For streaming request, executors will continue scan from range end where last scan is finished
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
