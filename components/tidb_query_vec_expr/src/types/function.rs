@@ -7,7 +7,7 @@
 //! ```ignore
 //! use tidb_query_codegen::rpn_fn;
 //!
-//! #[rpn_fn]
+//! #[rpn_fn(nullable)]
 //! fn foo(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
@@ -28,6 +28,7 @@ use std::marker::PhantomData;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
+use super::expr_eval::LogicalRows;
 use super::RpnStackNode;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
@@ -76,6 +77,15 @@ pub trait RpnFnArg: std::fmt::Debug {
 
     /// Gets the value in the given row.
     fn get(&self, row: usize) -> Self::Type;
+
+    /// Gets the bit vector of the arg.
+    /// Returns `None` if scalar value, and bool indicates whether
+    /// all is null or isn't null, otherwise a BitVec.
+    /// Returns `Some` if vector value, and bool indicates whether
+    /// stored bitmap vector has the same layout as elements,
+    /// aka. logical_rows is identical or not. If logical_rows is
+    /// identical, the second tuple element yields true.
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool);
 }
 
 /// Represents an RPN function argument of a `ScalarValue`.
@@ -96,13 +106,19 @@ impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
     fn get(&self, _row: usize) -> Option<T> {
         self.0.clone()
     }
+
+    // All items of scalar arg is either not null or null
+    #[inline]
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool) {
+        (None, self.0.is_some())
+    }
 }
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
 pub struct VectorArg<'a, T: 'a + EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> {
     physical_col: C,
-    logical_rows: &'a [usize],
+    logical_rows: LogicalRows<'a>,
     _phantom: PhantomData<T>,
 }
 
@@ -111,7 +127,16 @@ impl<'a, T: EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> RpnFnArg for VectorArg<'a
 
     #[inline]
     fn get(&self, row: usize) -> Option<T> {
-        self.physical_col.get_option_ref(self.logical_rows[row])
+        let logical_index = self.logical_rows.get_idx(row);
+        self.physical_col.get_option_ref(logical_index)
+    }
+
+    #[inline]
+    fn get_bit_vec(&self) -> (Option<&BitVec>, bool) {
+        (
+            Some(self.physical_col.get_bit_vec()),
+            self.logical_rows.is_ident(),
+        )
     }
 }
 
@@ -142,6 +167,12 @@ impl<A: RpnFnArg, Rem: ArgDef> Arg<A, Rem> {
     #[inline]
     pub fn extract(&self, row: usize) -> (A::Type, &Rem) {
         (self.arg.get(row), &self.rem)
+    }
+
+    /// Gets the bit vector of each arg
+    #[inline]
+    pub fn get_bit_vec(&self) -> ((Option<&BitVec>, bool), &Rem) {
+        (self.arg.get_bit_vec(), &self.rem)
     }
 }
 
@@ -213,7 +244,7 @@ impl<'a, A: EvaluableRef<'a>, E: Evaluator<'a>> Evaluator<'a> for ArgConstructor
                     .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
             RpnStackNode::Vector { value, .. } => {
-                let logical_rows = value.logical_rows();
+                let logical_rows = value.logical_rows_struct();
 
                 let v = A::borrow_vector_value(value.as_ref());
 

@@ -150,6 +150,11 @@ trait MockKvService {
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
     );
+    unary_call!(
+        kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
+    );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
     unary_call!(kv_gc, GcRequest, GcResponse);
@@ -251,6 +256,11 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         kv_check_txn_status,
         CheckTxnStatusRequest,
         CheckTxnStatusResponse
+    );
+    unary_call_dispatch!(
+        kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        CheckSecondaryLocksResponse
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);

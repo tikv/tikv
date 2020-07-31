@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -23,7 +23,8 @@ use engine_traits::{
     CompactExt, Iterable, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
-use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
@@ -33,6 +34,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;
+use tikv_util::time::ThreadReadId;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -50,8 +52,9 @@ pub trait Simulator {
         node_id: u64,
         cfg: TiKvConfig,
         engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
@@ -64,7 +67,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -74,6 +77,28 @@ pub trait Simulator {
         let node_id = request.get_header().get_peer().get_store_id();
         self.call_command_on_node(node_id, request, timeout)
     }
+
+    fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
+        let (cb, rx) = make_cb(&request);
+        self.async_read(node_id, batch_id, request, cb);
+        rx.recv_timeout(timeout)
+            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+    }
+
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    );
+
     fn call_command_on_node(
         &self,
         node_id: u64,
@@ -102,6 +127,7 @@ pub struct Cluster<T: Simulator> {
 
     pub paths: Vec<TempDir>,
     pub dbs: Vec<KvEngines<RocksEngine, RocksEngine>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub engines: HashMap<u64, KvEngines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
@@ -126,6 +152,7 @@ impl<T: Simulator> Cluster<T> {
             count,
             paths: vec![],
             dbs: vec![],
+            store_metas: HashMap::default(),
             key_managers: vec![],
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
@@ -159,7 +186,7 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
     }
 
-    fn create_engine(&mut self, router: Option<RaftRouter<RocksSnapshot>>) {
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
         let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
@@ -186,17 +213,20 @@ impl<T: Simulator> Cluster<T> {
 
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
                 self.cfg.clone(),
                 engines.clone(),
+                store_meta.clone(),
                 key_mgr.clone(),
                 router,
                 system,
             )?;
             self.engines.insert(node_id, engines);
+            self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
         }
         Ok(())
@@ -239,11 +269,13 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        self.store_metas.insert(node_id, store_meta.clone());
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, cfg, engines, key_mgr, router, system)?;
+            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -297,12 +329,41 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn read(
+        &self,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        match self.sim.rl().read(batch_id, request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to read {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
+    }
+
     pub fn call_command(
         &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.rl().call_command(request.clone(), timeout) {
+        let mut is_read = false;
+        for req in request.get_requests() {
+            match req.get_cmd_type() {
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => {
+                    is_read = true;
+                }
+                _ => (),
+            }
+        }
+        let ret = if is_read {
+            self.sim.rl().read(None, request.clone(), timeout)
+        } else {
+            self.sim.rl().call_command(request.clone(), timeout)
+        };
+        match ret {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
                 Err(e)
@@ -469,6 +530,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
         }
@@ -500,6 +563,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+            self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
         }
@@ -607,6 +672,7 @@ impl<T: Simulator> Cluster<T> {
             self.stop_node(id);
         }
         self.leaders.clear();
+        self.store_metas.clear();
         debug!("all nodes are shut down.");
     }
 
@@ -1296,10 +1362,10 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut PeerFsm<RocksSnapshot>| {
-                let idx = peer.peer.raft_group.store().committed_index();
-                peer.peer.raft_group.request_snapshot(idx).unwrap();
-                debug!("{} request snapshot at {}", idx, peer.peer.tag);
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
+                let idx = peer.raft_committed_index();
+                peer.raft_request_snapshot(idx);
+                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
                 request_tx.send(idx).unwrap();
             })),
         )

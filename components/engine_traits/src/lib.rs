@@ -297,6 +297,8 @@ mod encryption;
 pub use crate::encryption::*;
 mod properties;
 pub use crate::properties::*;
+mod range_properties;
+pub use crate::range_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

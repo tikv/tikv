@@ -11,7 +11,7 @@ mod process;
 mod store;
 
 use crate::storage::{
-    types::{MvccInfo, PessimisticLockRes, TxnStatus},
+    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 use kvproto::kvrpcpb::LockInfo;
@@ -33,6 +33,9 @@ pub enum ProcessResult {
     MultiRes {
         results: Vec<StorageResult<()>>,
     },
+    PrewriteResult {
+        result: PrewriteResult,
+    },
     MvccKey {
         mvcc: MvccInfo,
     },
@@ -53,6 +56,9 @@ pub enum ProcessResult {
     },
     PessimisticLockRes {
         res: StorageResult<PessimisticLockRes>,
+    },
+    SecondaryLocksStatus {
+        status: SecondaryLocksStatus,
     },
 }
 

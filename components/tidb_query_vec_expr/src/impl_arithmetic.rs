@@ -10,30 +10,18 @@ use tidb_query_datatype::expr::EvalContext;
 
 #[rpn_fn]
 #[inline]
-pub fn arithmetic<A: ArithmeticOp>(
-    arg0: Option<&A::T>,
-    arg1: Option<&A::T>,
-) -> Result<Option<A::T>> {
-    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-        A::calc(lhs, rhs)
-    } else {
-        // All arithmetical functions with a NULL argument return NULL
-        Ok(None)
-    }
+pub fn arithmetic<A: ArithmeticOp>(lhs: &A::T, rhs: &A::T) -> Result<Option<A::T>> {
+    A::calc(lhs, rhs)
 }
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
     ctx: &mut EvalContext,
-    arg0: Option<&A::T>,
-    arg1: Option<&A::T>,
+    lhs: &A::T,
+    rhs: &A::T,
 ) -> Result<Option<A::T>> {
-    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-        A::calc(ctx, lhs, rhs)
-    } else {
-        Ok(None)
-    }
+    A::calc(ctx, lhs, rhs)
 }
 
 pub trait ArithmeticOp {
@@ -457,26 +445,23 @@ impl ArithmeticOp for UintDivideInt {
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn int_divide_decimal(
-    ctx: &mut EvalContext,
-    lhs: Option<&Decimal>,
-    rhs: Option<&Decimal>,
-) -> Result<Option<Int>> {
-    let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)).as_i64();
-
-    Ok(if result.is_truncated() {
-        Some(result.unwrap())
+fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Int>> {
+    let result = arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)?;
+    if let Some(result) = result {
+        let result = result.as_i64();
+        Ok(if result.is_truncated() {
+            Some(result.unwrap())
+        } else {
+            result
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)),
+                )
+                .map(Some)?
+        })
     } else {
-        result
-            .into_result_with_overflow_err(
-                ctx,
-                Error::overflow(
-                    "BIGINT",
-                    format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
-                ),
-            )
-            .map(Some)?
-    })
+        Ok(None)
+    }
 }
 
 pub struct DecimalDivide;

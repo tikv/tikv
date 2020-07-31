@@ -11,7 +11,7 @@ use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_traits::{KvEngines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -33,17 +33,25 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
+pub fn create_raft_storage<S, P: PdClient + 'static>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
+    pd_client: Arc<P>,
     pipelined_pessimistic_lock: bool,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+) -> Result<Storage<RaftKv<S>, LockManager, P>>
 where
-    S: RaftStoreRouter<RocksSnapshot> + 'static,
+    S: RaftStoreRouter<RocksEngine> + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
+    let store = Storage::from_engine(
+        engine,
+        cfg,
+        read_pool,
+        lock_mgr,
+        pd_client,
+        pipelined_pessimistic_lock,
+    )?;
     Ok(store)
 }
 
@@ -187,11 +195,11 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksSnapshot> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine, RocksEngine> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter {
+    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
         self.system.apply_router()
     }
 
