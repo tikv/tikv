@@ -72,7 +72,6 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
-        let (snapshot, lock_mgr, pd_client) = (snapshot, lock_mgr, pd_client);
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),
