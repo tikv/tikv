@@ -135,7 +135,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
     fn process_write<'a>(
         mut self,
         snapshot: S,
-        lock_mgr: &'a L,
+        _lock_mgr: &'a L,
         pd_client: Arc<P>,
         context: WriteContext<'a>,
     ) -> Result<WriteResult> {
