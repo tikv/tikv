@@ -4,12 +4,13 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, MAX_TXN_WRITE_SIZE};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, StorageToWrite, TypedCommand,
-    WriteCommand, WriteResult, WritingContext,
+    Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, TypedCommand, WriteCommand,
+    WriteContext, WriteResult,
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
+use std::sync::Arc;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -65,15 +66,13 @@ impl CommandExt for ResolveLock {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLock {
     fn process_write<'a>(
         mut self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
-        let (snapshot, lock_mgr, pd_client) = (
-            storage_to_write.snapshot,
-            storage_to_write.lock_mgr,
-            storage_to_write.pd_client,
-        );
+        let (snapshot, lock_mgr, pd_client) = (snapshot, lock_mgr, pd_client);
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),

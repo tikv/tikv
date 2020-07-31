@@ -7,11 +7,11 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, StorageToWrite, TypedCommand, WriteCommand, WriteResult,
-    WritingContext,
+    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
+use std::sync::Arc;
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -41,8 +41,10 @@ impl CommandExt for Commit {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Commit {
     fn process_write<'a>(
         self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
@@ -51,10 +53,10 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             }));
         }
         let mut txn = MvccTxn::new(
-            storage_to_write.snapshot,
+            snapshot,
             self.lock_ts,
             !self.ctx.get_not_fill_cache(),
-            storage_to_write.pd_client,
+            pd_client,
         );
 
         let rows = self.keys.len();
@@ -63,7 +65,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         for k in self.keys {
             released_locks.push(txn.commit(k, self.commit_ts)?);
         }
-        released_locks.wake_up(storage_to_write.lock_mgr);
+        released_locks.wake_up(lock_mgr);
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {

@@ -8,11 +8,12 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
-    Command, CommandExt, StorageToWrite, TypedCommand, WriteCommand, WriteResult, WritingContext,
+    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{Error, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
+use std::sync::Arc;
 
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -67,15 +68,17 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
 {
     fn process_write<'a>(
         self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
-            storage_to_write.snapshot,
+            snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            storage_to_write.pd_client,
+            pd_client,
         );
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.

@@ -9,13 +9,14 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
 };
-use crate::storage::txn::commands::{StorageToWrite, WriteCommand, WriteResult, WritingContext};
+use crate::storage::txn::commands::{WriteCommand, WriteContext, WriteResult};
 use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
 };
+use std::sync::Arc;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -133,8 +134,10 @@ impl Prewrite {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
     fn process_write<'a>(
         mut self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         let mut scan_mode = None;
         let rows = self.mutations.len();
@@ -149,7 +152,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 .clone()
                 .append_ts(TimeStamp::zero());
             if !has_data_in_range(
-                storage_to_write.snapshot.clone(),
+                snapshot.clone(),
                 CF_WRITE,
                 left_key,
                 &right_key,
@@ -164,18 +167,18 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         }
         let mut txn = if scan_mode.is_some() {
             MvccTxn::for_scan(
-                storage_to_write.snapshot,
+                snapshot,
                 scan_mode,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                storage_to_write.pd_client,
+                pd_client,
             )
         } else {
             MvccTxn::new(
-                storage_to_write.snapshot,
+                snapshot,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                storage_to_write.pd_client,
+                pd_client,
             )
         };
 

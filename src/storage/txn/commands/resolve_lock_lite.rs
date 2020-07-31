@@ -4,12 +4,12 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, StorageToWrite, TypedCommand, WriteCommand, WriteResult,
-    WritingContext,
+    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
+use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -39,14 +39,16 @@ impl CommandExt for ResolveLockLite {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLockLite {
     fn process_write<'a>(
         self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
-            storage_to_write.snapshot,
+            snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            storage_to_write.pd_client,
+            pd_client,
         );
 
         let rows = self.resolve_keys.len();
@@ -60,7 +62,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 txn.rollback(key)?
             });
         }
-        released_locks.wake_up(storage_to_write.lock_mgr);
+        released_locks.wake_up(lock_mgr);
 
         context.statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());

@@ -476,29 +476,30 @@ impl Command {
         statistics: &mut Statistics,
         pipelined_pessimistic_lock: bool,
     ) -> Result<WriteResult> {
-        let storage = StorageToWrite {
-            snapshot,
-            lock_mgr,
-            pd_client,
-        };
-        let context = WritingContext {
+        let context = WriteContext {
             extra_op,
             statistics,
             pipelined_pessimistic_lock,
         };
         match self {
-            Command::Prewrite(t) => t.process_write(storage, context),
-            Command::PrewritePessimistic(t) => t.process_write(storage, context),
-            Command::AcquirePessimisticLock(t) => t.process_write(storage, context),
-            Command::Commit(t) => t.process_write(storage, context),
-            Command::Cleanup(t) => t.process_write(storage, context),
-            Command::Rollback(t) => t.process_write(storage, context),
-            Command::PessimisticRollback(t) => t.process_write(storage, context),
-            Command::ResolveLock(t) => t.process_write(storage, context),
-            Command::ResolveLockLite(t) => t.process_write(storage, context),
-            Command::TxnHeartBeat(t) => t.process_write(storage, context),
-            Command::CheckTxnStatus(t) => t.process_write(storage, context),
-            Command::Pause(t) => t.process_write(storage, context),
+            Command::Prewrite(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::PrewritePessimistic(t) => {
+                t.process_write(snapshot, lock_mgr, pd_client, context)
+            }
+            Command::AcquirePessimisticLock(t) => {
+                t.process_write(snapshot, lock_mgr, pd_client, context)
+            }
+            Command::Commit(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::Cleanup(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::Rollback(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::PessimisticRollback(t) => {
+                t.process_write(snapshot, lock_mgr, pd_client, context)
+            }
+            Command::ResolveLock(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::ResolveLockLite(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::TxnHeartBeat(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::CheckTxnStatus(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::Pause(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -567,13 +568,7 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
-pub struct StorageToWrite<'a, S: Snapshot, L: LockManager, P: PdClient + 'static> {
-    snapshot: S,
-    lock_mgr: &'a L,
-    pd_client: Arc<P>,
-}
-
-pub struct WritingContext<'a> {
+pub struct WriteContext<'a> {
     extra_op: ExtraOp,
     statistics: &'a mut Statistics,
     pipelined_pessimistic_lock: bool,
@@ -584,7 +579,9 @@ pub(super) trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static
 {
     fn process_write<'a>(
         self,
-        storage_to_write: StorageToWrite<'a, S, L, P>,
-        context: WritingContext<'a>,
+        snapshot: S,
+        lock_mgr: &'a L,
+        pd_client: Arc<P>,
+        context: WriteContext<'a>,
     ) -> Result<WriteResult>;
 }
