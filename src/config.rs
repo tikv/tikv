@@ -898,7 +898,7 @@ impl Default for DbConfig {
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::kb(0),
-            refill_period: ReadableDuration::millis(100),
+            rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
@@ -942,7 +942,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
-                self.rate_limiter_refill_period.as_micros() as i64,
+                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 self.rate_limiter_mode,
                 self.auto_tuned,
             );
