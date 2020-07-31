@@ -34,7 +34,9 @@ where
     S: Snapshot,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new<E: KvEngines<Kv = RocksEngine>>(ps: &PeerStorage<E>) -> RegionSnapshot<RocksSnapshot> {
+    pub fn new<E: KvEngines<Kv = RocksEngine>>(
+        ps: &PeerStorage<E>,
+    ) -> RegionSnapshot<RocksSnapshot> {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
@@ -367,9 +369,7 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
     }
 }
 
-pub fn new_temp_engine(
-    path: &tempfile::TempDir,
-) -> engine_rocks::TwoRocksEngines {
+pub fn new_temp_engine(path: &tempfile::TempDir) -> engine_rocks::TwoRocksEngines {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     let shared_block_cache = false;
     engine_rocks::TwoRocksEngines::new(

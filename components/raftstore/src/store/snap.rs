@@ -4,9 +4,9 @@ use std::cmp::{Ordering as CmpOrdering, Reverse};
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
-use std::marker::PhantomData;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
+use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -29,7 +29,6 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};

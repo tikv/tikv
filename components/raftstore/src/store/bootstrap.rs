@@ -9,7 +9,7 @@ use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 use super::util::new_peer;
-use engine_traits::{Iterable, KvEngine, KvEngines, Mutable, SyncMutable, WriteBatchExt};
+use engine_traits::{KvEngine, KvEngines, Mutable, SyncMutable, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {

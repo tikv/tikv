@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_rocks::{TwoRocksEngines,RocksEngine};
+use engine_rocks::{RocksEngine, TwoRocksEngines};
 use engine_traits::{KvEngines, MiscExt};
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::CpuPool;

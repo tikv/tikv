@@ -13,7 +13,11 @@ pub struct TwoRocksEngines {
 
 impl TwoRocksEngines {
     pub fn new(kv: RocksEngine, raft: RocksEngine, shared_block_cache: bool) -> Self {
-        TwoRocksEngines { kv, raft, shared_block_cache }
+        TwoRocksEngines {
+            kv,
+            raft,
+            shared_block_cache,
+        }
     }
 }
 

@@ -24,7 +24,7 @@ use crate::store::{
 };
 use crate::Result;
 
-use engine_traits::{KvEngines, KvEngine};
+use engine_traits::{KvEngine, KvEngines};
 use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};

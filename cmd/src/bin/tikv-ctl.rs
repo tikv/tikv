@@ -27,8 +27,7 @@ use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::encryption::get_env;
-use engine_rocks::{TwoRocksEngines,RocksEngine};
-use engine_traits::KvEngines;
+use engine_rocks::{RocksEngine, TwoRocksEngines};
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;

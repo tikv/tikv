@@ -9,7 +9,7 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt, Peekable};
+use engine_traits::{KvEngine, KvEngines, Peekable, Snapshot, WriteBatchExt};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -141,7 +141,10 @@ impl<E: KvEngines> Drop for PeerFsm<E> {
     }
 }
 
-pub type SenderFsmPair<E: KvEngines> = (LooseBoundedSender<PeerMsg<E::Kv>>, Box<PeerFsm<E>>);
+pub type SenderFsmPair<E> = (
+    LooseBoundedSender<PeerMsg<<E as KvEngines>::Kv>>,
+    Box<PeerFsm<E>>,
+);
 
 impl<E: KvEngines> PeerFsm<E> {
     // If we create the peer actively, like bootstrap/split/merge region, we should

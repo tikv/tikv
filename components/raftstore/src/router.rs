@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 
 use crossbeam::{SendError, TrySendError};
-use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, KvEngines};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;

@@ -2,13 +2,11 @@
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_rocks::RocksCompactionJobInfo;
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{
-    RocksCompactionJobInfo, RocksEngine, RocksSnapshot, RocksWriteBatch, RocksWriteBatchVec,
-};
 use engine_traits::{
     CompactExt, CompactionJobInfo, Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable,
-    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    WriteBatch, WriteBatchExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -662,7 +660,7 @@ impl<E: KvEngines + 'static, T: Transport, C: PdClient> RaftPoller<E, T, C> {
     }
 }
 
-impl<E: KvEngines+ 'static, T: Transport, C: PdClient> PollHandler<PeerFsm<E>, StoreFsm>
+impl<E: KvEngines + 'static, T: Transport, C: PdClient> PollHandler<PeerFsm<E>, StoreFsm>
     for RaftPoller<E, T, C>
 {
     fn begin(&mut self, _batch_size: usize) {
@@ -1129,19 +1127,9 @@ impl<E: KvEngines + 'static> RaftBatchSystem<E> {
         let region_peers = builder.init()?;
         let engine = builder.engines.kv().clone();
         if engine.support_write_batch_vec() {
-            self.start_system::<T, C>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
+            self.start_system::<T, C>(workers, region_peers, builder, auto_split_controller)?;
         } else {
-            self.start_system::<T, C>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-            )?;
+            self.start_system::<T, C>(workers, region_peers, builder, auto_split_controller)?;
         }
         Ok(())
     }
@@ -1245,8 +1233,7 @@ impl<E: KvEngines + 'static> RaftBatchSystem<E> {
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner =
-            ConsistencyCheckRunner::<E::Kv, _>::new(self.router.clone());
+        let consistency_check_runner = ConsistencyCheckRunner::<E::Kv, _>::new(self.router.clone());
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
@@ -1283,9 +1270,7 @@ impl<E: KvEngines + 'static> RaftBatchSystem<E> {
     }
 }
 
-pub fn create_raft_batch_system<E: KvEngines>(
-    cfg: &Config,
-) -> (RaftRouter<E>, RaftBatchSystem<E>) {
+pub fn create_raft_batch_system<E: KvEngines>(cfg: &Config) -> (RaftRouter<E>, RaftBatchSystem<E>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =

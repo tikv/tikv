@@ -10,7 +10,6 @@ use std::{cmp, io};
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, KvEngines, MiscExt};
 use kvproto::metapb;
 use kvproto::pdpb;

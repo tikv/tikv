@@ -4,7 +4,6 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngines;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;

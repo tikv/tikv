@@ -126,10 +126,7 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(
-        engines: TwoRocksEngines,
-        cfg_controller: ConfigController,
-    ) -> Debugger {
+    pub fn new(engines: TwoRocksEngines, cfg_controller: ConfigController) -> Debugger {
         Debugger {
             engines,
             cfg_controller,
@@ -193,7 +190,10 @@ impl Debugger {
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
         let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self.engines.raft().get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self
+            .engines
+            .raft()
+            .get_msg::<RaftLocalState>(&raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state = box_try!(self

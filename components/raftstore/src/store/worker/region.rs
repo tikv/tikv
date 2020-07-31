@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, CF_RAFT, MiscExt, WriteBatchExt};
+use engine_traits::{KvEngine, KvEngines, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -308,10 +307,11 @@ impl<E: KvEngines, R: CasualRouter<E::Kv>> SnapContext<E, R> {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(self
-            .engines
-            .kv()
-            .delete_all_in_range(&start_key, &end_key, self.use_delete_range));
+        box_try!(self.engines.kv().delete_all_in_range(
+            &start_key,
+            &end_key,
+            self.use_delete_range
+        ));
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -607,7 +607,7 @@ impl<E: KvEngines, R: CasualRouter<E::Kv>> Runner<E, R> {
     }
 }
 
-impl<E: KvEngines+ 'static, R: CasualRouter<E::Kv> + Send + Clone + 'static>
+impl<E: KvEngines + 'static, R: CasualRouter<E::Kv> + Send + Clone + 'static>
     Runnable<Task<<E::Kv as KvEngine>::Snapshot>> for Runner<E, R>
 {
     fn run(&mut self, task: Task<<E::Kv as KvEngine>::Snapshot>) {

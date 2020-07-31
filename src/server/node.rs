@@ -258,11 +258,7 @@ impl<E: KvEngines + 'static, C: PdClient> Node<E, C> {
 
     // Exported for tests.
     #[doc(hidden)]
-    pub fn prepare_bootstrap_cluster(
-        &self,
-        engines: &E,
-        store_id: u64,
-    ) -> Result<metapb::Region> {
+    pub fn prepare_bootstrap_cluster(&self, engines: &E, store_id: u64) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
         debug!(
             "alloc first region id";
@@ -298,11 +294,7 @@ impl<E: KvEngines + 'static, C: PdClient> Node<E, C> {
         }
     }
 
-    fn bootstrap_cluster(
-        &mut self,
-        engines: &E,
-        first_region: metapb::Region,
-    ) -> Result<()> {
+    fn bootstrap_cluster(&mut self, engines: &E, first_region: metapb::Region) -> Result<()> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {

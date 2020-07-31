@@ -3,7 +3,6 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, KvEngines, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;

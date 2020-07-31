@@ -365,8 +365,11 @@ impl TiKVServer {
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv().clone(), store_meta.clone(), self.router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv().clone(),
+            store_meta.clone(),
+            self.router.clone(),
+        );
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -404,7 +407,13 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>, RocksEngine, ServerRaftStoreRouter<TwoRocksEngines>> {
+    fn init_gc_worker(
+        &mut self,
+    ) -> GcWorker<
+        RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>,
+        RocksEngine,
+        ServerRaftStoreRouter<TwoRocksEngines>,
+    > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -424,7 +433,11 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>, RocksEngine, ServerRaftStoreRouter<TwoRocksEngines>>,
+        gc_worker: &GcWorker<
+            RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>,
+            RocksEngine,
+            ServerRaftStoreRouter<TwoRocksEngines>,
+        >,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(

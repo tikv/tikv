@@ -8,7 +8,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT, SyncMutable, MiscExt, Iterable};
+use engine_traits::{
+    Iterable, KvEngine, KvEngines, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch,
+    WriteBatchExt, CF_RAFT,
+};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -2573,7 +2576,10 @@ mod tests {
             .put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
-        engines.raft().put_msg(&raft_state_key, &raft_state).unwrap();
+        engines
+            .raft()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         assert!(build_storage().is_err());
 
         let log_key = keys::raft_log_key(1, 20);
@@ -2582,7 +2588,10 @@ mod tests {
             .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.set_last_index(20);
-        engines.raft().put_msg(&raft_state_key, &raft_state).unwrap();
+        engines
+            .raft()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
@@ -2641,7 +2650,10 @@ mod tests {
             .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
             .unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
-        engines.raft().put_msg(&raft_state_key, &raft_state).unwrap();
+        engines
+            .raft()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
@@ -2652,13 +2664,19 @@ mod tests {
             .raft
             .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
             .unwrap();
-        engines.raft().put_msg(&raft_state_key, &raft_state).unwrap();
+        engines
+            .raft()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         assert!(build_storage().is_err());
 
         // last_commit_index > commit_index is invalid.
         raft_state.set_last_index(20);
         raft_state.mut_hard_state().set_commit(12);
-        engines.raft().put_msg(&raft_state_key, &raft_state).unwrap();
+        engines
+            .raft()
+            .put_msg(&raft_state_key, &raft_state)
+            .unwrap();
         apply_state.set_last_commit_index(13);
         engines
             .kv

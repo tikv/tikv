@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine};
+use engine_traits::{KvEngine, MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, DummyPdClient, PdClient};
@@ -129,7 +128,7 @@ impl Display for GcTask {
 /// Used to perform GC operations on the engine.
 struct GcRunner<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> {
     engine: E,
-    
+
     _kv_engine: std::marker::PhantomData<EK>,
     raft_store_router: Option<RR>,
 
@@ -410,7 +409,9 @@ impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> GcRunner<E, EK, RR> {
     }
 }
 
-impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> FutureRunnable<GcTask> for GcRunner<E, EK, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> FutureRunnable<GcTask>
+    for GcRunner<E, EK, RR>
+{
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
         let enum_label = task.get_enum_label();

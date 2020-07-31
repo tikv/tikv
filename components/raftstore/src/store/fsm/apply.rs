@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
@@ -14,11 +13,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{cmp, usize};
 
-use batch_system::{create_system, BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    create_system, BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatch, WriteBatchExt, WriteBatchVecExt};
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatch, WriteBatchExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -434,7 +434,11 @@ impl<E: KvEngines> ApplyContext<E> {
     /// Otherwise create `RocksWriteBatch`.
     pub fn prepare_write_batch(&mut self) {
         if self.kv_wb.is_none() {
-            let kv_wb = <E::Kv as WriteBatchExt>::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+            let kv_wb = <E::Kv as WriteBatchExt>::write_batch_vec(
+                &self.engine,
+                WRITE_BATCH_LIMIT,
+                DEFAULT_APPLY_WB_SIZE,
+            );
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
@@ -471,7 +475,8 @@ impl<E: KvEngines> ApplyContext<E> {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.engine.write_vec_opt(self.kv_wb(), &write_opts)
+            self.engine
+                .write_vec_opt(self.kv_wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -483,7 +488,11 @@ impl<E: KvEngines> ApplyContext<E> {
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                let kv_wb = <E::Kv as WriteBatchExt>::write_batch_vec(&self.engine, WRITE_BATCH_LIMIT, DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = <E::Kv as WriteBatchExt>::write_batch_vec(
+                    &self.engine,
+                    WRITE_BATCH_LIMIT,
+                    DEFAULT_APPLY_WB_SIZE,
+                );
                 self.kv_wb = Some(kv_wb);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
@@ -884,10 +893,7 @@ impl<EK: KvEngine> ApplyDelegate<EK> {
         }
     }
 
-    fn update_metrics<E: KvEngines<Kv = EK>>(
-        &mut self,
-        apply_ctx: &ApplyContext<E>,
-    ) {
+    fn update_metrics<E: KvEngines<Kv = EK>>(&mut self, apply_ctx: &ApplyContext<E>) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
@@ -2816,11 +2822,7 @@ impl<EK: KvEngine> ApplyFsm<EK> {
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<E: KvEngines<Kv = EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<E>,
-        d: Destroy,
-    ) {
+    fn handle_destroy<E: KvEngines<Kv = EK>>(&mut self, ctx: &mut ApplyContext<E>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
@@ -2842,10 +2844,7 @@ impl<EK: KvEngine> ApplyFsm<EK> {
         }
     }
 
-    fn resume_pending<E: KvEngines<Kv = EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<E>,
-    ) {
+    fn resume_pending<E: KvEngines<Kv = EK>>(&mut self, ctx: &mut ApplyContext<E>) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -3259,8 +3258,7 @@ impl<E: KvEngines> Builder<E> {
     }
 }
 
-impl<E: KvEngines> HandlerBuilder<ApplyFsm<E::Kv>, ControlFsm> for Builder<E>
-{
+impl<E: KvEngines> HandlerBuilder<ApplyFsm<E::Kv>, ControlFsm> for Builder<E> {
     type Handler = ApplyPoller<E>;
 
     fn build(&mut self) -> ApplyPoller<E> {
@@ -3412,7 +3410,9 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
     }
 }
 
-pub fn create_apply_batch_system<EK: KvEngine>(cfg: &Config) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
+pub fn create_apply_batch_system<EK: KvEngine>(
+    cfg: &Config,
+) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (tx, _) = loose_bounded(usize::MAX);
     let control = Box::new(ControlFsm);
     let (router, system) = create_system(&cfg.apply_batch_system, tx, control);
