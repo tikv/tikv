@@ -261,6 +261,10 @@ impl ErrorCodeExt for Error {
             Error::Snapshot(e) => e.error_code(),
             Error::SstImporter(e) => e.error_code(),
             Error::Encryption(e) => e.error_code(),
+            #[cfg(feature = "prost-codec")]
+            Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
+            #[cfg(feature = "prost-codec")]
+            Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
 
             Error::Other(_) => error_code::raftstore::UNDETERMINED,
         }
