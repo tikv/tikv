@@ -839,7 +839,8 @@ pub struct DbConfig {
     #[config(skip)]
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
-    pub refill_period: ReadableDuration,
+    #[config(skip)]
+    pub rate_limiter_refill_period: ReadableDuration,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
@@ -941,7 +942,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
-                self.refill_period.as_micros() as i64,
+                self.rate_limiter_refill_period.as_micros() as i64,
                 self.rate_limiter_mode,
                 self.auto_tuned,
             );
