@@ -124,7 +124,7 @@ impl Column {
     pub fn from_vector_value(
         field_type: &FieldType,
         v: &VectorValue,
-        logical_rows: &[usize],
+        logical_rows: LogicalRows,
     ) -> Result<Self> {
         use crate::codec::data_type::*;
         for (idx, row) in logical_rows.iter().enumerate() {
@@ -1014,8 +1014,13 @@ mod tests {
         ];
         test_colum_datum(fields.clone(), data.clone());
 
-        let data_chunked =
-            ChunkedVecSized::<Int>::from_vec(data.iter().map(|x| x.as_int().unwrap()).collect());
+        let data_chunked = ChunkedVecSized::<Int>::from_vec(
+            data.iter()
+                .cycle()
+                .take(2333)
+                .map(|x| x.as_int().unwrap())
+                .collect(),
+        );
         test_column_encode!(data_chunked, fields);
     }
 
@@ -1049,6 +1054,8 @@ mod tests {
 
         let data_chunked = ChunkedVecSized::<Real>::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
                 .collect(),
         );
@@ -1068,6 +1075,8 @@ mod tests {
 
         let data_chunked = ChunkedVecSized::<Real>::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_real().unwrap().map(|x| Real::new(x).unwrap()))
                 .collect(),
         );
@@ -1088,6 +1097,8 @@ mod tests {
 
         let data_chunked = ChunkedVecSized::<DateTime>::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_time().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1102,7 +1113,11 @@ mod tests {
         test_colum_datum(fields.clone(), data.clone());
 
         let data_chunked = ChunkedVecSized::<Duration>::from_vec(
-            data.iter().map(|x| x.as_duration().unwrap()).collect(),
+            data.iter()
+                .cycle()
+                .take(2333)
+                .map(|x| x.as_duration().unwrap())
+                .collect(),
         );
         test_column_encode!(data_chunked, fields);
     }
@@ -1116,6 +1131,8 @@ mod tests {
 
         let data_chunked = ChunkedVecSized::<Decimal>::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_decimal().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1132,6 +1149,8 @@ mod tests {
 
         let data_chunked = ChunkedVecJson::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_json().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
@@ -1154,6 +1173,8 @@ mod tests {
 
         let data_chunked = ChunkedVecBytes::from_vec(
             data.iter()
+                .cycle()
+                .take(2333)
                 .map(|x| x.as_string().unwrap().map(|x| x.into_owned()))
                 .collect(),
         );
