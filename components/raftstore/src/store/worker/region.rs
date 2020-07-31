@@ -215,7 +215,7 @@ impl PendingDeleteRanges {
 struct SnapContext<E: KvEngines, R: CasualRouter<E::Kv>> {
     engines: E,
     batch_size: usize,
-    mgr: SnapManager<E>,
+    mgr: SnapManager<E::Kv>,
     use_delete_range: bool,
     pending_delete_ranges: PendingDeleteRanges,
     coprocessor_host: CoprocessorHost<E::Kv>,
@@ -554,7 +554,7 @@ pub struct Runner<E: KvEngines, R: CasualRouter<E::Kv>> {
 impl<E: KvEngines, R: CasualRouter<E::Kv>> Runner<E, R> {
     pub fn new(
         engines: E,
-        mgr: SnapManager<E>,
+        mgr: SnapManager<E::Kv>,
         batch_size: usize,
         use_delete_range: bool,
         coprocessor_host: CoprocessorHost<E::Kv>,

@@ -55,9 +55,9 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => {
-                cb((CbContext::new(), write_modifies(&self.0.kv, modifies)))
+                cb((CbContext::new(), write_modifies(&self.0.kv(), modifies)))
             }
-            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv.snapshot())))),
+            Task::Snapshot(cb) => cb((CbContext::new(), Ok(Arc::new(self.0.kv().snapshot())))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -138,7 +138,7 @@ impl RocksEngine {
     }
 
     pub fn get_rocksdb(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+        self.engines.kv().clone()
     }
 
     pub fn stop(&self) {
@@ -274,7 +274,7 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
 
     fn kv_engine(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+        self.engines.kv().clone()
     }
 
     fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
@@ -282,7 +282,7 @@ impl Engine for RocksEngine {
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        write_modifies(&self.engines.kv, modifies)
+        write_modifies(&self.engines.kv(), modifies)
     }
 
     fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {

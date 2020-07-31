@@ -68,7 +68,7 @@ pub struct Node<E: KvEngines, C: PdClient + 'static> {
     state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<E: KvEngines, C: PdClient> Node<E, C> {
+impl<E: KvEngines + 'static, C: PdClient> Node<E, C> {
     /// Creates a new Node.
     pub fn new(
         system: RaftBatchSystem<E>,
@@ -132,10 +132,10 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         &mut self,
         engines: E,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        snap_mgr: SnapManager<E::Kv>,
+        pd_worker: FutureWorker<PdTask<E::Kv>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<E::Kv>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
@@ -196,14 +196,14 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
+    pub fn get_apply_router(&self) -> ApplyRouter<E::Kv> {
         self.system.apply_router()
     }
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &E) -> Result<u64> {
-        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines.kv().get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -251,7 +251,7 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
-        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
+        store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
         Ok(store_id)
     }
@@ -278,7 +278,7 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -287,7 +287,7 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         engines: &E,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
+        if let Some(first_region) = engines.kv().get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
         } else {
             if self.check_cluster_bootstrapped()? {
@@ -315,17 +315,17 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines)?;
+                            store::clear_prepare_bootstrap_key(engines)?;
                             return Ok(());
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                             return Ok(());
                         }
                     }
@@ -367,10 +367,10 @@ impl<E: KvEngines, C: PdClient> Node<E, C> {
         store_id: u64,
         engines: E,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        snap_mgr: SnapManager<E::Kv>,
+        pd_worker: FutureWorker<PdTask<E::Kv>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<E::Kv>,
         importer: Arc<SSTImporter>,
         split_check_worker: Worker<SplitCheckTask>,
         auto_split_controller: AutoSplitController,

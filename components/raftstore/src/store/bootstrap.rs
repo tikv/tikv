@@ -40,7 +40,7 @@ fn is_range_empty<E: KvEngine>(
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store<E: KvEngines>(engines: E, cluster_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store<E: KvEngines>(engines: &E, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::default();
 
     if !is_range_empty(engines.kv(), CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {

@@ -19,6 +19,9 @@ use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK: KvEngine>: Send + Clone {
+    /// Sends StoreMsg to local store.
+    fn send_store_msg(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
@@ -95,6 +98,11 @@ where
     EK: KvEngine,
 {
     /// Sends RaftMessage to local store.
+    fn send_store_msg(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         Ok(())
     }
@@ -148,15 +156,6 @@ impl<E: KvEngines> ServerRaftStoreRouter<E> {
             local_reader,
         }
     }
-
-    pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.router.send_control(msg).map_err(|e| {
-            RaftStoreError::Transport(match e {
-                TrySendError::Full(_) => DiscardReason::Full,
-                TrySendError::Disconnected(_) => DiscardReason::Disconnected,
-            })
-        })
-    }
 }
 
 #[inline]
@@ -168,6 +167,14 @@ pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreErro
 }
 
 impl<E: KvEngines> RaftStoreRouter<E::Kv> for ServerRaftStoreRouter<E> {
+    fn send_store_msg(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        self.router.send_control(msg).map_err(|e| {
+            RaftStoreError::Transport(match e {
+                TrySendError::Full(_) => DiscardReason::Full,
+                TrySendError::Disconnected(_) => DiscardReason::Disconnected,
+            })
+        })
+    }
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.router

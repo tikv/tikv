@@ -4,6 +4,7 @@ use std::cmp::{Ordering as CmpOrdering, Reverse};
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
+use std::marker::PhantomData;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
@@ -17,7 +18,7 @@ use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, KvEngines};
+use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -762,8 +763,7 @@ impl fmt::Debug for Snap {
     }
 }
 
-impl<EK: KvEngine> Snapshot<EK> for Snap
-{
+impl<EK: KvEngine> Snapshot<EK> for Snap {
     fn build(
         &mut self,
         engine: &EK,
@@ -1090,25 +1090,25 @@ struct SnapManagerCore {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-pub struct SnapManager<E: KvEngines> {
+pub struct SnapManager<EK: KvEngine> {
     core: SnapManagerCore,
-    router: Option<RaftRouter<E>>,
     max_total_size: u64,
+    _phantom: PhantomData<EK>,
 }
 
-impl<E: KvEngines> Clone for SnapManager<E> {
+impl<EK: KvEngine> Clone for SnapManager<EK> {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            router: self.router.clone(),
             max_total_size: self.max_total_size,
+            _phantom: Default::default(),
         }
     }
 }
 
-impl<E: KvEngines> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E>>) -> Self {
-        SnapManagerBuilder::default().build(path, router)
+impl<EK: KvEngine> SnapManager<EK> {
+    pub fn new<T: Into<String>>(path: T) -> Self {
+        SnapManagerBuilder::default().build(path)
     }
 
     pub fn init(&self) -> io::Result<()> {
@@ -1213,7 +1213,7 @@ impl<E: KvEngines> SnapManager<E> {
     pub fn get_snapshot_for_building(
         &self,
         key: &SnapKey,
-    ) -> RaftStoreResult<Box<dyn Snapshot<E::Kv>>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot<EK>>> {
         let mut old_snaps = None;
         while self.get_total_snap_size() > self.max_total_snap_size() {
             if old_snaps.is_none() {
@@ -1303,7 +1303,7 @@ impl<E: KvEngines> SnapManager<E> {
     pub fn get_snapshot_for_applying_to_engine(
         &self,
         key: &SnapKey,
-    ) -> RaftStoreResult<Box<dyn Snapshot<E::Kv>>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot<EK>>> {
         Ok(self.get_concrete_snapshot_for_applying(key)?)
     }
 
@@ -1472,11 +1472,7 @@ impl SnapManagerBuilder {
         self.key_manager = m;
         self
     }
-    pub fn build<T: Into<String>, E: KvEngines>(
-        self,
-        path: T,
-        router: Option<RaftRouter<E>>,
-    ) -> SnapManager<E> {
+    pub fn build<T: Into<String>, EK: KvEngine>(self, path: T) -> SnapManager<EK> {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {
@@ -1495,8 +1491,8 @@ impl SnapManagerBuilder {
                 snap_size: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
-            router,
             max_total_size,
+            _phantom: Default::default(),
         }
     }
 }
@@ -1514,7 +1510,6 @@ pub mod tests {
     use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngines;
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};

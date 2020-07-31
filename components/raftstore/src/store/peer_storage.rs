@@ -1555,10 +1555,10 @@ pub fn clear_meta<E: KvEngines>(
     Ok(())
 }
 
-pub fn do_snapshot<E: KvEngines>(
-    mgr: SnapManager<E>,
-    engine: &E::Kv,
-    kv_snap: <E::Kv as KvEngine>::Snapshot,
+pub fn do_snapshot<EK: KvEngine>(
+    mgr: SnapManager<EK>,
+    engine: &EK,
+    kv_snap: EK::Snapshot,
     region_id: u64,
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,

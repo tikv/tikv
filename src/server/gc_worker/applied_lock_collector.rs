@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{CfName, CF_LOCK};
+use engine_traits::{CfName, CF_LOCK, KvEngine};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
@@ -121,7 +121,7 @@ impl LockObserver {
         Self { state, sender }
     }
 
-    pub fn register(self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register<EK: KvEngine>(self, coprocessor_host: &mut CoprocessorHost<EK>) {
         coprocessor_host
             .registry
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(self.clone()));
@@ -383,7 +383,7 @@ pub struct AppliedLockCollector {
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
+    pub fn new<EK: KvEngine>(coprocessor_host: &mut CoprocessorHost<EK>) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let scheduler = worker.lock().unwrap().scheduler();

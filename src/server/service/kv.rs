@@ -53,7 +53,7 @@ pub struct Service<
     P: PdClient + 'static,
 > {
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E, T>,
+    gc_worker: GcWorker<E, RocksEngine, T>,
     // For handling KV requests.
     storage: Storage<E, L, P>,
     // For handling coprocessor requests.
@@ -107,7 +107,7 @@ impl<
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L, P>,
-        gc_worker: GcWorker<E, T>,
+        gc_worker: GcWorker<E, RocksEngine, T>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,

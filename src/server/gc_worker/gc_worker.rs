@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine};
 use futures::Future;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{ClusterVersion, DummyPdClient, PdClient};
@@ -127,9 +127,10 @@ impl Display for GcTask {
 }
 
 /// Used to perform GC operations on the engine.
-struct GcRunner<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
+struct GcRunner<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> {
     engine: E,
-
+    
+    _kv_engine: std::marker::PhantomData<EK>,
     raft_store_router: Option<RR>,
 
     /// Used to limit the write flow of GC.
@@ -141,7 +142,7 @@ struct GcRunner<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
     stats: Statistics,
 }
 
-impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcRunner<E, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> GcRunner<E, EK, RR> {
     pub fn new(
         engine: E,
         raft_store_router: Option<RR>,
@@ -155,6 +156,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcRunner<E, RR> {
         });
         Self {
             engine,
+            _kv_engine: Default::default(),
             raft_store_router,
             limiter,
             cfg,
@@ -341,7 +343,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcRunner<E, RR> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send_store(StoreMsg::ClearRegionSizeInRange {
+                .send_store_msg(StoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
                 })
@@ -408,7 +410,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcRunner<E, RR> {
     }
 }
 
-impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> FutureRunnable<GcTask> for GcRunner<E, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> FutureRunnable<GcTask> for GcRunner<E, EK, RR> {
     #[inline]
     fn run(&mut self, task: GcTask, _handle: &Handle) {
         let enum_label = task.get_enum_label();
@@ -533,11 +535,17 @@ pub fn sync_gc(
 }
 
 /// Used to schedule GC operations.
-pub struct GcWorker<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
+pub struct GcWorker<E, EK, RR>
+where
+    E: Engine,
+    EK: KvEngine,
+    RR: RaftStoreRouter<EK> + 'static, // For `Drop`.
+{
     engine: E,
 
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<RR>,
+    _kv_engine: std::marker::PhantomData<EK>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -556,7 +564,7 @@ pub struct GcWorker<E: Engine, RR: RaftStoreRouter<RocksEngine>> {
     cluster_version: ClusterVersion,
 }
 
-impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Clone for GcWorker<E, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK>> Clone for GcWorker<E, EK, RR> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
@@ -564,6 +572,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Clone for GcWorker<E, RR> {
         Self {
             engine: self.engine.clone(),
             raft_store_router: self.raft_store_router.clone(),
+            _kv_engine: Default::default(),
             config_manager: self.config_manager.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
@@ -576,7 +585,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Clone for GcWorker<E, RR> {
     }
 }
 
-impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Drop for GcWorker<E, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK> + 'static> Drop for GcWorker<E, EK, RR> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -592,18 +601,19 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> Drop for GcWorker<E, RR> {
     }
 }
 
-impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcWorker<E, RR> {
+impl<E: Engine, EK: KvEngine, RR: RaftStoreRouter<EK> + 'static> GcWorker<E, EK, RR> {
     pub fn new(
         engine: E,
         raft_store_router: Option<RR>,
         cfg: GcConfig,
         cluster_version: ClusterVersion,
-    ) -> GcWorker<E, RR> {
+    ) -> GcWorker<E, EK, RR> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GcWorker {
             engine,
             raft_store_router,
+            _kv_engine: Default::default(),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
@@ -656,7 +666,7 @@ impl<E: Engine, RR: RaftStoreRouter<RocksEngine>> GcWorker<E, RR> {
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        coprocessor_host: &mut CoprocessorHost<EK>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
         let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);

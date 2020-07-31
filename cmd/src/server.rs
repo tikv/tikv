@@ -10,7 +10,7 @@
 
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine};
+use engine_rocks::{encryption::get_env, RocksEngine, TwoRocksEngines};
 use engine_traits::{KvEngines, MetricsFlusher};
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -112,8 +112,8 @@ struct TiKVServer {
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine, RocksEngine>,
-    system: Option<RaftBatchSystem>,
+    router: RaftRouter<TwoRocksEngines>,
+    system: Option<RaftBatchSystem<TwoRocksEngines>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
@@ -127,22 +127,22 @@ struct TiKVServer {
 }
 
 struct Engines {
-    engines: KvEngines<RocksEngine, RocksEngine>,
+    engines: TwoRocksEngines,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine>>,
-    raft_router: ServerRaftStoreRouter<RocksEngine>,
+    engine: RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>,
+    raft_router: ServerRaftStoreRouter<TwoRocksEngines>,
 }
 
 struct Servers {
     lock_mgr: LockManager,
-    server: Server<ServerRaftStoreRouter<RocksEngine>, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient>,
+    server: Server<ServerRaftStoreRouter<TwoRocksEngines>, resolve::PdStoreAddrResolver>,
+    node: Node<TwoRocksEngines, RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
 impl TiKVServer {
-    fn init(mut config: TiKvConfig) -> TiKVServer {
+    fn init(mut config: TiKvConfig) -> Self {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -359,28 +359,28 @@ impl TiKVServer {
         )
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let engines = KvEngines::new(
+        let engines = TwoRocksEngines::new(
             RocksEngine::from_db(Arc::new(kv_engine)),
             RocksEngine::from_db(Arc::new(raft_engine)),
             block_cache.is_some(),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader =
-            LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
+            LocalReader::new(engines.kv().clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
-                engines.kv.clone(),
+                engines.kv().clone(),
                 self.config.storage.block_cache.shared,
             )),
         );
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                engines.kv.clone(),
+                engines.kv().clone(),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
@@ -388,13 +388,13 @@ impl TiKVServer {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(
-                engines.raft.clone(),
+                engines.raft().clone(),
                 DBType::Raft,
                 self.config.storage.block_cache.shared,
             )),
         );
 
-        let engine = RaftKv::new(raft_router.clone(), engines.kv.clone());
+        let engine = RaftKv::new(raft_router.clone(), engines.kv().clone());
 
         self.engines = Some(Engines {
             engines,
@@ -404,7 +404,7 @@ impl TiKVServer {
         });
     }
 
-    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>> {
+    fn init_gc_worker(&mut self) -> GcWorker<RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>, RocksEngine, ServerRaftStoreRouter<TwoRocksEngines>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -424,7 +424,7 @@ impl TiKVServer {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine>>>,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter<TwoRocksEngines>>, RocksEngine, ServerRaftStoreRouter<TwoRocksEngines>>,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -493,7 +493,7 @@ impl TiKVServer {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
-            .build(snap_path, Some(self.router.clone()));
+            .build(snap_path);
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
@@ -535,7 +535,7 @@ impl TiKVServer {
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.engines.kv.clone(),
+            engines.engines.kv().clone(),
             self.router.clone(),
             coprocessor_host.clone(),
             self.config.coprocessor.clone(),
@@ -632,7 +632,7 @@ impl TiKVServer {
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
             engines.raft_router.clone(),
-            engines.engines.kv.clone(),
+            engines.engines.kv().clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
         );
@@ -721,7 +721,7 @@ impl TiKVServer {
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
+            engines.engines.kv().as_inner().clone(),
             self.config.backup.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
@@ -747,10 +747,10 @@ impl TiKVServer {
     }
 
     fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(KvEngines::new(
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-            self.engines.as_ref().unwrap().engines.raft.clone(),
-            self.engines.as_ref().unwrap().engines.shared_block_cache,
+        let mut metrics_flusher = Box::new(MetricsFlusher::new(TwoRocksEngines::new(
+            self.engines.as_ref().unwrap().engines.kv().clone(),
+            self.engines.as_ref().unwrap().engines.raft().clone(),
+            self.engines.as_ref().unwrap().engines.shared_block_cache(),
         )));
 
         // Start metrics flusher
@@ -924,9 +924,9 @@ trait Stop {
     fn stop(self: Box<Self>);
 }
 
-impl<E, R> Stop for StatusServer<E, R>
+impl<TwoRocksEngines, R> Stop for StatusServer<TwoRocksEngines, R>
 where
-    E: 'static,
+    TwoRocksEngines: 'static,
     R: 'static + Send,
 {
     fn stop(self: Box<Self>) {
@@ -934,7 +934,7 @@ where
     }
 }
 
-impl Stop for MetricsFlusher<RocksEngine, RocksEngine> {
+impl<TwoRocksEngines: KvEngines> Stop for MetricsFlusher<TwoRocksEngines> {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
