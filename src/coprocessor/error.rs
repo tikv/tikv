@@ -5,7 +5,7 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 #[derive(Fail, Debug)]
 pub enum Error {

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{error, result};
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 quick_error! {
     #[derive(Debug)]

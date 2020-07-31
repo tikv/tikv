@@ -24,7 +24,7 @@ pub use types::{
 };
 pub use write::{Write, WriteRef, WriteType};
 
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 quick_error! {
     #[derive(Debug)]

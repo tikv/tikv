@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;

@@ -10,7 +10,7 @@ use encryption::Error as EncryptionError;
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use tokio_sync::oneshot::error::RecvError;
 use uuid::Error as UuidError;
 

@@ -11,7 +11,7 @@ use crate::storage::{
     Result,
 };
 use kvproto::{errorpb, kvrpcpb};
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{KvPair, TimeStamp};
 
 quick_error! {

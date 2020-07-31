@@ -2,7 +2,7 @@
 
 use std::error;
 use std::result;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 quick_error! {
     #[derive(Debug)]

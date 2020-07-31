@@ -2,6 +2,7 @@
 
 use std::error::Error as StdError;
 use std::result::Result as StdResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 quick_error! {
     #[derive(Debug)]
@@ -15,3 +16,9 @@ quick_error! {
 }
 
 pub type Result<T> = StdResult<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        error_code::raftstore::COPROCESSOR
+    }
+}

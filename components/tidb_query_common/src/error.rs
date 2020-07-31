@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::Fail;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
 
 #[derive(Fail, Debug)]
 pub enum EvaluateError {

@@ -3,7 +3,6 @@
 define_error_codes!(
     "KV:SSTImporter:",
 
-
     IO => ("Io", "", ""),
     GRPC => ("gRPC", "", ""),
     UUID => ("Uuid", "", ""),

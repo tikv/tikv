@@ -4,7 +4,7 @@ macro_rules! define_error_codes {
     ($prefix:literal,
         $($name:ident => ($suffix:literal, $description:literal, $workaround:literal)),+
     ) => {
-        use crate::error_code::ErrorCode;
+        use crate::ErrorCode;
         $(pub const $name: ErrorCode = ErrorCode {
             code: concat!($prefix, $suffix),
             description: $description,

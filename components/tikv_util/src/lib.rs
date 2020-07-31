@@ -46,7 +46,6 @@ pub mod future_pool;
 pub mod macros;
 pub mod callback;
 pub mod deadline;
-pub mod error_code;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;

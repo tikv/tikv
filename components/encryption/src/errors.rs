@@ -4,7 +4,7 @@ use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 /// The error type for encryption.
 #[derive(Debug, Fail)]

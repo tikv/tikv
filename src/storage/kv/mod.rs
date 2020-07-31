@@ -27,7 +27,7 @@ pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 use into_other::IntoOther;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;

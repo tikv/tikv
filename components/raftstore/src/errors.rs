@@ -12,7 +12,7 @@ use protobuf::ProtobufError;
 
 use kvproto::{errorpb, metapb};
 use tikv_util::codec;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
@@ -256,7 +256,7 @@ impl ErrorCodeExt for Error {
             Error::Raft(e) => e.error_code(),
             Error::Timeout(_) => error_code::raftstore::TIMEOUT,
             Error::EpochNotMatch(_, _) => error_code::raftstore::EPOCH_NOT_MATCH,
-            Error::Coprocessor(_) => error_code::raftstore::COPROCESSOR,
+            Error::Coprocessor(e) => e.error_code(),
             Error::Transport(_) => error_code::raftstore::TRANSPORT,
             Error::Snapshot(e) => e.error_code(),
             Error::SstImporter(e) => e.error_code(),

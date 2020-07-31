@@ -11,7 +11,7 @@ use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
 use tidb_query_common::error::EvaluateError;
-use tikv_util::error_code::{self, ErrorCode, ErrorCodeExt};
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use tipb::{self, ScalarFuncSig};
 
 pub const ERR_M_BIGGER_THAN_D: i32 = 1427;
