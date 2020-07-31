@@ -321,7 +321,6 @@ pub struct RegionPacketFilter {
     drop_type: Vec<MessageType>,
     skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
-    msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
 impl Filter for RegionPacketFilter {
@@ -338,22 +337,18 @@ impl Filter for RegionPacketFilter {
                 && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
                 && !self.skip_type.contains(&msg_type)
             {
-                let res = match self.block {
+                return match self.block {
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
                         if left == 0 {
-                            break false;
+                            return false;
                         }
                         if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
-                            break true;
+                            return true;
                         }
                     },
                     Either::Right(ref block) => !block.load(Ordering::SeqCst),
                 };
-                if let Some(f) = self.msg_callback.as_ref() {
-                    f(m)
-                }
-                return res;
             }
             true
         };
@@ -377,7 +372,6 @@ impl RegionPacketFilter {
             skip_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
-            msg_callback: None,
         }
     }
 
@@ -409,14 +403,6 @@ impl RegionPacketFilter {
 
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
-        self
-    }
-
-    pub fn set_msg_callback(
-        mut self,
-        cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,
-    ) -> RegionPacketFilter {
-        self.msg_callback = Some(cb);
         self
     }
 }
