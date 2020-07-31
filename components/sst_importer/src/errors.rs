@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::result;
 
 use encryption::Error as EncryptionError;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use tokio_sync::oneshot::error::RecvError;
 use uuid::Error as UuidError;
 

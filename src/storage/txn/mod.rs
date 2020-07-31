@@ -14,11 +14,11 @@ use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{Key, TimeStamp};
 
 pub use self::commands::Command;

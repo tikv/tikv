@@ -10,8 +10,8 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
-use kvproto::{errorpb, kvrpcpb};
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, kvrpcpb};
 use txn_types::{KvPair, TimeStamp};
 
 quick_error! {

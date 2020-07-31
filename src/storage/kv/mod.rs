@@ -26,8 +26,8 @@ pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestE
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
-use into_other::IntoOther;
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;

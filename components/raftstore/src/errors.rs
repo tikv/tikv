@@ -10,9 +10,9 @@ use crossbeam::TrySendError;
 use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use tikv_util::codec;
-use error_code::{self, ErrorCode, ErrorCodeExt};
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
