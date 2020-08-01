@@ -518,7 +518,9 @@ impl Command {
             Command::ResolveLockLite(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
             Command::TxnHeartBeat(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
             Command::CheckTxnStatus(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::CheckSecondaryLocks(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::CheckSecondaryLocks(t) => {
+                t.process_write(snapshot, lock_mgr, pd_client, context)
+            }
             Command::Pause(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
             _ => panic!("unsupported write command"),
         }
