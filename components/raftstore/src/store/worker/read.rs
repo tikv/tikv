@@ -447,7 +447,7 @@ where
                         let mut response = self.execute(&req, &delegate.region, None, read_id);
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut response.response, delegate.term);
-                        response.txn_extra_op = delegate.txn_extra_op.load();
+                        // response.txn_extra_op = delegate.txn_extra_op.load();
                         cb.invoke_read(response);
                         self.delegates.insert(region_id, Some(delegate));
                         return;
