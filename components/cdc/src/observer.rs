@@ -118,7 +118,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         txn_extras
             .into_iter()
             .for_each(|mut e| txn_extra.extend(&mut e));
-        if !self.cmd_batches.borrow().is_empty() {
+        if false {
+            // if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
