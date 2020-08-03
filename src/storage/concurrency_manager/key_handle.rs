@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod lock_store;
-
-use self::lock_store::LockStore;
 use super::lock_table::LockTable;
 
+use parking_lot::Mutex;
 use std::{mem, sync::Arc};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
@@ -15,7 +13,7 @@ pub struct KeyHandle {
     pub key: Key,
     table: LockTable,
     mutex: AsyncMutex<()>,
-    lock_store: LockStore,
+    lock_store: Mutex<Option<Lock>>,
 }
 
 impl KeyHandle {
@@ -24,7 +22,7 @@ impl KeyHandle {
             key,
             table,
             mutex: AsyncMutex::new(()),
-            lock_store: LockStore::new(),
+            lock_store: Mutex::new(None),
         }
     }
 
@@ -40,7 +38,7 @@ impl KeyHandle {
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
-        self.lock_store.read(f)
+        f(&*self.lock_store.lock())
     }
 }
 
@@ -64,7 +62,17 @@ impl KeyHandleGuard {
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T) -> T {
-        self.handle.lock_store.write(f, &self.handle)
+        f(&mut *self.handle.lock_store.lock())
+    }
+}
+
+impl Drop for KeyHandleGuard {
+    fn drop(&mut self) {
+        // We only keep the lock in memory until the write to the underlying
+        // store finishes.
+        // The guard can be released after finishes writing.
+        // FIXME: read checks should be done before getting the snapshot
+        *self.handle.lock_store.lock() = None;
     }
 }
 
