@@ -61,7 +61,7 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<RocksEngine, RocksEngine>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -74,7 +74,7 @@ where
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
@@ -199,7 +199,7 @@ where
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
+    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine, RocksEngine> {
         self.system.apply_router()
     }
 

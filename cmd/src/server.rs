@@ -11,7 +11,8 @@
 use crate::{setup::*, signal_handler};
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
-use engine_traits::{KvEngines, MetricsFlusher};
+use engine_traits::{compaction_job::CompactionJobInfo, KvEngines, MetricsFlusher};
+use engine_traits::{CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
@@ -26,8 +27,8 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-        new_compaction_listener, AutoSplitController, GlobalReplicationState, LocalReader,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;
@@ -113,7 +114,7 @@ struct TiKVServer {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, RocksEngine>,
-    system: Option<RaftBatchSystem>,
+    system: Option<RaftBatchSystem<RocksEngine, RocksEngine>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
@@ -329,6 +330,36 @@ impl TiKVServer {
         .map(|key_manager| Arc::new(key_manager));
     }
 
+    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
+        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+            // When calculating region size, we only consider write and default
+            // column families.
+            let cf = info.cf_name();
+            if cf != CF_WRITE && cf != CF_DEFAULT {
+                return false;
+            }
+            // Compactions in level 0 and level 1 are very frequently.
+            if info.output_level() < 2 {
+                return false;
+            }
+
+            true
+        }
+
+        let ch = Mutex::new(self.router.clone());
+        let compacted_handler = Box::new(move |compacted_event: engine_rocks::CompactedEvent| {
+            let ch = ch.lock().unwrap();
+            let event = StoreMsg::CompactedEvent(compacted_event);
+            if let Err(e) = ch.send_control(event) {
+                error!(
+                    "send compaction finished event to raftstore failed";
+                    "err" => ?e,
+                );
+            }
+        });
+        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+    }
+
     fn init_engines(&mut self) {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
@@ -347,7 +378,7 @@ impl TiKVServer {
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(new_compaction_listener(self.router.clone()));
+        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(&block_cache);
         let db_path = self
             .store_path
