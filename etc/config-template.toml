@@ -448,8 +448,8 @@
 ## 1. rate-bytes-per-sec is the only parameter you want to set most of the time. It controls the
 ##    total write rate of compaction and flush in bytes per second. Currently, RocksDB does not
 ##    enforce rate limit for anything other than flush and compaction, e.g. write to WAL.
-## 2. refill-period controls how often IO tokens are refilled. Smaller value will flatten IO bursts
-##    while introducing more CPU overhead.
+## 2. rate-limiter-refill-period controls how often IO tokens are refilled. Smaller value will flatten
+##    IO bursts while introducing more CPU overhead.
 ## 3. rate-limiter-mode indicates which types of operations count against the limit.
 ##    1 : ReadOnly
 ##    2 : WriteOnly
