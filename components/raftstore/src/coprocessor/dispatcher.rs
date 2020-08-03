@@ -6,6 +6,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::marker::PhantomData;
+use txn_types::TxnExtra;
 
 use std::mem;
 use std::ops::Deref;
@@ -145,7 +146,7 @@ impl_box_observer!(
     RegionChangeObserver,
     WrappedRegionChangeObserver
 );
-impl_box_observer!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
+impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 
 /// Registry contains all registered coprocessors.
 #[derive(Default, Clone)]
@@ -156,7 +157,7 @@ pub struct Registry {
     split_check_observers: Vec<Entry<BoxSplitCheckObserver<RocksEngine>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
-    cmd_observers: Vec<Entry<BoxCmdObserver>>,
+    cmd_observers: Vec<Entry<BoxCmdObserver<RocksEngine>>>,
     // TODO: add endpoint
 }
 
@@ -206,7 +207,7 @@ impl Registry {
         push!(priority, rlo, self.region_change_observers);
     }
 
-    pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver) {
+    pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<RocksEngine>) {
         push!(priority, rlo, self.cmd_observers);
     }
 }
@@ -439,10 +440,27 @@ impl CoprocessorHost {
             .on_apply_cmd(observe_id, region_id, cmd)
     }
 
-    pub fn on_flush_apply(&self) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob.observer.inner().on_flush_apply()
+    pub fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: RocksEngine) {
+        if self.registry.cmd_observers.is_empty() {
+            return;
         }
+
+        for i in 0..self.registry.cmd_observers.len() - 1 {
+            self.registry
+                .cmd_observers
+                .get(i)
+                .unwrap()
+                .observer
+                .inner()
+                .on_flush_apply(txn_extras.clone(), engine.clone())
+        }
+        self.registry
+            .cmd_observers
+            .last()
+            .unwrap()
+            .observer
+            .inner()
+            .on_flush_apply(txn_extras, engine)
     }
 
     pub fn shutdown(&self) {
@@ -467,10 +485,12 @@ mod tests {
     use std::sync::atomic::*;
     use std::sync::Arc;
 
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
     };
+    use tempfile::Builder;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -567,14 +587,14 @@ mod tests {
         }
     }
 
-    impl CmdObserver for TestCoprocessor {
+    impl CmdObserver<RocksEngine> for TestCoprocessor {
         fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
         fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
-        fn on_flush_apply(&self) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -599,6 +619,8 @@ mod tests {
     fn test_trigger_right_hook() {
         let mut host = CoprocessorHost::default();
         let ob = TestCoprocessor::default();
+        let path = Builder::new().tempdir().unwrap();
+        let engine = engine_rocks::util::new_default_engine(path.path().to_str().unwrap()).unwrap();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(ob.clone()));
         host.registry
@@ -653,7 +675,7 @@ mod tests {
             Cmd::new(0, RaftCmdRequest::default(), query_resp),
         );
         assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply();
+        host.on_flush_apply(Vec::default(), engine);
         assert_all!(&[&ob.called], &[91]);
     }
 
