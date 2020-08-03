@@ -944,17 +944,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if self.fsm.group_state == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
-                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 3
-                // (default 7) and the follwer's `election_elapsed` in raft-rs is 1.
+                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
+                // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
+                // and the follwer's `election_elapsed` in raft-rs is 1.
                 // After the group state becomes Chaos, the next tick will call `raft_group.tick`
-                // `missing_tick` + 1 times(default 8).
-                // So the follower's `election_elapsed` should be 1 + `missing_tick` + 1(default 9)
-                // which is less than the min election timeout.
+                // `missing_tick` + 1 times(default 7).
+                // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
+                // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
                 // The reason is that we don't want let all followers become (pre)candidate if one
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
-                // to others. As long as the leader can wake up and broadcast hearbeats in one raft base
-                // tick time(default 1s), no more followers will wake up and sends vote msg again.
-                if self.fsm.missing_ticks + 3 < self.ctx.cfg.raft_election_timeout_ticks {
+                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // time(default 2s), no more followers will wake up and sends vote msg again.
+                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                    < self.ctx.cfg.raft_election_timeout_ticks
+                {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
                 }
