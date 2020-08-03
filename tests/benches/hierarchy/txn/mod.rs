@@ -84,7 +84,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
-                txn.commit(key, 2.into(), false).unwrap();
+                txn.commit(key, 2.into()).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }
