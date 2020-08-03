@@ -2,7 +2,10 @@
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
-use crate::storage::{concurrency_manager::ConcurrencyManager, types::TxnStatus};
+use crate::storage::{
+    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
+    types::TxnStatus,
+};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use pd_client::PdClient;
@@ -90,6 +93,7 @@ pub struct MvccTxn<S: Snapshot, P: PdClient + 'static> {
     pub extra_op: ExtraOp,
     _pd_client: Arc<P>,
     concurrency_manager: ConcurrencyManager,
+    guards: Vec<KeyHandleGuard>,
 }
 
 impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
@@ -150,6 +154,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             extra_op: ExtraOp::Noop,
             _pd_client: pd_client,
             concurrency_manager,
+            guards: vec![],
         }
     }
 
@@ -169,6 +174,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         std::mem::take(&mut self.writes.extra)
     }
 
+    pub fn take_guards(&mut self) -> Vec<KeyHandleGuard> {
+        std::mem::take(&mut self.guards)
+    }
+
     pub fn take_statistics(&mut self) -> Statistics {
         let mut statistics = Statistics::default();
         self.reader.collect_statistics_into(&mut statistics);
@@ -186,8 +195,6 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
     }
 
     fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
-        ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
-            .with_lock(|l| *l = None);
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
@@ -277,6 +284,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 ts
             });
             async_commit_ts = ts;
+
+            self.guards.push(key_guard);
         }
 
         self.put_lock(key, &lock);

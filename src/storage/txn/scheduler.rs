@@ -48,7 +48,9 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    concurrency_manager::ConcurrencyManager, get_priority_tag, types::StorageCallback,
+    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
+    get_priority_tag,
+    types::StorageCallback,
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
@@ -458,6 +460,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
+        lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         tag: metrics::CommandKind,
     ) {
@@ -471,6 +474,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         }
 
         debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
+        drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
         // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
@@ -615,13 +619,14 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 rows,
                 pr,
                 lock_info,
+                lock_guards,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
                     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
                 } else if to_be_write.modifies.is_empty() {
-                    scheduler.on_write_finished(cid, pr, Ok(()), false, tag);
+                    scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, tag);
                 } else {
                     let sched = scheduler.clone();
                     // The normal write process is respond to clients and release latches
@@ -649,6 +654,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                                     cid,
                                     write_finished_pr,
                                     result,
+                                    lock_guards,
                                     pipelined,
                                     tag,
                                 );

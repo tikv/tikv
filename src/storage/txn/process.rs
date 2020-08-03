@@ -26,7 +26,7 @@ use crate::storage::txn::{
     Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
+    concurrency_manager::{ConcurrencyManager, KeyHandleGuard},
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
     SecondaryLocksStatus,
@@ -218,6 +218,7 @@ pub(super) struct WriteResult {
     pub pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_guards: Vec<KeyHandleGuard>,
 }
 
 pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'static>(
@@ -230,6 +231,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
     statistics: &mut Statistics,
     pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
+    let mut lock_guards = Vec::new();
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
         Command::Prewrite(Prewrite {
             mut mutations,
@@ -333,6 +335,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     },
                 };
                 let txn_extra = txn.take_extra();
+                lock_guards = txn.take_guards();
                 let write_data = WriteData::new(txn.into_modifies(), txn_extra);
                 (pr, write_data, rows, ctx, None)
             } else {
@@ -397,6 +400,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
                     },
                 };
                 let txn_extra = txn.take_extra();
+                lock_guards = txn.take_guards();
                 let write_data = WriteData::new(txn.into_modifies(), txn_extra);
                 (pr, write_data, rows, ctx, None)
             } else {
@@ -795,6 +799,7 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
         rows,
         pr,
         lock_info,
+        lock_guards,
     })
 }
 
