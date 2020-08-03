@@ -29,13 +29,13 @@ impl KeyHandle {
     }
 
     pub async fn lock(self: Arc<Self>) -> KeyHandleGuard {
-        // Safety: `_mutex_guard` is declared after `handle_ref` in `KeyHandleGuard`.
+        // Safety: `_mutex_guard` is declared before `handle_ref` in `KeyHandleGuard`.
         // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
         // Then we can make sure the mutex guard doesn't point to released memory.
         let mutex_guard = unsafe { mem::transmute(self.mutex.lock().await) };
         KeyHandleGuard {
-            handle: self,
             _mutex_guard: mutex_guard,
+            handle: self,
         }
     }
 
@@ -148,6 +148,6 @@ mod tests {
         let guard = table.get(&k).unwrap().lock().await;
         guard.with_lock(|lock| *lock = None);
         drop(guard);
-        assert!(table.get(&k).is_some());
+        assert!(table.get(&k).is_none());
     }
 }

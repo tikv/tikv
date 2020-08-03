@@ -34,7 +34,7 @@ impl LockStore {
                 guard.1 = Some(handle.clone());
             }
             (true, false) => {
-                // TODO: wake up tasks waiting for releasing the lock
+                guard.1 = None;
             }
             _ => {}
         }
