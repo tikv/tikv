@@ -2746,7 +2746,7 @@ where
     EK: KvEngine,
 {
     fn from_peer(
-        peer: &Peer<RocksEngine, RocksEngine>,
+        peer: &Peer<EK, RocksEngine>,
     ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
