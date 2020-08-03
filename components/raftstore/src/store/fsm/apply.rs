@@ -3155,11 +3155,11 @@ where
     }
 }
 
-impl<E> Fsm for ApplyFsm<E>
+impl<EK> Fsm for ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    type Message = Msg<E>;
+    type Message = Msg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -3183,9 +3183,9 @@ where
     }
 }
 
-impl<E> Drop for ApplyFsm<E>
+impl<EK> Drop for ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
