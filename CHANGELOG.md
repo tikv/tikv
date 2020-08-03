@@ -3,6 +3,16 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.3] - 2020-07-24
+
++ Improvements
+  + Introduce the new `backup.num-threads` configuration to control the size of the backup thread pool [#8199](https://github.com/tikv/tikv/pull/8199)
+  + Do not send store heartbeats when receiving snapshots [#8136](https://github.com/tikv/tikv/pull/8136)
+  + Support dynamically changing the shared block cache's capacity [#8232](https://github.com/tikv/tikv/pull/8232)
++ Bug Fixes
+  + Fix the issue that reads might get stale data during merging [#8113](https://github.com/tikv/tikv/pull/8113)
+  + Fix the issue that collation does not work on the `min`/`max` function when aggregation is pushed down to TiKV [#8108](https://github.com/tikv/tikv/pull/8108)
+
 ## [4.0.2] - 2020-07-01
 
 + Bug Fixes
