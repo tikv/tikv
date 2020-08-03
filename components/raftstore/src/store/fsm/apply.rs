@@ -340,21 +340,21 @@ where
     }
 }
 
-struct ApplyContext<E, W>
+struct ApplyContext<EK, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost<E>,
+    host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<RocksEngine>,
-    notifier: Notifier<E>,
-    engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E>>,
-    apply_res: Vec<ApplyRes<E::Snapshot>>,
+    notifier: Notifier<EK>,
+    engine: EK,
+    cbs: MustConsumeVec<ApplyCallback<EK>>,
+    apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: Option<W>,
@@ -384,24 +384,24 @@ where
     txn_extras: MustConsumeVec<TxnExtra>,
 }
 
-impl<E, W> ApplyContext<E, W>
+impl<EK, W> ApplyContext<EK, W>
 where
-    E: KvEngine,
-    W: WriteBatch + WriteBatchVecExt<E>,
+    EK: KvEngine,
+    W: WriteBatch + WriteBatchVecExt<EK>,
 {
     pub fn new(
         tag: String,
-        host: CoprocessorHost<E>,
+        host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-        engine: E,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        engine: EK,
         router: ApplyRouter<RocksEngine>,
-        notifier: Notifier<E>,
+        notifier: Notifier<EK>,
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    ) -> ApplyContext<E, W> {
-        ApplyContext::<E, W> {
+    ) -> ApplyContext<EK, W> {
+        ApplyContext::<EK, W> {
             tag,
             timer: None,
             host,
@@ -434,7 +434,7 @@ where
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
-    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<E>) {
+    pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.prepare_write_batch();
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
@@ -468,7 +468,7 @@ where
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    pub fn commit(&mut self, delegate: &mut ApplyDelegate<E>) {
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
@@ -477,7 +477,7 @@ where
         self.commit_opt(delegate, true);
     }
 
-    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<E>, persistent: bool) {
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
             self.write_to_db();
@@ -530,8 +530,8 @@ where
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(
         &mut self,
-        delegate: &mut ApplyDelegate<E>,
-        results: VecDeque<ExecResult<E::Snapshot>>,
+        delegate: &mut ApplyDelegate<EK>,
+        results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
