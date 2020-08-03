@@ -3633,9 +3633,8 @@ mod tests {
             Msg::Validate(
                 region_id,
                 Box::new(move |(delegate, _): (*const u8, _)| {
-                    let delegate = unsafe {
-                        std::mem::transmute::<_, &ApplyDelegate<RocksEngine, RocksEngine>>(delegate)
-                    };
+                    let delegate =
+                        unsafe { &*(delegate as *const ApplyDelegate<RocksEngine, RocksEngine>) };
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
