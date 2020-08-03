@@ -1568,7 +1568,7 @@ where
 }
 
 pub fn do_snapshot<E>(
-    mgr: SnapManager<E>,
+    mgr: SnapManager,
     engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
@@ -2055,7 +2055,7 @@ mod tests {
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
@@ -2371,7 +2371,7 @@ mod tests {
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
