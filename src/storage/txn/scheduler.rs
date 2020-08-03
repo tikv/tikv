@@ -580,7 +580,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
@@ -625,26 +624,11 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                     };
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        sched
-                            .get_sched_pool()
-                            .clone()
-                            .spawn(
-                                async move {
-                                    fail_point!("scheduler_async_write_finish");
-                                    sched.on_write_finished(
-                                        cid,
-                                        write_finished_pr,
-                                        result,
-                                        pipelined,
-                                        tag,
-                                    );
-                                    KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                        .get(tag)
-                                        .observe(rows as f64);
-                                },
-                                priority,
-                            )
-                            .unwrap()
+                        fail_point!("scheduler_async_write_finish");
+                        sched.on_write_finished(cid, write_finished_pr, result, pipelined, tag);
+                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                            .get(tag)
+                            .observe(rows as f64);
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
