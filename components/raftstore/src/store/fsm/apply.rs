@@ -16,8 +16,8 @@ use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_rocks::RocksEngine;
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -2745,9 +2745,7 @@ impl<EK> ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    fn from_peer(
-        peer: &Peer<EK, RocksEngine>,
-    ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
+    fn from_peer(peer: &Peer<EK, RocksEngine>) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
@@ -3303,7 +3301,10 @@ where
     }
 }
 
-pub struct Builder<EK, W: WriteBatch + WriteBatchVecExt<EK>> where EK: KvEngine {
+pub struct Builder<EK, W: WriteBatch + WriteBatchVecExt<EK>>
+where
+    EK: KvEngine,
+{
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
@@ -3317,7 +3318,10 @@ pub struct Builder<EK, W: WriteBatch + WriteBatchVecExt<EK>> where EK: KvEngine 
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
-impl<EK, W: WriteBatch + WriteBatchVecExt<EK>> Builder<EK, W> where EK: KvEngine {
+impl<EK, W: WriteBatch + WriteBatchVecExt<EK>> Builder<EK, W>
+where
+    EK: KvEngine,
+{
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<EK, RocksEngine, T, C>,
         sender: Notifier<EK, RocksEngine>,
@@ -3339,8 +3343,10 @@ impl<EK, W: WriteBatch + WriteBatchVecExt<EK>> Builder<EK, W> where EK: KvEngine
     }
 }
 
-impl<EK, W: WriteBatch + WriteBatchVecExt<EK>>
-    HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W> where EK: KvEngine
+impl<EK, W: WriteBatch + WriteBatchVecExt<EK>> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
+    for Builder<EK, W>
+where
+    EK: KvEngine,
 {
     type Handler = ApplyPoller<EK, W>;
 
@@ -3473,11 +3479,17 @@ where
     }
 }
 
-pub struct ApplyBatchSystem<EK> where EK: KvEngine {
+pub struct ApplyBatchSystem<EK>
+where
+    EK: KvEngine,
+{
     system: BatchSystem<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl<EK> Deref for ApplyBatchSystem<EK> where EK: KvEngine {
+impl<EK> Deref for ApplyBatchSystem<EK>
+where
+    EK: KvEngine,
+{
     type Target = BatchSystem<ApplyFsm<EK>, ControlFsm>;
 
     fn deref(&self) -> &BatchSystem<ApplyFsm<EK>, ControlFsm> {
@@ -3485,17 +3497,20 @@ impl<EK> Deref for ApplyBatchSystem<EK> where EK: KvEngine {
     }
 }
 
-impl<EK> DerefMut for ApplyBatchSystem<EK> where EK: KvEngine {
+impl<EK> DerefMut for ApplyBatchSystem<EK>
+where
+    EK: KvEngine,
+{
     fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<EK>, ControlFsm> {
         &mut self.system
     }
 }
 
-impl<EK> ApplyBatchSystem<EK> where EK: KvEngine {
-    pub fn schedule_all<'a>(
-        &self,
-        peers: impl Iterator<Item = &'a Peer<EK, RocksEngine>>,
-    ) {
+impl<EK> ApplyBatchSystem<EK>
+where
+    EK: KvEngine,
+{
+    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer<EK, RocksEngine>>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3505,7 +3520,9 @@ impl<EK> ApplyBatchSystem<EK> where EK: KvEngine {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem<RocksEngine>) {
+pub fn create_apply_batch_system(
+    cfg: &Config,
+) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem<RocksEngine>) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
