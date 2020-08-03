@@ -5,6 +5,7 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -140,6 +141,7 @@ where
                     "failed to get approximate stat";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
@@ -159,6 +161,7 @@ where
                 "failed to send approximate region size";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 
