@@ -275,7 +275,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
 
             // This operation should not block because the latch makes sure only one thread
             // is operating on this key.
-            let key_guard = ::futures_executor::block_on(self.concurrency_manager.lock_key(&key));
+            let key_guard =
+                CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
+                    ::futures_executor::block_on(self.concurrency_manager.lock_key(&key))
+                });
 
             let ts = key_guard.with_lock(|l| {
                 let ts = self.concurrency_manager.max_read_ts().next();
