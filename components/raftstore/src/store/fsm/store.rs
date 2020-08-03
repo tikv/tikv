@@ -3,12 +3,10 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{
-    RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec,
-};
+use engine_rocks::{RocksCompactionJobInfo, RocksEngine, RocksWriteBatch, RocksWriteBatchVec};
 use engine_traits::{
-    CompactionJobInfo, KvEngine, KvEngines, Mutable,
-    WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
+    CompactionJobInfo, KvEngine, KvEngines, Mutable, WriteBatch, WriteBatchExt, WriteBatchVecExt,
+    WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -476,12 +474,20 @@ impl Fsm for StoreFsm {
     }
 }
 
-struct StoreFsmDelegate<'a, EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: KvEngine {
+struct StoreFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fsm: &'a mut StoreFsm,
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
         match tick {
@@ -553,7 +559,11 @@ impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> w
     }
 }
 
-pub struct RaftPoller<EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: KvEngine {
+pub struct RaftPoller<EK, ER, T: 'static, C: 'static>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
@@ -564,7 +574,11 @@ pub struct RaftPoller<EK, ER, T: 'static, C: 'static> where EK: KvEngine, ER: Kv
     cfg_tracker: Tracker<Config>,
 }
 
-impl<EK, ER, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
@@ -686,7 +700,10 @@ impl<EK, ER, T: Transport, C: PdClient> RaftPoller<EK, ER, T, C> where EK: KvEng
 }
 
 impl<EK, ER, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
-    for RaftPoller<EK, ER, T, C> where EK: KvEngine, ER: KvEngine
+    for RaftPoller<EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
@@ -805,7 +822,11 @@ impl<EK, ER, T: Transport, C: PdClient> PollHandler<PeerFsm<EK, ER>, StoreFsm>
     }
 }
 
-pub struct RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+pub struct RaftPollerBuilder<EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<EK>>,
@@ -830,7 +851,11 @@ pub struct RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
 
-impl<EK, ER, T, C> RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<EK, ER, T, C> RaftPollerBuilder<EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
@@ -1001,7 +1026,7 @@ impl<EK, ER, T, C> RaftPollerBuilder<EK, ER, T, C> where EK: KvEngine, ER: KvEng
 impl<EK, ER, T, C> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm> for RaftPollerBuilder<EK, ER, T, C>
 where
     EK: KvEngine,
-    ER: KvEngine, 
+    ER: KvEngine,
     T: Transport + 'static,
     C: PdClient + 'static,
 {
@@ -1059,7 +1084,10 @@ where
     }
 }
 
-struct Workers<EK> where EK: KvEngine {
+struct Workers<EK>
+where
+    EK: KvEngine,
+{
     pd_worker: FutureWorker<PdTask<EK>>,
     consistency_check_worker: Worker<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_worker: Worker<SplitCheckTask>,
@@ -1341,7 +1369,11 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -2068,7 +2100,11 @@ impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> w
     }
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C> where EK: KvEngine, ER: KvEngine {
+impl<'a, EK, ER, T: Transport, C: PdClient> StoreFsmDelegate<'a, EK, ER, T, C>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
