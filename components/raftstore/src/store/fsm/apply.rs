@@ -3473,28 +3473,28 @@ where
     }
 }
 
-pub struct ApplyBatchSystem {
-    system: BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>,
+pub struct ApplyBatchSystem<EK> where EK: KvEngine {
+    system: BatchSystem<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl Deref for ApplyBatchSystem {
-    type Target = BatchSystem<ApplyFsm<RocksEngine>, ControlFsm>;
+impl<EK> Deref for ApplyBatchSystem<EK> where EK: KvEngine {
+    type Target = BatchSystem<ApplyFsm<EK>, ControlFsm>;
 
-    fn deref(&self) -> &BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchSystem<ApplyFsm<EK>, ControlFsm> {
         &self.system
     }
 }
 
-impl DerefMut for ApplyBatchSystem {
-    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<RocksEngine>, ControlFsm> {
+impl<EK> DerefMut for ApplyBatchSystem<EK> where EK: KvEngine {
+    fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<EK>, ControlFsm> {
         &mut self.system
     }
 }
 
-impl ApplyBatchSystem {
+impl<EK> ApplyBatchSystem<EK> where EK: KvEngine {
     pub fn schedule_all<'a>(
         &self,
-        peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>,
+        peers: impl Iterator<Item = &'a Peer<EK, RocksEngine>>,
     ) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
@@ -3505,7 +3505,7 @@ impl ApplyBatchSystem {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem) {
+pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem<RocksEngine>) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));

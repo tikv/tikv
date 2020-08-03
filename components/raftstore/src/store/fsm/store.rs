@@ -1102,7 +1102,7 @@ where
 pub struct RaftBatchSystem {
     system: BatchSystem<PeerFsm<RocksEngine, RocksEngine>, StoreFsm>,
     apply_router: ApplyRouter<RocksEngine>,
-    apply_system: ApplyBatchSystem,
+    apply_system: ApplyBatchSystem<RocksEngine>,
     router: RaftRouter<RocksEngine, RocksEngine>,
     workers: Option<Workers<RocksEngine>>,
 }
