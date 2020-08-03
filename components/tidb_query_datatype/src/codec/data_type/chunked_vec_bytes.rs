@@ -182,6 +182,10 @@ impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
         self.get(idx)
     }
 
+    fn get_bit_vec(self) -> &'a BitVec {
+        &self.bitmap
+    }
+
     fn phantom_data(self) -> Option<BytesRef<'a>> {
         None
     }

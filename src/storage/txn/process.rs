@@ -14,13 +14,13 @@ use crate::storage::kv::{Engine, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
-    MvccReader, MvccTxn, ReleasedLock, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    MvccReader, MvccTxn, ReleasedLock, SecondaryLockStatus, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
     commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, Commit, MvccByKey, MvccByStartTs,
-        Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite,
-        ResolveLockReadPhase, Rollback, ScanLock, TxnHeartBeat,
+        AcquirePessimisticLock, CheckSecondaryLocks, CheckTxnStatus, Cleanup, Command, Commit,
+        MvccByKey, MvccByStartTs, Pause, PessimisticRollback, Prewrite, PrewritePessimistic,
+        ResolveLock, ResolveLockLite, ResolveLockReadPhase, Rollback, ScanLock, TxnHeartBeat,
     },
     sched_pool::*,
     Error, ErrorInner, ProcessResult, Result,
@@ -28,6 +28,7 @@ use crate::storage::txn::{
 use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, TxnStatus},
     Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
+    SecondaryLocksStatus,
 };
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
@@ -671,6 +672,45 @@ pub(super) fn process_write_impl<S: Snapshot, L: LockManager, P: PdClient + 'sta
             let pr = ProcessResult::TxnStatus { txn_status };
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, 1, ctx, None)
+        }
+        Command::CheckSecondaryLocks(CheckSecondaryLocks {
+            keys,
+            start_ts,
+            ctx,
+        }) => {
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+            let mut released_locks = ReleasedLocks::new(start_ts, TimeStamp::zero());
+            let mut result = SecondaryLocksStatus::Locked(Vec::new());
+
+            for key in keys {
+                let (status, released) = txn.check_secondary_lock(&key, start_ts)?;
+                released_locks.push(released);
+                match status {
+                    SecondaryLockStatus::Locked(lock) => {
+                        result.push(lock.into_lock_info(key.to_raw()?));
+                    }
+                    SecondaryLockStatus::Committed(commit_ts) => {
+                        result = SecondaryLocksStatus::Committed(commit_ts);
+                        break;
+                    }
+                    SecondaryLockStatus::RolledBack => {
+                        result = SecondaryLocksStatus::RolledBack;
+                        break;
+                    }
+                }
+            }
+
+            let mut rows = 0;
+            if let SecondaryLocksStatus::RolledBack = &result {
+                // Lock is only released when result is `RolledBack`.
+                released_locks.wake_up(lock_mgr);
+                // One row is mutated only when a secondary lock is rolled back.
+                rows = 1;
+            }
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::SecondaryLocksStatus { status: result };
+            let write_data = WriteData::from_modifies(txn.into_modifies());
+            (pr, write_data, rows, ctx, None)
         }
         Command::Pause(Pause { duration, ctx, .. }) => {
             thread::sleep(Duration::from_millis(duration));
