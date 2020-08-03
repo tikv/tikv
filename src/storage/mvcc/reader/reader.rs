@@ -17,7 +17,7 @@ const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 pub enum TxnCommitRecord {
     /// The commit record of the given transaction is not found. But it's possible that there's
     /// another transaction's commit record, whose `commit_ts` equals to the current transaction's
-    /// `start_ts`. That kind of record will be returned via the `overlay_write` field. 
+    /// `start_ts`. That kind of record will be returned via the `overlay_write` field.
     /// In this case, if the current transaction is to be rolled back, the `overlay_write` must not
     /// be overwritten.
     None { overlay_write: Option<Write> },

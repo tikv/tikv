@@ -1116,18 +1116,18 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         start_ts: TimeStamp,
     ) -> Result<(SecondaryLockStatus, Option<ReleasedLock>)> {
         let mut released_lock = None;
-        let (status, need_rollback) = match self.reader.load_lock(&key)? {
+        let (status, need_rollback, rollback_overlay_write) = match self.reader.load_lock(&key)? {
             Some(lock) if lock.ts == start_ts => {
                 if lock.lock_type == LockType::Pessimistic {
                     released_lock = self.unlock_key(key.clone(), true);
-                    (SecondaryLockStatus::RolledBack, true)
+                    (SecondaryLockStatus::RolledBack, true, None)
                 } else {
-                    (SecondaryLockStatus::Locked(lock), false)
+                    (SecondaryLockStatus::Locked(lock), false, None)
                 }
             }
-            _ => match self.reader.get_txn_commit_info(&key, start_ts)? {
-                Some((commit_ts, write_type)) => {
-                    let status = if write_type != WriteType::Rollback {
+            _ => match self.reader.get_txn_commit_record(&key, start_ts)? {
+                TxnCommitRecord::SingleRecord { commit_ts, write } => {
+                    let status = if write.write_type != WriteType::Rollback {
                         SecondaryLockStatus::Committed(commit_ts)
                     } else {
                         SecondaryLockStatus::RolledBack
@@ -1137,18 +1137,24 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     // If it's a rollback record, it either comes from another check_secondary_lock
                     // (thus protected) or the client stops commit actively. So we don't need
                     // to make it protected again.
-                    (status, false)
+                    (status, false, None)
                 }
-                None => (SecondaryLockStatus::RolledBack, true),
+                TxnCommitRecord::OverlayRollback { .. } => {
+                    (SecondaryLockStatus::RolledBack, false, None)
+                }
+                TxnCommitRecord::None { overlay_write } => {
+                    (SecondaryLockStatus::RolledBack, true, overlay_write)
+                }
             },
         };
         if need_rollback {
             // We must protect this rollback in case this rollback is collapsed and a stale
             // acquire_pessimistic_lock and prewrite succeed again.
-            let write = Write::new_rollback(start_ts, true);
-            self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
-            if self.collapse_rollback {
-                self.collapse_prev_rollback(key.clone())?;
+            if let Some(write) = make_rollback(start_ts, true, rollback_overlay_write) {
+                self.put_write(key.clone(), start_ts, write.as_ref().to_bytes());
+                if self.collapse_rollback {
+                    self.collapse_prev_rollback(key.clone())?;
+                }
             }
         }
         Ok((status, released_lock))

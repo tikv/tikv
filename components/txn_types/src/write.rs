@@ -62,7 +62,7 @@ pub struct Write {
     pub short_value: Option<Value>,
     /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
     /// records in the same CF where Commit records is, and Rollback records are saved with
-    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback 
+    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
     /// records can't be avoided. In this case, we keep the Commit record, and set the
     /// `has_overlay_rollback` flag to indicate that there's also a Rollback record.
     /// Also note that `has_overlay_rollback` field is only necessary when the Rollback record
@@ -158,7 +158,7 @@ pub struct WriteRef<'a> {
     pub short_value: Option<&'a [u8]>,
     /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
     /// records in the same CF where Commit records is, and Rollback records are saved with
-    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback 
+    /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
     /// records can't be avoided. In this case, we keep the Commit record, and set the
     /// `has_overlay_rollback` flag to indicate that there's also a Rollback record.
     /// Also note that `has_overlay_rollback` field is only necessary when the Rollback record
