@@ -17,6 +17,7 @@ prost-codec = [
 ]
 
 [dependencies]
+error_code = { path = "../error_code" }
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }

@@ -13,6 +13,7 @@ byteorder = "1.2"
 farmhash = "1.1.5"
 hex = "0.4"
 derive-new = "0.5"
+error_code = { path = "../error_code" }
 codec = { path = "../codec" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 slog = "2.3"
