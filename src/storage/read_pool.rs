@@ -66,7 +66,9 @@ pub fn build_read_pool_for_test<E: Engine>(
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| {
-                    unsafe { destroy_tls_engine::<E>(); }
+                    unsafe {
+                        destroy_tls_engine::<E>();
+                    }
                     fail::FailPointRegistry::deregister_current();
                 })
                 .build()
