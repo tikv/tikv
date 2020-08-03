@@ -24,6 +24,8 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
+/// Generate the Write record that should be written that means to to perform a specified rollback
+/// operation.
 fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
@@ -67,8 +69,6 @@ impl MissingLockAction {
         }
     }
 
-    // This function should only be invoked when it's sure that there are no overlapping commit
-    // record whose commit_ts equals to `ts`, the current transaction's start_ts.
     fn construct_write(&self, ts: TimeStamp, overlay_write: Option<Write>) -> Option<Write> {
         match self {
             MissingLockAction::Rollback => make_rollback(ts, false, overlay_write),
@@ -283,6 +283,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         Ok(async_commit_ts)
     }
 
+    // Check whether there's an overlay write record, and then perform rollback. The actual behavior
+    // to do the rollback differs according th whether there's an ovarlay write record.
     fn check_write_and_rollback_lock(
         &mut self,
         key: Key,
@@ -806,6 +808,10 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             short_value,
         );
         if use_async_commit {
+            // When `use_async_commit` is set, it means that the `commit_ts` is not guaranteed to be
+            // globally unique. So it's necessary to check if there's another transaction's.
+            // Rollback record whose ts equals to the current commit ts.
+
             // The write cursor shouldn't have been used until here.
             if let Some(overlay_write) = self.reader.load_write(&key, commit_ts)? {
                 assert_eq!(overlay_write.write_type, WriteType::Rollback);
