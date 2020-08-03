@@ -103,6 +103,7 @@ impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, 
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
                 .after_start(move || fail_registry.register_current())
+                .before_stop(move || fail::FailPointRegistry::deregister_current())
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );

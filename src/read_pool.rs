@@ -185,7 +185,10 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     fn end(&mut self, local: &mut Local<Self::TaskCell>) {
         self.inner.end(local);
         self.flush_metrics();
-        unsafe { destroy_tls_engine::<E>() }
+        unsafe {
+            destroy_tls_engine::<E>();
+        }
+        fail::FailPointRegistry::deregister_current();
     }
 }
 

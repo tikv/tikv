@@ -34,12 +34,12 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     set_tls_engine(engine.lock().unwrap().clone());
                 })
                 .before_stop(move || {
-                    fail::FailPointRegistry::deregister_current();
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     unsafe {
                         destroy_tls_engine::<E>();
                     }
-                    tls_flush(&reporter2)
+                    tls_flush(&reporter2);
+                    fail::FailPointRegistry::deregister_current();
                 })
                 .build()
         })
@@ -65,8 +65,10 @@ pub fn build_read_pool_for_test<E: Engine>(
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| {
+                    unsafe {
+                        destroy_tls_engine::<E>();
+                    }
                     fail::FailPointRegistry::deregister_current();
-                    unsafe { destroy_tls_engine::<E>() }
                 })
                 .build()
         })

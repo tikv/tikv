@@ -50,12 +50,12 @@ impl SchedPool {
                 set_tls_engine(engine.lock().unwrap().clone());
             })
             .before_stop(move || {
-                fail::FailPointRegistry::deregister_current();
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 unsafe {
                     destroy_tls_engine::<E>();
                 }
                 tls_flush();
+                fail::FailPointRegistry::deregister_current();
             })
             .build();
         SchedPool { pool }
