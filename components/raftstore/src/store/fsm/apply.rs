@@ -3367,38 +3367,38 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter<E>
+pub struct ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
+    pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl<E> Deref for ApplyRouter<E>
+impl<EK> Deref for ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
+    type Target = BatchRouter<ApplyFsm<EK>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<EK>, ControlFsm> {
         &self.router
     }
 }
 
-impl<E> DerefMut for ApplyRouter<E>
+impl<EK> DerefMut for ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<EK>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl<E> ApplyRouter<E>
+impl<EK> ApplyRouter<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3410,7 +3410,7 @@ where
                     );
                     for p in apply.cbs.drain(..) {
                         let cmd =
-                            PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                            PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
