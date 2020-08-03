@@ -1,10 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD:components/tidb_query/src/error.rs
 use crate::codec::Error as CodecError;
-=======
 use error_code::{self, ErrorCode, ErrorCodeExt};
->>>>>>> eacee77... *: define error code for errors (#8375):components/tidb_query_common/src/error.rs
 use failure::Fail;
 
 #[derive(Fail, Debug)]

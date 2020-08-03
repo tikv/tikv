@@ -6,6 +6,7 @@ use kvproto::errorpb;
 define_error_codes!(
     "KV:Raftstore:",
 
+    ENGINE => ("Engine", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
     STORE_NOT_MATCH => ("StoreNotMatch", "", ""),

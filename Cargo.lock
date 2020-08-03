@@ -4404,40 +4404,7 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
 name = "tidb_query"
-=======
-name = "tidb_query_codegen"
-version = "0.0.1"
-dependencies = [
- "darling",
- "heck",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "tidb_query_common"
-version = "0.0.1"
-dependencies = [
- "byteorder",
- "derive_more",
- "error_code",
- "failure",
- "hex 0.3.2",
- "kvproto",
- "lazy_static",
- "prometheus",
- "prometheus-static-metric",
- "tikv_util",
- "time 0.1.42",
- "tipb",
-]
-
-[[package]]
-name = "tidb_query_datatype"
->>>>>>> eacee77... *: define error code for errors (#8375)
 version = "0.0.1"
 dependencies = [
  "base64 0.12.0",
@@ -4449,11 +4416,8 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
-<<<<<<< HEAD
  "derive_more",
-=======
  "error_code",
->>>>>>> eacee77... *: define error code for errors (#8375)
  "failure",
  "flate2",
  "futures 0.3.4",
@@ -4511,6 +4475,7 @@ name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "error_code",
  "failure",
  "tikv_alloc",
  "tipb",

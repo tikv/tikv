@@ -30,6 +30,7 @@ define_error_codes!(
     COMMIT_TS_EXPIRED => ("CommitTsExpired", "", ""),
     KEY_VERSION => ("KeyVersion", "",""),
     PESSIMISTIC_LOCK_NOT_FOUND => ("PessimisticLockNotFound", "", ""),
+    PESSIMISTIC_TXN_NOT_ENABLE => ("PessimisticTxnNotEnable", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );
