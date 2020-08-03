@@ -17,7 +17,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -3303,27 +3303,27 @@ where
     }
 }
 
-pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
+pub struct Builder<EK, W: WriteBatch + WriteBatchVecExt<EK>> where EK: KvEngine {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
-    coprocessor_host: CoprocessorHost<RocksEngine>,
+    coprocessor_host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
-    engine: RocksEngine,
-    sender: Notifier<RocksEngine, RocksEngine>,
-    router: ApplyRouter<RocksEngine>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    engine: EK,
+    sender: Notifier<EK, RocksEngine>,
+    router: ApplyRouter<EK>,
     _phantom: PhantomData<W>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
+impl<EK, W: WriteBatch + WriteBatchVecExt<EK>> Builder<EK, W> where EK: KvEngine {
     pub fn new<T, C>(
-        builder: &RaftPollerBuilder<RocksEngine, RocksEngine, T, C>,
-        sender: Notifier<RocksEngine, RocksEngine>,
-        router: ApplyRouter<RocksEngine>,
-    ) -> Builder<W> {
-        Builder::<W> {
+        builder: &RaftPollerBuilder<EK, RocksEngine, T, C>,
+        sender: Notifier<EK, RocksEngine>,
+        router: ApplyRouter<EK>,
+    ) -> Builder<EK, W> {
+        Builder::<EK, W> {
             tag: format!("[store {}]", builder.store.get_id()),
             cfg: builder.cfg.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
@@ -3339,14 +3339,14 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     }
 }
 
-impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
-    HandlerBuilder<ApplyFsm<RocksEngine>, ControlFsm> for Builder<W>
+impl<EK, W: WriteBatch + WriteBatchVecExt<EK>>
+    HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W> where EK: KvEngine
 {
-    type Handler = ApplyPoller<RocksEngine, W>;
+    type Handler = ApplyPoller<EK, W>;
 
-    fn build(&mut self) -> ApplyPoller<RocksEngine, W> {
+    fn build(&mut self) -> ApplyPoller<EK, W> {
         let cfg = self.cfg.value();
-        ApplyPoller::<RocksEngine, W> {
+        ApplyPoller::<EK, W> {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
                 self.tag.clone(),
@@ -3718,7 +3718,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
@@ -4083,7 +4083,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -4442,7 +4442,7 @@ mod tests {
         let (router, mut system) = create_apply_batch_system(&cfg);
         let _phantom = engine.write_batch();
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
@@ -4741,7 +4741,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksWriteBatch> {
+        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
