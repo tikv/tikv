@@ -31,6 +31,7 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use crate::errors::Error as RaftStoreError;
 use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
@@ -90,6 +91,16 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Abort => error_code::raftstore::SNAP_ABORT,
+            Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
+        }
+    }
+}
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]

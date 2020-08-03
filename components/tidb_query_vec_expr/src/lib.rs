@@ -245,12 +245,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::MultiplyInt => map_int_sig(value, children, multiply_mapper)?,
         ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<UintUintMultiply>(),
         ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
-        ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_nonnull_fn_meta::<DecimalDivide>(),
-        ScalarFuncSig::DivideReal => arithmetic_with_ctx_nonnull_fn_meta::<RealDivide>(),
+        ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_fn_meta::<DecimalDivide>(),
+        ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
         ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
-        ScalarFuncSig::ModDecimal => arithmetic_with_ctx_nonnull_fn_meta::<DecimalMod>(),
+        ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
