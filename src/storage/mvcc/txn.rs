@@ -3627,5 +3627,31 @@ mod tests {
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_locked(&engine, b"k1", 13);
+
+        // ----------------------------
+
+        must_commit(&engine, b"k1", 13, 15);
+
+        // Lock CF has an optimistic lock
+        //
+        // LOCK CF       | WRITE CF
+        // ------------------------------------
+        //               | 15: start_ts = 13
+        //               | 11: rollback
+        //               |  9: start_ts = 7
+        //               |  5: rollback
+        //               |  3: start_ts = 1
+
+        match check_secondary(b"k1", 14) {
+            (SecondaryLockStatus::RolledBack, None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_get_rollback_protected(&engine, b"k1", 14, true);
+
+        match check_secondary(b"k1", 15) {
+            (SecondaryLockStatus::RolledBack, None) => {}
+            res => panic!("unexpected lock status: {:?}", res),
+        }
+        must_get_overlay_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
     }
 }
