@@ -303,18 +303,20 @@ where
     }
 }
 
-pub enum Notifier<EK>
+pub enum Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
-    Router(RaftRouter<EK, RocksEngine>),
+    Router(RaftRouter<EK, ER>),
     #[cfg(test)]
     Sender(Sender<PeerMsg<EK>>),
 }
 
-impl<EK> Clone for Notifier<EK>
+impl<EK, ER> Clone for Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -325,9 +327,10 @@ where
     }
 }
 
-impl<EK> Notifier<EK>
+impl<EK, ER> Notifier<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
         match *self {
@@ -351,7 +354,7 @@ where
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<RocksEngine>,
-    notifier: Notifier<EK>,
+    notifier: Notifier<EK, RocksEngine>,
     engine: EK,
     cbs: MustConsumeVec<ApplyCallback<EK>>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
@@ -396,7 +399,7 @@ where
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<RocksEngine>,
-        notifier: Notifier<EK>,
+        notifier: Notifier<EK, RocksEngine>,
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
@@ -2729,27 +2732,27 @@ where
     },
 }
 
-pub struct ApplyFsm<E>
+pub struct ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
-    delegate: ApplyDelegate<E>,
-    receiver: Receiver<Msg<E>>,
-    mailbox: Option<BasicMailbox<ApplyFsm<E>>>,
+    delegate: ApplyDelegate<EK>,
+    receiver: Receiver<Msg<EK>>,
+    mailbox: Option<BasicMailbox<ApplyFsm<EK>>>,
 }
 
-impl<E> ApplyFsm<E>
+impl<EK> ApplyFsm<EK>
 where
-    E: KvEngine,
+    EK: KvEngine,
 {
     fn from_peer(
         peer: &Peer<RocksEngine, RocksEngine>,
-    ) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -2777,10 +2780,10 @@ where
     }
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
-    fn handle_apply<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_apply<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-        mut apply: Apply<E::Snapshot>,
+        apply_ctx: &mut ApplyContext<EK, W>,
+        mut apply: Apply<EK::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -2828,12 +2831,12 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<E::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
+                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -2857,7 +2860,7 @@ where
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<E>>(&mut self, ctx: &mut ApplyContext<E, W>) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
             // Flush before destroying to avoid reordering messages.
@@ -2877,9 +2880,9 @@ where
     }
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
-    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_destroy<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, W>,
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
@@ -2903,9 +2906,9 @@ where
         }
     }
 
-    fn resume_pending<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn resume_pending<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, W>,
     ) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
@@ -2938,9 +2941,9 @@ where
         }
     }
 
-    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn logs_up_to_date_for_merge<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
+        ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
         fail_point!("after_handle_catch_up_logs_for_merge");
@@ -2975,9 +2978,9 @@ where
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
@@ -3009,7 +3012,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot::<E>(
+        if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
             apply_ctx.engine.snapshot(),
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
@@ -3032,12 +3035,12 @@ where
         );
     }
 
-    fn handle_change<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_change<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
+        apply_ctx: &mut ApplyContext<EK, W>,
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        cb: Callback<E::Snapshot>,
+        cb: Callback<EK::Snapshot>,
     ) {
         let (observe_id, region_id, enabled) = match cmd {
             ChangeCmd::RegisterObserver {
@@ -3111,10 +3114,10 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-        msgs: &mut Vec<Msg<E>>,
+        apply_ctx: &mut ApplyContext<EK, W>,
+        msgs: &mut Vec<Msg<EK>>,
     ) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -3307,7 +3310,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksEngine>,
+    sender: Notifier<RocksEngine, RocksEngine>,
     router: ApplyRouter<RocksEngine>,
     _phantom: PhantomData<W>,
     store_id: u64,
@@ -3317,7 +3320,7 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<RocksEngine, RocksEngine, T, C>,
-        sender: Notifier<RocksEngine>,
+        sender: Notifier<RocksEngine, RocksEngine>,
         router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {
         Builder::<W> {
