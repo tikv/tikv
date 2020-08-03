@@ -5,6 +5,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [3.0.17]
 ### Bugfixes
 - Fix a bug that might read stale data during region merging [#8111](https://github.com/tikv/tikv/pull/8111)
+- Fix memory leak during scheduling [#8355](https://github.com/tikv/tikv/pull/8355)
 
 ### Improvements
 - Add the `hibernate-timeout` configuration that delays region hibernation to improve rolling update performance [#8207](https://github.com/tikv/tikv/pull/8207)
