@@ -10,7 +10,17 @@ protobuf-codec = ["tipb/protobuf-codec"]
 prost-codec = ["tipb/prost-codec"]
 
 [dependencies]
+<<<<<<< HEAD
 bitflags = "1.0"
+=======
+bitfield = "0.13.2"
+bitflags = "1.0.1"
+boolinator = "2.4.0"
+chrono = "0.4"
+chrono-tz = "0.5.1"
+codec = { path = "../codec" }
+error_code = { path = "../error_code" }
+>>>>>>> eacee77... *: define error code for errors (#8375)
 failure = "0.1"
 tikv_alloc = { path = "../tikv_alloc" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

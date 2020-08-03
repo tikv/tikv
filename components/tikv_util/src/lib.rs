@@ -1,7 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+<<<<<<< HEAD
 #![feature(str_strip)]
+=======
+#![feature(thread_id_value)]
+#![feature(box_patterns)]
+>>>>>>> eacee77... *: define error code for errors (#8375)
 
 #[macro_use(fail_point)]
 extern crate fail;
