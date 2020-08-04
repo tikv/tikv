@@ -7,6 +7,7 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::store::util::is_epoch_stale;
 use crate::store::{StoreMsg, StoreRouter};
+use error_code::ErrorCodeExt;
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::worker::Runnable;
@@ -77,7 +78,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
                     invalid_ssts.push(sst);
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => %e);
+                    error!("get region failed"; "err" => %e, "error_code" => %e.error_code());
                 }
             }
         }
@@ -87,7 +88,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
         // destroyed.
         let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
         if let Err(e) = self.store_router.send(msg) {
-            error!("send validate sst result failed"; "err" => %e);
+            error!("send validate sst result failed"; "err" => %e, "error_code" => %e.error_code());
         }
     }
 }

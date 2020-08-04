@@ -12,7 +12,12 @@ use std::u64;
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::CF_RAFT;
+<<<<<<< HEAD
 use engine_traits::{MiscExt, Mutable, Peekable, WriteBatchExt};
+=======
+use engine_traits::{KvEngine, KvEngines, Mutable};
+use error_code::ErrorCodeExt;
+>>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -275,7 +280,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
             return;
         }
 
@@ -389,7 +394,8 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
+
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -419,6 +425,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -435,6 +442,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         } else {
             info!(

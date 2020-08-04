@@ -1,8 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, CasualRouter};
+<<<<<<< HEAD
 use engine_traits::CF_WRITE;
 use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection};
+=======
+use engine_traits::{KvEngine, Range};
+use error_code::ErrorCodeExt;
+>>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
 use std::mem;
@@ -128,6 +133,7 @@ where
                     "failed to get approximate keys";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
@@ -146,6 +152,7 @@ where
                 "failed to send approximate region keys";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
 

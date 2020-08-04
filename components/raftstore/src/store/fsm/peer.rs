@@ -10,7 +10,12 @@ use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot, WRITE_BATCH_MAX_KEYS};
 use engine_traits::CF_RAFT;
+<<<<<<< HEAD
 use engine_traits::{KvEngine, Peekable};
+=======
+use engine_traits::{KvEngine, KvEngines, Snapshot, WriteBatchExt};
+use error_code::ErrorCodeExt;
+>>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -412,6 +417,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                     }
                 }
@@ -575,6 +581,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "peer_id" => self.fsm.peer_id(),
                             "snapshot" => ?key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -631,6 +638,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             "peer_id" => self.fsm.peer_id(),
                             "snap_file" => %key,
                             "err" => %e,
+                            "error_code" => %e.error_code(),
                         );
                         continue;
                     }
@@ -1795,6 +1803,36 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 continue;
             }
 
+<<<<<<< HEAD
+=======
+            // Create new region
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                if let Err(e) = self
+                    .fsm
+                    .peer
+                    .mut_store()
+                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
+                {
+                    error!(
+                        "failed to cleanup extra split data, may leave some dirty data";
+                        "region_id" => new_region.get_id(),
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                }
+                continue;
+            }
+
+            {
+                let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
+            }
+
+>>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
             // Insert new regions and validation
             info!(
                 "insert new region";
@@ -2012,6 +2050,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
                     "target_region_id" => target_region_id,
+                    "error_code" => %e.error_code(),
                 );
                 Ok(false)
             }
@@ -2144,6 +2183,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
                 }
@@ -2154,6 +2194,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer_id(),
                     "leader_id" => self.fsm.peer.leader_id(),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 if self.fsm.peer.leader_id() != raft::INVALID_ID {
                     self.fsm.peer.send_want_rollback_merge(
@@ -2667,6 +2708,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "message" => ?msg,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
             return;

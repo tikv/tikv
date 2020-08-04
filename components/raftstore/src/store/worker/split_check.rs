@@ -6,9 +6,15 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
+<<<<<<< HEAD
 use engine::DB;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, CF_WRITE, LARGE_CFS};
+=======
+use engine_rocks::RocksEngine;
+use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
+use error_code::ErrorCodeExt;
+>>>>>>> 787c490... raftstore: ouput error code to logs  (#8385)
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -208,7 +214,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
                         return;
                     }
                 }
@@ -224,11 +230,12 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
                         "err" => %e,
+                        "error_code" => %e.error_code(),
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
                             return;
                         }
                     }
