@@ -10,7 +10,7 @@ pub trait WriteBatchVecExt<E: WriteBatchExt + Sized> {
 }
 
 pub trait WriteBatchExt: Sized {
-    type WriteBatch: WriteBatch;
+    type WriteBatch: WriteBatchVecExt<Self> + WriteBatch;
     /// `WriteBatchVec` is used for `multi_batch_write` of RocksEngine and other Engine could also
     /// implement another kind of WriteBatch according to their needs.
     type WriteBatchVec: WriteBatchVecExt<Self> + WriteBatch;

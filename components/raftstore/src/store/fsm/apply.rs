@@ -18,7 +18,7 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchExt, WriteBatchVecExt};
+use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -1208,7 +1208,10 @@ where
         (resp, exec_result)
     }
 
-    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, ER, W>) {
+    fn destroy<W: WriteBatch + WriteBatchVecExt<EK>>(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+    ) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -2889,8 +2892,10 @@ where
 
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy<W: WriteBatch + WriteBatchVecExt<EK>>(
-        &mut self, ctx: &mut ApplyContext<EK, ER, W>, d: Destroy
-        ) {
+        &mut self,
+        ctx: &mut ApplyContext<EK, ER, W>,
+        d: Destroy,
+    ) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
@@ -2913,8 +2918,9 @@ where
     }
 
     fn resume_pending<W: WriteBatch + WriteBatchVecExt<EK>>(
-        &mut self, ctx: &mut ApplyContext<EK, ER, W>
-        ) {
+        &mut self,
+        ctx: &mut ApplyContext<EK, ER, W>,
+    ) {
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -2984,8 +2990,10 @@ where
 
     #[allow(unused_mut)]
     fn handle_snapshot<W: WriteBatch + WriteBatchVecExt<EK>>(
-        &mut self, apply_ctx: &mut ApplyContext<EK, ER, W>, snap_task: GenSnapTask
-        ) {
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        snap_task: GenSnapTask,
+    ) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -3117,8 +3125,11 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<EK>>
-        (&mut self, apply_ctx: &mut ApplyContext<EK, ER, W>, msgs: &mut Vec<Msg<EK>>) {
+    fn handle_tasks<W: WriteBatch + WriteBatchVecExt<EK>>(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK, ER, W>,
+        msgs: &mut Vec<Msg<EK>>,
+    ) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
         loop {
