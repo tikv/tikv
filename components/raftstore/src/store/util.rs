@@ -7,7 +7,7 @@ use std::{fmt, u64};
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb;
+use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
@@ -52,7 +52,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 // a helper function to create learner peer easily.
 pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = new_peer(store_id, peer_id);
-    peer.set_is_learner(true);
+    peer.set_role(PeerRole::Learner);
     peer
 }
 
@@ -136,6 +136,26 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfChangeKind {
+    // Only contains one configuration change
+    Simple,
+    // Enter joint state
+    EnterJoint,
+    // Leave joint state
+    LeaveJoint,
+}
+
+impl ConfChangeKind {
+    pub fn confchange_kind(change_num: usize) -> ConfChangeKind {
+        match change_num {
+            0 => ConfChangeKind::LeaveJoint,
+            1 => ConfChangeKind::Simple,
+            _ => ConfChangeKind::EnterJoint,
+        }
     }
 }
 
@@ -295,9 +315,9 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers().iter().any(|rp| {
-            rp.get_store_id() == lp.get_store_id() && rp.get_is_learner() == lp.get_is_learner()
-        })
+        rhs.get_peers()
+            .iter()
+            .any(|rp| rp.get_store_id() == lp.get_store_id() && is_learner(rp) == is_learner(lp))
     })
 }
 
@@ -603,16 +623,36 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
 }
 
 pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
-    // Here `learners` means learner peers, and `nodes` means voter peers.
     let mut conf_state = ConfState::default();
+    let mut in_joint = false;
     for p in region.get_peers() {
-        if p.get_is_learner() {
-            conf_state.mut_learners().push(p.get_id());
-        } else {
-            conf_state.mut_voters().push(p.get_id());
+        match p.get_role() {
+            PeerRole::Voter => {
+                conf_state.mut_voters().push(p.get_id());
+                conf_state.mut_voters_outgoing().push(p.get_id());
+            }
+            PeerRole::Learner => conf_state.mut_learners().push(p.get_id()),
+            role => {
+                in_joint = true;
+                match role {
+                    PeerRole::IncomingVoter => conf_state.mut_voters().push(p.get_id()),
+                    PeerRole::DemotingVoter => {
+                        conf_state.mut_voters_outgoing().push(p.get_id());
+                        conf_state.mut_learners_next().push(p.get_id());
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
+    if !in_joint {
+        conf_state.mut_voters_outgoing().clear();
+    }
     conf_state
+}
+
+pub fn is_learner(p: &metapb::Peer) -> bool {
+    p.get_role() == PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
@@ -915,7 +955,7 @@ mod tests {
 
         let mut peer = metapb::Peer::default();
         peer.set_id(2);
-        peer.set_is_learner(true);
+        peer.set_role(PeerRole::Learner);
         region.mut_peers().push(peer);
 
         let cs = conf_state_from_region(&region);
@@ -930,8 +970,8 @@ mod tests {
         region.mut_peers().push(new_peer(1, 1));
         region.mut_peers().push(new_learner_peer(2, 2));
 
-        assert!(!find_peer(&region, 1).unwrap().get_is_learner());
-        assert!(find_peer(&region, 2).unwrap().get_is_learner());
+        assert!(!is_learner(find_peer(&region, 1).unwrap()));
+        assert!(is_learner(find_peer(&region, 2).unwrap()));
 
         assert!(remove_peer(&mut region, 1).is_some());
         assert!(remove_peer(&mut region, 1).is_none());

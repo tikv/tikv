@@ -22,15 +22,18 @@ use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
+use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, Request, Response,
+    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, ChangePeerV2Request, CmdType,
+    CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft::eraftpb::{
+    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
+};
+use raft_proto::confchange::ConfChangeI;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -43,7 +46,7 @@ use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
 use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+use crate::store::util::{ConfChangeKind, KeysInfoFormatter, PerfContextStatistics};
 
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
@@ -181,8 +184,8 @@ where
 #[derive(Default, Debug)]
 pub struct ChangePeer {
     pub index: u64,
-    pub conf_change: ConfChange,
-    pub peer: PeerMeta,
+    pub conf_change: ConfChangeV2,
+    pub changes: Vec<ChangePeerRequest>,
     pub region: Region,
 }
 
@@ -887,7 +890,9 @@ where
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
-                EntryType::EntryConfChangeV2 => unimplemented!(),
+                EntryType::EntryConfChangeV2 => {
+                    self.handle_raft_entry_conf_change_v2(apply_ctx, &entry)
+                }
             };
 
             match res {
@@ -995,6 +1000,23 @@ where
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
     ) -> ApplyResult<E::Snapshot> {
+        let mut entry = entry.clone();
+        let conf_change: ConfChange =
+            util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+
+        // FIXME: We also need to change ChangePeerRequest to ChangePeerV2Request here
+        let data_v2 = conf_change.into_v2();
+
+        entry.set_data(data_v2.write_to_bytes().unwrap());
+
+        self.handle_raft_entry_conf_change_v2(apply_ctx, &entry)
+    }
+
+    fn handle_raft_entry_conf_change_v2<W: WriteBatch + WriteBatchVecExt<E>>(
+        &mut self,
+        apply_ctx: &mut ApplyContext<E, W>,
+        entry: &Entry,
+    ) -> ApplyResult<E::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -1002,7 +1024,7 @@ where
         });
         let index = entry.get_index();
         let term = entry.get_term();
-        let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
+        let conf_change: ConfChangeV2 = util::parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
@@ -1557,6 +1579,29 @@ where
     }
 }
 
+mod confchange_cmd_metric {
+    use super::*;
+
+    fn write_metric(cct: ConfChangeType, kind: &str) {
+        let metric = match cct {
+            ConfChangeType::AddNode => "add_peer",
+            ConfChangeType::RemoveNode => "remove_peer",
+            ConfChangeType::AddLearnerNode => "add_learner",
+        };
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&[metric, kind])
+            .inc();
+    }
+
+    pub fn inc_all(cct: ConfChangeType) {
+        write_metric(cct, "all")
+    }
+
+    pub fn inc_success(cct: ConfChangeType) {
+        write_metric(cct, "success")
+    }
+}
+
 // Admin commands related.
 impl<E> ApplyDelegate<E>
 where
@@ -1567,12 +1612,6 @@ where
         ctx: &mut ApplyContext<E, W>,
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<E::Snapshot>)> {
-        let request = request.get_change_peer();
-        let peer = request.get_peer();
-        let store_id = peer.get_store_id();
-        let change_type = request.get_change_type();
-        let mut region = self.region.clone();
-
         fail_point!(
             "apply_on_conf_change_1_3_1",
             (self.id == 1 || self.id == 3) && self.region_id() == 1,
@@ -1588,97 +1627,78 @@ where
             self.region_id() == 1,
             |_| panic!("should not use return")
         );
+
+        let changes: Vec<_> = request.get_change_peer().clone().take_changes().into();
         info!(
             "exec ConfChange";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "type" => util::conf_change_type_str(change_type),
-            "epoch" => ?region.get_region_epoch(),
+            "kind" => ConfChangeKind::confchange_kind(changes.len()),
+            "epoch" => ?self.region.get_region_epoch(),
         );
 
-        // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-        region.mut_region_epoch().set_conf_ver(conf_ver);
+        let region = match ConfChangeKind::confchange_kind(changes.len()) {
+            ConfChangeKind::LeaveJoint => self.leave_joint(ctx)?,
+            _ => self.apply_conf_change(ctx, changes)?,
+        };
 
-        match change_type {
-            ConfChangeType::AddNode => {
-                let add_ndoe_fp = || {
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let mut resp = AdminResponse::default();
+        resp.mut_change_peer().set_region(region.clone());
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
+                conf_change: Default::default(),
+                changes,
+                region,
+            })),
+        ))
+    }
+
+    fn apply_conf_change<W: WriteBatch + WriteBatchVecExt<E>>(
+        &mut self,
+        ctx: &mut ApplyContext<E, W>,
+        changes: Vec<ChangePeerRequest>,
+    ) -> Result<Region> {
+        let mut region = self.region.clone();
+        for cp in changes.iter() {
+            let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+            let store_id = peer.get_store_id();
+            {
+                let add_node_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        self.id == 2 && self.region_id() == 1,
+                        change_type == ConfChangeType::AddNode
+                            && self.id == 2
+                            && self.region_id() == 1,
                         |_| {}
                     )
                 };
-                add_ndoe_fp();
-
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_peer", "all"])
-                    .inc();
-
-                let mut exists = false;
-                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
-                    exists = true;
-                    if !p.get_is_learner() || p.get_id() != peer.get_id() {
-                        error!(
-                            "can't add duplicated peer";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't add duplicated peer {:?} to region {:?}",
-                            peer,
-                            self.region
-                        ));
-                    } else {
-                        p.set_is_learner(false);
-                    }
-                }
-                if !exists {
-                    // TODO: Do we allow adding peer in same node?
-                    region.mut_peers().push(peer.clone());
-                }
-
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_peer", "success"])
-                    .inc();
-                info!(
-                    "add peer successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region
-                );
+                add_node_fp();
             }
-            ConfChangeType::RemoveNode => {
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["remove_peer", "all"])
-                    .inc();
-
-                if let Some(p) = util::remove_peer(&mut region, store_id) {
-                    // Considering `is_learner` flag in `Peer` here is by design.
-                    if &p != peer {
-                        error!(
-                            "ignore remove unmatched peer";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "expect_peer" => ?peer,
-                            "get_peeer" => ?p
-                        );
-                        return Err(box_err!(
-                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
-                            peer,
-                            p
-                        ));
-                    }
-                    if self.id == peer.get_id() {
-                        // Remove ourself, we will destroy all region data later.
-                        // So we need not to apply following logs.
-                        self.stopped = true;
-                        self.pending_remove = true;
-                    }
-                } else {
+            confchange_cmd_metric::inc_all(change_type);
+            match (util::find_peer_mut(&mut region, store_id), change_type) {
+                (None, ConfChangeType::AddNode) => {
+                    let mut peer = peer.clone();
+                    peer.set_role(PeerRole::IncomingVoter);
+                    region.mut_peers().push(peer);
+                }
+                (None, ConfChangeType::AddLearnerNode) => {
+                    let mut peer = peer.clone();
+                    peer.set_role(PeerRole::Learner);
+                    region.mut_peers().push(peer);
+                }
+                (None, ConfChangeType::RemoveNode) => {
                     error!(
                         "remove missing peer";
                         "region_id" => self.region_id(),
@@ -1692,73 +1712,128 @@ where
                         self.region
                     ));
                 }
-
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["remove_peer", "success"])
-                    .inc();
-                info!(
-                    "remove peer successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region
-                );
+                (Some(exist_peer), cct) => match (exist_peer.get_role(), cct) {
+                    (PeerRole::IncomingVoter, _) | (PeerRole::DemotingVoter, _) => {
+                        error!(
+                            "can't apply confchange due to still in joint state";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can't apply confchange {:?} to peer {:?} from region {:?}",
+                            cct,
+                            peer,
+                            self.region
+                        ));
+                    }
+                    (PeerRole::Voter, ConfChangeType::AddLearnerNode) => {
+                        exist_peer.set_role(PeerRole::DemotingVoter)
+                    }
+                    (PeerRole::Learner, ConfChangeType::AddNode) => {
+                        exist_peer.set_role(PeerRole::IncomingVoter)
+                    }
+                    (PeerRole::Voter, ConfChangeType::AddNode) => {
+                        error!(
+                            "can't add duplicated peer";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    }
+                    (PeerRole::Learner, ConfChangeType::AddLearnerNode) => {
+                        error!(
+                            "can't add duplicated learner";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can't add duplicated learner {:?} to region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    }
+                    (PeerRole::Voter, ConfChangeType::RemoveNode) => {
+                        error!(
+                            "can't remove voter directly";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can't remove voter {:?} directly from region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    }
+                    (PeerRole::Learner, ConfChangeType::RemoveNode) => {
+                        match util::remove_peer(&mut region, store_id) {
+                            Some(p) => {
+                                if &p != peer {
+                                    error!(
+                                        "ignore remove unmatched peer";
+                                        "region_id" => self.region_id(),
+                                        "peer_id" => self.id(),
+                                        "expect_peer" => ?peer,
+                                        "get_peeer" => ?p
+                                    );
+                                    return Err(box_err!(
+                                        "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                                        peer,
+                                        p
+                                    ));
+                                }
+                                if self.id == peer.get_id() {
+                                    // Remove ourself, we will destroy all region data later.
+                                    // So we need not to apply following logs.
+                                    self.stopped = true;
+                                    self.pending_remove = true;
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                },
             }
-            ConfChangeType::AddLearnerNode => {
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_learner", "all"])
-                    .inc();
+            confchange_cmd_metric::inc_success(change_type);
+            info!(
+                "conf change successfully";
+                "type" => ?change_type,
+                "region_id" => self.region_id(),
+                "peer_id" => self.id(),
+                "peer" => ?peer,
+                "region" => ?&self.region
+            );
+        }
+        let conf_ver = region.get_region_epoch().get_conf_ver() + changes.len() as u64;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        Ok(region)
+    }
 
-                if util::find_peer(&region, store_id).is_some() {
-                    error!(
-                        "can't add duplicated learner";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "peer" => ?peer,
-                        "region" => ?&self.region
-                    );
-                    return Err(box_err!(
-                        "can't add duplicated learner {:?} to region {:?}",
-                        peer,
-                        self.region
-                    ));
-                }
-                region.mut_peers().push(peer.clone());
-
-                PEER_ADMIN_CMD_COUNTER_VEC
-                    .with_label_values(&["add_learner", "success"])
-                    .inc();
-                info!(
-                    "add learner successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region,
-                );
+    fn leave_joint<W: WriteBatch + WriteBatchVecExt<E>>(
+        &self,
+        ctx: &mut ApplyContext<E, W>,
+    ) -> Result<Region> {
+        let mut region = self.region.clone();
+        for peer in region.mut_peers().iter() {
+            match peer.get_role() {
+                PeerRole::IncomingVoter => peer.set_role(PeerRole::Voter),
+                PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
+                _ => {}
             }
         }
-
-        let state = if self.pending_remove {
-            PeerState::Tombstone
-        } else {
-            PeerState::Normal
-        };
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
-            panic!("{} failed to update region state: {:?}", self.tag, e);
-        }
-
-        let mut resp = AdminResponse::default();
-        resp.mut_change_peer().set_region(region.clone());
-
-        Ok((
-            resp,
-            ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
-                index: ctx.exec_ctx.as_ref().unwrap().index,
-                conf_change: Default::default(),
-                peer: peer.clone(),
-                region,
-            })),
-        ))
+        // TODO: Should we also increate epoch here?
+        Ok(region)
     }
 
     fn exec_split<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -2321,7 +2396,7 @@ where
     }
 }
 
-pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
+pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerV2Request> {
     if !msg.has_admin_request() {
         return None;
     }

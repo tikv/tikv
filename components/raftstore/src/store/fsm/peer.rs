@@ -554,7 +554,7 @@ where
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
 
-                if self.fsm.peer.peer.get_is_learner() {
+                if self.fsm.peer.is_learner() {
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
@@ -1814,12 +1814,11 @@ where
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        if cp.conf_change.get_node_id() == raft::INVALID_ID {
+        if cp.index == raft::INVALID_INDEX {
             // Apply failed, skip.
             return;
         }
 
-        let change_type = cp.conf_change.get_change_type();
         if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
@@ -1836,51 +1835,63 @@ where
             meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
         }
 
-        let peer_id = cp.peer.get_id();
         let now = Instant::now();
-        match change_type {
-            ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                let peer = cp.peer.clone();
-                let group_id = self
-                    .ctx
-                    .global_replication_state
-                    .lock()
-                    .unwrap()
-                    .group
-                    .group_id(self.fsm.peer.replication_mode_version, peer.store_id);
-                if group_id.unwrap_or(0) != 0 {
-                    info!("updating group"; "peer_id" => peer.id, "group_id" => group_id.unwrap());
-                    self.fsm
-                        .peer
-                        .raft_group
-                        .raft
-                        .assign_commit_groups(&[(peer.id, group_id.unwrap())]);
+        let mut remove_self = false;
+        for change in cp.changes {
+            let (change_type, peer) = (change.get_change_type(), change.get_peer());
+            let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
+            match change_type {
+                ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                    let group_id = self
+                        .ctx
+                        .global_replication_state
+                        .lock()
+                        .unwrap()
+                        .group
+                        .group_id(self.fsm.peer.replication_mode_version, store_id);
+                    if group_id.unwrap_or(0) != 0 {
+                        info!("updating group"; "peer_id" => peer_id, "group_id" => group_id.unwrap());
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .assign_commit_groups(&[(peer_id, group_id.unwrap())]);
+                    }
+                    if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.is_learner() {
+                        self.fsm.peer.peer = peer.clone();
+                    }
+                    // Add this peer to cache and heartbeats.
+                    self.fsm.peer.peer_heartbeats.insert(peer_id, now);
+                    if self.fsm.peer.is_leader() {
+                        // Speed up snapshot instead of waiting another heartbeat.
+                        self.fsm.peer.ping();
+                        self.fsm.has_ready = true;
+                        self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                    }
+                    self.fsm.peer.insert_peer_cache(peer.clone());
                 }
-                if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
-                    self.fsm.peer.peer = peer.clone();
+                ConfChangeType::RemoveNode => {
+                    // Remove this peer from cache.
+                    self.fsm.peer.peer_heartbeats.remove(&peer_id);
+                    if self.fsm.peer.is_leader() {
+                        self.fsm
+                            .peer
+                            .peers_start_pending_time
+                            .retain(|&(p, _)| p != peer_id);
+                    }
+                    self.fsm.peer.remove_peer_from_cache(peer_id);
+                    // We only care remove itself now.
+                    if self.store_id() == store_id {
+                        if self.fsm.peer.peer_id() == peer_id {
+                            remove_self = true;
+                        } else {
+                            panic!(
+                                "{} trying to remove unknown peer {:?}",
+                                self.fsm.peer.tag, peer
+                            );
+                        }
+                    }
                 }
-
-                // Add this peer to cache and heartbeats.
-                let id = peer.get_id();
-                self.fsm.peer.peer_heartbeats.insert(id, now);
-                if self.fsm.peer.is_leader() {
-                    // Speed up snapshot instead of waiting another heartbeat.
-                    self.fsm.peer.ping();
-                    self.fsm.has_ready = true;
-                    self.fsm.peer.peers_start_pending_time.push((id, now));
-                }
-                self.fsm.peer.insert_peer_cache(peer);
-            }
-            ConfChangeType::RemoveNode => {
-                // Remove this peer from cache.
-                self.fsm.peer.peer_heartbeats.remove(&peer_id);
-                if self.fsm.peer.is_leader() {
-                    self.fsm
-                        .peer
-                        .peers_start_pending_time
-                        .retain(|&(p, _)| p != peer_id);
-                }
-                self.fsm.peer.remove_peer_from_cache(peer_id);
             }
         }
 
@@ -1899,20 +1910,8 @@ where
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        let my_peer_id = self.fsm.peer.peer_id();
-
-        let peer = cp.peer;
-
-        // We only care remove itself now.
-        if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            if my_peer_id == peer.get_id() {
-                self.destroy_peer(false);
-            } else {
-                panic!(
-                    "{} trying to remove unknown peer {:?}",
-                    self.fsm.peer.tag, peer
-                );
-            }
+        if remove_self {
+            self.destroy_peer(false);
         }
     }
 
@@ -2357,17 +2356,13 @@ where
                 self.fsm
                     .peer
                     .add_want_rollback_merge_peer(self.fsm.peer_id());
-                if self.fsm.peer.want_rollback_merge_peers.len()
-                    >= raft::majority(
-                        self.fsm
-                            .peer
-                            .raft_group
-                            .status()
-                            .progress
-                            .unwrap()
-                            .voter_ids()
-                            .len(),
-                    )
+                if self
+                    .fsm
+                    .peer
+                    .raft_group
+                    .raft
+                    .prs()
+                    .has_quorum(&self.fsm.peer.want_rollback_merge_peers)
                 {
                     info!(
                         "failed to schedule merge, rollback";
@@ -2377,7 +2372,7 @@ where
                     );
                     self.rollback_merge();
                 }
-            } else if !self.fsm.peer.peer.get_is_learner() {
+            } else if !self.fsm.peer.is_learner() {
                 info!(
                     "want to rollback merge";
                     "region_id" => self.fsm.region_id(),

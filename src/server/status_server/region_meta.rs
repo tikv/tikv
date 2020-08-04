@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
 use raftstore::store::AbstractPeer;
 use std::collections::HashMap;
@@ -104,11 +105,12 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
         let mut voters = HashMap::new();
         let mut learners = HashMap::new();
         if let Some(progress) = status.progress {
-            for (id, voter) in progress.voters() {
-                voters.insert(*id, RaftProgress::new(voter));
-            }
-            for (id, learner) in progress.learners() {
-                learners.insert(*id, RaftProgress::new(learner));
+            for (id, pr) in progress.iter() {
+                if progress.conf().voters().contains(*id) {
+                    voters.insert(*id, RaftProgress::new(pr));
+                } else {
+                    learners.insert(*id, RaftProgress::new(pr));
+                }
             }
         }
         Self {
@@ -182,7 +184,7 @@ impl RegionMeta {
             peers.push(RegionPeer {
                 id: peer.get_id(),
                 store_id: peer.get_store_id(),
-                is_learner: peer.get_is_learner(),
+                is_learner: peer.get_role() == PeerRole::Learner,
             });
         }
 

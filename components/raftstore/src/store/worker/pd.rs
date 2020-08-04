@@ -14,17 +14,17 @@ use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, ChangePeerRequest, RaftCmdRequest, SplitRequest,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
-use raft::eraftpb::ConfChangeType;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::util::is_epoch_stale;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::Callback;
@@ -816,17 +816,29 @@ where
                         .with_label_values(&["change peer"])
                         .inc();
 
-                    let mut change_peer = resp.take_change_peer();
+                    let change_peer = resp.take_change_peer();
                     info!(
                         "try to change peer";
                         "region_id" => region_id,
                         "change_type" => ?change_peer.get_change_type(),
-                        "peer" => ?change_peer.get_peer()
+                        "peer" => ?change_peer.get_peer(),
+                        "kind" => ConfChangeKind::Simple,
                     );
-                    let req = new_change_peer_request(
-                        change_peer.get_change_type(),
-                        change_peer.take_peer(),
+                    let req = new_change_peer_v2_request(vec![change_peer]);
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
+                } else if resp.has_change_peer_v2() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["change peer"])
+                        .inc();
+
+                    let mut change_peer_v2 = resp.take_change_peer_v2();
+                    info!(
+                        "try to change peer";
+                        "region_id" => region_id,
+                        "changes" => ?change_peer_v2.get_changes(),
+                        "kind" => ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
+                    let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_transfer_leader() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -1076,11 +1088,19 @@ where
     }
 }
 
-fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
-    req.mut_change_peer().set_change_type(change_type);
-    req.mut_change_peer().set_peer(peer);
+    let change_peer_reqs = changes
+        .into_iter()
+        .map(|mut c| {
+            let mut cp = ChangePeerRequest::default();
+            cp.set_change_type(c.get_change_type());
+            cp.set_peer(c.take_peer());
+            cp
+        })
+        .collect();
+    req.mut_change_peer().set_changes(change_peer_reqs);
     req
 }
 
