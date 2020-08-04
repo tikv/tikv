@@ -253,6 +253,7 @@ impl ErrorCodeExt for Error {
             Error::KeyNotInRegion(_, _) => error_code::raftstore::KEY_NOT_IN_REGION,
             Error::Io(_) => error_code::raftstore::IO,
             Error::Engine(e) => e.error_code(),
+            Error::RaftEngine(_) => error_code::engine::ENGINE,
             Error::Protobuf(_) => error_code::raftstore::PROTOBUF,
             Error::Codec(e) => e.error_code(),
             Error::AddrParse(_) => error_code::raftstore::ADDR_PARSE,

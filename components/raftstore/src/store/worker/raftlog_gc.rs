@@ -4,8 +4,6 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use engine_traits::MAX_DELETE_BATCH_SIZE;
-use engine_traits::{Mutable, WriteBatch};
 use raft_engine::RaftEngine;
 use tikv_util::worker::Runnable;
 
@@ -57,34 +55,9 @@ impl Runner {
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
-    ) -> Result<u64, Error> {
-        let mut first_idx = start_idx;
-        if first_idx == 0 {
-            let start_key = keys::raft_log_key(region_id, 0);
-            first_idx = end_idx;
-            if let Some((k, _)) = box_try!(raft_engine.seek(&start_key)) {
-                first_idx = box_try!(keys::raft_log_index(&k));
-            }
-        }
-        if first_idx >= end_idx {
-            info!("no need to gc"; "region_id" => region_id);
-            return Ok(0);
-        }
-        let mut raft_wb = raft_engine.write_batch();
-        for idx in first_idx..end_idx {
-            let key = keys::raft_log_key(region_id, idx);
-            box_try!(raft_wb.delete(&key));
-            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Avoid large write batch to reduce latency.
-                raft_engine.write(&raft_wb).unwrap();
-                raft_wb.clear();
-            }
-        }
-        // TODO: disable WAL here.
-        if !raft_wb.is_empty() {
-            raft_engine.write(&raft_wb).unwrap();
-        }
-        Ok(end_idx - first_idx)
+    ) -> Result<usize, Error> {
+        let deleted = box_try!(raft_engine.gc(region_id, start_idx, end_idx));
+        Ok(deleted)
     }
 
     fn report_collected(&self, collected: u64) {
@@ -106,7 +79,6 @@ impl<ER: RaftEngine> Runnable<Task<ER>> for Runner {
             "region_id" => task.region_id,
             "end_index" => task.end_idx,
         );
-        /****************************************************
         match self.gc_raft_log(
             task.raft_engine,
             task.region_id,
@@ -115,14 +87,13 @@ impl<ER: RaftEngine> Runnable<Task<ER>> for Runner {
         ) {
             Err(e) => {
                 error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
-                self.report_collected(0);
+                self.report_collected(0 as u64);
             }
             Ok(n) => {
                 debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
-                self.report_collected(n);
+                self.report_collected(n as u64);
             }
         }
-        ****************************************************/
     }
 }
 

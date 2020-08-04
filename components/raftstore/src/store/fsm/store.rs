@@ -35,7 +35,7 @@ use pd_client::PdClient;
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
-use raft_engine::{RaftEngine};
+use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;

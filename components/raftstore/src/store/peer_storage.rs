@@ -37,7 +37,6 @@ use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
-const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
@@ -378,8 +377,8 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_raft_state_to(&self, raft_wb: &mut impl WriteBatch) -> Result<()> {
-        raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
+    pub fn save_raft_state_to<W: RaftLogBatch>(&self, raft_wb: &mut W) -> Result<()> {
+        raft_wb.put_raft_state(self.region_id, &self.raft_state)?;
         Ok(())
     }
 
@@ -739,11 +738,10 @@ where
         }
         let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
-        let max_size = Some(max_size as usize);
         if high <= cache_low {
             // not overlap
             self.stats.miss.update(|m| m + 1);
-            self.engines.raft.fetch_entries_to(region_id, low, high, max_size, &mut ents)?;
+            self.engines.raft.fetch_entries_to(region_id, low, high, Some(max_size as usize), &mut ents)?;
             return Ok(ents);
         }
         let mut fetched_size = 0;
@@ -753,10 +751,10 @@ where
                 region_id,
                 low,
                 cache_low,
-                max_size,
+                Some(max_size as usize),
                 &mut ents,
             )?;
-            if fetched_size > max_size.unwrap() {
+            if fetched_size > max_size as usize {
                 // max_size exceed.
                 return Ok(ents);
             }
@@ -976,7 +974,7 @@ where
     pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
-        entries: &mut [Entry],
+        entries: &[Entry],
         ready_ctx: &mut H,
     ) -> Result<u64> {
         debug!(
@@ -1000,16 +998,12 @@ where
                 ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
             }
         }
-        ready_ctx.raft_wb_mut().append(self.get_region_id(), &mut entries)?;
+        ready_ctx.raft_wb_mut().append(self.get_region_id(), entries)?;
         assert!(entries.is_empty());
 
         // Delete any previously appended log entries which never committed.
-        for i in (last_index + 1)..=prev_last_index {
-            // TODO: Wrap it as an engine::Error.
-            box_try!(ready_ctx
-                .raft_wb_mut()
-                .delete(&keys::raft_log_key(self.get_region_id(), i)));
-        }
+        // TODO: Wrap it as an engine::Error.
+        ready_ctx.raft_wb_mut().remove(self.get_region_id(), last_index + 1, prev_last_index)?;
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
@@ -1462,7 +1456,6 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "raft_logs" => last_index + 1 - first_index,
         "takes" => ?t.elapsed(),
     );
     Ok(())

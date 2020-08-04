@@ -2,7 +2,7 @@ use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
     Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable,
-    WriteBatch, WriteBatchExt, CF_DEFAULT,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -166,7 +166,7 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn append(&mut self, raft_group_id: u64, entries: &mut Vec<Entry>) -> Result<usize> {
+    fn append(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
         let (total_size, max_size) = entries.iter().fold((0usize, 0usize), |(total, max), e| {
             let size = e.compute_size() as usize;
             (total + size, std::cmp::max(max, size))
@@ -179,21 +179,51 @@ impl RaftEngine for RocksEngine {
         Ok(ret)
     }
 
-    fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
+    fn remove(&self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
         let mut wb = self.write_batch();
         wb.remove(raft_group_id, from, to)?;
         self.consume(&mut wb, false)?;
         Ok(())
     }
 
-    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+    fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+        assert!(to > from);
+        if from == 0 {
+            let start_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
+            match box_try!(self.seek(&start_key)) {
+                Some((k, _)) if k.starts_with(&prefix) => from = box_try!(keys::raft_log_index(&k)),
+                // No need to gc.
+                _ => return Ok(0),
+            }
+        }
+
+        let mut raft_wb = self.write_batch_with_cap(MAX_DELETE_BATCH_SIZE);
+        for idx in from..to {
+            let key = keys::raft_log_key(raft_group_id, idx);
+            box_try!(raft_wb.delete(&key));
+            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                // Avoid large write batch to reduce latency.
+                self.write(&raft_wb).unwrap();
+                raft_wb.clear();
+            }
+        }
+
+        // TODO: disable WAL here.
+        if !WriteBatch::is_empty(&raft_wb) {
+            self.write(&raft_wb).unwrap();
+        }
+        Ok((to - from) as usize)
+    }
+
+    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
         Ok(())
     }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: &mut Vec<Entry>) -> Result<usize> {
+    fn append(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
             return self.append_impl(raft_group_id, entries, ser_buf);
@@ -204,7 +234,7 @@ impl RaftLogBatch for RocksWriteBatch {
     fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
         for index in from..to {
             let key = keys::raft_log_key(raft_group_id, index);
-            self.delete(&key);
+            box_try!(self.delete(&key));
         }
         Ok(())
     }
@@ -223,17 +253,16 @@ impl RocksWriteBatch {
     fn append_impl(
         &mut self,
         raft_group_id: u64,
-        entries: &mut Vec<Entry>,
+        entries: &[Entry],
         mut ser_buf: Vec<u8>,
     ) -> Result<usize> {
         let ret = entries.len();
-        for entry in entries.iter() {
+        for entry in entries {
             let key = keys::raft_log_key(raft_group_id, entry.get_index());
             ser_buf.clear();
             entry.write_to_vec(&mut ser_buf).unwrap();
             box_try!(self.put(&key, &ser_buf));
         }
-        entries.clear();
         Ok(ret)
     }
 }
