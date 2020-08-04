@@ -20,6 +20,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
@@ -44,23 +45,18 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::fsm::{RaftPollerBuilder, RaftRouter};
-use crate::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC;
-use crate::store::metrics::*;
+use crate::store::metrics::{self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC};
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
-use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+use crate::store::util::{
+    check_region_epoch, compare_region_epoch, KeysInfoFormatter, PerfContextStatistics,
+};
+use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
+use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
-
-use crate::store::{cmd_resp, util, Config, RegionSnapshot};
-use crate::{Error, Result};
-
-use super::super::RegionTask;
 use super::metrics::*;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
@@ -1159,7 +1155,8 @@ where
                         "execute raft command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "err" => ?e
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
                     ),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -1550,7 +1547,8 @@ where
                  "peer_id" => self.id(),
                  "sst" => ?sst,
                  "region" => ?&self.region,
-                 "err" => ?e
+                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
