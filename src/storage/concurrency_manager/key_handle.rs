@@ -50,9 +50,11 @@ impl Drop for KeyHandle {
 
 /// A `KeyHandle` with its mutex locked.
 pub struct KeyHandleGuard {
-    // It must be declared before `handle_ref` so it will be dropped before
-    // `handle_ref`.
+    // It must be declared before `handle` so it will be dropped before
+    // `handle`.
     _mutex_guard: AsyncMutexGuard<'static, ()>,
+    // It is unsafe to mutate `handle` to point at another `KeyHandle`.
+    // Otherwise `_mutex_guard` can be invalidated.
     handle: Arc<KeyHandle>,
 }
 
