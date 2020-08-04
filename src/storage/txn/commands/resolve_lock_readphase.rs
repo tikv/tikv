@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
+use crate::storage::mvcc::MvccReader;
+use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand};
+use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
+use crate::storage::txn::{ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE};
+use crate::storage::{ScanMode, Snapshot, Statistics};
 use tikv_util::collections::HashMap;
 use txn_types::{Key, TimeStamp};
 
@@ -26,4 +30,40 @@ impl CommandExt for ResolveLockReadPhase {
     command_method!(readonly, bool, true);
     command_method!(write_bytes, usize, 0);
     gen_lock!(empty);
+}
+
+impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
+    fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
+        let tag = self.tag();
+        let (ctx, txn_status) = (self.ctx, self.txn_status);
+        let mut reader = MvccReader::new(
+            snapshot,
+            Some(ScanMode::Forward),
+            !ctx.get_not_fill_cache(),
+            ctx.get_isolation_level(),
+        );
+        let result = reader.scan_locks(
+            self.scan_key.as_ref(),
+            |lock| txn_status.contains_key(&lock.ts),
+            RESOLVE_LOCK_BATCH_SIZE,
+        );
+        statistics.add(reader.get_statistics());
+        let (kv_pairs, has_remain) = result?;
+        tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
+
+        if kv_pairs.is_empty() {
+            Ok(ProcessResult::Res)
+        } else {
+            let next_scan_key = if has_remain {
+                // There might be more locks.
+                kv_pairs.last().map(|(k, _lock)| k.clone())
+            } else {
+                // All locks are scanned
+                None
+            };
+            Ok(ProcessResult::NextCommand {
+                cmd: ResolveLock::new(txn_status, next_scan_key, kv_pairs, ctx).into(),
+            })
+        }
+    }
 }
