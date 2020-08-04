@@ -40,10 +40,10 @@ use crate::storage::metrics::{
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
+use crate::storage::txn::commands::{WriteContext, WriteResult};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
-    process::{process_read_impl, process_write_impl, WriteResult},
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
@@ -583,10 +583,10 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         let tag = task.cmd.tag();
 
-        let pr = match process_read_impl::<E>(task.cmd, snapshot, statistics) {
-            Err(e) => ProcessResult::Failed { err: e.into() },
-            Ok(pr) => pr,
-        };
+        let pr = task
+            .cmd
+            .process_read(snapshot, statistics)
+            .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
         self.on_read_finished(task.cid, pr, tag);
     }
 
@@ -601,16 +601,16 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
         let scheduler = self.clone();
         let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        match process_write_impl(
-            task.cmd,
-            snapshot,
-            &self.inner.lock_mgr,
-            self.inner.pd_client.clone(),
-            self.inner.concurrency_manager.clone(),
-            task.extra_op,
+        let context = WriteContext {
+            lock_mgr: &self.inner.lock_mgr,
+            pd_client: self.inner.pd_client.clone(),
+            concurrency_manager: self.inner.concurrency_manager.clone(),
+            extra_op: task.extra_op,
             statistics,
-            self.inner.pipelined_pessimistic_lock,
-        ) {
+            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+        };
+
+        match task.cmd.process_write(snapshot, context) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {

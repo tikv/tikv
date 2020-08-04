@@ -238,6 +238,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             ranges,
             req.take_primary_column_ids().into(),
             false,
+            false, // Streaming mode is not supported in Analyze request, always false here
         )?;
         Ok(Self {
             data: table_scanner,

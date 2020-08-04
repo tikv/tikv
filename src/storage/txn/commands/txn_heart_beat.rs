@@ -1,7 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::commands::{Command, CommandExt, TypedCommand};
-use crate::storage::TxnStatus;
+use crate::storage::kv::WriteData;
+use crate::storage::lock_manager::LockManager;
+use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::commands::{
+    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+};
+use crate::storage::txn::Result;
+use crate::storage::{ProcessResult, Snapshot, TxnStatus};
+use pd_client::PdClient;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -30,4 +37,32 @@ impl CommandExt for TxnHeartBeat {
     ts!(start_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
+}
+
+impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for TxnHeartBeat {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+        // TxnHeartBeat never remove locks. No need to wake up waiters.
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.pd_client,
+            context.concurrency_manager,
+        );
+        let lock_ttl = txn.txn_heart_beat(self.primary_key, self.advise_ttl)?;
+
+        context.statistics.add(&txn.take_statistics());
+        let pr = ProcessResult::TxnStatus {
+            txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero(), false, vec![]),
+        };
+        let write_data = WriteData::from_modifies(txn.into_modifies());
+        Ok(WriteResult {
+            ctx: self.ctx,
+            to_be_write: write_data,
+            rows: 1,
+            pr,
+            lock_info: None,
+            lock_guards: vec![],
+        })
+    }
 }
