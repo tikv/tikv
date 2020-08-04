@@ -3,7 +3,6 @@
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
-use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -22,7 +21,7 @@ pub trait CasualRouter<EK>
 where
     EK: KvEngine,
 {
-    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -40,12 +39,13 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl<EK> CasualRouter<EK> for RaftRouter<EK, RocksEngine>
+impl<EK, ER> CasualRouter<EK> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -54,9 +54,10 @@ where
     }
 }
 
-impl<EK> ProposalRouter<EK::Snapshot> for RaftRouter<EK, RocksEngine>
+impl<EK, ER> ProposalRouter<EK::Snapshot> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
+    ER: KvEngine,
 {
     #[inline]
     fn send(
@@ -67,7 +68,11 @@ where
     }
 }
 
-impl StoreRouter for RaftRouter<RocksEngine, RocksEngine> {
+impl<EK, ER> StoreRouter for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: KvEngine,
+{
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {
@@ -80,11 +85,11 @@ impl StoreRouter for RaftRouter<RocksEngine, RocksEngine> {
     }
 }
 
-impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK, RocksEngine>)>
+impl<EK> CasualRouter<EK> for mpsc::SyncSender<(u64, CasualMessage<EK>)>
 where
     EK: KvEngine,
 {
-    fn send(&self, region_id: u64, msg: CasualMessage<EK, RocksEngine>) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

@@ -64,7 +64,7 @@ struct ServerMeta {
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
-    raw_apply_router: ApplyRouter<RocksEngine>,
+    raw_apply_router: ApplyRouter<RocksEngine, RocksEngine>,
     worker: Worker<ResolveTask>,
     gc_worker: GcWorker<RaftKv<SimulateStoreTransport>>,
 }
@@ -120,7 +120,7 @@ impl ServerCluster {
         &self.addrs[&node_id]
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
+    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine, RocksEngine> {
         self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
@@ -143,7 +143,7 @@ impl Simulator for ServerCluster {
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
@@ -243,7 +243,7 @@ impl Simulator for ServerCluster {
             resolve::new_resolver(Arc::clone(&self.pd_client), router.clone()).unwrap();
         let snap_mgr = SnapManagerBuilder::default()
             .encryption_key_manager(key_manager)
-            .build(tmp_str, Some(router.clone()));
+            .build(tmp_str);
         let server_cfg = Arc::new(cfg.server.clone());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),

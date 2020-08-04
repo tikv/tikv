@@ -24,7 +24,7 @@ use engine_traits::{
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
+use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
@@ -55,7 +55,7 @@ pub trait Simulator {
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -1362,14 +1362,12 @@ impl<T: Simulator> Cluster<T> {
         CasualRouter::send(
             &router,
             region_id,
-            CasualMessage::AccessPeer(Box::new(
-                move |peer: &mut PeerFsm<RocksEngine, RocksEngine>| {
-                    let idx = peer.peer.raft_group.store().committed_index();
-                    peer.peer.raft_group.request_snapshot(idx).unwrap();
-                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
-                    request_tx.send(idx).unwrap();
-                },
-            )),
+            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
+                let idx = peer.raft_committed_index();
+                peer.raft_request_snapshot(idx);
+                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
+                request_tx.send(idx).unwrap();
+            })),
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()

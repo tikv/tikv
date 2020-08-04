@@ -35,7 +35,7 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
+    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine>>>,
 }
 
@@ -181,7 +181,7 @@ impl Simulator for NodeCluster {
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
@@ -209,7 +209,7 @@ impl Simulator for NodeCluster {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
                 .encryption_key_manager(key_manager)
-                .build(tmp.path().to_str().unwrap(), Some(router.clone()));
+                .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();

@@ -275,7 +275,7 @@ pub mod tests {
     use super::*;
 
     fn must_split_at_impl(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine, RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
@@ -307,7 +307,7 @@ pub mod tests {
     }
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine, RocksEngine>)>,
+        rx: &mpsc::Receiver<(u64, CasualMessage<RocksEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
@@ -383,7 +383,7 @@ pub mod tests {
 
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -397,7 +397,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -411,7 +411,7 @@ pub mod tests {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
-        engine.flush(true).unwrap();
+        engine.flush_cf(&cf_handle, true).unwrap();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,

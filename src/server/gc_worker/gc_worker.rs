@@ -935,6 +935,7 @@ mod tests {
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
+                0,
                 1.into(),
                 false,
                 false,
