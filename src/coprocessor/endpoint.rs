@@ -31,6 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::prelude::*;
+use txn_types::TimeStamp;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -108,6 +109,9 @@ impl<E: Engine> Endpoint<E> {
         key_ranges: &[coppb::KeyRange],
     ) -> Result<()> {
         let start_ts = req_ctx.txn_start_ts;
+        if start_ts != TimeStamp::max() {
+            self.concurrency_manager.update_max_read_ts(start_ts);
+        }
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
             for range in key_ranges {
                 let start_key = txn_types::Key::from_raw(range.get_start());
