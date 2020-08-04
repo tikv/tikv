@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{cmp, usize};
 
@@ -21,6 +21,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, Snapshot, WriteBatch, WriteBatchVecExt};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Peer as PeerMeta, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -30,7 +31,6 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -51,6 +51,7 @@ use crate::report_perf_context;
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
 use sst_importer::SSTImporter;
+use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -58,11 +59,13 @@ use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
+use txn_types::TxnExtra;
 
 use super::metrics::*;
 
 use super::super::RegionTask;
 use std::vec::Drain;
+use time::Timespec;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -76,16 +79,18 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Option<Callback<S>>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<S> PendingCmd<S>
 where
     S: Snapshot,
 {
-    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
+    fn new(index: u64, term: u64, cb: Callback<S>, txn_extra: TxnExtra) -> PendingCmd<S> {
         PendingCmd {
             index,
             term,
+            txn_extra,
             cb: Some(cb),
         }
     }
@@ -208,6 +213,7 @@ pub enum ExecResult<S> {
     SplitRegion {
         regions: Vec<Region>,
         derived: Region,
+        new_split_regions: HashMap<u64, NewSplitPeer>,
     },
     PrepareMerge {
         region: Region,
@@ -266,24 +272,24 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<S>
+struct ApplyCallback<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<S>>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<E::Snapshot>>, RaftCmdResponse)>,
 }
 
-impl<S> ApplyCallback<S>
+impl<E> ApplyCallback<E>
 where
-    S: Snapshot,
+    E: KvEngine,
 {
-    fn new(region: Region) -> ApplyCallback<S> {
+    fn new(region: Region) -> Self {
         let cbs = vec![];
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost<RocksEngine>) {
+    fn invoke_all(self, host: &CoprocessorHost<E>) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -292,23 +298,23 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<S>>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<E::Snapshot>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
 
-pub enum Notifier<S>
+pub enum Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    Router(RaftRouter<S>),
+    Router(RaftRouter<EK, RocksEngine>),
     #[cfg(test)]
-    Sender(Sender<PeerMsg<S>>),
+    Sender(Sender<PeerMsg<EK>>),
 }
 
-impl<S> Clone for Notifier<S>
+impl<EK> Clone for Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -319,11 +325,11 @@ where
     }
 }
 
-impl<S> Notifier<S>
+impl<EK> Notifier<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    fn notify(&self, region_id: u64, msg: PeerMsg<S>) {
+    fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
         match *self {
             Notifier::Router(ref r) => {
                 r.force_send(region_id, msg).unwrap();
@@ -341,13 +347,13 @@ where
 {
     tag: String,
     timer: Option<Instant>,
-    host: CoprocessorHost<RocksEngine>,
+    host: CoprocessorHost<E>,
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
-    router: ApplyRouter,
-    notifier: Notifier<E::Snapshot>,
+    router: ApplyRouter<RocksEngine>,
+    notifier: Notifier<E>,
     engine: E,
-    cbs: MustConsumeVec<ApplyCallback<E::Snapshot>>,
+    cbs: MustConsumeVec<ApplyCallback<E>>,
     apply_res: Vec<ApplyRes<E::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -368,6 +374,14 @@ where
     perf_context_statistics: PerfContextStatistics,
 
     yield_duration: Duration,
+
+    store_id: u64,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    // TxnExtra collected from applied cmds.
+    txn_extras: MustConsumeVec<TxnExtra>,
 }
 
 impl<E, W> ApplyContext<E, W>
@@ -377,13 +391,15 @@ where
 {
     pub fn new(
         tag: String,
-        host: CoprocessorHost<RocksEngine>,
+        host: CoprocessorHost<E>,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask<E::Snapshot>>,
         engine: E,
-        router: ApplyRouter,
-        notifier: Notifier<E::Snapshot>,
+        router: ApplyRouter<RocksEngine>,
+        notifier: Notifier<E>,
         cfg: &Config,
+        store_id: u64,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> ApplyContext<E, W> {
         ApplyContext::<E, W> {
             tag,
@@ -407,6 +423,9 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             yield_duration: cfg.apply_yield_duration.0,
+            store_id,
+            pending_create_peers,
+            txn_extras: MustConsumeVec::new("extra data from txn"),
         }
     }
 
@@ -499,7 +518,8 @@ where
             self.kv_wb_last_keys = 0;
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply();
+        self.host
+            .on_flush_apply(std::mem::take(&mut self.txn_extras), self.engine.clone());
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -717,6 +737,14 @@ impl Debug for WaitSourceMergeState {
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSplitPeer {
+    pub peer_id: u64,
+    // `None` => success,
+    // `Some(s)` => fail due to `s`.
+    pub result: Option<String>,
 }
 
 /// The apply delegate of a Region which is responsible for handling committed
@@ -996,27 +1024,33 @@ where
         }
     }
 
-    fn find_cb(
+    fn find_pending(
         &mut self,
         index: u64,
         term: u64,
         is_conf_change: bool,
-    ) -> Option<Callback<E::Snapshot>> {
+    ) -> (Option<Callback<E::Snapshot>>, TxnExtra) {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
-                    return Some(cmd.cb.take().unwrap());
+                    return (
+                        Some(cmd.cb.take().unwrap()),
+                        std::mem::take(&mut cmd.txn_extra),
+                    );
                 } else {
                     notify_stale_command(region_id, peer_id, self.term, cmd);
                 }
             }
-            return None;
+            return (None, TxnExtra::default());
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
             if head.term == term {
                 if head.index == index {
-                    return Some(head.cb.take().unwrap());
+                    return (
+                        Some(head.cb.take().unwrap()),
+                        std::mem::take(&mut head.txn_extra),
+                    );
                 } else {
                     panic!(
                         "{} unexpected callback at term {}, found index {}, expected {}",
@@ -1029,7 +1063,7 @@ where
                 notify_stale_command(region_id, peer_id, self.term, head);
             }
         }
-        None
+        (None, TxnExtra::default())
     }
 
     fn process_raft_cmd<W: WriteBatch + WriteBatchVecExt<E>>(
@@ -1066,9 +1100,10 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_cb(index, term, is_conf_change);
+        let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
+            apply_ctx.txn_extras.push(txn_extra);
             apply_ctx
                 .host
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd);
@@ -1814,10 +1849,10 @@ where
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+
+        let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
-            // TODO: check new region id validation.
             new_region.set_id(req.get_new_region_id());
             new_region.set_region_epoch(derived.get_region_epoch().to_owned());
             new_region.set_start_key(keys.pop_front().unwrap());
@@ -1830,7 +1865,96 @@ where
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
+            new_split_regions.insert(
+                new_region.get_id(),
+                NewSplitPeer {
+                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    result: None,
+                },
+            );
+            regions.push(new_region);
+        }
+
+        if right_derive {
+            derived.set_start_key(keys.pop_front().unwrap());
+            regions.push(derived.clone());
+        }
+
+        let mut replace_regions = HashSet::default();
+        {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+                match pending_create_peers.entry(*region_id) {
+                    HashMapEntry::Occupied(mut v) => {
+                        if *v.get() != (new_split_peer.peer_id, false) {
+                            new_split_peer.result =
+                                Some(format!("status {:?} is not expected", v.get()));
+                        } else {
+                            replace_regions.insert(*region_id);
+                            v.insert((new_split_peer.peer_id, true));
+                        }
+                    }
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((new_split_peer.peer_id, true));
+                    }
+                }
+            }
+        }
+
+        // region_id -> peer_id
+        let mut already_exist_regions = Vec::new();
+        for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+            let region_state_key = keys::region_state_key(*region_id);
+            match ctx
+                .engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            {
+                Ok(None) => (),
+                Ok(Some(state)) => {
+                    if replace_regions.get(region_id).is_some() {
+                        // This peer must be the first one on local store. So if this peer is created on the other side,
+                        // it means no `RegionLocalState` in kv engine.
+                        panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state);
+                    }
+                    already_exist_regions.push((*region_id, new_split_peer.peer_id));
+                    new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
+                }
+                e => panic!(
+                    "{} failed to get regions state of {}: {:?}",
+                    self.tag, region_id, e
+                ),
+            }
+        }
+
+        if !already_exist_regions.is_empty() {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
+                assert_eq!(
+                    pending_create_peers.remove(region_id),
+                    Some((*peer_id, true))
+                );
+            }
+        }
+
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        for new_region in &regions {
+            if new_region.get_id() == derived.get_id() {
+                continue;
+            }
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if let Some(ref r) = new_split_peer.result {
+                warn!(
+                    "new region from splitting already exists";
+                    "new_region_id" => new_region.get_id(),
+                    "new_peer_id" => new_split_peer.peer_id,
+                    "reason" => r,
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                );
+                continue;
+            }
+            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None)
                 .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1838,11 +1962,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-            regions.push(new_region);
-        }
-        if right_derive {
-            derived.set_start_key(keys.pop_front().unwrap());
-            regions.push(derived.clone());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
@@ -1853,7 +1972,11 @@ where
 
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::SplitRegion { regions, derived }),
+            ApplyResult::Res(ExecResult::SplitRegion {
+                regions,
+                derived,
+                new_split_regions,
+            }),
         ))
     }
 
@@ -2348,7 +2471,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(peer: &Peer) -> Registration {
+    pub fn new(peer: &Peer<impl KvEngine, impl KvEngine>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2371,6 +2494,7 @@ where
     pub cb: Callback<S>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
+    pub txn_extra: TxnExtra,
 }
 
 pub struct Destroy {
@@ -2522,7 +2646,7 @@ where
         }
     }
 
-    pub fn register(peer: &Peer) -> Msg<E> {
+    pub fn register(peer: &Peer<E, impl KvEngine>) -> Msg<E> {
         Msg::Registration(Registration::new(peer))
     }
 
@@ -2618,7 +2742,9 @@ impl<E> ApplyFsm<E>
 where
     E: KvEngine,
 {
-    fn from_peer(peer: &Peer) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
+    fn from_peer(
+        peer: &Peer<RocksEngine, RocksEngine>,
+    ) -> (LooseBoundedSender<Msg<E>>, Box<ApplyFsm<E>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
@@ -2695,6 +2821,7 @@ where
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+        fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
         }
@@ -2706,13 +2833,13 @@ where
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in props_drainer {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            let cmd = PendingCmd::new(p.index, p.term, p.cb, p.txn_extra);
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -2945,10 +3072,11 @@ where
                 }
                 ReadResponse {
                     response: Default::default(),
-                    snapshot: Some(RegionSnapshot::<E::Snapshot>::from_snapshot(
+                    snapshot: Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
-                        self.delegate.region.clone(),
+                        Arc::new(self.delegate.region.clone()),
                     )),
+                    txn_extra_op: TxnExtraOp::Noop,
                 }
             }
             Err(e) => {
@@ -2956,6 +3084,7 @@ where
                 cb.invoke_read(ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 });
                 return;
             }
@@ -3178,16 +3307,18 @@ pub struct Builder<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask<RocksSnapshot>>,
     engine: RocksEngine,
-    sender: Notifier<RocksSnapshot>,
-    router: ApplyRouter,
+    sender: Notifier<RocksEngine>,
+    router: ApplyRouter<RocksEngine>,
     _phantom: PhantomData<W>,
+    store_id: u64,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
     pub fn new<T, C>(
         builder: &RaftPollerBuilder<T, C>,
-        sender: Notifier<RocksSnapshot>,
-        router: ApplyRouter,
+        sender: Notifier<RocksEngine>,
+        router: ApplyRouter<RocksEngine>,
     ) -> Builder<W> {
         Builder::<W> {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -3199,6 +3330,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> Builder<W> {
             _phantom: PhantomData,
             sender,
             router,
+            store_id: builder.store.get_id(),
+            pending_create_peers: builder.pending_create_peers.clone(),
         }
     }
 }
@@ -3221,6 +3354,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
                 self.router.clone(),
                 self.sender.clone(),
                 &cfg,
+                self.store_id,
+                self.pending_create_peers.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -3229,26 +3364,38 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>>
 }
 
 #[derive(Clone)]
-pub struct ApplyRouter {
-    pub router: BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>,
+pub struct ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    pub router: BatchRouter<ApplyFsm<E>, ControlFsm>,
 }
 
-impl Deref for ApplyRouter {
-    type Target = BatchRouter<ApplyFsm<RocksEngine>, ControlFsm>;
+impl<E> Deref for ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    type Target = BatchRouter<ApplyFsm<E>, ControlFsm>;
 
-    fn deref(&self) -> &BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+    fn deref(&self) -> &BatchRouter<ApplyFsm<E>, ControlFsm> {
         &self.router
     }
 }
 
-impl DerefMut for ApplyRouter {
-    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<RocksEngine>, ControlFsm> {
+impl<E> DerefMut for ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<E>, ControlFsm> {
         &mut self.router
     }
 }
 
-impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg<RocksEngine>) {
+impl<E> ApplyRouter<E>
+where
+    E: KvEngine,
+{
+    pub fn schedule_task(&self, region_id: u64, msg: Msg<E>) {
         let reg = match self.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
@@ -3259,7 +3406,8 @@ impl ApplyRouter {
                         "region_id" => region_id
                     );
                     for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<RocksSnapshot>::new(p.index, p.term, p.cb);
+                        let cmd =
+                            PendingCmd::<E::Snapshot>::new(p.index, p.term, p.cb, p.txn_extra);
                         notify_region_removed(apply.region_id, apply.peer_id, cmd);
                     }
                     return;
@@ -3301,6 +3449,7 @@ impl ApplyRouter {
                     let resp = ReadResponse {
                         response: cmd_resp::new_error(Error::RegionNotFound(region_id)),
                         snapshot: None,
+                        txn_extra_op: TxnExtraOp::Noop,
                     };
                     cb.invoke_read(resp);
                     return;
@@ -3340,7 +3489,10 @@ impl DerefMut for ApplyBatchSystem {
 }
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
+    pub fn schedule_all<'a>(
+        &self,
+        peers: impl Iterator<Item = &'a Peer<RocksEngine, RocksEngine>>,
+    ) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -3350,7 +3502,7 @@ impl ApplyBatchSystem {
     }
 }
 
-pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
+pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter<RocksEngine>, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
@@ -3370,9 +3522,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{
-        util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch, WRITE_BATCH_MAX_KEYS,
-    };
+    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3460,7 +3610,7 @@ mod tests {
         assert_eq!(should_write_to_engine(&cmd), true);
     }
 
-    fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
+    fn validate<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
     where
         F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
     {
@@ -3479,7 +3629,11 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg<RocksEngine>>) {
+    fn batch_messages(
+        router: &ApplyRouter<RocksEngine>,
+        region_id: u64,
+        msgs: Vec<Msg<RocksEngine>>,
+    ) {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -3502,7 +3656,7 @@ mod tests {
     }
 
     fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksSnapshot>>,
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
     ) -> ApplyRes<RocksSnapshot> {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -3525,6 +3679,7 @@ mod tests {
             term,
             cb,
             renew_lease_time: None,
+            txn_extra: TxnExtra::default(),
         }
     }
 
@@ -3559,6 +3714,7 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3569,6 +3725,8 @@ mod tests {
             _phantom: PhantomData,
             engine,
             router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -3880,7 +4038,7 @@ mod tests {
         }
     }
 
-    impl CmdObserver for ApplyObserver {
+    impl CmdObserver<RocksEngine> for ApplyObserver {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -3895,7 +4053,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self) {
+        fn on_flush_apply(&self, _: Vec<TxnExtra>, _: RocksEngine) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
@@ -3921,6 +4079,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -3931,6 +4090,8 @@ mod tests {
             importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4223,9 +4384,11 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
+        let write_batch_max_keys = <RocksEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
+
         let mut props = vec![];
         let mut entries = vec![];
-        for i in 0..WRITE_BATCH_MAX_KEYS {
+        for i in 0..write_batch_max_keys {
             let put_entry = EntryBuilder::new(i as u64 + 12, 3)
                 .put(b"k", b"v")
                 .epoch(1, 3)
@@ -4242,14 +4405,14 @@ mod tests {
                 entries,
                 11,
                 3,
-                WRITE_BATCH_MAX_KEYS as u64 + 11,
+                write_batch_max_keys as u64 + 11,
                 props,
             )),
         );
-        for _ in 0..WRITE_BATCH_MAX_KEYS {
+        for _ in 0..write_batch_max_keys {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
-        let index = WRITE_BATCH_MAX_KEYS + 11;
+        let index = write_batch_max_keys + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
@@ -4275,6 +4438,7 @@ mod tests {
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let _phantom = engine.write_batch();
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
@@ -4285,6 +4449,8 @@ mod tests {
             engine,
             _phantom: PhantomData,
             router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -4571,6 +4737,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<RocksWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
@@ -4581,6 +4748,8 @@ mod tests {
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
+            store_id: 2,
+            pending_create_peers,
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -4607,7 +4776,7 @@ mod tests {
         let (capture_tx, capture_rx) = mpsc::channel();
         let epoch = Rc::new(RefCell::new(reg.region.get_region_epoch().to_owned()));
         let epoch_ = epoch.clone();
-        let mut exec_split = |router: &ApplyRouter, reqs| {
+        let mut exec_split = |router: &ApplyRouter<RocksEngine>, reqs| {
             let epoch = epoch_.borrow();
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)
@@ -4777,7 +4946,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default());
         });
         res.unwrap_err();
     }
@@ -4785,7 +4954,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None, TxnExtra::default());
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });

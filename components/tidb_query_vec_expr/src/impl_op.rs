@@ -6,7 +6,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::Error;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn logical_and(lhs: Option<&i64>, rhs: Option<&i64>) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
@@ -16,7 +16,7 @@ pub fn logical_and(lhs: Option<&i64>, rhs: Option<&i64>) -> Result<Option<i64>> 
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn logical_or(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>> {
     // This is a standard Kleene OR used in SQL where
@@ -28,7 +28,7 @@ pub fn logical_or(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>>
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn logical_xor(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>> {
     // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is returned.
@@ -38,25 +38,25 @@ pub fn logical_xor(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_not_int(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (*v == 0) as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_not_real(arg: Option<&Real>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v.into_inner() == 0f64) as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     use std::cmp::Ordering::*;
@@ -74,7 +74,7 @@ pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
     match arg {
@@ -89,13 +89,13 @@ pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_minus_real(arg: Option<&Real>) -> Result<Option<Real>> {
     Ok(arg.map(|val| -*val))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unary_minus_decimal(arg: Option<&Decimal>) -> Result<Option<Decimal>> {
     Ok(arg.map(|val| -*val))
@@ -106,25 +106,25 @@ pub fn is_null_ref<'a, T: EvaluableRef<'a>>(arg: Option<T>) -> Result<Option<i64
     Ok(Some(arg.is_none() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
-pub fn is_null<T: Evaluable>(arg: Option<&T>) -> Result<Option<i64>> {
+pub fn is_null<T: Evaluable + EvaluableRet>(arg: Option<&T>) -> Result<Option<i64>> {
     is_null_ref(arg)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_null_bytes(arg: Option<BytesRef>) -> Result<Option<i64>> {
     is_null_ref(arg)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn is_null_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
     is_null_ref(arg)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_and(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
@@ -133,7 +133,7 @@ pub fn bit_and(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_or(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
@@ -142,7 +142,7 @@ pub fn bit_or(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_xor(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
@@ -151,7 +151,7 @@ pub fn bit_xor(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_neg(arg: Option<&Int>) -> Result<Option<Int>> {
     Ok(arg.map(|arg| !arg))
@@ -171,7 +171,7 @@ impl KeepNull for KeepNullOff {
     const VALUE: bool = false;
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn int_is_true<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -181,7 +181,7 @@ pub fn int_is_true<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn real_is_true<K: KeepNull>(arg: Option<&Real>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -191,7 +191,7 @@ pub fn real_is_true<K: KeepNull>(arg: Option<&Real>) -> Result<Option<i64>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn decimal_is_true<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -201,7 +201,7 @@ pub fn decimal_is_true<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn int_is_false<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -211,7 +211,7 @@ pub fn int_is_false<K: KeepNull>(arg: Option<&Int>) -> Result<Option<i64>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn real_is_false<K: KeepNull>(arg: Option<&Real>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -221,7 +221,7 @@ pub fn real_is_false<K: KeepNull>(arg: Option<&Real>) -> Result<Option<i64>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn decimal_is_false<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>> {
     Ok(if K::VALUE {
@@ -231,7 +231,7 @@ fn decimal_is_false<K: KeepNull>(arg: Option<&Decimal>) -> Result<Option<i64>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn left_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
@@ -246,7 +246,7 @@ fn left_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {

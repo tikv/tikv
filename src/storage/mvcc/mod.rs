@@ -8,13 +8,14 @@ mod txn;
 
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
 use std::fmt;
 use std::io;
@@ -226,6 +227,12 @@ impl From<codec::Error> for ErrorInner {
     }
 }
 
+impl From<::pd_client::Error> for ErrorInner {
+    fn from(err: ::pd_client::Error) -> Self {
+        box_err!("{}", err)
+    }
+}
+
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
@@ -243,6 +250,35 @@ impl From<txn_types::Error> for ErrorInner {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self.0.as_ref() {
+            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Io(_) => error_code::storage::IO,
+            ErrorInner::Codec(e) => e.error_code(),
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
+            ErrorInner::BadFormat(e) => e.error_code(),
+            ErrorInner::Committed { .. } => error_code::storage::COMMITTED,
+            ErrorInner::PessimisticLockRolledBack { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_ROLLED_BACK
+            }
+            ErrorInner::TxnLockNotFound { .. } => error_code::storage::TXN_LOCK_NOT_FOUND,
+            ErrorInner::TxnNotFound { .. } => error_code::storage::TXN_NOT_FOUND,
+            ErrorInner::LockTypeNotMatch { .. } => error_code::storage::LOCK_TYPE_NOT_MATCH,
+            ErrorInner::WriteConflict { .. } => error_code::storage::WRITE_CONFLICT,
+            ErrorInner::Deadlock { .. } => error_code::storage::DEADLOCK,
+            ErrorInner::AlreadyExist { .. } => error_code::storage::ALREADY_EXIST,
+            ErrorInner::DefaultNotFound { .. } => error_code::storage::DEFAULT_NOT_FOUND,
+            ErrorInner::CommitTsExpired { .. } => error_code::storage::COMMIT_TS_EXPIRED,
+            ErrorInner::KeyVersion => error_code::storage::KEY_VERSION,
+            ErrorInner::PessimisticLockNotFound { .. } => {
+                error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
+            }
+            ErrorInner::Other(_) => error_code::storage::UNKNOWN,
+        }
+    }
+}
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
 #[inline(never)]
@@ -273,6 +309,8 @@ pub mod tests {
     use crate::storage::types::TxnStatus;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use pd_client::DummyPdClient;
+    use std::sync::Arc;
     use txn_types::Key;
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
@@ -336,10 +374,11 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
+            &None,
             false,
             0,
             0,
@@ -357,10 +396,11 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         txn.prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
+            &None,
             false,
             0,
             0,
@@ -377,7 +417,7 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
@@ -406,11 +446,19 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, lock_ttl, txn_size, min_commit_ts)
-                .unwrap();
+            txn.prewrite(
+                mutation,
+                pk,
+                &None,
+                false,
+                lock_ttl,
+                txn_size,
+                min_commit_ts,
+            )
+            .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -562,11 +610,11 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
                 .unwrap_err()
         } else {
             txn.pessimistic_prewrite(
@@ -645,11 +693,11 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let mutation = Mutation::Delete(Key::from_raw(key));
         let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
                 .unwrap();
         } else {
             txn.pessimistic_prewrite(
@@ -699,11 +747,11 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         let for_update_ts = for_update_ts.into();
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+            txn.prewrite(mutation, pk, &None, false, 0, 0, TimeStamp::default())
                 .unwrap();
         } else {
             txn.pessimistic_prewrite(
@@ -740,11 +788,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, Arc::new(DummyPdClient::new()));
         assert!(txn
             .prewrite(
                 Mutation::Lock(Key::from_raw(key)),
                 pk,
+                &None,
                 false,
                 0,
                 0,
@@ -776,7 +825,12 @@ pub mod tests {
     ) -> Option<Value> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         let res = txn
             .acquire_pessimistic_lock(
                 Key::from_raw(key),
@@ -916,7 +970,12 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.acquire_pessimistic_lock(
             Key::from_raw(key),
             pk,
@@ -937,7 +996,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.pessimistic_rollback(Key::from_raw(key), for_update_ts.into())
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -951,7 +1015,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -964,14 +1033,24 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.collapse_rollback(false);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -984,7 +1063,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -992,7 +1076,12 @@ pub mod tests {
     pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
@@ -1004,7 +1093,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.cleanup(Key::from_raw(key), current_ts.into(), true)
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -1018,7 +1112,12 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.cleanup(Key::from_raw(key), current_ts.into(), true)
             .unwrap_err()
     }
@@ -1032,7 +1131,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         let ttl = txn
             .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap();
@@ -1048,7 +1152,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap_err();
     }
@@ -1064,7 +1173,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            lock_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         let (txn_status, _) = txn
             .check_txn_status(
                 Key::from_raw(primary_key),
@@ -1087,7 +1201,12 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            lock_ts.into(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.check_txn_status(
             Key::from_raw(primary_key),
             caller_start_ts.into(),
@@ -1100,7 +1219,13 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true);
+        let mut txn = MvccTxn::for_scan(
+            snapshot,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            true,
+            Arc::new(DummyPdClient::new()),
+        );
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }

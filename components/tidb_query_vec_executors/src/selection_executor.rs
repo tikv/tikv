@@ -130,12 +130,15 @@ fn update_logical_rows_by_scalar_value(
     Ok(())
 }
 
-fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
+fn update_logical_rows_by_vector_value<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>>(
     logical_rows: &mut Vec<usize>,
     ctx: &mut EvalContext,
-    eval_result: &[Option<T>],
+    eval_result: T,
     eval_result_logical_rows: &[usize],
-) -> tidb_query_common::error::Result<()> {
+) -> tidb_query_common::error::Result<()>
+where
+    Option<TT>: AsMySQLBool,
+{
     let mut err_result = Ok(());
     let mut logical_index = 0;
     logical_rows.retain(|_| {
@@ -146,7 +149,10 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
         let eval_result_physical_index = eval_result_logical_rows[logical_index];
         logical_index += 1;
 
-        match eval_result[eval_result_physical_index].as_mysql_bool(ctx) {
+        match eval_result
+            .get_option_ref(eval_result_physical_index)
+            .as_mysql_bool(ctx)
+        {
             Err(e) => {
                 if err_result.is_ok() {
                     err_result = Err(e);
@@ -236,8 +242,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None]),
-                        VectorValue::Real(vec![None]),
+                        VectorValue::Int(vec![None].into()),
+                        VectorValue::Real(vec![None].into()),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
@@ -296,14 +302,11 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None, None, Some(1), None, Some(5)]),
-                        VectorValue::Real(vec![
-                            Real::new(7.0).ok(),
-                            Real::new(-5.0).ok(),
-                            None,
-                            None,
-                            None,
-                        ]),
+                        VectorValue::Int(vec![None, None, Some(1), None, Some(5)].into()),
+                        VectorValue::Real(
+                            vec![Real::new(7.0).ok(), Real::new(-5.0).ok(), None, None, None]
+                                .into(),
+                        ),
                     ]),
                     logical_rows: vec![2, 0],
                     warnings: EvalWarnings::default(),
@@ -311,8 +314,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None]),
-                        VectorValue::Real(vec![None]),
+                        VectorValue::Int(vec![None].into()),
+                        VectorValue::Real(vec![None].into()),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
@@ -320,8 +323,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(1), None]),
-                        VectorValue::Real(vec![None, None]),
+                        VectorValue::Int(vec![Some(1), None].into()),
+                        VectorValue::Real(vec![None, None].into()),
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
@@ -397,7 +400,7 @@ mod tests {
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn is_even(v: Option<&i64>) -> Result<Option<i64>> {
         let r = match v.cloned() {
             None => Some(0),
@@ -435,9 +438,9 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(2), Some(1), None, Some(4), None]),
-                        VectorValue::Int(vec![Some(4), None, Some(2), None, None]),
-                        VectorValue::Int(vec![Some(3), Some(-1), Some(4), Some(1), Some(2)]),
+                        VectorValue::Int(vec![Some(2), Some(1), None, Some(4), None].into()),
+                        VectorValue::Int(vec![Some(4), None, Some(2), None, None].into()),
+                        VectorValue::Int(vec![Some(3), Some(-1), Some(4), Some(1), Some(2)].into()),
                     ]),
                     logical_rows: vec![3, 4, 0, 2],
                     warnings: EvalWarnings::default(),
@@ -451,9 +454,9 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None, Some(1)]),
-                        VectorValue::Int(vec![None, Some(-1)]),
-                        VectorValue::Int(vec![Some(2), Some(42)]),
+                        VectorValue::Int(vec![None, Some(1)].into()),
+                        VectorValue::Int(vec![None, Some(-1)].into()),
+                        VectorValue::Int(vec![Some(2), Some(42)].into()),
                     ]),
                     logical_rows: vec![0],
                     warnings: EvalWarnings::default(),
@@ -592,7 +595,7 @@ mod tests {
     #[test]
     fn test_predicate_error() {
         /// This function returns error when value is None.
-        #[rpn_fn]
+        #[rpn_fn(nullable)]
         fn foo(v: Option<&i64>) -> Result<Option<i64>> {
             match v.cloned() {
                 None => Err(other_err!("foo")),
@@ -616,8 +619,8 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(1), Some(4), None, Some(1), Some(2)]),
-                        VectorValue::Int(vec![None, Some(4), None, Some(2), None]),
+                        VectorValue::Int(vec![Some(1), Some(4), None, Some(1), Some(2)].into()),
+                        VectorValue::Int(vec![None, Some(4), None, Some(2), None].into()),
                     ]),
                     logical_rows: vec![1, 3, 4, 0],
                     warnings: EvalWarnings::default(),
@@ -625,8 +628,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(-5)]),
-                        VectorValue::Int(vec![Some(5)]),
+                        VectorValue::Int(vec![Some(-5)].into()),
+                        VectorValue::Int(vec![Some(5)].into()),
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),

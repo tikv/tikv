@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -16,7 +16,9 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use raftstore::{DiscardReason, Error, Result};
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
+use txn_types::TxnExtra;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -186,7 +188,7 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for SimulateTransport<C> {
+impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateTransport<C> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
@@ -195,7 +197,25 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.send_command(req, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksSnapshot>) -> Result<()> {
+    fn read(
+        &self,
+        read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.ch.read(read_id, req, cb)
+    }
+
+    fn send_command_txn_extra(
+        &self,
+        req: RaftCmdRequest,
+        txn_extra: TxnExtra,
+        cb: Callback<RocksSnapshot>,
+    ) -> Result<()> {
+        self.ch.send_command_txn_extra(req, txn_extra, cb)
+    }
+
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 
@@ -203,7 +223,7 @@ impl<C: RaftStoreRouter<RocksSnapshot>> RaftStoreRouter<RocksSnapshot> for Simul
         self.ch.broadcast_unreachable(store_id)
     }
 
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
 }

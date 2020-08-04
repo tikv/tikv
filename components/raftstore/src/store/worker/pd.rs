@@ -10,7 +10,8 @@ use std::{cmp, io};
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine_traits::{KvEngine, Snapshot};
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
@@ -331,6 +332,7 @@ where
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
                     if timer_cnt % thread_info_interval == 0 {
@@ -381,6 +383,7 @@ where
                     timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
                     auto_split_controller.refresh_cfg();
                 }
+                tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
@@ -402,15 +405,15 @@ where
     }
 }
 
-pub struct Runner<E, T>
+pub struct Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter<E::Snapshot>,
-    db: E,
+    router: RaftRouter<EK, RocksEngine>,
+    db: EK,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -420,13 +423,13 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<E>>,
-    stats_monitor: StatsMonitor<E>,
+    scheduler: Scheduler<Task<EK>>,
+    stats_monitor: StatsMonitor<EK>,
 }
 
-impl<E, T> Runner<E, T>
+impl<EK, T> Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
     const INTERVAL_DIVISOR: u32 = 2;
@@ -434,12 +437,12 @@ where
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter<E::Snapshot>,
-        db: E,
-        scheduler: Scheduler<Task<E>>,
+        router: RaftRouter<EK, RocksEngine>,
+        db: EK,
+        scheduler: Scheduler<Task<EK>>,
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
-    ) -> Runner<E, T> {
+    ) -> Runner<EK, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
@@ -468,7 +471,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
         let router = self.router.clone();
@@ -512,7 +515,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback<E::Snapshot>,
+        callback: Callback<EK::Snapshot>,
         task: String,
     ) {
         if split_keys.is_empty() {
@@ -629,7 +632,7 @@ where
         &mut self,
         handle: &Handle,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<E>,
+        store_info: StoreInfo<EK>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
@@ -922,12 +925,12 @@ where
     }
 }
 
-impl<E, T> Runnable<Task<E>> for Runner<E, T>
+impl<EK, T> Runnable<Task<EK>> for Runner<EK, T>
 where
-    E: KvEngine,
+    EK: KvEngine,
     T: PdClient,
 {
-    fn run(&mut self, task: Task<E>, handle: &Handle) {
+    fn run(&mut self, task: Task<EK>, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -1131,15 +1134,15 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request<S>(
-    router: &RaftRouter<S>,
+fn send_admin_request<EK>(
+    router: &RaftRouter<EK, RocksEngine>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback<S>,
+    callback: Callback<EK::Snapshot>,
 ) where
-    S: Snapshot,
+    EK: KvEngine,
 {
     let cmd_type = request.get_cmd_type();
 
@@ -1159,12 +1162,14 @@ fn send_admin_request<S>(
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message(
-    router: &RaftRouter<impl Snapshot>,
+fn send_destroy_peer_message<EK>(
+    router: &RaftRouter<EK, RocksEngine>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
-) {
+) where
+    EK: KvEngine,
+{
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());

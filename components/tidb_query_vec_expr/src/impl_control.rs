@@ -5,7 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_null<T: Evaluable + EvaluableRet>(lhs: Option<&T>, rhs: Option<&T>) -> Result<Option<T>> {
     if lhs.is_some() {
@@ -14,7 +14,7 @@ fn if_null<T: Evaluable + EvaluableRet>(lhs: Option<&T>, rhs: Option<&T>) -> Res
     Ok(rhs.cloned())
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_null_json(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<Json>> {
     if lhs.is_some() {
@@ -23,7 +23,7 @@ fn if_null_json(lhs: Option<JsonRef>, rhs: Option<JsonRef>) -> Result<Option<Jso
     Ok(rhs.map(|x| x.to_owned()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_null_bytes(lhs: Option<BytesRef>, rhs: Option<BytesRef>) -> Result<Option<Bytes>> {
     if lhs.is_some() {
@@ -32,7 +32,7 @@ fn if_null_bytes(lhs: Option<BytesRef>, rhs: Option<BytesRef>) -> Result<Option<
     Ok(rhs.map(|x| x.to_vec()))
 }
 
-#[rpn_fn(raw_varg, extra_validator = case_when_validator::<T>)]
+#[rpn_fn(nullable, raw_varg, extra_validator = case_when_validator::<T>)]
 #[inline]
 pub fn case_when<T: Evaluable + EvaluableRet>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>> {
     for chunk in args.chunks(2) {
@@ -50,7 +50,7 @@ pub fn case_when<T: Evaluable + EvaluableRet>(args: &[ScalarValueRef<'_>]) -> Re
     Ok(None)
 }
 
-#[rpn_fn(raw_varg, extra_validator = case_when_validator::<Bytes>)]
+#[rpn_fn(nullable, raw_varg, extra_validator = case_when_validator::<Bytes>)]
 #[inline]
 pub fn case_when_bytes(args: &[ScalarValueRef<'_>]) -> Result<Option<Bytes>> {
     for chunk in args.chunks(2) {
@@ -68,7 +68,7 @@ pub fn case_when_bytes(args: &[ScalarValueRef<'_>]) -> Result<Option<Bytes>> {
     Ok(None)
 }
 
-#[rpn_fn(raw_varg, extra_validator = case_when_validator::<Json>)]
+#[rpn_fn(nullable, raw_varg, extra_validator = case_when_validator::<Json>)]
 #[inline]
 pub fn case_when_json(args: &[ScalarValueRef<'_>]) -> Result<Option<Json>> {
     for chunk in args.chunks(2) {
@@ -86,7 +86,7 @@ pub fn case_when_json(args: &[ScalarValueRef<'_>]) -> Result<Option<Json>> {
     Ok(None)
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_condition<T: Evaluable + EvaluableRet>(
     condition: Option<&Int>,
@@ -100,7 +100,7 @@ fn if_condition<T: Evaluable + EvaluableRet>(
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_condition_json(
     condition: Option<&Int>,
@@ -114,7 +114,7 @@ fn if_condition_json(
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn if_condition_bytes(
     condition: Option<&Int>,

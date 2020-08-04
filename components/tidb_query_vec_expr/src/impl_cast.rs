@@ -245,7 +245,7 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
 // - cast_duration_as_int_or_uint -> cast_any_as_any<Duration, Int>
 // - cast_json_as_int -> cast_any_as_any<Json, Int>
 
-#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_int(
     metadata: &tipb::InUnionMetadata,
@@ -264,7 +264,7 @@ fn cast_signed_int_as_unsigned_int(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_int_as_int_others(val: Option<&Int>) -> Result<Option<Int>> {
     match val {
@@ -273,7 +273,7 @@ fn cast_int_as_int_others(val: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_uint(
     ctx: &mut EvalContext,
@@ -299,7 +299,7 @@ fn cast_real_as_uint(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_int(
     ctx: &mut EvalContext,
@@ -372,7 +372,7 @@ fn cast_string_as_int(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
@@ -383,7 +383,7 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
     }
 }
 
-#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_uint(
     ctx: &mut EvalContext,
@@ -404,7 +404,7 @@ fn cast_decimal_as_uint(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Int>> {
     match val {
@@ -423,7 +423,7 @@ fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opti
 // cast_duration_as_real -> cast_any_as_any<Duration, Real>
 // cast_json_as_real -> by cast_any_as_any<Json, Real>
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_signed_int_as_signed_real(val: Option<&Int>) -> Result<Option<Real>> {
     match val {
@@ -432,7 +432,7 @@ fn cast_signed_int_as_signed_real(val: Option<&Int>) -> Result<Option<Real>> {
     }
 }
 
-#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_real(
     metadata: &tipb::InUnionMetadata,
@@ -453,7 +453,7 @@ fn cast_signed_int_as_unsigned_real(
 
 // because we needn't to consider if uint overflow upper boundary of signed real,
 // so we can merge uint to signed/unsigned real in one function
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Option<Real>> {
     match val {
@@ -462,13 +462,13 @@ fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Opt
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_real_as_signed_real(val: Option<&Real>) -> Result<Option<Real>> {
     Ok(val.cloned())
 }
 
-#[rpn_fn(capture = [metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_unsigned_real(
     metadata: &tipb::InUnionMetadata,
@@ -487,7 +487,7 @@ fn cast_real_as_unsigned_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_signed_real(
     ctx: &mut EvalContext,
@@ -504,7 +504,7 @@ fn cast_string_as_signed_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_binary_string_as_signed_real(
     ctx: &mut EvalContext,
@@ -521,7 +521,7 @@ fn cast_binary_string_as_signed_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_unsigned_real(
     ctx: &mut EvalContext,
@@ -542,7 +542,7 @@ fn cast_string_as_unsigned_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_binary_string_as_unsigned_real(
     ctx: &mut EvalContext,
@@ -559,7 +559,7 @@ fn cast_binary_string_as_unsigned_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_unsigned_real(
     ctx: &mut EvalContext,
@@ -588,9 +588,9 @@ fn cast_decimal_as_unsigned_real(
 // cast_duration_as_string -> cast_any_as_string_fn_meta::<Duration>
 // cast_json_as_string -> by cast_any_as_any<Json, String>
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
+fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&T>,
@@ -604,7 +604,7 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_uint_as_string(
     ctx: &mut EvalContext,
@@ -620,7 +620,7 @@ fn cast_uint_as_string(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_float_real_as_string(
     ctx: &mut EvalContext,
@@ -640,7 +640,7 @@ fn cast_float_real_as_string(
 // FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes cannot
 //  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
 //  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_string(
     ctx: &mut EvalContext,
@@ -684,7 +684,7 @@ fn cast_as_string_helper(
 // - cast_duration_as_decimal -> cast_any_as_decimal<Duration>
 // - cast_json_as_decimal -> cast_any_as_decimal<Json>
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_decimal(
     ctx: &mut EvalContext,
@@ -706,7 +706,7 @@ fn cast_unsigned_int_as_signed_or_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_decimal(
     ctx: &mut EvalContext,
@@ -731,7 +731,7 @@ fn cast_signed_int_as_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_decimal(
     ctx: &mut EvalContext,
@@ -757,7 +757,7 @@ fn cast_real_as_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_unsigned_decimal(
     ctx: &mut EvalContext,
@@ -784,7 +784,7 @@ fn cast_string_as_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_decimal_as_signed_decimal(
     ctx: &mut EvalContext,
@@ -801,7 +801,7 @@ fn cast_decimal_as_signed_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(nullable, capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_unsigned_decimal(
     ctx: &mut EvalContext,
@@ -826,9 +826,9 @@ fn cast_decimal_as_unsigned_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
-fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
+fn cast_any_as_decimal<From: Evaluable + EvaluableRet + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&From>,
@@ -846,7 +846,7 @@ fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_json_as_decimal(
     ctx: &mut EvalContext,
@@ -866,7 +866,7 @@ fn cast_json_as_decimal(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_bytes_as_decimal(
     ctx: &mut EvalContext,
@@ -888,7 +888,7 @@ fn cast_bytes_as_decimal(
 
 // cast any as duration, no cast functions reuse `cast_any_as_any`
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_int_as_duration(
     ctx: &mut EvalContext,
@@ -911,7 +911,7 @@ fn cast_int_as_duration(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_time_as_duration(
     ctx: &mut EvalContext,
@@ -927,7 +927,7 @@ fn cast_time_as_duration(
     }
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn(nullable, capture = [extra])]
 #[inline]
 fn cast_duration_as_duration(
     extra: &RpnFnCallExtra,
@@ -941,7 +941,7 @@ fn cast_duration_as_duration(
 
 macro_rules! cast_as_duration {
     ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
-        #[rpn_fn(capture = [ctx, extra])]
+        #[rpn_fn(nullable, capture = [ctx, extra])]
         #[inline]
         fn $as_uint_fn(
             ctx: &mut EvalContext,
@@ -986,7 +986,7 @@ cast_as_duration!(
 );
 cast_as_duration!(JsonRef, cast_json_as_duration, val.unquote()?.as_bytes());
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_int_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1013,7 +1013,7 @@ fn cast_int_as_time(
 
 // NOTE: in MySQL, casting `Real` to `Time` should cast `Real` to `Int` first,
 // However, TiDB cast `Real` to `String` and then parse it into a `Time`
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_real_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1036,7 +1036,7 @@ fn cast_real_as_time(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_string_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1059,7 +1059,7 @@ fn cast_string_as_time(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_decimal_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1082,7 +1082,7 @@ fn cast_decimal_as_time(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_time_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1099,7 +1099,7 @@ fn cast_time_as_time(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [ctx, extra])]
 fn cast_duration_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1127,7 +1127,7 @@ fn cast_duration_as_time(
 // - cast_time_as_json -> cast_any_as_any<Time, Json>
 // - cast_duration_as_json -> cast_any_as_any<Duration, Json>
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_bool_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     match val {
@@ -1136,7 +1136,7 @@ fn cast_bool_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     match val {
@@ -1145,7 +1145,7 @@ fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn(nullable, capture = [extra])]
 #[inline]
 fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Result<Option<Json>> {
     match val {
@@ -1170,7 +1170,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Res
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     match val {
@@ -1179,9 +1179,9 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
-fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable + EvaluableRet>(
+fn cast_any_as_any<From: ConvertTo<To> + Evaluable + EvaluableRet, To: Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<To>> {
@@ -1194,7 +1194,7 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable + EvaluableRet
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn cast_json_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Json>>(
     ctx: &mut EvalContext,
@@ -1209,9 +1209,9 @@ fn cast_json_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Json>>(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
-fn cast_any_as_json<From: ConvertTo<Json> + Evaluable>(
+fn cast_any_as_json<From: ConvertTo<Json> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<Json>> {
@@ -1224,9 +1224,9 @@ fn cast_any_as_json<From: ConvertTo<Json> + Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
-fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable>(
+fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     val: Option<&From>,
 ) -> Result<Option<Bytes>> {
@@ -1239,7 +1239,7 @@ fn cast_any_as_bytes<From: ConvertTo<Bytes> + Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Option<Bytes>> {
     match val {

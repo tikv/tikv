@@ -41,6 +41,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         primary_column_ids: Vec<i64>,
         is_backward: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -73,6 +74,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        let no_common_handle = primary_column_ids.is_empty();
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -88,7 +90,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             key_ranges,
             is_backward,
             is_key_only,
-            accept_point_range: true,
+            accept_point_range: no_common_handle,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
     }
@@ -656,6 +659,7 @@ mod tests {
             ranges,
             vec![],
             false,
+            false,
         )
         .unwrap();
 
@@ -737,6 +741,7 @@ mod tests {
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
             vec![],
+            false,
             false,
         )
         .unwrap()
@@ -876,6 +881,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -885,7 +891,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0), Some(1)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -893,7 +899,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), None]
             );
             assert!(result.physical_columns[2].is_raw());
@@ -901,7 +907,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[2])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[2].decoded().as_int_slice(),
+                result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(7), None]
             );
         }
@@ -981,6 +987,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -990,7 +997,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -998,7 +1005,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
         }
@@ -1016,6 +1023,7 @@ mod tests {
                 ],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1025,7 +1033,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1033,7 +1041,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
 
@@ -1052,6 +1060,7 @@ mod tests {
                 columns_info.clone(),
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1072,6 +1081,7 @@ mod tests {
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
                 vec![],
                 false,
+                false,
             )
             .unwrap();
 
@@ -1081,7 +1091,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
-                result.physical_columns[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().to_int_vec(),
                 &[Some(2), Some(0)]
             );
             assert!(result.physical_columns[1].is_raw());
@@ -1089,7 +1099,7 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
-                result.physical_columns[1].decoded().as_int_slice(),
+                result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), Some(7)]
             );
         }
@@ -1103,6 +1113,7 @@ mod tests {
                 columns_info,
                 vec![key_range_point[1].clone()],
                 vec![],
+                false,
                 false,
             )
             .unwrap();
@@ -1152,6 +1163,7 @@ mod tests {
             vec![key_range],
             vec![],
             false,
+            false,
         )
         .unwrap();
 
@@ -1165,12 +1177,12 @@ mod tests {
                 .unwrap();
             if columns_is_pk[i] {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(1)]
                 );
             } else {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(i as i64 + 10)]
                 );
             }
@@ -1253,6 +1265,7 @@ mod tests {
             vec![key_range],
             primary_column_ids.clone(),
             false,
+            false,
         )
         .unwrap();
 
@@ -1272,11 +1285,11 @@ mod tests {
             let column_id = columns_info[i].get_column_id();
             if primary_column_ids.contains(&column_id) {
                 assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
+                    result.physical_columns[i].decoded().to_int_vec(),
                     &[Some(column_id)]
                 );
             } else {
-                assert_eq!(result.physical_columns[i].decoded().as_int_slice(), &[None]);
+                assert_eq!(result.physical_columns[i].decoded().to_int_vec(), &[None]);
             }
         }
     }

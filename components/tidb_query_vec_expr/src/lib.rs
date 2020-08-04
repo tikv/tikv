@@ -521,6 +521,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
@@ -560,6 +561,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
         ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
+        ScalarFuncSig::Repeat => repeat_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),

@@ -48,7 +48,9 @@ use raftstore::coprocessor::Config as CopConfig;
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::SplitConfig;
 use security::SecurityConfig;
-use tikv_util::config::{self, LogFormat, ReadableDuration, ReadableSize, TomlWriter, GB, MB};
+use tikv_util::config::{
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+};
 use tikv_util::future_pool;
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -1241,11 +1243,16 @@ pub enum DBType {
 pub struct DBConfigManger {
     db: RocksEngine,
     db_type: DBType,
+    shared_block_cache: bool,
 }
 
 impl DBConfigManger {
-    pub fn new(db: RocksEngine, db_type: DBType) -> Self {
-        DBConfigManger { db, db_type }
+    pub fn new(db: RocksEngine, db_type: DBType, shared_block_cache: bool) -> Self {
+        DBConfigManger {
+            db,
+            db_type,
+            shared_block_cache,
+        }
     }
 }
 
@@ -1277,6 +1284,11 @@ impl DBConfigManger {
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
         self.validate_cf(cf)?;
+        if self.shared_block_cache {
+            return Err("shared block cache is enabled, change cache size through \
+                 block-cache.capacity in storage module instead"
+                .into());
+        }
         let handle = self.db.cf_handle(cf)?;
         let opt = self.db.get_options_cf(handle);
         opt.set_block_cache_capacity(size.0)?;
@@ -1353,6 +1365,7 @@ impl ConfigManager for DBConfigManger {
         Ok(())
     }
 }
+
 fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
     config_change
         .iter()
@@ -1364,20 +1377,24 @@ fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
 fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
     config_change
         .into_iter()
-        .map(|(name, value)| {
+        .filter_map(|(name, value)| {
             let v = match value {
                 d @ ConfigValue::Duration(_) => {
                     let d: ReadableDuration = d.into();
-                    d.as_secs().to_string()
+                    Some(d.as_secs().to_string())
                 }
                 s @ ConfigValue::Size(_) => {
                     let s: ReadableSize = s.into();
-                    s.0.to_string()
+                    Some(s.0.to_string())
+                }
+                s @ ConfigValue::OptionSize(_) => {
+                    let s: OptionReadableSize = s.into();
+                    s.0.map(|v| v.0.to_string())
                 }
                 ConfigValue::Module(_) => unreachable!(),
-                v => format!("{}", v),
+                v => Some(format!("{}", v)),
             };
-            (name, v)
+            v.map(|v| (name, v))
         })
         .collect()
 }
@@ -1962,6 +1979,32 @@ mod readpool_tests {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupConfig {
+    pub num_threads: usize,
+}
+
+impl BackupConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::new().cpu_cores_quota();
+        Self {
+            // use at most 75% of vCPU by default
+            num_threads: (cpu_num - cpu_num / 4).clamp(1, 32),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -1999,7 +2042,7 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub server: ServerConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub storage: StorageConfig,
 
     #[config(skip)]
@@ -2026,6 +2069,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub import: ImportConfig,
+
+    #[config(submodule)]
+    pub backup: BackupConfig,
 
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
@@ -2060,6 +2106,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            backup: BackupConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
             gc: GcConfig::default(),
             split: SplitConfig::default(),
@@ -2142,6 +2189,7 @@ impl TiKvConfig {
         self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         Ok(())
@@ -2227,8 +2275,8 @@ impl TiKvConfig {
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.shared && cache_cfg.capacity.is_none() {
-            cache_cfg.capacity = Some(ReadableSize {
+        if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
+            cache_cfg.capacity.0 = Some(ReadableSize {
                 0: self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
@@ -2473,6 +2521,9 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
+        ConfigValue::OptionSize(_) => {
+            ConfigValue::from(OptionReadableSize(Some(v.parse::<ReadableSize>()?)))
+        }
         ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
         ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
         ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
@@ -2506,6 +2557,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
+                        | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
                         | ConfigValue::BlobRunMode(_) => Ok(true),
                         _ => Ok(false),
@@ -2521,9 +2573,9 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         let fields: Vec<_> = name.as_str().split('.').collect();
         let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
-            dst.insert(name, format!("\"{}\"", value));
+            dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
         } else {
-            dst.insert(name, value);
+            dst.insert(name.replace("_", "-"), value);
         }
     }
     Ok(dst)
@@ -2543,6 +2595,7 @@ pub enum Module {
     Security,
     Encryption,
     Import,
+    Backup,
     PessimisticTxn,
     Gc,
     Split,
@@ -2564,6 +2617,7 @@ impl From<&str> for Module {
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
+            "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             n => Module::Unknown(n.to_owned()),
@@ -2608,7 +2662,7 @@ impl ConfigController {
             match change {
                 ConfigValue::Module(change) => {
                     // update a submodule's config only if changes had been sucessfully
-                    // dispatched to corresponding config manager, to avoid double dispatch change
+                    // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
                             inner.current.update(to_update);
@@ -2663,6 +2717,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::storage::config::StorageConfigManger;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use slog::Level;
@@ -2913,20 +2968,20 @@ mod tests {
             new_engine_opt(
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
+                cfg.rocksdb
+                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache()),
             )
             .unwrap(),
         ));
 
-        let cfg_controller = ConfigController::new(cfg);
+        let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
+            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
+        );
+        cfg_controller.register(
+            Module::Storage,
+            Box::new(StorageConfigManger::new(engine.clone(), shared)),
         );
         (engine, cfg_controller)
     }
@@ -2939,6 +2994,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
+        cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
@@ -2992,6 +3048,36 @@ mod tests {
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
+
+        // Can not update block cache through storage module
+        // when shared block cache is disabled
+        assert!(cfg_controller
+            .update_config("storage.block-cache.capacity", "512MB")
+            .is_err());
+    }
+
+    #[test]
+    fn test_change_shared_block_cache() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.block_cache.shared = true;
+        cfg.validate().unwrap();
+        let (db, cfg_controller) = new_engines(cfg);
+
+        // Can not update shared block cache through rocksdb module
+        assert!(cfg_controller
+            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+            .is_err());
+
+        cfg_controller
+            .update_config("storage.block-cache.capacity", "256MB")
+            .unwrap();
+
+        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+        let defaultcf_opts = db.get_options_cf(defaultcf);
+        assert_eq!(
+            defaultcf_opts.get_block_cache_capacity(),
+            ReadableSize::mb(256).0
+        );
     }
 
     #[test]

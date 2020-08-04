@@ -3,9 +3,9 @@
 use std::fmt;
 use std::time::Instant;
 
-use engine_rocks::RocksSnapshot;
-use engine_traits::Snapshot;
+use engine_traits::{KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -13,22 +13,23 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
-use crate::store::fsm::PeerFsm;
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
-use super::RegionSnapshot;
+use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot<S>>,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 #[derive(Debug)]
@@ -47,6 +48,7 @@ where
         ReadResponse {
             response: self.response.clone(),
             snapshot: self.snapshot.clone(),
+            txn_extra_op: self.txn_extra_op,
         }
     }
 }
@@ -79,6 +81,7 @@ where
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
             }
@@ -185,7 +188,10 @@ pub enum MergeResultKind {
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
-pub enum SignificantMsg {
+pub enum SignificantMsg<SK>
+where
+    SK: Snapshot,
+{
     /// Reports whether the snapshot sending is successful or not.
     SnapshotStatus {
         region_id: u64,
@@ -216,22 +222,22 @@ pub enum SignificantMsg {
     CaptureChange {
         cmd: ChangeCmd,
         region_epoch: RegionEpoch,
-        callback: Callback<RocksSnapshot>,
+        callback: Callback<SK>,
     },
-    LeaderCallback(Callback<RocksSnapshot>),
+    LeaderCallback(Callback<SK>),
 }
 
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage<S: Snapshot> {
+pub enum CasualMessage<EK: KvEngine> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback<S>,
+        callback: Callback<EK::Snapshot>,
     },
 
     /// Hash result of ComputeHash command.
@@ -269,10 +275,10 @@ pub enum CasualMessage<S: Snapshot> {
     SnapshotGenerated,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut PeerFsm<S>) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
 }
 
-impl<S: Snapshot> fmt::Debug for CasualMessage<S> {
+impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -319,21 +325,31 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub txn_extra: TxnExtra,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+    pub fn with_txn_extra(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        txn_extra: TxnExtra,
+    ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
+            txn_extra,
             send_time: Instant::now(),
         }
+    }
+
+    pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+        Self::with_txn_extra(request, callback, TxnExtra::default())
     }
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<S: Snapshot> {
+pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -341,28 +357,28 @@ pub enum PeerMsg<S: Snapshot> {
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<S>),
+    RaftCommand(RaftCommand<EK::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<S> },
+    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
-    SignificantMsg(SignificantMsg),
+    SignificantMsg(SignificantMsg<EK::Snapshot>),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<S>),
+    CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
 }
 
-impl<S: Snapshot> fmt::Debug for PeerMsg<S> {
+impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
