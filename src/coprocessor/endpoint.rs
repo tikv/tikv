@@ -51,7 +51,6 @@ pub struct Endpoint<E: Engine> {
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
-    enable_batch_if_possible: bool,
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
@@ -87,7 +86,6 @@ impl<E: Engine> Endpoint<E> {
             semaphore,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
-            enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
@@ -198,7 +196,6 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                let enable_batch_if_possible = self.enable_batch_if_possible;
                 builder = Box::new(move |snap, req_ctx: &ReqContext| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let data_version = snap.get_data_version();
@@ -220,7 +217,6 @@ impl<E: Engine> Endpoint<E> {
                         req.get_is_cache_enabled(),
                     )
                     .data_version(data_version)
-                    .enable_batch_if_possible(enable_batch_if_possible)
                     .build()
                 });
             }
