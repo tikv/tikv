@@ -7,7 +7,6 @@ pub mod sched_pool;
 pub mod scheduler;
 
 mod latch;
-mod process;
 mod store;
 
 use crate::storage::{
@@ -21,12 +20,12 @@ use std::fmt;
 use std::io::Error as IoError;
 use txn_types::{Key, TimeStamp};
 
-pub use self::commands::Command;
-pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
+pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::scheduler::Scheduler;
-pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
-pub use self::store::{FixtureStore, FixtureStoreScanner};
-pub use self::store::{Scanner, SnapshotStore, Store};
+pub use self::store::{
+    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
+    TxnEntryScanner, TxnEntryStore,
+};
 
 /// Process result of a command.
 pub enum ProcessResult {

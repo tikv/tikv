@@ -181,20 +181,20 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         }
     }
 
-    /// Take out and reset the statistics collected so far.
-    fn take_statistics(&mut self) -> Statistics {
-        match self {
-            Scanner::Forward(scanner) => scanner.take_statistics(),
-            Scanner::Backward(scanner) => scanner.take_statistics(),
-        }
-    }
-
     /// Returns whether data with newer ts is found. The result is meaningful only when
     /// `check_has_newer_ts_data` is set to true.
     fn met_newer_ts_data(&self) -> NewerTsCheckState {
         match self {
             Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
             Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
+        }
+    }
+
+    /// Take out and reset the statistics collected so far.
+    fn take_statistics(&mut self) -> Statistics {
+        match self {
+            Scanner::Forward(scanner) => scanner.take_statistics(),
+            Scanner::Backward(scanner) => scanner.take_statistics(),
         }
     }
 }

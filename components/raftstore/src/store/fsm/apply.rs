@@ -50,6 +50,7 @@ use crate::report_perf_context;
 
 use crate::store::{cmd_resp, util, Config, RegionSnapshot};
 use crate::{Error, Result};
+use error_code::ErrorCodeExt;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
@@ -1153,7 +1154,8 @@ where
                         "execute raft command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "err" => ?e
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
                     ),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -1539,7 +1541,8 @@ where
                  "peer_id" => self.id(),
                  "sst" => ?sst,
                  "region" => ?&self.region,
-                 "err" => ?e
+                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
             // This file is not valid, we can delete it here.
             let _ = importer.delete(sst);
