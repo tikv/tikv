@@ -14,7 +14,7 @@ use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
+    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -136,7 +136,6 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         snapshot: S,
         context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
-        let mut scan_mode = None;
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -155,29 +154,16 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 &right_key,
                 &mut context.statistics.write,
             )? {
-                // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
-                // Because in most instances, there won't be more than one transaction write the same key. Seek
-                // operation could skip nonexistent key in CF_LOCK.
+                // If there is no data in range, we could skip constraint check.
                 self.skip_constraint_check = true;
-                scan_mode = Some(ScanMode::Forward)
             }
         }
-        let mut txn = if scan_mode.is_some() {
-            MvccTxn::for_scan(
-                snapshot,
-                scan_mode,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        } else {
-            MvccTxn::new(
-                snapshot,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            )
-        };
+        let mut txn = MvccTxn::new(
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.pd_client,
+        );
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
@@ -260,7 +246,7 @@ mod tests {
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::commands::{
-        Commit, Prewrite, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
+        Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
     };
     use crate::storage::txn::LockInfo;
     use crate::storage::txn::{Error, ErrorInner, Result};
@@ -382,6 +368,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_prewrite_skip_too_many_tombstone() {
+        use crate::server::gc_worker::gc_by_compact;
+        use crate::storage::kv::PerfStatisticsInstant;
+        use engine_rocks::{set_perf_level, PerfLevel};
+        let mut mutations = Vec::default();
+        let pri_key_number = 0;
+        let pri_key = &[pri_key_number];
+        for i in 0..40 {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        let mut statistic = Statistics::default();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .unwrap();
+        // Rollback to make tombstones in lock-cf.
+        rollback(&engine, &mut statistic, keys, 100).unwrap();
+        // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
+        // seek write cf.
+        gc_by_compact(&engine, pri_key, 101);
+        set_perf_level(PerfLevel::EnableTimeExceptForMutex);
+        let perf = PerfStatisticsInstant::new();
+        let mut statistic = Statistics::default();
+        while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
+            mutations.pop();
+        }
+        prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
+        let d = perf.delta();
+        assert_eq!(1, statistic.write.seek);
+        assert_eq!(d.0.internal_delete_skipped_count, 0);
+    }
+
     fn prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
@@ -432,6 +460,29 @@ mod tests {
             ctx,
         );
 
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            pd_client: Arc::new(DummyPdClient::new()),
+            extra_op: ExtraOp::Noop,
+            statistics,
+            pipelined_pessimistic_lock: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             pd_client: Arc::new(DummyPdClient::new()),
