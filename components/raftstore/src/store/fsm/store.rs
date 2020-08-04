@@ -1,5 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::{Ord, Ordering as CmpOrdering};
+use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::{mem, thread, u64};
+
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
@@ -16,17 +25,22 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::{Ready, StateRole};
-use raft_engine::{RaftLogBatch,RaftEngine};
-use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
+
+use engine_rocks::CompactedEvent;
+use error_code::ErrorCodeExt;
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use pd_client::PdClient;
+use sst_importer::SSTImporter;
+use tikv_util::collections::HashMap;
+use tikv_util::config::{Tracker, VersionTrack};
+use raft_engine::{RaftEngine};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::timer::SteadyTimer;
+use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
@@ -58,19 +72,7 @@ use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
-
 use crate::Result;
-use engine_rocks::CompactedEvent;
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
-use sst_importer::SSTImporter;
-use tikv_util::collections::HashMap;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 type Key = Vec<u8>;
 
@@ -258,7 +260,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub apply_router: ApplyRouter<EK, ER>,
+    pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -424,7 +426,8 @@ where
             error!(
                 "send gc message failed";
                 "region_id" => region_id,
-                "err" => ?e
+                "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         }
         self.need_flush_trans = true;
@@ -518,6 +521,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport, C: PdCl
                         error!(
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
+                            "error_code" => %e.error_code(),
                             "err" => ?e
                         );
                     }
@@ -814,7 +818,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T, C> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    apply_router: ApplyRouter<EK, ER>,
+    apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -1070,8 +1074,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
-    apply_router: ApplyRouter<EK, ER>,
-    apply_system: ApplyBatchSystem<EK, ER>,
+    apply_router: ApplyRouter<EK>,
+    apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
 }
@@ -1081,7 +1085,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.router.clone()
     }
 
-    pub fn apply_router(&self) -> ApplyRouter<EK, ER> {
+    pub fn apply_router(&self) -> ApplyRouter<EK> {
         self.apply_router.clone()
     }
 
@@ -1446,6 +1450,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                     error!(
                         "send check stale peer response message failed";
                         "region_id" => region_id,
+                        "error_code" => %e.error_code(),
                         "err" => ?e
                     );
                 }
@@ -2004,6 +2009,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
             error!(
                 "handle gc snap failed";
                 "store_id" => self.fsm.store.id,
+                "error_code" => %e.error_code(),
                 "err" => ?e
             );
         }
@@ -2224,6 +2230,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient>
                 "cleanup import sst failed";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e,
+                "error_code" => %e.error_code(),
             );
         }
         self.register_cleanup_import_sst_tick();

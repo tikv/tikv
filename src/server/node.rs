@@ -199,7 +199,7 @@ where
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine, RocksEngine> {
+    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
         self.system.apply_router()
     }
 

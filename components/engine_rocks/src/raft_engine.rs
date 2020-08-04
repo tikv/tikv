@@ -179,7 +179,7 @@ impl RaftEngine for RocksEngine {
         Ok(ret)
     }
 
-    fn remove(&mut self, raft_group_id: u64, from: u64, to: Option<u64>) -> Result<()> {
+    fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
         let mut wb = self.write_batch();
         wb.remove(raft_group_id, from, to)?;
         self.consume(&mut wb, false)?;
@@ -201,8 +201,12 @@ impl RaftLogBatch for RocksWriteBatch {
         Ok(0)
     }
 
-    fn remove(&mut self, raft_group_id: u64, from: u64, to: Option<u64>) -> Result<()> {
-        sel
+    fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
+        for index in from..to {
+            let key = keys::raft_log_key(raft_group_id, index);
+            self.delete(&key);
+        }
+        Ok(())
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
