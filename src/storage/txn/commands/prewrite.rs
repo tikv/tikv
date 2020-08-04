@@ -475,6 +475,7 @@ mod tests {
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
     }
+
     fn rollback<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
