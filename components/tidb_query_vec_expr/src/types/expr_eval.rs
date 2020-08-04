@@ -6,23 +6,10 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
-use tidb_query_datatype::expr::EvalContext;
-
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-pub const BATCH_MAX_SIZE: usize = 1024;
-
-/// Identical logical row is a special case in expression evaluation that
-/// the rows in physical_value are continuous and in order.
-static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
-    let mut logical_rows = [0; BATCH_MAX_SIZE];
-    let mut row = 0;
-    while row < logical_rows.len() {
-        logical_rows[row] = row;
-        row += 1;
-    }
-    logical_rows
+use tidb_query_datatype::codec::data_type::{
+    ScalarValue, ScalarValueRef, VectorValue, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
 };
+use tidb_query_datatype::expr::EvalContext;
 
 #[derive(Clone, Copy, Debug)]
 pub enum LogicalRows<'a> {

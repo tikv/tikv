@@ -5,6 +5,7 @@ mod chunked_vec_bytes;
 mod chunked_vec_common;
 mod chunked_vec_json;
 mod chunked_vec_sized;
+mod logical_rows;
 mod scalar;
 mod vector;
 
@@ -18,6 +19,7 @@ pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_json::ChunkedVecJson;
 pub use chunked_vec_sized::ChunkedVecSized;
+pub use logical_rows::*;
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
