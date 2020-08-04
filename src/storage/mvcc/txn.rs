@@ -1000,7 +1000,8 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                 if !caller_start_ts.is_zero() && lock.use_async_commit {
                     return Err(ErrorInner::Other(box_err!(
                         "cannot push min_commit_ts of an async commit transaction"
-                    )));
+                    ))
+                    .into());
                 }
 
                 // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
