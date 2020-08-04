@@ -10,11 +10,11 @@ use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use raft_engine::RaftEngine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
+use raft_engine::RaftEngine;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;

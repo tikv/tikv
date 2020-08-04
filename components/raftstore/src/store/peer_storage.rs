@@ -25,7 +25,7 @@ use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use into_other::into_other;
-use raft_engine::{RaftLogBatch, RaftEngine};
+use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -431,8 +431,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
             }
         };
 
-    let raft_state = box_try!(engines.raft.get_raft_state(region_id))
-        .unwrap_or_default();
+    let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
     // if we recv append log when applying snapshot, last_index in raft_local_state will
     // larger than snapshot_index. since raft_local_state is written to raft engine, and
@@ -459,7 +458,10 @@ fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
         return Ok(truncated_state.get_term());
     }
 
-    match engines.raft.get_entry(region.get_id(), apply_state.applied_index)? {
+    match engines
+        .raft
+        .get_entry(region.get_id(), apply_state.applied_index)?
+    {
         Some(e) => Ok(e.term),
         None => Err(box_err!(
             "[region {}] entry at apply index {} doesn't exist, may lose data.",
@@ -741,7 +743,13 @@ where
         if high <= cache_low {
             // not overlap
             self.stats.miss.update(|m| m + 1);
-            self.engines.raft.fetch_entries_to(region_id, low, high, Some(max_size as usize), &mut ents)?;
+            self.engines.raft.fetch_entries_to(
+                region_id,
+                low,
+                high,
+                Some(max_size as usize),
+                &mut ents,
+            )?;
             return Ok(ents);
         }
         let mut fetched_size = 0;
@@ -998,12 +1006,16 @@ where
                 ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
             }
         }
-        ready_ctx.raft_wb_mut().append(self.get_region_id(), entries)?;
+        ready_ctx
+            .raft_wb_mut()
+            .append(self.get_region_id(), entries)?;
         assert!(entries.is_empty());
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
-        ready_ctx.raft_wb_mut().remove(self.get_region_id(), last_index + 1, prev_last_index)?;
+        ready_ctx
+            .raft_wb_mut()
+            .remove(self.get_region_id(), last_index + 1, prev_last_index)?;
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;

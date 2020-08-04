@@ -32,10 +32,10 @@ use engine_rocks::CompactedEvent;
 use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
+use raft_engine::{RaftEngine, RaftLogBatch};
 use sst_importer::SSTImporter;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
-use raft_engine::{RaftEngine, RaftLogBatch};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -629,14 +629,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport, C: PdClient> RaftPoller<EK, ER,
             );
 
             let need_sync = self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log;
-            self.poll_ctx.engines.raft.consume_and_shrink(
-                &mut self.poll_ctx.raft_wb, need_sync,
-                RAFT_WB_SHRINK_SIZE,
-                4 * 1024,
-
-            ).unwrap_or_else(|e| {
+            self.poll_ctx
+                .engines
+                .raft
+                .consume_and_shrink(
+                    &mut self.poll_ctx.raft_wb,
+                    need_sync,
+                    RAFT_WB_SHRINK_SIZE,
+                    4 * 1024,
+                )
+                .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
-            });
+                });
         }
 
         report_perf_context!(
@@ -966,8 +970,7 @@ impl<EK: KvEngine, ER: RaftEngine, T, C> RaftPollerBuilder<EK, ER, T, C> {
             None => return,
             Some(value) => value,
         };
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, &raft_state)
-            .unwrap();
+        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, &raft_state).unwrap();
         let key = keys::region_state_key(rid);
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }

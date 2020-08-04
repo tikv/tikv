@@ -1,13 +1,13 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
+    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, MAX_DELETE_BATCH_SIZE,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::{eraftpb::Entry, StorageError};
-use raft_engine::{Error, RaftEngine, Result, RaftLogBatch};
+use raft_engine::{Error, RaftEngine, RaftLogBatch, Result};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -131,7 +131,13 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn consume_and_shrink(&self, batch: &mut Self::LogBatch, sync_log: bool, max_capacity: usize, shrink_to: usize) -> Result<()> {
+    fn consume_and_shrink(
+        &self,
+        batch: &mut Self::LogBatch,
+        sync_log: bool,
+        max_capacity: usize,
+        shrink_to: usize,
+    ) -> Result<()> {
         let data_size = batch.data_size();
         self.consume(batch, sync_log)?;
         if data_size > max_capacity {
