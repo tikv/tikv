@@ -4,11 +4,16 @@ use crate::errors::Result;
 use crate::mutable::Mutable;
 use crate::options::WriteOptions;
 
-pub trait WriteBatchExt {
+pub trait WriteBatchVecExt<E: WriteBatchExt + Sized> {
+    fn write_batch_vec(e: &E, vec_size: usize, cap: usize) -> Self;
+    fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
+}
+
+pub trait WriteBatchExt: Sized {
     type WriteBatch: WriteBatch;
     /// `WriteBatchVec` is used for `multi_batch_write` of RocksEngine and other Engine could also
     /// implement another kind of WriteBatch according to their needs.
-    type WriteBatchVec: WriteBatch;
+    type WriteBatchVec: WriteBatchVecExt<Self>;
 
     const WRITE_BATCH_MAX_KEYS: usize;
 
