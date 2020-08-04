@@ -19,7 +19,7 @@ use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
@@ -46,7 +46,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -68,7 +68,7 @@ pub struct Server<T: RaftStoreRouter<RocksSnapshot> + 'static, S: StoreAddrResol
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<RocksEngine>, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
@@ -113,11 +113,6 @@ impl<T: RaftStoreRouter<RocksSnapshot>, S: StoreAddrResolver + 'static> Server<T
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
-                Some(Duration::from(cfg.request_batch_wait_duration))
-            } else {
-                None
-            },
             security_mgr.clone(),
         );
 
@@ -320,10 +315,10 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
-    impl RaftStoreRouter<RocksSnapshot> for TestRaftStoreRouter {
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
@@ -348,12 +343,16 @@ mod tests {
             Ok(())
         }
 
-        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
         }
 
-        fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> RaftStoreResult<()> {
+        fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -363,7 +362,11 @@ mod tests {
         }
     }
 
-    fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
+    fn is_unreachable_to(
+        msg: &SignificantMsg<RocksSnapshot>,
+        region_id: u64,
+        to_peer_id: u64,
+    ) -> bool {
         if let SignificantMsg::Unreachable {
             region_id: r_id,
             to_peer_id: p_id,

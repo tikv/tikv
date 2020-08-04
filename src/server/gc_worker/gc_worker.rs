@@ -806,11 +806,13 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use engine_rocks::RocksSnapshot;
+    use engine_traits::KvEngine;
     use futures::Future;
     use kvproto::{kvrpcpb::Op, metapb};
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
+    use tikv_util::time::ThreadReadId;
     use txn_types::Mutation;
 
     use crate::storage::kv::{
@@ -848,7 +850,10 @@ mod tests {
             region.set_end_key(end_key.to_owned());
             // Use a fake peer to avoid panic.
             region.mut_peers().push(Default::default());
-            Ok(RegionSnapshot::from_raw(self.kv_engine(), region))
+            Ok(RegionSnapshot::from_snapshot(
+                Arc::new(self.kv_engine().snapshot()),
+                Arc::new(region),
+            ))
         }
 
         fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
@@ -897,10 +902,12 @@ mod tests {
         fn async_snapshot(
             &self,
             ctx: &Context,
+            _read_id: Option<ThreadReadId>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
+                None,
                 Box::new(move |(cb_ctx, r)| {
                     callback((
                         cb_ctx,
@@ -908,7 +915,7 @@ mod tests {
                             let mut region = metapb::Region::default();
                             // Add a peer to pass initialized check.
                             region.mut_peers().push(metapb::Peer::default());
-                            RegionSnapshot::from_snapshot(snap, region)
+                            RegionSnapshot::from_snapshot(snap, Arc::new(region))
                         }),
                     ))
                 }),
@@ -928,6 +935,7 @@ mod tests {
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
+                0,
                 1.into(),
                 false,
                 false,

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::Peer;
+use raftstore::store::AbstractPeer;
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -170,11 +170,9 @@ pub struct RegionMeta {
 }
 
 impl RegionMeta {
-    pub fn new(peer: &Peer) -> Self {
-        let raft_group = &peer.raft_group;
-        let store = raft_group.store();
-        let region = store.region();
-        let apply_state = store.apply_state();
+    pub fn new(abstract_peer: &dyn AbstractPeer) -> Self {
+        let region = abstract_peer.region();
+        let apply_state = abstract_peer.apply_state();
         let epoch = region.get_region_epoch();
         let start_key = region.get_start_key();
         let end_key = region.get_end_key();
@@ -197,23 +195,22 @@ impl RegionMeta {
                 version: epoch.get_version(),
             },
             peers,
-            merge_state: peer
-                .pending_merge_state
-                .as_ref()
+            merge_state: abstract_peer
+                .pending_merge_state()
                 .map(|state| RegionMergeState {
                     min_index: state.get_min_index(),
                     commit: state.get_commit(),
                     region_id: state.get_target().get_id(),
                 }),
-            raft_status: raft_group.status().into(),
+            raft_status: abstract_peer.raft_status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
                 last_commit_index: apply_state.get_last_commit_index(),
                 commit_index: apply_state.get_commit_index(),
                 commit_term: apply_state.get_commit_term(),
                 truncated_state: RaftTruncatedState {
-                    index: store.truncated_index(),
-                    term: store.truncated_term(),
+                    index: apply_state.get_truncated_state().get_index(),
+                    term: apply_state.get_truncated_state().get_term(),
                 },
             },
         }

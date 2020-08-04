@@ -45,7 +45,7 @@ impl SyncBenchRouter {
         match cmd.callback {
             Callback::Read(cb) => {
                 let snapshot = RocksSnapshot::new(Arc::clone(&self.db));
-                let region = self.region.to_owned();
+                let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
                     snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
@@ -64,7 +64,7 @@ impl SyncBenchRouter {
     }
 }
 
-impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
+impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
@@ -84,11 +84,11 @@ impl RaftStoreRouter<RocksSnapshot> for SyncBenchRouter {
         Ok(())
     }
 
-    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 
-    fn casual_send(&self, _: u64, _: CasualMessage<RocksSnapshot>) -> Result<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<RocksEngine>) -> Result<()> {
         Ok(())
     }
 
@@ -111,7 +111,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
             Arc::new(snapshot),
-            Region::default(),
+            Arc::new(Region::default()),
         )),
         txn_extra_op: TxnExtraOp::Noop,
     };
@@ -161,7 +161,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
         let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
-        kv.async_snapshot(&ctx, on_finished).unwrap();
+        kv.async_snapshot(&ctx, None, on_finished).unwrap();
     });
 }
 

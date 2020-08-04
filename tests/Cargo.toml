@@ -113,6 +113,7 @@ tokio-threadpool = "0.1.13"
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+time = "0.1"
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage

@@ -949,27 +949,4 @@ mod tests {
         Ok(())
     }
 
-    fn rollback<E: Engine>(
-        engine: &E,
-        statistics: &mut Statistics,
-        keys: Vec<Key>,
-        start_ts: u64,
-    ) -> Result<()> {
-        let ctx = Context::default();
-        let snap = engine.snapshot(&ctx)?;
-        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
-
-        let ret = process_write_impl(
-            cmd.into(),
-            snap,
-            &DummyLockManager {},
-            Arc::new(DummyPdClient::new()),
-            ExtraOp::Noop,
-            statistics,
-            false,
-        )?;
-        let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
-        Ok(())
-    }
 }

@@ -12,7 +12,8 @@ use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, SeekKey, WriteBatchExt,
+    IterOptions, Iterable, Iterator, KvEngine, KvEngines, Mutable, Peekable, ReadOptions, SeekKey,
+    WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -20,6 +21,7 @@ use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
@@ -135,8 +137,8 @@ impl RocksEngine {
         self.engines.clone()
     }
 
-    pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(self.engines.kv.as_inner())
+    pub fn get_rocksdb(&self) -> BaseRocksEngine {
+        self.engines.kv.clone()
     }
 
     pub fn stop(&self) {
@@ -293,7 +295,12 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(
+        &self,
+        _: &Context,
+        _: Option<ThreadReadId>,
+        cb: Callback<Self::Snap>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
@@ -325,6 +332,12 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
+        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

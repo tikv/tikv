@@ -2,7 +2,7 @@
 
 use futures::Future;
 
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use pd_client::DummyPdClient;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
@@ -121,6 +121,32 @@ impl<E: Engine> SyncTestStorage<E> {
             .wait()
     }
 
+    pub fn batch_get_command(
+        &self,
+        ctx: Context,
+        keys: &[&[u8]],
+        start_ts: u64,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let requests: Vec<GetRequest> = keys
+            .to_owned()
+            .into_iter()
+            .map(|key| {
+                let mut req = GetRequest::default();
+                req.set_context(ctx.clone());
+                req.set_key(key.to_owned());
+                req.set_version(start_ts);
+                req
+            })
+            .collect();
+        let resp = self.store.batch_get_command(requests).wait()?;
+        let mut values = vec![];
+
+        for value in resp.into_iter() {
+            values.push(value?);
+        }
+        Ok(values)
+    }
+
     pub fn scan(
         &self,
         ctx: Context,
@@ -136,6 +162,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 start_key,
                 end_key,
                 limit,
+                0,
                 start_ts.into(),
                 key_only,
                 false,
@@ -158,6 +185,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 start_key,
                 end_key,
                 limit,
+                0,
                 start_ts.into(),
                 key_only,
                 true,
