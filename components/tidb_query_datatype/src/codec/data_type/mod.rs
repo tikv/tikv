@@ -8,7 +8,7 @@ mod chunked_vec_sized;
 mod logical_rows;
 mod scalar;
 mod vector;
-pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE};
+pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
