@@ -37,7 +37,6 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     let snapshot = engine.snapshot(&Context::default()).unwrap();
-    let cm = ConcurrencyManager::new(10.into());
     let store = SnapshotStore::new(
         snapshot,
         10.into(),
@@ -45,7 +44,6 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         true,
         Default::default(),
         false,
-        cm,
     );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup

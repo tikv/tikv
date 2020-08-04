@@ -263,7 +263,6 @@ impl TestSuite {
             false,
             Default::default(),
             false,
-            self.concurrency_manager.clone(),
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::new(snap_store, false),
