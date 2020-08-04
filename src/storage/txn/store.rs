@@ -596,7 +596,6 @@ mod tests {
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
-    use pd_client::DummyPdClient;
     use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -637,13 +636,7 @@ mod tests {
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    true,
-                    Arc::new(DummyPdClient::new()),
-                    cm,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -664,13 +657,7 @@ mod tests {
             // do commit
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    true,
-                    Arc::new(DummyPdClient::new()),
-                    cm,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();

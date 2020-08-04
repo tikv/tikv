@@ -9,7 +9,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
-use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -62,18 +61,13 @@ impl CommandExt for ResolveLock {
     gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLock {
-    fn process_write(
-        mut self,
-        snapshot: S,
-        context: WriteContext<'_, L, P>,
-    ) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
-            context.pd_client,
             context.concurrency_manager,
         );
 

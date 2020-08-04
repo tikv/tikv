@@ -27,7 +27,7 @@ where
     let snapshot = engine.snapshot(&ctx).unwrap();
     let start_ts = start_ts.into();
     let cm = ConcurrencyManager::new(start_ts);
-    let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
@@ -74,7 +74,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         },
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1, true, cm.clone());
                 txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
                     .unwrap();
             }
@@ -90,7 +90,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1, true, cm.clone());
                 black_box(txn.commit(key, 1.into())).unwrap();
             }
         },
@@ -108,7 +108,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1, true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -126,7 +126,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
         || setup_prewrite(&engine, &config, 2),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1, true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -155,7 +155,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1, true, cm.clone());
                 black_box(txn.rollback(key)).unwrap();
             }
         },

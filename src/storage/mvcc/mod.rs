@@ -9,7 +9,6 @@ mod txn;
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
 pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
-pub use crate::new_txn;
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
@@ -309,8 +308,6 @@ pub mod tests {
     use crate::storage::{concurrency_manager::ConcurrencyManager, types::TxnStatus};
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use pd_client::DummyPdClient;
-    use std::sync::Arc;
     use txn_types::Key;
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
@@ -376,7 +373,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
@@ -401,7 +398,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         txn.prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
@@ -425,7 +422,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
@@ -456,13 +453,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
 
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
@@ -629,13 +620,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
 
         if for_update_ts.is_zero() {
@@ -720,13 +705,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
         let mutation = Mutation::Delete(Key::from_raw(key));
 
         if for_update_ts.is_zero() {
@@ -782,13 +761,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
 
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
@@ -831,7 +804,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         assert!(txn
             .prewrite(
@@ -871,13 +844,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
         let res = txn
             .acquire_pessimistic_lock(
                 Key::from_raw(key),
@@ -1019,13 +986,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
         txn.acquire_pessimistic_lock(
             Key::from_raw(key),
             pk,
@@ -1048,13 +1009,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let for_update_ts = for_update_ts.into();
         let cm = ConcurrencyManager::new(for_update_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
         txn.pessimistic_rollback(Key::from_raw(key), for_update_ts)
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -1070,7 +1025,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1085,7 +1040,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
     }
 
@@ -1094,7 +1049,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         txn.collapse_rollback(false);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -1109,7 +1064,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1119,7 +1074,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
@@ -1133,13 +1088,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
         txn.cleanup(Key::from_raw(key), current_ts, true).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1154,13 +1103,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
         txn.cleanup(Key::from_raw(key), current_ts, true)
             .unwrap_err()
     }
@@ -1176,7 +1119,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         let ttl = txn
             .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap();
@@ -1194,7 +1137,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap_err();
     }
@@ -1212,13 +1155,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            lock_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true, cm);
         let (txn_status, _) = txn
             .check_txn_status(
                 Key::from_raw(primary_key),
@@ -1243,13 +1180,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            lock_ts.into(),
-            true,
-            Arc::new(DummyPdClient::new()),
-            cm,
-        );
+        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true, cm);
         txn.check_txn_status(
             Key::from_raw(primary_key),
             caller_start_ts.into(),
@@ -1268,7 +1199,6 @@ pub mod tests {
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             true,
-            Arc::new(DummyPdClient::new()),
             cm,
         );
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();

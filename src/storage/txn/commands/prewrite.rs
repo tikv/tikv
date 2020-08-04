@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::CF_WRITE;
-use pd_client::PdClient;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use crate::storage::kv::WriteData;
@@ -130,12 +129,8 @@ impl Prewrite {
     }
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
-    fn process_write(
-        mut self,
-        snapshot: S,
-        context: WriteContext<'_, L, P>,
-    ) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -162,7 +157,6 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
             context.concurrency_manager,
         );
 
@@ -238,12 +232,9 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kvproto::kvrpcpb::{Context, ExtraOp};
 
     use engine_traits::CF_WRITE;
-    use pd_client::DummyPdClient;
     use txn_types::TimeStamp;
     use txn_types::{Key, Mutation};
 
@@ -427,7 +418,6 @@ mod tests {
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -469,7 +459,6 @@ mod tests {
 
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -490,10 +479,11 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
-            pd_client: Arc::new(DummyPdClient::new()),
+            concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             pipelined_pessimistic_lock: false,

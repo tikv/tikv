@@ -451,7 +451,6 @@ mod tests {
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use pd_client::DummyPdClient;
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
     use std::sync::Arc;
@@ -512,7 +511,7 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
             txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
                 .unwrap();
@@ -529,7 +528,7 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
             txn.pessimistic_prewrite(
                 m,
@@ -556,13 +555,7 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
-            let mut txn = MvccTxn::new(
-                snap,
-                start_ts.into(),
-                true,
-                Arc::new(DummyPdClient::new()),
-                cm,
-            );
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true, cm);
             txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts, false, TimeStamp::zero())
                 .unwrap();
             self.write(txn.into_modifies());
@@ -578,7 +571,7 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -588,7 +581,7 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
             self.write(txn.into_modifies());
@@ -601,13 +594,7 @@ mod tests {
                     self.db.c().clone(),
                     self.region.clone(),
                 );
-                let mut txn = MvccTxn::new(
-                    snap,
-                    safe_point.into(),
-                    true,
-                    Arc::new(DummyPdClient::new()),
-                    cm.clone(),
-                );
+                let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
                 txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {

@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use pd_client::PdClient;
 use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
 use txn_types::TimeStamp;
 
@@ -137,7 +136,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
+struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -160,8 +159,6 @@ struct SchedulerInner<L: LockManager, P: PdClient + 'static> {
 
     lock_mgr: L,
 
-    pd_client: Arc<P>,
-
     concurrency_manager: ConcurrencyManager,
 
     pipelined_pessimistic_lock: bool,
@@ -172,7 +169,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
+impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -245,20 +242,20 @@ impl<L: LockManager, P: PdClient + 'static> SchedulerInner<L, P> {
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler<E: Engine, L: LockManager, P: PdClient + 'static> {
+pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner<L, P>>,
+    inner: Arc<SchedulerInner<L>>,
 }
 
-unsafe impl<E: Engine, L: LockManager, P: PdClient + 'static> Send for Scheduler<E, L, P> {}
+unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
     pub(in crate::storage) fn new(
         engine: E,
         lock_mgr: L,
-        pd_client: Arc<P>,
+
         concurrency_manager: ConcurrencyManager,
         concurrency: usize,
         worker_pool_size: usize,
@@ -286,7 +283,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
-            pd_client,
             concurrency_manager,
             pipelined_pessimistic_lock,
         });
@@ -603,7 +599,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
-            pd_client: self.inner.pd_client.clone(),
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
@@ -692,7 +687,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
     }
 }
 
-impl<E: Engine, L: LockManager, P: PdClient + 'static> Clone for Scheduler<E, L, P> {
+impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
     fn clone(&self) -> Self {
         Scheduler {
             engine: self.engine.clone(),

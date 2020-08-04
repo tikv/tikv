@@ -28,7 +28,7 @@ where
     let snapshot = engine.snapshot(&ctx).unwrap();
     let start_ts = start_ts.into();
     let cm = ConcurrencyManager::new(start_ts);
-    let mut txn = MvccTxn::new(snapshot, start_ts, true, Arc::new(DummyPdClient::new()), cm);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
 
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
@@ -66,7 +66,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
         |mutations| {
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = mvcc::new_txn!(snapshot, 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot, 1, true, cm.clone());
                 txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
                     .unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
@@ -86,7 +86,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = mvcc::new_txn!(snapshot, 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot, 1, true, cm.clone());
                 txn.commit(key, 2.into()).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
@@ -105,7 +105,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = mvcc::new_txn!(snapshot, 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot, 1, true, cm.clone());
                 txn.rollback(key).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
@@ -124,7 +124,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = mvcc::new_txn!(snapshot, 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot, 1, true, cm.clone());
                 txn.rollback(key).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
@@ -151,7 +151,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = mvcc::new_txn!(snapshot, 1, true, cm.clone());
+                let mut txn = mvcc::MvccTxn::new(snapshot, 1, true, cm.clone());
                 txn.rollback(key).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();

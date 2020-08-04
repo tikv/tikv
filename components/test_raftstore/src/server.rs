@@ -21,7 +21,7 @@ use super::*;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngines, MiscExt};
-use pd_client::{DummyPdClient, PdClient};
+use pd_client::PdClient;
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
@@ -212,7 +212,6 @@ impl Simulator for ServerCluster {
             storage_read_pool.handle(),
             lock_mgr.clone(),
             concurrency_manager.clone(),
-            Arc::new(DummyPdClient::new()),
             false,
         )?;
         self.storages.insert(node_id, raft_engine);

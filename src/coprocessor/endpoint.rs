@@ -817,7 +817,7 @@ mod tests {
             Duration::from_secs(0),
             None,
             None,
-            None,
+            TimeStamp::max(),
             None,
         );
         assert!(cop

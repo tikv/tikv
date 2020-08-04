@@ -9,7 +9,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::types::SecondaryLocksStatus;
 use crate::storage::{ProcessResult, Snapshot};
-use pd_client::PdClient;
 use txn_types::Key;
 
 command! {
@@ -39,15 +38,12 @@ impl CommandExt for CheckSecondaryLocks {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
-    for CheckSecondaryLocks
-{
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            context.pd_client,
             context.concurrency_manager,
         );
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());

@@ -168,7 +168,7 @@ impl ReqContext {
             Duration::from_secs(100),
             None,
             None,
-            None,
+            TimeStamp::max(),
             None,
         )
     }
@@ -203,7 +203,7 @@ mod tests {
     fn test_build_task_id() {
         let mut ctx = ReqContext::default_for_test();
         let start_ts: u64 = 0x05C6_1BFA_2648_324A;
-        ctx.txn_start_ts = Some(start_ts);
+        ctx.txn_start_ts = start_ts.into();
         ctx.context.set_task_id(1);
         assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
 
