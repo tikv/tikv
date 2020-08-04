@@ -87,6 +87,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
             black_box(ranges.to_vec()),
             black_box(vec![]),
             black_box(false),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
@@ -107,14 +108,14 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     type P = TableScanParam;
 
     fn build(
-        batch: bool,
+        _batch: bool,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
         _: (),
     ) -> Box<dyn RequestHandler> {
         let exec = table_scan(columns);
-        crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
+        crate::util::build_dag_handler::<T>(&[exec], ranges, store)
     }
 }
 
