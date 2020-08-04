@@ -63,7 +63,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
                         .into(),
                 );
             }
-            cmds.push(ResolveLock::new(txn_status, kv_pairs.into(), ctx.clone()).into());
+            cmds.push(ResolveLock::new(txn_status, kv_pairs.into(), ctx).into());
             Ok(ProcessResult::NextCommands { cmds })
         }
     }
