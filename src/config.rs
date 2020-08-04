@@ -62,6 +62,7 @@ const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
+const DEFAULT_REFILL_PERIOD_US: i64 = 100 * 1000; // 100ms
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = SysQuota::new().memory_limit_in_bytes();
@@ -939,6 +940,7 @@ impl DbConfig {
         if self.rate_bytes_per_sec.0 > 0 {
             opts.set_ratelimiter_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
+                DEFAULT_REFILL_PERIOD_US,
                 self.rate_limiter_mode,
                 self.auto_tuned,
             );
