@@ -3,7 +3,7 @@
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, KvEngines, Mutable, WriteBatch, WriteOptions};
+use engine_traits::{KvEngine, KvEngines, Mutable, WriteBatch, WriteOptions, WriteBatchVecExt, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -1148,11 +1148,30 @@ impl<EK: KvEngine, ER: KvEngine> RaftBatchSystem<EK, ER> {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system::<T, C>(workers, region_peers, builder, auto_split_controller)?;
+        let engine = builder.engines.kv.clone();
+        if engine.support_write_batch_vec() {
+            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
+        } else {
+            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
+                workers,
+                region_peers,
+                builder,
+                auto_split_controller,
+            )?;
+        }
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
+    fn start_system<
+        T: Transport + 'static,
+        C: PdClient + 'static,
+        W: WriteBatch + WriteBatchVecExt<EK> + 'static,
+    >(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
@@ -1168,7 +1187,7 @@ impl<EK: KvEngine, ER: KvEngine> RaftBatchSystem<EK, ER> {
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(
+        let apply_poller_builder = ApplyPollerBuilder::<_, _, W>::new(
             &builder,
             ApplyNotifier::Router(self.router.clone()),
             self.apply_router.clone(),
