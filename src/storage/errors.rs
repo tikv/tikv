@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
-use std::convert::TryInto;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
@@ -13,7 +12,7 @@ use crate::storage::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb};
-use txn_types::{KvPair, VerKvPair, TimeStamp};
+use txn_types::{KvPair, TimeStamp, VerKvPair};
 
 quick_error! {
     #[derive(Debug)]
@@ -350,9 +349,9 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
     }
 }
 
-pub fn extract_ver_error(err: &Error) -> kvrpcpb::VerError {
+pub fn extract_ver_error(_err: &Error) -> kvrpcpb::VerError {
     // TODO: add match pattern for ver_error
-    let mut ver_error = kvrpcpb::VerError::default();
+    let ver_error = kvrpcpb::VerError::default();
     ver_error
 }
 
@@ -364,10 +363,11 @@ pub fn extract_verkv_pairs(res: Result<Vec<Result<VerKvPair>>>) -> Vec<kvrpcpb::
                 Ok((key, value)) => {
                     // extract version(last serialized 8 bytes as u64) from key
                     let offset = key.len() - 8;
-                    let version:&[u8; 8] = &key[offset..].try_into().expect("slice with incorrect length");
+                    let mut version: [u8; 8] = Default::default();
+                    version.copy_from_slice(&key[offset..offset + 8]);
                     let mut ver_value = kvrpcpb::VerValue::default();
                     ver_value.set_value(value);
-                    ver_value.set_version(u64::from_le_bytes(*version));
+                    ver_value.set_version(u64::from_le_bytes(version));
                     let mut pair = kvrpcpb::VerKvPair::default();
                     pair.set_key(key);
                     pair.set_value(ver_value);
@@ -434,6 +434,4 @@ mod test {
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
     }
-
-    // Todo: error test for verkv in conflict
 }

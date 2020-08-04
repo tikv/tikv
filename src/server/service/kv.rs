@@ -13,7 +13,7 @@ use crate::server::Error;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error, extract_ver_error, extract_ver_errors, extract_verkv_pairs
+        extract_region_error, extract_ver_error, extract_verkv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -1451,8 +1451,8 @@ fn future_raw_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerGetRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerGetRequest,
 ) -> impl Future<Item = VerGetResponse, Error = Error> {
     let mut ver_value = VerValue::default();
     let version: TimeStamp = req.get_start_version().into();
@@ -1460,7 +1460,7 @@ fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
         .get(
             req.take_context(),
             Key::from_raw(req.get_key()),
-            version.clone()
+            version.clone(),
         )
         .then(move |v| {
             let mut resp = VerGetResponse::default();
@@ -1472,7 +1472,7 @@ fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
                         ver_value.set_value(val);
                         ver_value.set_version(version.physical());
                         resp.set_value(ver_value);
-                    },
+                    }
                     Ok(None) => resp.set_not_found(true),
                     Err(e) => resp.set_error(extract_ver_error(&e)),
                 }
@@ -1482,8 +1482,8 @@ fn future_ver_get<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 fn future_ver_batch_get<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerBatchGetRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerBatchGetRequest,
 ) -> impl Future<Item = VerBatchGetResponse, Error = Error> {
     // TODO: modify this to get several versions of one key
     let keys = req.get_key().iter().map(|x| Key::from_raw(x)).collect();
@@ -1518,10 +1518,9 @@ fn future_ver_batch_mut<E: Engine, L: LockManager, P: PdClient + 'static>(
     future::ok(resp)
 }
 
-
 fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerScanRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerScanRequest,
 ) -> impl Future<Item = VerScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
         None
@@ -1529,12 +1528,14 @@ fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
         Some(Key::from_raw(req.get_end_key()))
     };
 
+    // TODO: implement ver_scan for VerKv
     storage
         .scan(
             req.take_context(),
             Key::from_raw(req.get_start_key()),
             end_key,
             req.get_limit() as usize,
+            0 as usize,
             req.get_start_version().into(),
             req.get_key_only(),
             req.get_reverse(),
@@ -1551,8 +1552,8 @@ fn future_ver_scan<E: Engine, L: LockManager, P: PdClient + 'static>(
 }
 
 fn future_ver_delete_range<E: Engine, L: LockManager, P: PdClient + 'static>(
-    _storage: &Storage<E, L, P>,
-    mut _req: VerDeleteRangeRequest,
+    storage: &Storage<E, L, P>,
+    mut req: VerDeleteRangeRequest,
 ) -> impl Future<Item = VerDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
