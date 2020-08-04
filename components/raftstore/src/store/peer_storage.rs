@@ -24,6 +24,7 @@ use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use into_other::into_other;
+use raft_engine::{RaftLogBatch, RaftEngine};
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -313,7 +314,7 @@ impl CacheQueryStats {
 pub trait HandleRaftReadyContext<WK, WR>
 where
     WK: WriteBatch,
-    WR: WriteBatch,
+    WR: RaftLogBatch,
 {
     /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
     fn wb_mut(&mut self) -> (&mut WK, &mut WR);
@@ -359,7 +360,7 @@ pub struct InvokeContext {
 }
 
 impl InvokeContext {
-    pub fn new(store: &PeerStorage<impl KvEngine, impl KvEngine>) -> InvokeContext {
+    pub fn new<EK: KvEngine, ER: RaftEngine>(store: &PeerStorage<EK, ER>) -> InvokeContext {
         InvokeContext {
             region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
@@ -412,9 +413,9 @@ impl InvokeContext {
     }
 }
 
-pub fn recover_from_applying_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
-    raft_wb: &mut impl WriteBatch,
+pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
+    raft_wb: &mut ER::LogBatch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -430,11 +431,8 @@ pub fn recover_from_applying_state(
             }
         };
 
-    let raft_state_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
-        Some(state) => state,
-        None => RaftLocalState::default(),
-    };
+    let raft_state = box_try!(engines.raft.get_raft_state(region_id))
+        .unwrap_or_default();
 
     // if we recv append log when applying snapshot, last_index in raft_local_state will
     // larger than snapshot_index. since raft_local_state is written to raft engine, and
@@ -443,13 +441,13 @@ pub fn recover_from_applying_state(
     // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-        raft_wb.put_msg(&raft_state_key, &snapshot_raft_state)?;
+        raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
 }
 
-fn init_applied_index_term(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
     region: &Region,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
@@ -460,8 +458,8 @@ fn init_applied_index_term(
     if apply_state.applied_index == truncated_state.get_index() {
         return Ok(truncated_state.get_term());
     }
-    let state_key = keys::raft_log_key(region.get_id(), apply_state.applied_index);
-    match engines.raft.get_msg::<Entry>(&state_key)? {
+
+    match engines.raft.get_entry(region.get_id(), apply_state.applied_index)? {
         Some(e) => Ok(e.term),
         None => Err(box_err!(
             "[region {}] entry at apply index {} doesn't exist, may lose data.",
@@ -471,29 +469,27 @@ fn init_applied_index_term(
     }
 }
 
-fn init_raft_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
     region: &Region,
 ) -> Result<RaftLocalState> {
-    let state_key = keys::raft_state_key(region.get_id());
-    Ok(match engines.raft.get_msg(&state_key)? {
-        Some(s) => s,
-        None => {
-            let mut raft_state = RaftLocalState::default();
-            if util::is_region_initialized(region) {
-                // new split region
-                raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-                raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-                raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-                engines.raft.put_msg(&state_key, &raft_state)?;
-            }
-            raft_state
-        }
-    })
+    if let Some(state) = engines.raft.get_raft_state(region.get_id())? {
+        return Ok(state);
+    }
+
+    let mut raft_state = RaftLocalState::default();
+    if util::is_region_initialized(region) {
+        // new split region
+        raft_state.last_index = RAFT_INIT_LOG_INDEX;
+        raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
+        raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+        engines.raft.put_raft_state(region.get_id(), &raft_state)?;
+    }
+    Ok(raft_state)
 }
 
-fn init_apply_state(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
     region: &Region,
 ) -> Result<RaftApplyState> {
     Ok(
@@ -516,9 +512,9 @@ fn init_apply_state(
     )
 }
 
-fn validate_states(
+fn validate_states<EK: KvEngine, ER: RaftEngine>(
     region_id: u64,
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+    engines: &KvEngines<EK, ER>,
     raft_state: &mut RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<()> {
@@ -535,8 +531,7 @@ fn validate_states(
     }
     let recorded_commit_index = apply_state.get_commit_index();
     if commit_index < recorded_commit_index {
-        let log_key = keys::raft_log_key(region_id, recorded_commit_index);
-        let entry = engines.raft.get_msg::<Entry>(&log_key)?;
+        let entry = engines.raft.get_entry(region_id, recorded_commit_index)?;
         if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
             return Err(box_err!(
                 "log at recorded commit index [{}] {} doesn't exist, may lose data",
@@ -564,8 +559,8 @@ fn validate_states(
     Ok(())
 }
 
-fn init_last_term(
-    engines: &KvEngines<impl KvEngine, impl KvEngine>,
+fn init_last_term<EK: KvEngine, ER: RaftEngine>(
+    engines: &KvEngines<EK, ER>,
     region: &Region,
     raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
@@ -580,8 +575,7 @@ fn init_last_term(
     } else {
         assert!(last_idx > RAFT_INIT_LOG_INDEX);
     }
-    let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
-    let entry = engines.raft.get_msg::<Entry>(&last_log_key)?;
+    let entry = engines.raft.get_entry(region.get_id(), last_idx)?;
     match entry {
         None => Err(box_err!(
             "[region {}] entry at {} doesn't exist, may lose data.",
@@ -619,7 +613,7 @@ where
 impl<EK, ER> Storage for PeerStorage<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
@@ -654,7 +648,7 @@ where
 impl<EK, ER> PeerStorage<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
@@ -744,31 +738,24 @@ where
         }
         let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
+        let max_size = Some(max_size as usize);
         if high <= cache_low {
             // not overlap
             self.stats.miss.update(|m| m + 1);
-            fetch_entries_to(
-                &self.engines.raft,
-                region_id,
-                low,
-                high,
-                max_size,
-                &mut ents,
-            )?;
+            self.engines.raft.fetch_entries_to(region_id, low, high, max_size, &mut ents)?;
             return Ok(ents);
         }
         let mut fetched_size = 0;
         let begin_idx = if low < cache_low {
             self.stats.miss.update(|m| m + 1);
-            fetched_size = fetch_entries_to(
-                &self.engines.raft,
+            fetched_size = self.engines.raft.fetch_entries_to(
                 region_id,
                 low,
                 cache_low,
                 max_size,
                 &mut ents,
             )?;
-            if fetched_size > max_size {
+            if fetched_size > max_size.unwrap() {
                 // max_size exceed.
                 return Ok(ents);
             }
@@ -779,7 +766,7 @@ where
 
         self.stats.hit.update(|h| h + 1);
         self.cache
-            .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
+            .fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
         Ok(ents)
     }
 
@@ -985,10 +972,10 @@ where
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>>(
+    pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
-        entries: &[Entry],
+        entries: &mut [Entry],
         ready_ctx: &mut H,
     ) -> Result<u64> {
         debug!(
@@ -1011,11 +998,9 @@ where
             if !ready_ctx.sync_log() {
                 ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
             }
-            ready_ctx.raft_wb_mut().put_msg(
-                &keys::raft_log_key(self.get_region_id(), entry.get_index()),
-                entry,
-            )?;
         }
+        ready_ctx.raft_wb_mut().append(self.get_region_id(), &mut entries)?;
+        assert!(entries.is_empty());
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..=prev_last_index {
@@ -1072,7 +1057,7 @@ where
         ctx: &mut InvokeContext,
         snap: &Snapshot,
         kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::WriteBatch,
+        raft_wb: &mut ER::LogBatch,
         destroy_regions: &[metapb::Region],
     ) -> Result<()> {
         info!(
@@ -1136,7 +1121,7 @@ where
     pub fn clear_meta(
         &mut self,
         kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::WriteBatch,
+        raft_wb: &mut ER::LogBatch,
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
@@ -1323,7 +1308,7 @@ where
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
-    pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::WriteBatch>>(
+    pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
@@ -1451,109 +1436,22 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
     false
 }
 
-pub fn fetch_entries_to(
-    engine: &impl KvEngine,
-    region_id: u64,
-    low: u64,
-    high: u64,
-    max_size: u64,
-    buf: &mut Vec<Entry>,
-) -> raft::Result<u64> {
-    let mut total_size: u64 = 0;
-    let mut next_index = low;
-    let mut exceeded_max_size = false;
-    if high - low <= RAFT_LOG_MULTI_GET_CNT {
-        // If election happens in inactive regions, they will just try
-        // to fetch one empty log.
-        for i in low..high {
-            let key = keys::raft_log_key(region_id, i);
-            match engine.get_value(&key) {
-                Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
-                Ok(Some(v)) => {
-                    let mut entry = Entry::default();
-                    entry.merge_from_bytes(&v)?;
-                    assert_eq!(entry.get_index(), i);
-                    total_size += v.len() as u64;
-                    if buf.is_empty() || total_size <= max_size {
-                        buf.push(entry);
-                    }
-                    if total_size > max_size {
-                        break;
-                    }
-                }
-                Err(e) => return Err(storage_error(e)),
-            }
-        }
-        return Ok(total_size);
-    }
-
-    let start_key = keys::raft_log_key(region_id, low);
-    let end_key = keys::raft_log_key(region_id, high);
-    engine
-        .scan(
-            &start_key,
-            &end_key,
-            true, // fill_cache
-            |_, value| {
-                let mut entry = Entry::default();
-                entry.merge_from_bytes(value)?;
-
-                // May meet gap or has been compacted.
-                if entry.get_index() != next_index {
-                    return Ok(false);
-                }
-                next_index += 1;
-
-                total_size += value.len() as u64;
-                exceeded_max_size = total_size > max_size;
-                if !exceeded_max_size || buf.is_empty() {
-                    buf.push(entry);
-                }
-                Ok(!exceeded_max_size)
-            },
-        )
-        .map_err(|e| raft::Error::Store(raft::StorageError::Other(e.into())))?;
-
-    // If we get the correct number of entries, returns,
-    // or the total size almost exceeds max_size, returns.
-    if buf.len() == (high - low) as usize || exceeded_max_size {
-        return Ok(total_size);
-    }
-
-    // Here means we don't fetch enough entries.
-    Err(RaftError::Store(StorageError::Unavailable))
-}
-
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta<EK, ER>(
     engines: &KvEngines<EK, ER>,
     kv_wb: &mut EK::WriteBatch,
-    raft_wb: &mut ER::WriteBatch,
+    raft_wb: &mut ER::LogBatch,
     region_id: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-
-    let last_index = last_index(raft_state);
-    let mut first_index = last_index + 1;
-    let begin_log_key = keys::raft_log_key(region_id, 0);
-    let end_log_key = keys::raft_log_key(region_id, first_index);
-    engines
-        .raft
-        .scan(&begin_log_key, &end_log_key, false, |key, _| {
-            first_index = keys::raft_log_index(key).unwrap();
-            Ok(false)
-        })?;
-    for id in first_index..=last_index {
-        box_try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
-    }
-    box_try!(raft_wb.delete(&keys::raft_state_key(region_id)));
+    box_try!(engines.raft.clean(region_id, raft_state, raft_wb));
 
     info!(
         "finish clear peer meta";
@@ -1652,13 +1550,12 @@ where
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: Mutable>(raft_wb: &mut T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<W: RaftLogBatch>(raft_wb: &mut W, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::default();
-    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+    raft_state.last_index = RAFT_INIT_LOG_INDEX;
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-
-    raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state)?;
+    raft_wb.put_raft_state(region_id, &raft_state)?;
     Ok(())
 }
 

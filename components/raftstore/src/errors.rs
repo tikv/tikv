@@ -71,6 +71,10 @@ quick_error! {
             from()
             display("Engine {:?}", err)
         }
+        RaftEngine(err: raft_engine::Error) {
+            from()
+            display("RaftEngine {:?}", err)
+        }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)

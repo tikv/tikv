@@ -10,6 +10,7 @@ use crossbeam::atomic::AtomicCell;
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use raft_engine::RaftEngine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
@@ -149,7 +150,7 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer<impl KvEngine, impl KvEngine>) -> ReadDelegate {
+    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();

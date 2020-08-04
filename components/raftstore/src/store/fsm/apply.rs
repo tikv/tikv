@@ -31,6 +31,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft_engine::RaftEngine;
 use sst_importer::SSTImporter;
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
@@ -302,7 +303,7 @@ where
 pub enum Notifier<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     Router(RaftRouter<EK, ER>),
     #[cfg(test)]
@@ -312,7 +313,7 @@ where
 impl<EK, ER> Clone for Notifier<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         match self {
@@ -326,7 +327,7 @@ where
 impl<EK, ER> Notifier<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn notify(&self, region_id: u64, msg: PeerMsg<EK>) {
         match *self {
@@ -342,7 +343,7 @@ where
 struct ApplyContext<EK, ER, W>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
     tag: String,
@@ -387,7 +388,7 @@ where
 impl<EK, ER, W> ApplyContext<EK, ER, W>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
     pub fn new(
@@ -765,7 +766,7 @@ pub struct NewSplitPeer {
 pub struct ApplyDelegate<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     /// The ID of the peer.
     id: u64,
@@ -824,7 +825,7 @@ where
 impl<EK, ER> ApplyDelegate<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn from_registration(reg: Registration) -> ApplyDelegate<EK, ER> {
         ApplyDelegate {
@@ -1240,7 +1241,7 @@ where
 impl<EK, ER> ApplyDelegate<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd<W: WriteBatch + WriteBatchVecExt<EK>>(
@@ -1378,7 +1379,7 @@ where
 impl<EK, ER> ApplyDelegate<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn handle_put<W: WriteBatch>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
@@ -1572,7 +1573,7 @@ where
 impl<EK, ER> ApplyDelegate<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn exec_change_peer<W: WriteBatch + WriteBatchVecExt<EK>>(
         &mut self,
@@ -2483,7 +2484,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new<EK: KvEngine, ER: KvEngine>(peer: &Peer<EK, ER>) -> Registration {
+    pub fn new<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -2658,7 +2659,7 @@ where
         }
     }
 
-    pub fn register<ER: KvEngine>(peer: &Peer<EK, ER>) -> Msg<EK> {
+    pub fn register<ER: RaftEngine>(peer: &Peer<EK, ER>) -> Msg<EK> {
         Msg::Registration(Registration::new(peer))
     }
 
@@ -2744,7 +2745,7 @@ where
 pub struct ApplyFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     delegate: ApplyDelegate<EK, ER>,
     receiver: Receiver<Msg<EK>>,
@@ -2754,7 +2755,7 @@ where
 impl<EK, ER> ApplyFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn from_peer(peer: &Peer<EK, ER>) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK, ER>>) {
         let reg = Registration::new(peer);
@@ -3172,7 +3173,7 @@ where
 impl<EK, ER> Fsm for ApplyFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     type Message = Msg<EK>;
 
@@ -3201,7 +3202,7 @@ where
 impl<EK, ER> Drop for ApplyFsm<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
@@ -3224,7 +3225,7 @@ impl Fsm for ControlFsm {
 pub struct ApplyPoller<EK, ER, W>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
     msg_buf: Vec<Msg<EK>>,
@@ -3236,7 +3237,7 @@ where
 impl<EK, ER, W> PollHandler<ApplyFsm<EK, ER>, ControlFsm> for ApplyPoller<EK, ER, W>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
     fn begin(&mut self, _batch_size: usize) {
@@ -3321,7 +3322,7 @@ where
     }
 }
 
-pub struct Builder<EK: KvEngine, ER: KvEngine, W: WriteBatch + WriteBatchVecExt<EK>> {
+pub struct Builder<EK: KvEngine, ER: RaftEngine, W: WriteBatch + WriteBatchVecExt<EK>> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
@@ -3335,7 +3336,7 @@ pub struct Builder<EK: KvEngine, ER: KvEngine, W: WriteBatch + WriteBatchVecExt<
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
-impl<EK: KvEngine, ER: KvEngine, W> Builder<EK, ER, W>
+impl<EK: KvEngine, ER: RaftEngine, W> Builder<EK, ER, W>
 where
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
@@ -3363,7 +3364,7 @@ where
 impl<EK, ER, W> HandlerBuilder<ApplyFsm<EK, ER>, ControlFsm> for Builder<EK, ER, W>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch + WriteBatchVecExt<EK>,
 {
     type Handler = ApplyPoller<EK, ER, W>;
@@ -3394,7 +3395,7 @@ where
 pub struct ApplyRouter<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK, ER>, ControlFsm>,
 }
@@ -3402,7 +3403,7 @@ where
 impl<EK, ER> Deref for ApplyRouter<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     type Target = BatchRouter<ApplyFsm<EK, ER>, ControlFsm>;
 
@@ -3414,7 +3415,7 @@ where
 impl<EK, ER> DerefMut for ApplyRouter<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<EK, ER>, ControlFsm> {
         &mut self.router
@@ -3424,7 +3425,7 @@ where
 impl<EK, ER> ApplyRouter<EK, ER>
 where
     EK: KvEngine,
-    ER: KvEngine,
+    ER: RaftEngine,
 {
     pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
         let reg = match self.try_send(region_id, msg) {
@@ -3501,12 +3502,12 @@ where
     }
 }
 
-pub struct ApplyBatchSystem<EK: KvEngine, ER: KvEngine> {
+pub struct ApplyBatchSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<ApplyFsm<EK, ER>, ControlFsm>,
     _phantom: PhantomData<ER>,
 }
 
-impl<EK: KvEngine, ER: KvEngine> Deref for ApplyBatchSystem<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> Deref for ApplyBatchSystem<EK, ER> {
     type Target = BatchSystem<ApplyFsm<EK, ER>, ControlFsm>;
 
     fn deref(&self) -> &BatchSystem<ApplyFsm<EK, ER>, ControlFsm> {
@@ -3514,13 +3515,13 @@ impl<EK: KvEngine, ER: KvEngine> Deref for ApplyBatchSystem<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: KvEngine> DerefMut for ApplyBatchSystem<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> DerefMut for ApplyBatchSystem<EK, ER> {
     fn deref_mut(&mut self) -> &mut BatchSystem<ApplyFsm<EK, ER>, ControlFsm> {
         &mut self.system
     }
 }
 
-impl<EK: KvEngine, ER: KvEngine> ApplyBatchSystem<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> ApplyBatchSystem<EK, ER> {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer<EK, ER>>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
@@ -3531,7 +3532,7 @@ impl<EK: KvEngine, ER: KvEngine> ApplyBatchSystem<EK, ER> {
     }
 }
 
-pub fn create_apply_batch_system<EK: KvEngine, ER: KvEngine>(
+pub fn create_apply_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
 ) -> (ApplyRouter<EK, ER>, ApplyBatchSystem<EK, ER>) {
     let (tx, _) = loose_bounded(usize::MAX);

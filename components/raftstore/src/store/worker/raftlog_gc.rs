@@ -5,11 +5,12 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
 use engine_traits::MAX_DELETE_BATCH_SIZE;
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use engine_traits::{Mutable, WriteBatch};
+use raft_engine::RaftEngine;
 use tikv_util::worker::Runnable;
 
-pub struct Task<E: KvEngine> {
-    pub raft_engine: E,
+pub struct Task<ER: RaftEngine> {
+    pub raft_engine: ER,
     pub region_id: u64,
     pub start_idx: u64,
     pub end_idx: u64,
@@ -19,7 +20,7 @@ pub struct TaskRes {
     pub collected: u64,
 }
 
-impl<E: KvEngine> Display for Task<E> {
+impl<ER: RaftEngine> Display for Task<ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -50,9 +51,9 @@ impl Runner {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log<E: KvEngine>(
+    fn gc_raft_log<ER: RaftEngine>(
         &mut self,
-        raft_engine: E,
+        raft_engine: ER,
         region_id: u64,
         start_idx: u64,
         end_idx: u64,
@@ -98,13 +99,14 @@ impl Runner {
     }
 }
 
-impl<E: KvEngine> Runnable<Task<E>> for Runner {
-    fn run(&mut self, task: Task<E>) {
+impl<ER: RaftEngine> Runnable<Task<ER>> for Runner {
+    fn run(&mut self, task: Task<ER>) {
         debug!(
             "execute gc log";
             "region_id" => task.region_id,
             "end_index" => task.end_idx,
         );
+        /****************************************************
         match self.gc_raft_log(
             task.raft_engine,
             task.region_id,
@@ -120,6 +122,7 @@ impl<E: KvEngine> Runnable<Task<E>> for Runner {
                 self.report_collected(n);
             }
         }
+        ****************************************************/
     }
 }
 

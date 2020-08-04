@@ -1,13 +1,13 @@
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
-    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable, WriteBatch as KvWriteBatch,
-    WriteBatchExt, CF_DEFAULT,
+    Iterable, Iterator, MiscExt, Mutable, Peekable, SeekKey, SyncMutable,
+    WriteBatch, WriteBatchExt, CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::{eraftpb::Entry, StorageError};
-use raft_engine::{Error, RaftEngine, RaftState, Result, WriteBatch};
+use raft_engine::{Error, RaftEngine, Result, RaftLogBatch};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -16,9 +16,9 @@ pub struct RecoveryMode;
 
 impl RaftEngine for RocksEngine {
     type RecoveryMode = RecoveryMode;
-    type WriteBatch = RocksWriteBatch;
+    type LogBatch = RocksWriteBatch;
 
-    fn write_batch(&self, capacity: usize) -> Self::WriteBatch {
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
     }
 
@@ -36,13 +36,10 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn get_raft_state(&self, raft_group_id: u64) -> Result<RaftState> {
+    fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
-        match self.get_msg_cf(CF_DEFAULT, &key) {
-            Ok(Some(state)) => Ok(to_raft_state(state)),
-            Ok(None) => Err(Error::RaftNotFound(raft_group_id)),
-            Err(e) => Err(box_err!(e)),
-        }
+        let state = box_try!(self.get_msg_cf(CF_DEFAULT, &key));
+        Ok(state)
     }
 
     #[allow(unused_variables)]
@@ -125,25 +122,37 @@ impl RaftEngine for RocksEngine {
     }
 
     #[allow(unused_variables)]
-    fn consume_write_batch(&self, batch: &mut Self::WriteBatch, sync_log: bool) -> Result<()> {
+    fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<()> {
         box_try!(self.write(batch));
-        batch.clear();
         if sync_log {
             self.sync()?;
+        }
+        batch.clear();
+        Ok(())
+    }
+
+    fn consume_and_shrink(&self, batch: &mut Self::LogBatch, sync_log: bool, max_capacity: usize, shrink_to: usize) -> Result<()> {
+        let data_size = batch.data_size();
+        self.consume(batch, sync_log)?;
+        if data_size > max_capacity {
+            *batch = self.write_batch_with_cap(shrink_to);
         }
         Ok(())
     }
 
-    #[allow(unused_variables)]
     fn clean(
         &self,
         raft_group_id: u64,
-        state: &RaftState,
+        state: &RaftLocalState,
         batch: &mut RocksWriteBatch,
     ) -> Result<()> {
         let seek_key = keys::raft_log_key(raft_group_id, 0);
         let mut iter = box_try!(self.iterator());
         if box_try!(iter.valid()) && box_try!(iter.seek(SeekKey::Key(&seek_key))) {
+            if !iter.key().starts_with(&seek_key) {
+                // No raft logs for the raft group.
+                return Ok(());
+            }
             let first_index = match keys::raft_log_index(iter.key()) {
                 Ok(index) => index,
                 Err(_) => return Ok(()),
@@ -153,6 +162,7 @@ impl RaftEngine for RocksEngine {
                 box_try!(batch.delete(&key));
             }
         }
+        box_try!(batch.delete(&keys::raft_state_key(raft_group_id)));
         Ok(())
     }
 
@@ -165,20 +175,24 @@ impl RaftEngine for RocksEngine {
         let mut wb = RocksWriteBatch::with_capacity(self.as_inner().clone(), total_size);
         let buf = Vec::with_capacity(max_size);
         let ret = wb.append_impl(raft_group_id, entries, buf)?;
-        self.consume_write_batch(&mut wb, false)?;
-        return Ok(ret);
+        self.consume(&mut wb, false)?;
+        Ok(ret)
     }
 
-    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftState) -> Result<()> {
-        let mut raft_state = RaftLocalState::default();
-        raft_state.set_last_index(state.last_index);
-        raft_state.set_hard_state(state.hard_state.clone());
-        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), &raft_state));
+    fn remove(&mut self, raft_group_id: u64, from: u64, to: Option<u64>) -> Result<()> {
+        let mut wb = self.write_batch();
+        wb.remove(raft_group_id, from, to)?;
+        self.consume(&mut wb, false)?;
+        Ok(())
+    }
+
+    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
         Ok(())
     }
 }
 
-impl WriteBatch for RocksWriteBatch {
+impl RaftLogBatch for RocksWriteBatch {
     fn append(&mut self, raft_group_id: u64, entries: &mut Vec<Entry>) -> Result<usize> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
@@ -187,20 +201,17 @@ impl WriteBatch for RocksWriteBatch {
         Ok(0)
     }
 
-    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftState) -> Result<()> {
-        let mut raft_state = RaftLocalState::default();
-        raft_state.set_last_index(state.last_index);
-        raft_state.set_hard_state(state.hard_state.clone());
-        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), &raft_state));
+    fn remove(&mut self, raft_group_id: u64, from: u64, to: Option<u64>) -> Result<()> {
+        sel
+    }
+
+    fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
+        box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
         Ok(())
     }
 
     fn is_empty(&self) -> bool {
-        KvWriteBatch::is_empty(self)
-    }
-
-    fn size(&self) -> usize {
-        self.data_size()
+        WriteBatch::is_empty(self)
     }
 }
 
@@ -220,12 +231,5 @@ impl RocksWriteBatch {
         }
         entries.clear();
         Ok(ret)
-    }
-}
-
-fn to_raft_state(mut state: RaftLocalState) -> RaftState {
-    RaftState {
-        last_index: state.last_index,
-        hard_state: state.hard_state.take().unwrap_or_default(),
     }
 }
