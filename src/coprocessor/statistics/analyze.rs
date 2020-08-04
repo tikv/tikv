@@ -28,8 +28,7 @@ use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics,
-};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {

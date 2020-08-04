@@ -10,7 +10,6 @@ use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::EvalContext;
 use tikv::storage::{
-    concurrency_manager::ConcurrencyManager,
     kv::{Engine, RocksEngine, TestEngineBuilder},
     txn::FixtureStore,
     SnapshotStore,
@@ -205,7 +204,6 @@ impl<E: Engine> Store<E> {
     /// Directly creates a `SnapshotStore` over current committed data.
     pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
         let snapshot = self.get_engine().snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(self.current_ts.into());
         SnapshotStore::new(
             snapshot,
             self.last_committed_ts,
@@ -213,7 +211,6 @@ impl<E: Engine> Store<E> {
             true,
             Default::default(),
             false,
-            cm,
         )
     }
 
