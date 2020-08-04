@@ -127,6 +127,7 @@ where
                 black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
+                black_box(false),
             )
             .unwrap()
         })
@@ -170,7 +171,7 @@ where
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::DAGHandleBencher::new(|| {
-            crate::util::build_dag_handler::<T>(executors, ranges, store, self.batch)
+            crate::util::build_dag_handler::<T>(executors, ranges, store)
         })
         .bench(b);
     }
