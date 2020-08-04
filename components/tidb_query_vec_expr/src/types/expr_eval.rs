@@ -185,7 +185,7 @@ impl RpnExpression {
                 input_physical_columns[*offset].ensure_decoded(
                     ctx,
                     &schema[*offset],
-                    input_logical_rows,
+                    LogicalRows::from_slice(input_logical_rows),
                 )?;
             }
         }

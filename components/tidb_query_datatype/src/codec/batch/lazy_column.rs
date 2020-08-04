@@ -199,13 +199,8 @@ impl LazyBatchColumn {
         ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
-        let logical_rows: Vec<_> = (0..self.len()).collect();
-        // let logical_rows = LogicalRows::Identical { size: self.len() };
-        self.ensure_decoded(
-            ctx,
-            field_type,
-            LogicalRows::from_slice(logical_rows.as_slice()),
-        )
+        let logical_rows = LogicalRows::Identical { size: self.len() };
+        self.ensure_decoded(ctx, field_type, logical_rows)
     }
 
     /// Returns maximum encoded size.
