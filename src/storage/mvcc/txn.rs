@@ -113,8 +113,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         )
     }
 
-    // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
-    // which would seek less times.
+    // Use `ScanMode::Forward` when gc.
     // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be written by
     // in ascending order.
     pub fn for_scan(
