@@ -45,6 +45,13 @@ impl ConcurrencyManager {
         TimeStamp::new(self.max_read_ts.load(Ordering::SeqCst))
     }
 
+    /// Updates max_read_ts with the given read_ts. It has no effect if
+    /// max_read_ts >= read_ts.
+    pub fn update_max_read_ts(&self, read_ts: TimeStamp) {
+        self.max_read_ts
+            .fetch_max(read_ts.into_inner(), Ordering::SeqCst);
+    }
+
     /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
     /// out of scope, the mutex will be unlocked.
     ///
@@ -77,33 +84,23 @@ impl ConcurrencyManager {
     /// Checks if there is a memory lock of the key which blocks the read.
     /// The given `check_fn` should return false iff the lock passed in
     /// blocks the read.
-    ///
-    /// It will also updates the max_read_ts.
     pub fn read_key_check<E>(
         &self,
         key: &Key,
-        ts: TimeStamp,
         check_fn: impl FnOnce(&Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.max_read_ts
-            .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.lock_table.check_key(key, check_fn)
     }
 
     /// Checks if there is a memory lock in the range which blocks the read.
     /// The given `check_fn` should return false iff the lock passed in
     /// blocks the read.
-    ///
-    /// It will also updates the max_read_ts.
     pub fn read_range_check<E>(
         &self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
-        ts: TimeStamp,
         check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.max_read_ts
-            .fetch_max(ts.into_inner(), Ordering::SeqCst);
         self.lock_table.check_range(start_key, end_key, check_fn)
     }
 }
@@ -128,28 +125,10 @@ mod tests {
     #[tokio::test]
     async fn test_update_max_read_ts() {
         let concurrency_manager = ConcurrencyManager::new(10.into());
-        let key_k = Key::from_raw(b"k");
-        let key_a = Key::from_raw(b"a");
-        let key_b = Key::from_raw(b"b");
+        concurrency_manager.update_max_read_ts(20.into());
+        assert_eq!(concurrency_manager.max_read_ts(), 20.into());
 
-        assert!(concurrency_manager
-            .read_key_check(&key_k, 15.into(), |_| Err(()))
-            .is_ok());
-        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
-
-        assert!(concurrency_manager
-            .read_key_check(&key_k, 5.into(), |_| Err(()))
-            .is_ok());
-        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
-
-        assert!(concurrency_manager
-            .read_range_check(Some(&key_a), Some(&key_b), 10.into(), |_, _| Err(()))
-            .is_ok());
-        assert_eq!(concurrency_manager.max_read_ts(), 15.into());
-
-        assert!(concurrency_manager
-            .read_range_check(Some(&key_a), Some(&key_b), 20.into(), |_, _| Err(()))
-            .is_ok());
+        concurrency_manager.update_max_read_ts(5.into());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }
 }

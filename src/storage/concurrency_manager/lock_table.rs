@@ -172,7 +172,8 @@ mod test {
             1,
             10.into(),
         );
-        lock_table.lock_key(&key_k).await.with_lock(|l| {
+        let guard = lock_table.lock_key(&key_k).await;
+        guard.with_lock(|l| {
             *l = Some(lock.clone());
         });
 
@@ -197,12 +198,10 @@ mod test {
             1,
             20.into(),
         );
-        lock_table
-            .lock_key(&Key::from_raw(b"k"))
-            .await
-            .with_lock(|l| {
-                *l = Some(lock_k.clone());
-            });
+        let guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
+        guard.with_lock(|l| {
+            *l = Some(lock_k.clone());
+        });
 
         let lock_l = Lock::new(
             LockType::Lock,
@@ -214,12 +213,10 @@ mod test {
             1,
             10.into(),
         );
-        lock_table
-            .lock_key(&Key::from_raw(b"l"))
-            .await
-            .with_lock(|l| {
-                *l = Some(lock_l.clone());
-            });
+        let guard = lock_table.lock_key(&Key::from_raw(b"l")).await;
+        guard.with_lock(|l| {
+            *l = Some(lock_l.clone());
+        });
 
         // no lock found
         assert!(lock_table

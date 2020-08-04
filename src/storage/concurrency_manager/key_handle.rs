@@ -86,7 +86,6 @@ mod tests {
         time::Duration,
     };
     use tokio::time::delay_for;
-    use txn_types::LockType;
 
     #[tokio::test]
     async fn test_key_mutex() {
@@ -121,7 +120,6 @@ mod tests {
 
         let k = Key::from_raw(b"k");
 
-        // simple case
         let handle = Arc::new(KeyHandle::new(k.clone(), table.clone()));
         table.insert_if_not_exist(k.clone(), Arc::downgrade(&handle));
         let lock_ref1 = table.get(&k).unwrap();
@@ -130,32 +128,6 @@ mod tests {
         drop(lock_ref1);
         assert!(table.get(&k).is_some());
         drop(lock_ref2);
-        assert!(table.get(&k).is_none());
-
-        // should not removed it from the table if a lock is stored in it
-        let handle = Arc::new(KeyHandle::new(k.clone(), table.clone()));
-        table.insert_if_not_exist(k.clone(), Arc::downgrade(&handle));
-        let guard = table.get(&k).unwrap().lock().await;
-        drop(handle);
-        guard.with_lock(|lock| {
-            *lock = Some(Lock::new(
-                LockType::Lock,
-                b"k".to_vec(),
-                1.into(),
-                100,
-                None,
-                1.into(),
-                1,
-                1.into(),
-            ))
-        });
-        drop(guard);
-        assert!(table.get(&k).is_some());
-
-        // remove the lock stored in, then the handle should be removed from the table
-        let guard = table.get(&k).unwrap().lock().await;
-        guard.with_lock(|lock| *lock = None);
-        drop(guard);
         assert!(table.get(&k).is_none());
     }
 }

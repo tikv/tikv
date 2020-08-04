@@ -48,7 +48,7 @@ use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use pd_client::{DummyPdClient, PdClient};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
@@ -250,6 +250,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+
+                // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_read_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    concurrency_manager
+                        .read_key_check(&key, |lock| {
+                            lock.clone()
+                                .check_ts_conflict(&key, start_ts, &bypass_locks)
+                        })
+                        .map_err(mvcc::Error::from)?;
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -262,7 +274,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
-                        concurrency_manager,
                     );
                     let result = snap_store
                         .get(&key, &mut statistics)
@@ -315,36 +326,55 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let mut statistics = Statistics::default();
                 let mut results = Vec::default();
                 let mut snaps = vec![];
-                for req in requests {
-                    let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot(engine, read_id.clone(), req.get_context())
-                    });
-                    snaps.push((req, snap));
-                }
-                Self::with_tls_engine(|engine| engine.release_snapshot());
-                for (mut req, snap) in snaps {
+
+                for mut req in requests {
                     let key = Key::from_raw(req.get_key());
+                    let start_ts = req.get_version().into();
                     let mut ctx = req.take_context();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                    let region_id = ctx.get_region_id();
+                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                    concurrency_manager.update_max_read_ts(start_ts);
+                    if isolation_level == IsolationLevel::Si {
+                        concurrency_manager
+                            .read_key_check(&key, |lock| {
+                                lock.clone()
+                                    .check_ts_conflict(&key, start_ts, &bypass_locks)
+                            })
+                            .map_err(mvcc::Error::from)?;
+                    }
+                    let snap = Self::with_tls_engine(|engine| {
+                        Self::snapshot(engine, read_id.clone(), req.get_context())
+                    });
+                    snaps.push((
+                        snap,
+                        key,
+                        start_ts,
+                        isolation_level,
+                        fill_cache,
+                        bypass_locks,
+                        region_id,
+                    ));
+                }
+                Self::with_tls_engine(|engine| engine.release_snapshot());
+                for (snap, key, start_ts, isolation_level, fill_cache, bypass_locks, region_id) in
+                    snaps
+                {
                     match snap.await {
                         Ok(snapshot) => {
-                            match PointGetterBuilder::new(
-                                snapshot,
-                                req.get_version().into(),
-                                concurrency_manager.clone(),
-                            )
-                            .fill_cache(fill_cache)
-                            .isolation_level(isolation_level)
-                            .multi(false)
-                            .bypass_locks(bypass_locks)
-                            .build()
+                            match PointGetterBuilder::new(snapshot, start_ts)
+                                .fill_cache(fill_cache)
+                                .isolation_level(isolation_level)
+                                .multi(false)
+                                .bypass_locks(bypass_locks)
+                                .build()
                             {
                                 Ok(mut point_getter) => {
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
-                                    metrics::tls_collect_read_flow(ctx.get_region_id(), &stat);
+                                    metrics::tls_collect_read_flow(region_id, &stat);
                                     statistics.add(&stat);
                                     results.push(v.map_err(|e| Error::from(txn::Error::from(e))));
                                 }
@@ -401,6 +431,20 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+
+                // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_read_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    for key in &keys {
+                        concurrency_manager
+                            .read_key_check(&key, |lock| {
+                                lock.clone()
+                                    .check_ts_conflict(&key, start_ts, &bypass_locks)
+                            })
+                            .map_err(mvcc::Error::from)?;
+                    }
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -414,7 +458,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
-                        concurrency_manager,
                     );
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
@@ -504,6 +547,18 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+
+                // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_read_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    concurrency_manager
+                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            lock.clone()
+                                .check_ts_conflict(&key, start_ts, &bypass_locks)
+                        })
+                        .map_err(mvcc::Error::from)?;
+                }
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
                 {
@@ -516,7 +571,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         !ctx.get_not_fill_cache(),
                         bypass_locks,
                         false,
-                        concurrency_manager,
                     );
 
                     let mut scanner;

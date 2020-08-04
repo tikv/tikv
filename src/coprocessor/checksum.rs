@@ -35,7 +35,6 @@ impl<S: Snapshot> ChecksumContext<S> {
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
             false,
-            concurrency_manager,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::new(store, false),

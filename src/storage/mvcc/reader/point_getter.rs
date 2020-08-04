@@ -1,10 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
-    mvcc::{default_not_found_error, NewerTsCheckState, Result},
-};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
@@ -19,12 +16,11 @@ pub struct PointGetterBuilder<S: Snapshot> {
     ts: TimeStamp,
     bypass_locks: TsSet,
     check_has_newer_ts_data: bool,
-    concurrency_manager: ConcurrencyManager,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
     /// Initialize a new `PointGetterBuilder`.
-    pub fn new(snapshot: S, ts: TimeStamp, concurrency_manager: ConcurrencyManager) -> Self {
+    pub fn new(snapshot: S, ts: TimeStamp) -> Self {
         Self {
             snapshot,
             multi: true,
@@ -34,7 +30,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             ts,
             bypass_locks: Default::default(),
             check_has_newer_ts_data: false,
-            concurrency_manager,
         }
     }
 
@@ -121,7 +116,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             } else {
                 NewerTsCheckState::Unknown
             },
-            concurrency_manager: self.concurrency_manager,
 
             statistics: Statistics::default(),
 
@@ -144,7 +138,6 @@ pub struct PointGetter<S: Snapshot> {
     ts: TimeStamp,
     bypass_locks: TsSet,
     met_newer_ts_data: NewerTsCheckState,
-    concurrency_manager: ConcurrencyManager,
 
     statistics: Statistics,
 
@@ -185,12 +178,6 @@ impl<S: Snapshot> PointGetter<S> {
 
         match self.isolation_level {
             IsolationLevel::Si => {
-                // Check the in-memory lock table
-                self.concurrency_manager
-                    .read_key_check(user_key, self.ts, |lock| {
-                        lock.clone()
-                            .check_ts_conflict(user_key, self.ts, &self.bypass_locks)
-                    })?;
                 // Check for locks that signal concurrent writes in Si.
                 self.load_and_check_lock(user_key)?;
             }
@@ -348,8 +335,7 @@ mod tests {
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
-        PointGetterBuilder::new(snapshot, ts, cm)
+        PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .build()
             .unwrap()
@@ -357,8 +343,7 @@ mod tests {
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
-        PointGetterBuilder::new(snapshot, ts, cm)
+        PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
             .build()
@@ -382,9 +367,8 @@ mod tests {
         expected_met_newer_ts_data: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
         let ts = getter_ts.into();
-        let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts, cm.clone())
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts)
             .isolation_level(IsolationLevel::Si)
             .check_has_newer_ts_data(true)
             .build()
@@ -398,7 +382,7 @@ mod tests {
         };
         assert_eq!(expected, point_getter.met_newer_ts_data());
 
-        let mut point_getter = PointGetterBuilder::new(snapshot, ts, cm)
+        let mut point_getter = PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .check_has_newer_ts_data(false)
             .build()
@@ -715,9 +699,8 @@ mod tests {
         let engine = new_sample_engine_2();
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
 
-        let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into(), cm)
+        let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
             .omit_value(true)
             .build()
@@ -731,8 +714,7 @@ mod tests {
             snapshot: Arc<RocksSnapshot>,
             ts: TimeStamp,
         ) -> PointGetter<Arc<RocksSnapshot>> {
-            let cm = ConcurrencyManager::new(1.into());
-            PointGetterBuilder::new(snapshot, ts, cm)
+            PointGetterBuilder::new(snapshot, ts)
                 .isolation_level(IsolationLevel::Si)
                 .omit_value(true)
                 .multi(false)
@@ -797,8 +779,7 @@ mod tests {
         must_prewrite_delete(&engine, key, key, 30);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let cm = ConcurrencyManager::new(30.into());
-        let mut getter = PointGetterBuilder::new(snapshot, 60.into(), cm.clone())
+        let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
             .build()
@@ -806,7 +787,7 @@ mod tests {
         must_get_value(&mut getter, key, val);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut getter = PointGetterBuilder::new(snapshot, 60.into(), cm)
+        let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))
             .build()

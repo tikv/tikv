@@ -166,7 +166,6 @@ impl BackupRange {
             false, /* fill_cache */
             Default::default(),
             false,
-            concurrency_manager,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();

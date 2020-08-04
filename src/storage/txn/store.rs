@@ -5,12 +5,9 @@ use kvproto::kvrpcpb::IsolationLevel;
 use super::{Error, ErrorInner, Result};
 use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
-use crate::storage::{
-    concurrency_manager::ConcurrencyManager,
-    mvcc::{
-        EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
-        PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
-    },
+use crate::storage::mvcc::{
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
 
@@ -215,7 +212,6 @@ pub struct SnapshotStore<S: Snapshot> {
     fill_cache: bool,
     bypass_locks: TsSet,
     check_has_newer_ts_data: bool,
-    concurrency_manager: ConcurrencyManager,
 
     point_getter_cache: Option<PointGetter<S>>,
 }
@@ -224,16 +220,12 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut point_getter = PointGetterBuilder::new(
-            self.snapshot.clone(),
-            self.start_ts,
-            self.concurrency_manager.clone(),
-        )
-        .fill_cache(self.fill_cache)
-        .isolation_level(self.isolation_level)
-        .multi(false)
-        .bypass_locks(self.bypass_locks.clone())
-        .build()?;
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(false)
+            .bypass_locks(self.bypass_locks.clone())
+            .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
@@ -242,17 +234,13 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
-                PointGetterBuilder::new(
-                    self.snapshot.clone(),
-                    self.start_ts,
-                    self.concurrency_manager.clone(),
-                )
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .multi(true)
-                .bypass_locks(self.bypass_locks.clone())
-                .check_has_newer_ts_data(self.check_has_newer_ts_data)
-                .build()?,
+                PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+                    .fill_cache(self.fill_cache)
+                    .isolation_level(self.isolation_level)
+                    .multi(true)
+                    .bypass_locks(self.bypass_locks.clone())
+                    .check_has_newer_ts_data(self.check_has_newer_ts_data)
+                    .build()?,
             );
         }
         Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
@@ -294,16 +282,12 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
         order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
-        let mut point_getter = PointGetterBuilder::new(
-            self.snapshot.clone(),
-            self.start_ts,
-            self.concurrency_manager.clone(),
-        )
-        .fill_cache(self.fill_cache)
-        .isolation_level(self.isolation_level)
-        .multi(true)
-        .bypass_locks(self.bypass_locks.clone())
-        .build()?;
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(true)
+            .bypass_locks(self.bypass_locks.clone())
+            .build()?;
 
         let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
         for _ in 0..keys.len() {
@@ -333,8 +317,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        // Check the in-memory lock table for locks
-        self.check_locks_in_range(&lower_bound, &upper_bound)?;
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
@@ -359,8 +341,6 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        // Check the in-memory lock table for locks
-        self.check_locks_in_range(&lower_bound, &upper_bound)?;
         let (min_ts, max_ts) = if after_ts == TimeStamp::new(0) {
             // Do not set min_ts and max_ts as it wants to read all versions.
             (None, None)
@@ -391,7 +371,6 @@ impl<S: Snapshot> SnapshotStore<S> {
         fill_cache: bool,
         bypass_locks: TsSet,
         check_has_newer_ts_data: bool,
-        concurrency_manager: ConcurrencyManager,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -402,7 +381,6 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
-            concurrency_manager,
         }
     }
 
@@ -449,27 +427,6 @@ impl<S: Snapshot> SnapshotStore<S> {
             }
         }
 
-        Ok(())
-    }
-
-    fn check_locks_in_range(
-        &self,
-        lower_bound: &Option<Key>,
-        upper_bound: &Option<Key>,
-    ) -> Result<()> {
-        if self.isolation_level == IsolationLevel::Si {
-            self.concurrency_manager
-                .read_range_check(
-                    lower_bound.as_ref(),
-                    upper_bound.as_ref(),
-                    self.start_ts,
-                    |key, lock| {
-                        lock.clone()
-                            .check_ts_conflict(key, self.start_ts, &self.bypass_locks)
-                    },
-                )
-                .map_err(MvccError::from)?;
-        }
         Ok(())
     }
 }
@@ -652,7 +609,6 @@ mod tests {
         snapshot: Arc<RocksSnapshot>,
         ctx: Context,
         engine: RocksEngine,
-        concurrency_manager: ConcurrencyManager,
     }
 
     impl TestStore {
@@ -663,13 +619,11 @@ mod tests {
                 .collect();
             let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let concurrency_manager = ConcurrencyManager::new(START_TS);
             let mut store = TestStore {
                 keys,
                 snapshot,
                 ctx,
                 engine,
-                concurrency_manager,
             };
             store.init_data();
             store
@@ -679,6 +633,7 @@ mod tests {
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
             let pk = primary_key.as_bytes();
+
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
@@ -739,7 +694,6 @@ mod tests {
                 true,
                 Default::default(),
                 false,
-                self.concurrency_manager.clone(),
             )
         }
     }
@@ -958,7 +912,6 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let concurrency_manager = ConcurrencyManager::new(1.into());
         let store = SnapshotStore::new(
             snap,
             TimeStamp::zero(),
@@ -966,7 +919,6 @@ mod tests {
             true,
             Default::default(),
             false,
-            concurrency_manager.clone(),
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
@@ -1013,7 +965,6 @@ mod tests {
             true,
             Default::default(),
             false,
-            concurrency_manager,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
         assert!(store2

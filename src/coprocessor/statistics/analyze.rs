@@ -56,7 +56,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
             false,
-            concurrency_manager,
         );
         Ok(Self {
             req,
