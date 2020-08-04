@@ -14,7 +14,7 @@ use crate::storage::txn::{Error, Result};
 use crate::storage::{
     txn::commands::{Command, CommandExt, TypedCommand},
     types::PrewriteResult,
-    Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
+    Context, Error as StorageError, ProcessResult, Snapshot,
 };
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -136,7 +136,6 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         snapshot: S,
         context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
-        let mut scan_mode = None;
         let rows = self.mutations.len();
         if rows > FORWARD_MIN_MUTATIONS_NUM {
             self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
@@ -162,11 +161,11 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             }
         }
         let mut txn = MvccTxn::new(
-                snapshot,
-                self.start_ts,
-                !self.ctx.get_not_fill_cache(),
-                context.pd_client,
-            );
+            snapshot,
+            self.start_ts,
+            !self.ctx.get_not_fill_cache(),
+            context.pd_client,
+        );
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
@@ -249,7 +248,7 @@ mod tests {
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::commands::{
-        Commit, Prewrite, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
+        Commit, Prewrite, Rollback, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
     };
     use crate::storage::txn::LockInfo;
     use crate::storage::txn::{Error, ErrorInner, Result};
@@ -395,7 +394,7 @@ mod tests {
             pri_key.to_vec(),
             100,
         )
-            .unwrap();
+        .unwrap();
         // Rollback to make tombstones in lock-cf.
         rollback(&engine, &mut statistic, keys, 100).unwrap();
         // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
@@ -485,16 +484,15 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
-
-        let ret = process_write_impl(
-            cmd.into(),
-            snap,
-            &DummyLockManager {},
-            Arc::new(DummyPdClient::new()),
-            ExtraOp::Noop,
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            pd_client: Arc::new(DummyPdClient::new()),
+            extra_op: ExtraOp::Noop,
             statistics,
-            false,
-        )?;
+            pipelined_pessimistic_lock: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

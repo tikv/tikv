@@ -292,7 +292,7 @@ pub mod tests {
     use crate::storage::kv::{RocksEngine as StorageRocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CompactExt, Peekable, Mutable};
+    use engine_traits::{CompactExt, Peekable, SyncMutable};
     use txn_types::TimeStamp;
 
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
