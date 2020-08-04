@@ -803,6 +803,22 @@ impl TitanDBConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+// Note that the S3 integration is still an experimental feature.
+pub struct S3Config {
+    pub enabled: bool,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -871,6 +887,8 @@ pub struct DbConfig {
     pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
+    #[config(skip)]
+    pub s3: S3Config,
 }
 
 impl Default for DbConfig {
@@ -915,6 +933,7 @@ impl Default for DbConfig {
             raftcf: RaftCfConfig::default(),
             ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
+            s3: S3Config::default(),
         }
     }
 }
