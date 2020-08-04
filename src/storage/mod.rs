@@ -252,7 +252,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                concurrency_manager.update_max_read_ts(start_ts);
+                if start_ts != TimeStamp::max() {
+                    concurrency_manager.update_max_read_ts(start_ts);
+                }
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     concurrency_manager
                         .read_key_check(&key, |lock| {
@@ -336,7 +338,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                     let region_id = ctx.get_region_id();
                     // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_read_ts(start_ts);
+                    if start_ts != TimeStamp::max() {
+                        concurrency_manager.update_max_read_ts(start_ts);
+                    }
                     if isolation_level == IsolationLevel::Si {
                         concurrency_manager
                             .read_key_check(&key, |lock| {
@@ -433,7 +437,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                concurrency_manager.update_max_read_ts(start_ts);
+                if start_ts != TimeStamp::max() {
+                    concurrency_manager.update_max_read_ts(start_ts);
+                }
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     for key in &keys {
                         concurrency_manager
@@ -549,7 +555,9 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                concurrency_manager.update_max_read_ts(start_ts);
+                if start_ts != TimeStamp::max() {
+                    concurrency_manager.update_max_read_ts(start_ts);
+                }
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {

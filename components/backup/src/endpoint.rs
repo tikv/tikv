@@ -20,7 +20,10 @@ use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
 use tikv::storage::kv::{Engine, ScanMode, Snapshot};
-use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
+use tikv::storage::mvcc::Error as MvccError;
+use tikv::storage::txn::{
+    EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
+};
 use tikv::storage::{concurrency_manager::ConcurrencyManager, Statistics};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
@@ -152,6 +155,23 @@ impl BackupRange {
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
+
+        // Update max_read_ts and check the in-memory lock table before getting the snapshot
+        if backup_ts != TimeStamp::max() {
+            concurrency_manager.update_max_read_ts(backup_ts);
+        }
+        concurrency_manager
+            .read_range_check(
+                self.start_key.as_ref(),
+                self.end_key.as_ref(),
+                |key, lock| {
+                    lock.clone()
+                        .check_ts_conflict(&key, backup_ts, &Default::default())
+                },
+            )
+            .map_err(MvccError::from)
+            .map_err(TxnError::from)?;
+
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {

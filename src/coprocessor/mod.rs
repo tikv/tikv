@@ -34,6 +34,7 @@ pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
 
+use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
@@ -103,7 +104,7 @@ pub struct ReqContext {
     pub is_desc_scan: Option<bool>,
 
     /// The transaction start_ts of the request
-    pub txn_start_ts: Option<u64>,
+    pub txn_start_ts: TimeStamp,
 
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
@@ -129,7 +130,7 @@ impl ReqContext {
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
-        txn_start_ts: Option<u64>,
+        txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
@@ -176,9 +177,9 @@ impl ReqContext {
         const ID_SHIFT: u32 = 16;
         const MASK: u64 = u64::max_value() >> ID_SHIFT;
         const MAX_TS: u64 = u64::max_value();
-        let base = match self.txn_start_ts {
-            Some(0) | Some(MAX_TS) | None => thread_rng().next_u64(),
-            Some(start_ts) => start_ts,
+        let base = match self.txn_start_ts.into_inner() {
+            0 | MAX_TS => thread_rng().next_u64(),
+            start_ts => start_ts,
         };
         let task_id: u64 = self.context.get_task_id();
         if task_id > 0 {

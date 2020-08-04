@@ -10,17 +10,18 @@ use futures03::channel::mpsc;
 use futures03::prelude::*;
 use tokio::sync::Semaphore;
 
+use kvproto::kvrpcpb::IsolationLevel;
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
 use protobuf::CodedInputStream;
 use protobuf::Message;
-use tipb::{AnalyzeReq, AnalyzeType};
-use tipb::{ChecksumRequest, ChecksumScanOn};
-use tipb::{DagRequest, ExecType};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
+use crate::storage::concurrency_manager::ConcurrencyManager;
 use crate::storage::kv::{self, with_tls_engine};
+use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -30,7 +31,6 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use minitrace::prelude::*;
-use storage::concurrency_manager::ConcurrencyManager;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -102,9 +102,32 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+    fn check_memory_locks(
+        &self,
+        req_ctx: &ReqContext,
+        key_ranges: &[coppb::KeyRange],
+    ) -> Result<()> {
+        let start_ts = req_ctx.txn_start_ts;
+        if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+            for range in key_ranges {
+                let start_key = txn_types::Key::from_raw(range.get_start());
+                let end_key = txn_types::Key::from_raw(range.get_end());
+                self.concurrency_manager
+                    .read_range_check(Some(&start_key), Some(&end_key), |key, lock| {
+                        lock.clone()
+                            .check_ts_conflict(key, start_ts, &req_ctx.bypass_locks)
+                    })
+                    .map_err(MvccError::from)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
-    fn parse_request(
+    ///
+    /// It also checks if there are locks in memory blocking this read request.
+    fn parse_request_and_check_memory_locks(
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
@@ -170,7 +193,6 @@ impl<E: Engine> Endpoint<E> {
         let mut parser = Parser::new(&data, self.recursion_limit);
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
-        let concurrency_manager = self.concurrency_manager.clone();
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
@@ -202,9 +224,12 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     Some(is_desc_scan),
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx: &ReqContext| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -250,18 +275,16 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(
-                        analyze,
-                        ranges,
-                        start_ts,
-                        snap,
-                        concurrency_manager,
-                        req_ctx,
+                        analyze, ranges, start_ts, snap, req_ctx,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -286,20 +309,16 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(start_ts),
+                    start_ts.into(),
                     cache_match_version,
                 );
+
+                self.check_memory_locks(&req_ctx, &ranges)?;
+
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
-                    checksum::ChecksumContext::new(
-                        checksum,
-                        ranges,
-                        start_ts,
-                        snap,
-                        concurrency_manager,
-                        req_ctx,
-                    )
-                    .map(|h| h.into_boxed())
+                    checksum::ChecksumContext::new(checksum, ranges, start_ts, snap, req_ctx)
+                        .map(|h| h.into_boxed())
                 });
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
@@ -431,7 +450,7 @@ impl<E: Engine> Endpoint<E> {
         );
 
         let result_of_future = self
-            .parse_request(req, peer, false)
+            .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         future::result(result_of_future)
             .flatten()
@@ -551,11 +570,11 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let result_of_stream =
-            self.parse_request(req, peer, true)
-                .and_then(|(handler_builder, req_ctx)| {
-                    self.handle_stream_request(req_ctx, handler_builder)
-                }); // Result<Stream<Resp, Error>, Error>
+        let result_of_stream = self
+            .parse_request_and_check_memory_locks(req, peer, true)
+            .and_then(|(handler_builder, req_ctx)| {
+                self.handle_stream_request(req_ctx, handler_builder)
+            }); // Result<Stream<Resp, Error>, Error>
 
         futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
             .try_flatten() // Stream<Resp, Error>
