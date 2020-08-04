@@ -997,6 +997,12 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     return Ok((TxnStatus::TtlExpire, released));
                 }
 
+                if !caller_start_ts.is_zero() && lock.use_async_commit {
+                    return Err(ErrorInner::Other(box_err!(
+                        "cannot push min_commit_ts of an async commit transaction"
+                    )));
+                }
+
                 // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
                 // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
                 // during rolling update.
@@ -1008,6 +1014,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     // Push forward the min_commit_ts so that reading won't be blocked by locks.
                     && caller_start_ts >= lock.min_commit_ts
                 {
+                    assert!(!lock.use_async_commit);
                     lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
