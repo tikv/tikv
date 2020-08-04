@@ -286,7 +286,13 @@ impl Engine for RocksEngine {
         write_modifies(&self.engines.kv, modifies)
     }
 
-    fn async_write(&self, _: &Context, batch: WriteData, cb: Callback<()>, _tag: Option<CommandKind>) -> Result<()> {
+    fn async_write(
+        &self,
+        _: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        _tag: Option<CommandKind>,
+    ) -> Result<()> {
         fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
         if batch.modifies.is_empty() {

@@ -394,7 +394,6 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
-
     pub static ref SCHED_WAIT_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_wait_for_process_duration_seconds",
         "Bucketed histogram of duration of wait-for-process",
@@ -404,7 +403,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_WAIT_HISTOGRAM_VEC: SchedWaitDurationVec =
         auto_flush_from!(SCHED_WAIT_HISTOGRAM, SchedWaitDurationVec);
-
     pub static ref ASYNC_WRITE_DURATIONS_VEC: AsyncWriteDurationVec =
         auto_flush_from!(ASYNC_WRITE_DURATIONS, AsyncWriteDurationVec);
     pub static ref ASYNC_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
@@ -414,7 +412,6 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-
     pub static ref PRE_ASYNC_WRITE_DURATIONS_VEC: PreAsyncWriteDurationVec =
         auto_flush_from!(PRE_ASYNC_WRITE_DURATIONS, PreAsyncWriteDurationVec);
     pub static ref PRE_ASYNC_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
@@ -424,7 +421,6 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-
     pub static ref SCHED_PRE_HANDLE_1_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_pre_handle_1_duration_seconds",
         "Bucketed histogram of scheduler pre_handle_1 duration.",
@@ -434,7 +430,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PRE_HANDLE_1_DURATIONS_VEC: SchedPreHandle1DurationVec =
         auto_flush_from!(SCHED_PRE_HANDLE_1_DURATIONS, SchedPreHandle1DurationVec);
-
     pub static ref SCHED_PRE_HANDLE_2_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_pre_handle_2_duration_seconds",
         "Bucketed histogram of scheduler pre_handle_2 duration.",
@@ -444,7 +439,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PRE_HANDLE_2_DURATIONS_VEC: SchedPreHandle2DurationVec =
         auto_flush_from!(SCHED_PRE_HANDLE_2_DURATIONS, SchedPreHandle2DurationVec);
-
     pub static ref SCHED_PRE_HANDLE_3_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_pre_handle_3_duration_seconds",
         "Bucketed histogram of scheduler pre_handle_3 duration.",
@@ -454,7 +448,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_PRE_HANDLE_3_DURATIONS_VEC: SchedPreHandle3DurationVec =
         auto_flush_from!(SCHED_PRE_HANDLE_3_DURATIONS, SchedPreHandle3DurationVec);
-
     pub static ref SCHED_BEFORE_WRITE_1_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_before_write_1_duration_seconds",
         "Bucketed histogram of scheduler before_write_1 duration.",
@@ -464,7 +457,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_BEFORE_WRITE_1_DURATIONS_VEC: SchedBeforeWrite1DurationVec =
         auto_flush_from!(SCHED_BEFORE_WRITE_1_DURATIONS, SchedBeforeWrite1DurationVec);
-
     pub static ref SCHED_BEFORE_WRITE_2_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_before_write_2_duration_seconds",
         "Bucketed histogram of scheduler before_write_2 duration.",
@@ -474,7 +466,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_BEFORE_WRITE_2_DURATIONS_VEC: SchedBeforeWrite2DurationVec =
         auto_flush_from!(SCHED_BEFORE_WRITE_2_DURATIONS, SchedBeforeWrite2DurationVec);
-
     pub static ref SCHED_EXEC_CALLBACK_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_exec_callback_duration_seconds",
         "Bucketed histogram of scheduler executing callback.",
@@ -484,7 +475,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_EXEC_CALLBACK_DURATIONS_VEC: SchedExecCallbackDurationVec =
         auto_flush_from!(SCHED_EXEC_CALLBACK_DURATIONS, SchedExecCallbackDurationVec);
-
     pub static ref SCHED_POST_HANDLE_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_post_handle_duration_seconds",
         "Bucketed histogram of scheduler post-handle processing requests.",
@@ -494,7 +484,6 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_POST_HANDLE_DURATIONS_VEC: SchedPostHandleDurationVec =
         auto_flush_from!(SCHED_POST_HANDLE_DURATIONS, SchedPostHandleDurationVec);
-
     pub static ref SCHED_POST_WRITE_DURATIONS: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_post_write_duration_seconds",
         "Bucketed histogram of scheduler post-write processing requests.",

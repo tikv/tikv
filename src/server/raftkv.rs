@@ -317,7 +317,13 @@ impl<S: RaftStoreRouter<RocksEngine>> Engine for RaftKv<S> {
         write_modifies(&self.engine, modifies)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>, tag: Option<CommandKind>) -> kv::Result<()> {
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        cb: Callback<()>,
+        tag: Option<CommandKind>,
+    ) -> kv::Result<()> {
         let pre_begin_instant = Instant::now_coarse();
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {

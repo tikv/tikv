@@ -58,13 +58,13 @@ use crate::storage::metrics::SCHED_POST_WRITE_DURATIONS_VEC;
 // Scheduler command duration == ASYNC_WRITE_DURATIONS_VEC +
 //   ASYNC_WRITE_DURATIONS_VEC +
 //   sum duration of below:
-use crate::storage::metrics::SCHED_WAIT_HISTOGRAM_VEC;
-use crate::storage::metrics::SCHED_PRE_HANDLE_1_DURATIONS_VEC;
-use crate::storage::metrics::SCHED_PRE_HANDLE_2_DURATIONS_VEC;
-use crate::storage::metrics::SCHED_PRE_HANDLE_3_DURATIONS_VEC;
 use crate::storage::metrics::SCHED_BEFORE_WRITE_1_DURATIONS_VEC;
 use crate::storage::metrics::SCHED_BEFORE_WRITE_2_DURATIONS_VEC;
 use crate::storage::metrics::SCHED_EXEC_CALLBACK_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_1_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_2_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_PRE_HANDLE_3_DURATIONS_VEC;
+use crate::storage::metrics::SCHED_WAIT_HISTOGRAM_VEC;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -396,7 +396,6 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Scheduler<E, L, P> {
                             .get(tag)
                             .observe(timer.elapsed_secs());
                         sched.process_by_worker(snapshot, task);
-
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();

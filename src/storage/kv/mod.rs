@@ -11,6 +11,7 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
+use crate::storage::metrics::CommandKind;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksTablePropertiesCollection};
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, ReadOptions};
@@ -18,7 +19,6 @@ use futures03::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
 use txn_types::{Key, TxnExtra, Value};
-use crate::storage::metrics::CommandKind;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
@@ -110,7 +110,13 @@ pub trait Engine: Send + Clone + 'static {
         cb: Callback<Self::Snap>,
     ) -> Result<()>;
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, callback: Callback<()>, tag: Option<CommandKind>) -> Result<()>;
+    fn async_write(
+        &self,
+        ctx: &Context,
+        batch: WriteData,
+        callback: Callback<()>,
+        tag: Option<CommandKind>,
+    ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
