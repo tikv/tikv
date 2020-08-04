@@ -11,7 +11,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
-use std::sync::Arc;
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -49,18 +48,12 @@ impl CommandExt for CheckTxnStatus {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for CheckTxnStatus {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.lock_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
 
         let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
@@ -73,7 +66,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {
-            released_locks.wake_up(lock_mgr);
+            released_locks.wake_up(context.lock_mgr);
         }
 
         context.statistics.add(&txn.take_statistics());

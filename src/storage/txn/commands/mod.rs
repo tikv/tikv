@@ -425,6 +425,14 @@ pub trait CommandExt: Display {
     fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
 }
 
+pub struct WriteContext<'a, L: LockManager, P: PdClient + 'static> {
+    pub lock_mgr: &'a L,
+    pub pd_client: Arc<P>,
+    pub extra_op: ExtraOp,
+    pub statistics: &'a mut Statistics,
+    pub pipelined_pessimistic_lock: bool,
+}
+
 impl Command {
     // These two are for backward compatibility, after some other refactors are done
     // we can remove Command totally and use `&dyn CommandExt` instead
@@ -489,39 +497,22 @@ impl Command {
     pub(super) fn process_write<S: Snapshot, L: LockManager, P: PdClient + 'static>(
         self,
         snapshot: S,
-        lock_mgr: &L,
-        pd_client: Arc<P>,
-        extra_op: ExtraOp,
-        statistics: &mut Statistics,
-        pipelined_pessimistic_lock: bool,
+        context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
-        let context = WriteContext {
-            extra_op,
-            statistics,
-            pipelined_pessimistic_lock,
-        };
         match self {
-            Command::Prewrite(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::PrewritePessimistic(t) => {
-                t.process_write(snapshot, lock_mgr, pd_client, context)
-            }
-            Command::AcquirePessimisticLock(t) => {
-                t.process_write(snapshot, lock_mgr, pd_client, context)
-            }
-            Command::Commit(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::Cleanup(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::Rollback(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::PessimisticRollback(t) => {
-                t.process_write(snapshot, lock_mgr, pd_client, context)
-            }
-            Command::ResolveLock(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::ResolveLockLite(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::TxnHeartBeat(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::CheckTxnStatus(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
-            Command::CheckSecondaryLocks(t) => {
-                t.process_write(snapshot, lock_mgr, pd_client, context)
-            }
-            Command::Pause(t) => t.process_write(snapshot, lock_mgr, pd_client, context),
+            Command::Prewrite(t) => t.process_write(snapshot, context),
+            Command::PrewritePessimistic(t) => t.process_write(snapshot, context),
+            Command::AcquirePessimisticLock(t) => t.process_write(snapshot, context),
+            Command::Commit(t) => t.process_write(snapshot, context),
+            Command::Cleanup(t) => t.process_write(snapshot, context),
+            Command::Rollback(t) => t.process_write(snapshot, context),
+            Command::PessimisticRollback(t) => t.process_write(snapshot, context),
+            Command::ResolveLock(t) => t.process_write(snapshot, context),
+            Command::ResolveLockLite(t) => t.process_write(snapshot, context),
+            Command::TxnHeartBeat(t) => t.process_write(snapshot, context),
+            Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
+            Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
+            Command::Pause(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -590,20 +581,8 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
-pub struct WriteContext<'a> {
-    extra_op: ExtraOp,
-    statistics: &'a mut Statistics,
-    pipelined_pessimistic_lock: bool,
-}
-
 pub(super) trait WriteCommand<S: Snapshot, L: LockManager, P: PdClient + 'static>:
     CommandExt
 {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult>;
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult>;
 }

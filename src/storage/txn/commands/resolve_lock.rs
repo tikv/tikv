@@ -10,7 +10,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -64,19 +63,17 @@ impl CommandExt for ResolveLock {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for ResolveLock {
-    fn process_write<'a>(
+    fn process_write(
         mut self,
         snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
+        context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
         let mut txn = MvccTxn::new(
             snapshot,
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
 
         let mut scan_key = self.scan_key.take();
@@ -109,6 +106,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 break;
             }
         }
+        let lock_mgr = context.lock_mgr;
         released_locks
             .into_iter()
             .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));

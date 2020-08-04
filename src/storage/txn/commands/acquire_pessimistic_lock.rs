@@ -14,7 +14,6 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };
-use std::sync::Arc;
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
@@ -73,15 +72,14 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for AcquirePessimisticLock
 {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        _lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
-        let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache(), pd_client);
+        let mut txn = MvccTxn::new(
+            snapshot,
+            start_ts,
+            !ctx.get_not_fill_cache(),
+            context.pd_client,
+        );
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))

@@ -10,7 +10,6 @@ use crate::storage::txn::Result;
 use crate::storage::types::SecondaryLocksStatus;
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use txn_types::Key;
 
 command! {
@@ -43,18 +42,12 @@ impl CommandExt for CheckSecondaryLocks {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for CheckSecondaryLocks
 {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
@@ -80,7 +73,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
             // Lock is only released when result is `RolledBack`.
-            released_locks.wake_up(lock_mgr);
+            released_locks.wake_up(context.lock_mgr);
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
         }

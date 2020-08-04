@@ -8,7 +8,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use txn_types::Key;
@@ -36,13 +35,7 @@ impl CommandExt for Pause {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Pause {
-    fn process_write<'a>(
-        self,
-        _snapshot: S,
-        _lock_mgr: &'a L,
-        _pd_client: Arc<P>,
-        _context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, _snapshot: S, _context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         thread::sleep(Duration::from_millis(self.duration));
         Ok(WriteResult {
             ctx: self.ctx,

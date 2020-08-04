@@ -13,7 +13,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::{Error, Result};
 use crate::storage::types::PrewriteResult;
 use crate::storage::{Error as StorageError, ProcessResult, Snapshot};
-use std::sync::Arc;
 
 command! {
     /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -66,19 +65,13 @@ impl CommandExt for PrewritePessimistic {
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P>
     for PrewritePessimistic
 {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        _lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.

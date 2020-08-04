@@ -9,7 +9,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use pd_client::PdClient;
-use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
 command! {
@@ -35,18 +34,12 @@ impl CommandExt for Rollback {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Rollback {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(
             snapshot,
             self.start_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
 
         let rows = self.keys.len();
@@ -54,7 +47,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         for k in self.keys {
             released_locks.push(txn.rollback(k)?);
         }
-        released_locks.wake_up(lock_mgr);
+        released_locks.wake_up(context.lock_mgr);
 
         context.statistics.add(&txn.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());

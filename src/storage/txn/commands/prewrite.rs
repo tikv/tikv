@@ -16,7 +16,6 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, ScanMode, Snapshot,
 };
-use std::sync::Arc;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -132,12 +131,10 @@ impl Prewrite {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Prewrite {
-    fn process_write<'a>(
+    fn process_write(
         mut self,
         snapshot: S,
-        _lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
+        context: WriteContext<'_, L, P>,
     ) -> Result<WriteResult> {
         let mut scan_mode = None;
         let rows = self.mutations.len();
@@ -171,14 +168,14 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 scan_mode,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                pd_client,
+                context.pd_client,
             )
         } else {
             MvccTxn::new(
                 snapshot,
                 self.start_ts,
                 !self.ctx.get_not_fill_cache(),
-                pd_client,
+                context.pd_client,
             )
         };
 
@@ -262,7 +259,9 @@ mod tests {
     use txn_types::{Key, Mutation};
 
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::commands::{Commit, Prewrite, FORWARD_MIN_MUTATIONS_NUM};
+    use crate::storage::txn::commands::{
+        Commit, Prewrite, WriteContext, FORWARD_MIN_MUTATIONS_NUM,
+    };
     use crate::storage::txn::LockInfo;
     use crate::storage::txn::{Error, ErrorInner, Result};
     use crate::storage::DummyLockManager;
@@ -393,14 +392,14 @@ mod tests {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
-        let ret = cmd.cmd.process_write(
-            snap,
-            &DummyLockManager {},
-            Arc::new(DummyPdClient::new()),
-            ExtraOp::Noop,
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            pd_client: Arc::new(DummyPdClient::new()),
+            extra_op: ExtraOp::Noop,
             statistics,
-            false,
-        )?;
+            pipelined_pessimistic_lock: false,
+        };
+        let ret = cmd.cmd.process_write(snap, context)?;
         if let ProcessResult::PrewriteResult {
             result: PrewriteResult { locks, .. },
         } = ret.pr
@@ -433,14 +432,15 @@ mod tests {
             ctx,
         );
 
-        let ret = cmd.cmd.process_write(
-            snap,
-            &DummyLockManager {},
-            Arc::new(DummyPdClient::new()),
-            ExtraOp::Noop,
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            pd_client: Arc::new(DummyPdClient::new()),
+            extra_op: ExtraOp::Noop,
             statistics,
-            false,
-        )?;
+            pipelined_pessimistic_lock: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

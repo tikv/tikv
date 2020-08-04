@@ -11,7 +11,6 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
-use std::sync::Arc;
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -39,13 +38,7 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> for Commit {
-    fn process_write<'a>(
-        self,
-        snapshot: S,
-        lock_mgr: &'a L,
-        pd_client: Arc<P>,
-        context: WriteContext<'a>,
-    ) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L, P>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: self.lock_ts,
@@ -56,7 +49,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
             snapshot,
             self.lock_ts,
             !self.ctx.get_not_fill_cache(),
-            pd_client,
+            context.pd_client,
         );
 
         let rows = self.keys.len();
@@ -65,7 +58,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
         for k in self.keys {
             released_locks.push(txn.commit(k, self.commit_ts)?);
         }
-        released_locks.wake_up(lock_mgr);
+        released_locks.wake_up(context.lock_mgr);
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
