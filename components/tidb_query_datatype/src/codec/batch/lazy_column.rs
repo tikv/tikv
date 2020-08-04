@@ -171,18 +171,30 @@ impl LazyBatchColumn {
         match_template_evaluable! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
-                    let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
-                    for _ in 0..raw_vec_len {
-                        decode_bitmap.push(false);
-                    }
-                    for row_index in logical_rows {
-                        decode_bitmap[row_index] = true;
-                    }
-                    for i in 0..raw_vec_len {
-                        if decode_bitmap[i] {
-                            vec.push(raw_vec[i].decode(field_type, ctx)?);
-                        } else {
-                            vec.push(None);
+                    match logical_rows {
+                        LogicalRows::Identical { size } => {
+                            for i in 0..size {
+                                vec.push(raw_vec[i].decode(field_type, ctx)?);
+                            }
+                            for _ in size..raw_vec_len {
+                                vec.push(None);
+                            }
+                        }
+                        LogicalRows::Ref { logical_rows } => {
+                            let mut decode_bitmap = Vec::with_capacity(raw_vec_len);
+                            for _ in 0..raw_vec_len {
+                                decode_bitmap.push(false);
+                            }
+                            for row_index in logical_rows {
+                                decode_bitmap[*row_index] = true;
+                            }
+                            for i in 0..raw_vec_len {
+                                if decode_bitmap[i] {
+                                    vec.push(raw_vec[i].decode(field_type, ctx)?);
+                                } else {
+                                    vec.push(None);
+                                }
+                            }
                         }
                     }
                 }
