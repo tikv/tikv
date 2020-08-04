@@ -154,9 +154,7 @@ impl<S: Snapshot, L: LockManager, P: PdClient + 'static> WriteCommand<S, L, P> f
                 &right_key,
                 &mut context.statistics.write,
             )? {
-                // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
-                // Because in most instances, there won't be more than one transaction write the same key. Seek
-                // operation could skip nonexistent key in CF_LOCK.
+                // If there is no data in range, we could skip constraint check.
                 self.skip_constraint_check = true;
             }
         }
@@ -378,7 +376,7 @@ mod tests {
         let mut mutations = Vec::default();
         let pri_key_number = 0;
         let pri_key = &[pri_key_number];
-        for i in 0..100 {
+        for i in 0..40 {
             mutations.push(Mutation::Insert((
                 Key::from_raw(&[i as u8]),
                 b"100".to_vec(),
@@ -403,7 +401,7 @@ mod tests {
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = PerfStatisticsInstant::new();
         let mut statistic = Statistics::default();
-        while mutations.len() > 20 {
+        while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
         }
         prewrite(&engine, &mut statistic, mutations, pri_key.to_vec(), 110).unwrap();
