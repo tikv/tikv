@@ -259,7 +259,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub apply_router: ApplyRouter<EK, ER>,
+    pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -817,7 +817,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: KvEngine, T, C> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask<ER>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    apply_router: ApplyRouter<EK, ER>,
+    apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -1076,8 +1076,8 @@ struct Workers<EK: KvEngine, ER: KvEngine> {
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: KvEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
-    apply_router: ApplyRouter<EK, ER>,
-    apply_system: ApplyBatchSystem<EK, ER>,
+    apply_router: ApplyRouter<EK>,
+    apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
 }
@@ -1087,7 +1087,7 @@ impl<EK: KvEngine, ER: KvEngine> RaftBatchSystem<EK, ER> {
         self.router.clone()
     }
 
-    pub fn apply_router(&self) -> ApplyRouter<EK, ER> {
+    pub fn apply_router(&self) -> ApplyRouter<EK> {
         self.apply_router.clone()
     }
 
