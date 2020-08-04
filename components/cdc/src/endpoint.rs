@@ -1,17 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::RocksSnapshot;
+use crossbeam::atomic::AtomicCell;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::future::Future;
 use kvproto::cdcpb::*;
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID};
+use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use tikv::storage::kv::Snapshot;
@@ -86,6 +90,7 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
+pub(crate) type OldValueCallback = Box<dyn FnMut(Key) -> Option<Vec<u8>> + Send>;
 
 pub enum Task {
     Register {
@@ -99,6 +104,7 @@ pub enum Task {
     },
     MultiBatch {
         multi: Vec<CmdBatch>,
+        old_value_cb: OldValueCallback,
     },
     MinTS {
         region_id: u64,
@@ -119,7 +125,7 @@ pub enum Task {
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
         downstream_id: DownstreamID,
-        downstream_state: DownstreamState,
+        downstream_state: Arc<AtomicCell<DownstreamState>>,
         cb: InitCallback,
     },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -155,7 +161,7 @@ impl fmt::Debug for Task {
                 .field("type", &"open_conn")
                 .field("conn_id", &conn.get_id())
                 .finish(),
-            Task::MultiBatch { multi } => de
+            Task::MultiBatch { multi, .. } => de
                 .field("type", &"multibatch")
                 .field("multibatch", &multi.len())
                 .finish(),
@@ -212,6 +218,7 @@ pub struct Endpoint<T> {
     min_ts_interval: Duration,
     scan_batch_size: usize,
     tso_worker: ThreadPool,
+    store_meta: Arc<Mutex<StoreMeta>>,
 
     workers: ThreadPool,
 
@@ -219,12 +226,13 @@ pub struct Endpoint<T> {
     min_ts_region_id: u64,
 }
 
-impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
         observer: CdcObserver,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
@@ -238,6 +246,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
             workers,
             raft_router,
             observer,
+            store_meta,
             scan_batch_size: 1024,
             min_ts_interval: Duration::from_secs(1),
             min_resolved_ts: TimeStamp::max(),
@@ -286,6 +295,11 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 }
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                        reader
+                            .txn_extra_op
+                            .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
+                    }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
                     assert!(
@@ -311,6 +325,9 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 if need_remove {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
+                    }
+                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                        reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     self.connections
                         .iter_mut()
@@ -396,17 +413,6 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         let sched = self.scheduler.clone();
         let batch_size = self.scan_batch_size;
 
-        let init = Initializer {
-            sched,
-            region_id,
-            conn_id,
-            downstream_id,
-            batch_size,
-            observe_id: delegate.id,
-            downstream_state: downstream_state.clone(),
-            checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
-        };
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
             if is_new_delegate {
@@ -437,6 +443,26 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                 region_id,
             }
         };
+        let txn_extra_op = request.get_extra_op();
+        if txn_extra_op != TxnExtraOp::Noop {
+            delegate.txn_extra_op = request.get_extra_op();
+            if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
+                reader.txn_extra_op.store(txn_extra_op);
+            }
+        }
+        let init = Initializer {
+            sched,
+            region_id,
+            conn_id,
+            downstream_id,
+            batch_size,
+            downstream_state: downstream_state.clone(),
+            txn_extra_op: delegate.txn_extra_op,
+            observe_id: delegate.id,
+            checkpoint_ts: checkpoint_ts.into(),
+            build_resolver: is_new_delegate,
+        };
+
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
@@ -482,7 +508,8 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
         }));
     }
 
-    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>) {
+    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
+        let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -491,7 +518,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch) {
+                if let Err(e) = delegate.on_batch(batch, old_value_cb.clone()) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -631,10 +658,11 @@ struct Initializer {
     region_id: u64,
     observe_id: ObserveID,
     downstream_id: DownstreamID,
-    downstream_state: DownstreamState,
+    downstream_state: Arc<AtomicCell<DownstreamState>>,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
+    txn_extra_op: TxnExtraOp,
 
     build_resolver: bool,
 }
@@ -685,11 +713,11 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
-            .build_delta_scanner(self.checkpoint_ts)
+            .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let mut done = false;
         while !done {
-            if !self.downstream_state.is_normal() {
+            if self.downstream_state.load() != DownstreamState::Normal {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
@@ -808,7 +836,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
         debug!("run cdc task"; "task" => %task);
         match task {
@@ -831,7 +859,10 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T>
             } => {
                 self.on_incremental_scan(region_id, downstream_id, entries);
             }
-            Task::MultiBatch { multi } => self.on_multi_batch(multi),
+            Task::MultiBatch {
+                multi,
+                old_value_cb,
+            } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::InitDownstream {
@@ -840,7 +871,8 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T>
                 cb,
             } => {
                 debug!("downstream was initialized"; "downstream_id" => ?downstream_id);
-                downstream_state.uninitialized_to_normal();
+                downstream_state
+                    .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
             Task::Validate(region_id, validate) => {
@@ -851,7 +883,7 @@ impl<T: 'static + RaftStoreRouter<RocksSnapshot>> Runnable<Task> for Endpoint<T>
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksSnapshot>> RunnableWithTimer<Task, ()> for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer<Task, ()> for Endpoint<T> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
@@ -913,9 +945,7 @@ mod tests {
             .name_prefix("test-initializer-worker")
             .pool_size(4)
             .build();
-        let downstream_state = DownstreamState::new();
-        downstream_state.set_normal();
-
+        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
 
@@ -926,7 +956,7 @@ mod tests {
             conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),
             batch_size: 1,
-
+            txn_extra_op: TxnExtraOp::Noop,
             build_resolver: true,
         };
 
@@ -1003,7 +1033,7 @@ mod tests {
         }
 
         // Test cancellation.
-        initializer.downstream_state.set_stopped();
+        initializer.downstream_state.store(DownstreamState::Stopped);
         initializer.async_incremental_scan(snap, region);
 
         loop {
@@ -1024,7 +1054,13 @@ mod tests {
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(pd_client, task_sched, raft_router.clone(), observer);
+        let mut ep = Endpoint::new(
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+        );
         let (tx, _rx) = batch::unbounded(1);
 
         // Fill the channel.
@@ -1075,7 +1111,13 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
-        let mut ep = Endpoint::new(pd_client, task_sched, raft_router, observer);
+        let mut ep = Endpoint::new(
+            pd_client,
+            task_sched,
+            raft_router,
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+        );
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx);

@@ -18,7 +18,7 @@ use encryption::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{EncryptionKeyManager, KvEngine};
 use futures_executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -29,8 +29,9 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::errors::Error as RaftStoreError;
-use crate::store::{RaftRouter, StoreMsg};
+use crate::store::RaftRouter;
 use crate::Result as RaftStoreResult;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
@@ -90,6 +91,16 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Abort => error_code::raftstore::SNAP_ABORT,
+            Error::TooManySnapshots => error_code::raftstore::SNAP_TOO_MANY,
+            Error::Other(_) => error_code::raftstore::SNAP_UNKNOWN,
+        }
+    }
+}
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
@@ -410,6 +421,7 @@ impl Snap {
                     "failed to load existent snapshot meta when try to build snapshot";
                     "snapshot" => %s.path(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 if !retry_delete_snapshot(mgr, key, &s) {
                     warn!(
@@ -689,6 +701,7 @@ impl Snap {
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
                         "err" => ?e,
+                        "error_code" => %e.error_code(),
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
@@ -1098,21 +1111,10 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter<impl EngineSnapshot>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
-            error!(
-                "failed to notify snapshot stats";
-                "err" => ?e,
-            )
-        }
-    }
-}
-
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager<E: KvEngine> {
     core: SnapManagerCore,
-    router: Option<RaftRouter<E::Snapshot>>,
+    router: Option<RaftRouter<E, RocksEngine>>,
     max_total_size: u64,
 }
 
@@ -1130,7 +1132,7 @@ where
 }
 
 impl<E: KvEngine> SnapManager<E> {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E::Snapshot>>) -> Self {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E, RocksEngine>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1362,8 +1364,6 @@ impl<E: KvEngine> SnapManager<E> {
                 e.insert(vec![entry]);
             }
         }
-
-        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1385,7 +1385,6 @@ impl<E: KvEngine> SnapManager<E> {
             registry.remove(key);
         }
         if handled {
-            notify_stats(self.router.as_ref());
             return;
         }
         warn!(
@@ -1501,7 +1500,7 @@ impl SnapManagerBuilder {
     pub fn build<T: Into<String>, E: KvEngine>(
         self,
         path: T,
-        router: Option<RaftRouter<E::Snapshot>>,
+        router: Option<RaftRouter<E, RocksEngine>>,
     ) -> SnapManager<E> {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
@@ -1537,10 +1536,10 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
-    use engine::rocks::{DBOptions, Env, DB};
-    use engine::Engines;
+    use engine_rocks::raw::{DBOptions, Env, DB};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+    use engine_traits::KvEngines;
     use engine_traits::{Iterable, Peekable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
@@ -1612,7 +1611,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<Engines> {
+    ) -> Result<KvEngines<RocksEngine, RocksEngine>> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1641,9 +1640,9 @@ pub mod tests {
                 .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(Engines {
-            kv,
-            raft,
+        Ok(KvEngines {
+            kv: kv.c().clone(),
+            raft: raft.c().clone(),
             shared_block_cache,
         })
     }
@@ -2420,7 +2419,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_, RocksEngine>(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = RocksSnapshot::new(engine.kv.clone());
+        let snapshot = RocksSnapshot::new(engine.kv.as_inner().clone());
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
@@ -2429,7 +2428,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
             s.build(
-                engine.kv.c(),
+                &engine.kv,
                 &snapshot,
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
@@ -2457,14 +2456,8 @@ pub mod tests {
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
-            s.build(
-                &engine.kv.c(),
-                &snapshot,
-                &region,
-                &mut snap_data,
-                &mut stat,
-            )
-            .unwrap();
+            s.build(&engine.kv, &snapshot, &region, &mut snap_data, &mut stat)
+                .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1658;

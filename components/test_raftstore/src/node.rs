@@ -13,14 +13,14 @@ use raft::SnapshotStatus;
 
 use super::*;
 use encryption::DataKeyManager;
-use engine::*;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::Peekable;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::errors::Error as RaftError;
 use raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use raftstore::store::config::RaftstoreConfigManager;
-use raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
@@ -31,6 +31,7 @@ use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
+use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{FutureWorker, Worker};
 
 pub struct ChannelTransportCore {
@@ -176,9 +177,10 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
+        engines: KvEngines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksSnapshot>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -227,14 +229,12 @@ impl Simulator for NodeCluster {
             Arc::new(SSTImporter::new(dir, None).unwrap())
         };
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader =
-            LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
-            engines.kv.c().clone(),
+            engines.kv.clone(),
             router.clone(),
             coprocessor_host.clone(),
             cfg.coprocessor.clone(),
@@ -266,7 +266,6 @@ impl Simulator for NodeCluster {
         )?;
         assert!(engines
             .kv
-            .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
@@ -357,6 +356,32 @@ impl Simulator for NodeCluster {
         router.send_command(request, cb)
     }
 
+    fn async_read(
+        &self,
+        node_id: u64,
+        batch_id: Option<ThreadReadId>,
+        request: RaftCmdRequest,
+        cb: Callback<RocksSnapshot>,
+    ) {
+        if !self
+            .trans
+            .core
+            .lock()
+            .unwrap()
+            .routers
+            .contains_key(&node_id)
+        {
+            let mut resp = RaftCmdResponse::default();
+            let e: RaftError = box_err!("missing sender for store {}", node_id);
+            resp.mut_header().set_error(e.into());
+            cb.invoke_with_response(resp);
+            return;
+        }
+        let mut guard = self.trans.core.lock().unwrap();
+        let router = guard.routers.get_mut(&node_id).unwrap();
+        router.read(batch_id, request, cb).unwrap();
+    }
+
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.send(msg)
     }
@@ -385,7 +410,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksSnapshot>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

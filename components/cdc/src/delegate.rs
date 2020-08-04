@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     error::DuplicateRequest as ErrorDuplicateRequest,
@@ -19,7 +22,7 @@ use kvproto::cdcpb::{
     EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
-
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -32,6 +35,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
+use crate::endpoint::OldValueCallback;
 use crate::metrics::*;
 use crate::service::ConnID;
 use crate::{Error, Result};
@@ -49,46 +53,16 @@ impl DownstreamID {
     }
 }
 
-#[derive(Clone)]
-pub struct DownstreamState(Arc<AtomicU8>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DownstreamState {
+    Uninitialized,
+    Normal,
+    Stopped,
+}
 
-impl DownstreamState {
-    const UNINITIALIZED: u8 = 0;
-    const NORMAL: u8 = 1;
-    const STOPPED: u8 = 2;
-
-    pub fn new() -> Self {
-        DownstreamState(Arc::new(AtomicU8::new(Self::UNINITIALIZED)))
-    }
-
-    pub fn is_normal(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::NORMAL
-    }
-
-    pub fn is_stopped(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::STOPPED
-    }
-
-    pub fn is_uninitialized(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == Self::UNINITIALIZED
-    }
-
-    pub fn set_normal(&self) {
-        self.0.store(Self::NORMAL, Ordering::SeqCst);
-    }
-
-    pub fn set_stopped(&self) {
-        self.0.store(Self::STOPPED, Ordering::SeqCst);
-    }
-
-    pub fn set_uninitialized(&self) {
-        self.0.store(Self::UNINITIALIZED, Ordering::SeqCst);
-    }
-
-    pub fn uninitialized_to_normal(&self) -> bool {
-        self.0
-            .compare_and_swap(Self::UNINITIALIZED, Self::NORMAL, Ordering::SeqCst)
-            == Self::UNINITIALIZED
+impl Default for DownstreamState {
+    fn default() -> Self {
+        Self::Uninitialized
     }
 }
 
@@ -104,7 +78,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<(usize, Event)>>,
-    state: DownstreamState,
+    state: Arc<AtomicCell<DownstreamState>>,
 }
 
 impl Downstream {
@@ -125,7 +99,7 @@ impl Downstream {
             peer,
             region_epoch,
             sink: None,
-            state: DownstreamState::new(),
+            state: Arc::new(AtomicCell::new(DownstreamState::default())),
         }
     }
 
@@ -152,7 +126,7 @@ impl Downstream {
         self.id
     }
 
-    pub fn get_state(&self) -> DownstreamState {
+    pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
     }
 
@@ -220,6 +194,7 @@ pub struct Delegate {
     pending: Option<Pending>,
     enabled: Arc<AtomicBool>,
     failed: bool,
+    pub txn_extra_op: TxnExtraOp,
 }
 
 impl Delegate {
@@ -234,6 +209,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
+            txn_extra_op: TxnExtraOp::default(),
         }
     }
 
@@ -296,7 +272,7 @@ impl Delegate {
                 if let Some(change_data_error) = change_data_error.clone() {
                     d.sink_event(change_data_error, 0);
                 }
-                d.state.set_stopped();
+                d.state.store(DownstreamState::Stopped);
             }
             d.id != id
         });
@@ -348,8 +324,8 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
-        for downstream in &self.downstreams {
-            downstream.state.set_stopped();
+        for d in &self.downstreams {
+            d.state.store(DownstreamState::Stopped);
         }
         self.broadcast(change_data_err, 0, false);
     }
@@ -363,7 +339,7 @@ impl Delegate {
             change_data_event,
         );
         for i in 0..downstreams.len() - 1 {
-            if normal_only && !downstreams[i].state.is_normal() {
+            if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
             downstreams[i].sink_event(change_data_event.clone(), size);
@@ -423,7 +399,11 @@ impl Delegate {
         Some(resolved_ts)
     }
 
-    pub fn on_batch(&mut self, batch: CmdBatch) -> Result<()> {
+    pub fn on_batch(
+        &mut self,
+        batch: CmdBatch,
+        old_value_cb: Rc<RefCell<OldValueCallback>>,
+    ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
             return Ok(());
@@ -436,7 +416,7 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    self.sink_data(index, request.requests.into());
+                    self.sink_data(index, request.requests.into(), old_value_cb.clone())?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
                 }
@@ -467,7 +447,11 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite { default, lock }) => {
+                Some(TxnEntry::Prewrite {
+                    default,
+                    lock,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, &lock.1, &mut row);
                     if skip {
@@ -481,9 +465,14 @@ impl Delegate {
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
+                    row.old_value = old_value.unwrap_or_default();
                     rows.last_mut().unwrap().1.push(row);
                 }
-                Some(TxnEntry::Commit { default, write }) => {
+                Some(TxnEntry::Commit {
+                    default,
+                    write,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row);
                     if skip {
@@ -503,6 +492,7 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
+                    row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= EVENT_MAX_SIZE {
                         rows.last_mut().unwrap().0 = current_rows_size;
@@ -534,7 +524,12 @@ impl Delegate {
         }
     }
 
-    fn sink_data(&mut self, index: u64, requests: Vec<Request>) {
+    fn sink_data(
+        &mut self,
+        index: u64,
+        requests: Vec<Request>,
+        old_value_cb: Rc<RefCell<OldValueCallback>>,
+    ) -> Result<()> {
         let mut rows = HashMap::default();
         let mut total_size = 0;
         for mut req in requests {
@@ -596,6 +591,11 @@ impl Delegate {
                         continue;
                     }
 
+                    if self.txn_extra_op == TxnExtraOp::ReadOldValue {
+                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                        row.old_value = old_value_cb.borrow_mut()(key).unwrap_or_default();
+                    }
+
                     let occupied = rows.entry(row.key.clone()).or_default();
                     if !occupied.value.is_empty() {
                         assert!(row.value.is_empty());
@@ -646,6 +646,7 @@ impl Delegate {
         change_data_event.index = index;
         change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
         self.broadcast(change_data_event, total_size, true);
+        Ok(())
     }
 
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
@@ -930,37 +931,34 @@ mod tests {
         // Stashed in pending before region ready.
         let entries = vec![
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_prewrite(LockType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_prewrite(LockType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 1.into(),
-                    commit_ts: 2.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_commit(WriteType::Put, false),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(2.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_commit(WriteType::Put, false),
             ),
             Some(
-                EntryBuilder {
-                    key: b"a".to_vec(),
-                    value: b"b".to_vec(),
-                    start_ts: 3.into(),
-                    commit_ts: 0.into(),
-                    primary: vec![],
-                    for_update_ts: 0.into(),
-                }
-                .build_rollback(),
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(3.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_rollback(),
             ),
             None,
         ];

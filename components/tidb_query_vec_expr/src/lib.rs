@@ -7,13 +7,12 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(test)]
 #![feature(int_error_matching)]
-#![feature(const_loop)]
-#![feature(const_if_match)]
 #![feature(ptr_offset_from)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -406,6 +405,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::Sha2 => sha2_fn_meta(),
         ScalarFuncSig::RandomBytes => random_bytes_fn_meta(),
+        ScalarFuncSig::Password => password_fn_meta(),
         // impl_json
         ScalarFuncSig::JsonDepthSig => json_depth_fn_meta(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
@@ -467,6 +467,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
         ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
+        ScalarFuncSig::RoundWithFracDec => round_with_frac_dec_fn_meta(),
+        ScalarFuncSig::RoundWithFracReal => round_with_frac_real_fn_meta(),
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
@@ -526,6 +528,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
@@ -545,6 +548,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
+        ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
@@ -554,7 +558,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
         ScalarFuncSig::FieldString => field_bytes_fn_meta(),
         ScalarFuncSig::Elt => elt_fn_meta(),
+        ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
+        ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
@@ -562,6 +568,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
         ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
+        ScalarFuncSig::Repeat => repeat_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),

@@ -13,25 +13,25 @@ use tidb_query_shared_expr::string::{
 
 const SPACE: u8 = 0o40u8;
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bin(num: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(num.map(|i| Bytes::from(format!("{:b}", i))))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn oct_int(num: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(num.map(|i| Bytes::from(format!("{:o}", i))))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn length(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| bytes.len() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     if let Some(content) = arg {
@@ -49,13 +49,30 @@ pub fn unhex(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn bit_length(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| bytes.len() as i64 * 8))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable)]
+#[inline]
+pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
+    let mut result = 0;
+    if let Some(content) = arg {
+        let size = bstr::decode_utf8(content).1;
+        let bytes = &content[..size];
+        let mut factor = 1;
+
+        for b in bytes.iter().rev() {
+            result += i64::from(*b) * factor;
+            factor *= 256;
+        }
+    }
+    Ok(Some(result))
+}
+
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 pub fn concat(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     let mut output = Bytes::new();
@@ -69,7 +86,7 @@ pub fn concat(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
-#[rpn_fn(varg, min_args = 2)]
+#[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
@@ -85,7 +102,7 @@ pub fn concat_ws(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
     Ok(arg.map(|bytes| {
@@ -97,7 +114,7 @@ pub fn ascii(arg: Option<BytesRef>) -> Result<Option<i64>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -106,13 +123,13 @@ pub fn reverse_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn hex_int_arg(arg: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(arg.map(|i| format!("{:X}", i).into_bytes()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -125,7 +142,7 @@ pub fn ltrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -138,7 +155,7 @@ pub fn rtrim(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn lpad(
     arg: Option<BytesRef>,
@@ -169,7 +186,7 @@ pub fn lpad(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn lpad_utf8(
     arg: Option<BytesRef>,
@@ -208,7 +225,7 @@ pub fn lpad_utf8(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn rpad(
     arg: Option<BytesRef>,
@@ -235,7 +252,7 @@ pub fn rpad(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn replace(
     s: Option<BytesRef>,
@@ -262,7 +279,7 @@ pub fn replace(
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn left(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -281,7 +298,7 @@ pub fn left(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn left_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -305,7 +322,7 @@ pub fn left_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Byte
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn right(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -324,7 +341,37 @@ pub fn right(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> 
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
+#[inline]
+pub fn insert(
+    s: Option<BytesRef>,
+    pos: Option<&Int>,
+    len: Option<&Int>,
+    newstr: Option<BytesRef>,
+) -> Result<Option<Bytes>> {
+    match (s, pos, len, newstr) {
+        (Some(s), Some(pos), Some(len), Some(newstr)) => {
+            let pos = *pos;
+            let len = *len;
+            let upos: usize = pos as usize;
+            let mut ulen: usize = len as usize;
+            if pos < 1 || upos > s.len() {
+                return Ok(Some(s.to_vec()));
+            }
+            if ulen > s.len() - upos + 1 || len < 0 {
+                ulen = s.len() - upos + 1;
+            }
+            let mut ret = Vec::with_capacity(newstr.len() + s.len());
+            ret.extend_from_slice(&s[0..upos - 1]);
+            ret.extend_from_slice(&newstr);
+            ret.extend_from_slice(&s[upos + ulen - 1..]);
+            Ok(Some(ret.to_vec()))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn(nullable)]
 #[inline]
 pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
@@ -354,7 +401,7 @@ pub fn right_utf8(lhs: Option<BytesRef>, rhs: Option<&Int>) -> Result<Option<Byt
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     match arg {
@@ -366,19 +413,19 @@ pub fn upper_utf8(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn upper(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|b| b.to_vec()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn hex_str_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|b| hex::encode_upper(b).into_bytes()))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Option<i64>> {
     let (substr, s) = match (substr, s) {
@@ -391,7 +438,7 @@ pub fn locate_2_args(substr: Option<BytesRef>, s: Option<BytesRef>) -> Result<Op
         .or(Some(0)))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -401,7 +448,7 @@ pub fn reverse(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn locate_3_args(
     substr: Option<BytesRef>,
@@ -420,9 +467,9 @@ pub fn locate_3_args(
     }
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
-fn field<T: Evaluable + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
+fn field<T: Evaluable + EvaluableRet + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         None => 0,
@@ -434,7 +481,7 @@ fn field<T: Evaluable + PartialEq>(args: &[Option<&T>]) -> Result<Option<Int>> {
     }))
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
@@ -448,7 +495,42 @@ fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     }))
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[inline]
+pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
+    assert!(raw_args.len() >= 2);
+    let mask = raw_args[0].as_int();
+    let mut output = Vec::new();
+    let mut pow2 = 1;
+    let s = b",";
+    let mut q = false;
+    match mask {
+        None => {
+            return Ok(None);
+        }
+        Some(mask2) => {
+            for i in 1..raw_args.len() {
+                if pow2 & mask2 != 0 {
+                    let input = raw_args[i].as_bytes();
+                    match input {
+                        None => {}
+                        Some(s2) => {
+                            if q {
+                                output.extend_from_slice(s);
+                            }
+                            output.extend_from_slice(s2);
+                            q = true;
+                        }
+                    };
+                }
+                pow2 <<= 1;
+            }
+        }
+    };
+    Ok(Some(output))
+}
+
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = elt_validator)]
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
@@ -476,7 +558,7 @@ fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
     Ok(match len.cloned() {
@@ -493,7 +575,53 @@ pub fn space(len: Option<&Int>) -> Result<Option<Bytes>> {
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
+#[inline]
+pub fn substring_index(
+    s: Option<BytesRef>,
+    delim: Option<BytesRef>,
+    count: Option<&Int>,
+) -> Result<Option<Bytes>> {
+    if let (Some(s), Some(delim), Some(count)) = (s, delim, count) {
+        let count = *count;
+        if count == 0 || s.is_empty() || delim.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let finder = if count > 0 {
+            twoway::find_bytes
+        } else {
+            twoway::rfind_bytes
+        };
+        let mut remaining = &s[..];
+        let mut remaining_pattern_count = count.abs();
+        let mut bound = 0;
+        while remaining_pattern_count > 0 {
+            if let Some(offset) = finder(&remaining, delim) {
+                if count > 0 {
+                    bound += offset + delim.len();
+                    remaining = &s[bound..];
+                } else {
+                    bound = offset;
+                    remaining = &s[..bound];
+                }
+            } else {
+                break;
+            }
+            remaining_pattern_count -= 1;
+        }
+        Ok(Some(if remaining_pattern_count > 0 {
+            s[..].to_vec()
+        } else if count > 0 {
+            s[..bound - delim.len()].to_vec()
+        } else {
+            s[bound + delim.len()..].to_vec()
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(nullable)]
 #[inline]
 pub fn strcmp(left: Option<BytesRef>, right: Option<BytesRef>) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
@@ -507,7 +635,7 @@ pub fn strcmp(left: Option<BytesRef>, right: Option<BytesRef>) -> Result<Option<
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn instr_utf8(s: Option<BytesRef>, substr: Option<BytesRef>) -> Result<Option<Int>> {
     if let (Some(s), Some(substr)) = (s, substr) {
@@ -523,7 +651,7 @@ pub fn instr_utf8(s: Option<BytesRef>, substr: Option<BytesRef>) -> Result<Optio
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(match (s, str_list) {
@@ -543,7 +671,7 @@ pub fn find_in_set(s: Option<BytesRef>, str_list: Option<BytesRef>) -> Result<Op
     })
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     Ok(arg.map(|bytes| {
@@ -557,7 +685,7 @@ pub fn trim_1_arg(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn trim_3_args(
     arg: Option<BytesRef>,
@@ -578,13 +706,13 @@ pub fn trim_3_args(
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn char_length(bs: Option<BytesRef>) -> Result<Option<Int>> {
     Ok(bs.map(|b| b.len() as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
     match bs {
@@ -596,7 +724,7 @@ pub fn char_length_utf8(bs: Option<BytesRef>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     match bs {
@@ -619,7 +747,7 @@ pub fn to_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     match bs {
@@ -641,7 +769,7 @@ pub fn from_base64(bs: Option<BytesRef>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(nullable)]
 #[inline]
 pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
     match input {
@@ -667,6 +795,21 @@ pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
         }
         _ => Ok(Some(Vec::from("NULL"))),
     }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let cnt = if *cnt > std::i32::MAX.into() {
+        std::i32::MAX.into()
+    } else {
+        *cnt
+    };
+    let mut writer = writer.begin();
+    for _i in 0..cnt {
+        writer.partial_write(input);
+    }
+    Ok(writer.finish())
 }
 
 #[cfg(test)]
@@ -974,6 +1117,30 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::BitLength)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_ord() {
+        let cases = vec![
+            (Some("2"), Some(50i64)),
+            (Some("23"), Some(50i64)),
+            (Some("2.3"), Some(50i64)),
+            (Some(""), Some(0i64)),
+            (Some("你好"), Some(14990752i64)),
+            (Some("にほん"), Some(14909867i64)),
+            (Some("한국"), Some(15570332i64)),
+            (Some("👍"), Some(4036989325i64)),
+            (Some("א"), Some(55184i64)),
+            (None, Some(0)),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Ord)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -1606,6 +1773,67 @@ mod tests {
     }
 
     #[test]
+    fn test_insert() {
+        let cases = vec![
+            ("hello, world!", 1, 0, "asd", "asdhello, world!"),
+            ("hello, world!", 0, -1, "asd", "hello, world!"),
+            ("hello, world!", 0, 0, "asd", "hello, world!"),
+            ("hello, world!", -1, 0, "asd", "hello, world!"),
+            ("hello, world!", 1, -1, "asd", "asd"),
+            ("hello, world!", 1, 1, "asd", "asdello, world!"),
+            ("hello, world!", 1, 3, "asd", "asdlo, world!"),
+            ("hello, world!", 2, 2, "asd", "hasdlo, world!"),
+            ("hello", 5, 2, "asd", "hellasd"),
+            ("hello", 5, 200, "asd", "hellasd"),
+            ("hello", 2, 200, "asd", "hasd"),
+            ("hello", -1, 200, "asd", "hello"),
+            ("hello", 0, 200, "asd", "hello"),
+        ];
+        for (s1, i1, i2, s2, exp) in cases {
+            let s1 = Some(s1.as_bytes().to_vec());
+            let i1 = Some(i1);
+            let i2 = Some(i2);
+            let s2 = Some(s2.as_bytes().to_vec());
+            let exp = Some(exp.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s1)
+                .push_param(i1)
+                .push_param(i2)
+                .push_param(s2)
+                .evaluate(ScalarFuncSig::Insert)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let null_cases = vec![
+            (None, Some(-1), Some(200), Some(b"asd".to_vec())),
+            (
+                Some(b"hello".to_vec()),
+                None,
+                Some(200),
+                Some(b"asd".to_vec()),
+            ),
+            (
+                Some(b"hello".to_vec()),
+                Some(-1),
+                None,
+                Some(b"asd".to_vec()),
+            ),
+            (Some(b"hello".to_vec()), Some(-1), Some(200), None),
+        ];
+        for (s1, i1, i2, s2) in null_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s1)
+                .push_param(i1)
+                .push_param(i2)
+                .push_param(s2)
+                .evaluate::<Bytes>(ScalarFuncSig::Insert)
+                .unwrap();
+            assert_eq!(got, None);
+        }
+    }
+
+    #[test]
     fn test_right_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
@@ -1954,6 +2182,288 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Space)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_make_set() {
+        let test_cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    Some(0b110).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b100).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b0).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b1).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    None::<Int>.into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (vec![None::<Int>.into(), None::<Bytes>.into()], None),
+            (
+                vec![
+                    Some(0b1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b11).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b0).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xffffffff).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                    None::<Bytes>.into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0b10).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xffffffff).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xfffffffe).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"b,c".to_vec()),
+            ),
+            (
+                vec![
+                    Some(0xfffffffd).into(),
+                    Some(b"a".to_vec()).into(),
+                    Some(b"b".to_vec()).into(),
+                    Some(b"c".to_vec()).into(),
+                ],
+                Some(b"a,c".to_vec()),
+            ),
+        ];
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::MakeSet)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_substring_index() {
+        let test_cases = vec![
+            (None, None, None, None),
+            (Some(vec![]), None, None, None),
+            (Some(vec![]), Some(vec![]), Some(1i64), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(1), Some(vec![])),
+            (Some(vec![0x1]), Some(vec![]), Some(-1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(1), Some(vec![])),
+            (Some(vec![]), Some(vec![0x1]), Some(-1), Some(vec![])),
+            (
+                Some(b"abc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(0),
+                Some(vec![]),
+            ),
+            (
+                Some(b"aaaaaaaa".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"bbbbbbbb".to_vec()),
+                Some(b"bb".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"cccccccc".to_vec()),
+                Some(b"cc".to_vec()),
+                Some(2),
+                Some(b"cc".to_vec()),
+            ),
+            (
+                Some(b"dddddddd".to_vec()),
+                Some(b"dd".to_vec()),
+                Some(-2),
+                Some(b"dd".to_vec()),
+            ),
+            (
+                Some(b"eeeeeeee".to_vec()),
+                Some(b"ee".to_vec()),
+                Some(5),
+                Some(b"eeeeeeee".to_vec()),
+            ),
+            (
+                Some(b"ffffffff".to_vec()),
+                Some(b"ff".to_vec()),
+                Some(-5),
+                Some(b"ffffffff".to_vec()),
+            ),
+            (
+                Some(b"gggggggg".to_vec()),
+                Some(b"gg".to_vec()),
+                Some(6),
+                Some(b"gggggggg".to_vec()),
+            ),
+            (
+                Some(b"hhhhhhhh".to_vec()),
+                Some(b"hh".to_vec()),
+                Some(-6),
+                Some(b"hhhhhhhh".to_vec()),
+            ),
+            (
+                Some(b"iiiii".to_vec()),
+                Some(b"ii".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"jjjjj".to_vec()),
+                Some(b"jj".to_vec()),
+                Some(-1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"kkkkk".to_vec()),
+                Some(b"kk".to_vec()),
+                Some(3),
+                Some(b"kkkkk".to_vec()),
+            ),
+            (
+                Some(b"lllll".to_vec()),
+                Some(b"ll".to_vec()),
+                Some(-3),
+                Some(b"lllll".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(2),
+                Some(b"www.mysql".to_vec()),
+            ),
+            (
+                Some(b"www.mysql.com".to_vec()),
+                Some(b".".to_vec()),
+                Some(-2),
+                Some(b"mysql.com".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(1),
+                Some(vec![]),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-1),
+                Some(b"c".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(2),
+                Some(b"abc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-2),
+                Some(b"cabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"ab".to_vec()),
+                Some(-5),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+            (
+                Some(b"abcabcabc".to_vec()),
+                Some(b"d".to_vec()),
+                Some(-1),
+                Some(b"abcabcabc".to_vec()),
+            ),
+        ];
+        for (s, delim, count, exp) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(delim)
+                .push_param(count)
+                .evaluate(ScalarFuncSig::SubstringIndex)
                 .unwrap();
             assert_eq!(output, exp);
         }
@@ -2450,5 +2960,58 @@ mod tests {
         // check for null
         let got = quote(None).unwrap();
         assert_eq!(got, Some(Bytes::from("NULL")))
+    }
+
+    #[test]
+    fn test_repeat() {
+        let cases = vec![
+            ("hello, world!", -1, ""),
+            ("hello, world!", 0, ""),
+            ("hello, world!", 1, "hello, world!"),
+            (
+                "hello, world!",
+                3,
+                "hello, world!hello, world!hello, world!",
+            ),
+            ("你好世界", 3, "你好世界你好世界你好世界"),
+            ("こんにちは", 2, "こんにちはこんにちは"),
+            ("\x2f\x35", 5, "\x2f\x35\x2f\x35\x2f\x35\x2f\x35\x2f\x35"),
+        ];
+
+        for (input, cnt, expect) in cases {
+            let input = Bytes::from(input);
+            let expected_output = Bytes::from(expect);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(input))
+                .push_param(Some(cnt))
+                .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+                .unwrap();
+            assert_eq!(output, Some(expected_output));
+        }
+
+        let null_string: Option<Bytes> = None;
+        let null_cnt: Option<Int> = None;
+
+        // test NULL case
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string.clone())
+            .push_param(Some(42))
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(Some(b"hi".to_vec()))
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(null_string)
+            .push_param(null_cnt)
+            .evaluate::<Bytes>(ScalarFuncSig::Repeat)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }

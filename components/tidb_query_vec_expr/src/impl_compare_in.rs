@@ -143,7 +143,7 @@ impl Extract for Duration {
     }
 }
 
-pub trait InByCompare: Evaluable + Eq {}
+pub trait InByCompare: Evaluable + EvaluableRet + Eq {}
 
 impl InByCompare for Int {}
 impl InByCompare for Real {}
@@ -159,7 +159,7 @@ pub struct CompareInMeta<T: Eq + Hash> {
     has_null: bool,
 }
 
-#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
+#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
 #[inline]
 pub fn compare_in_by_hash<T: InByHash>(
     metadata: &CompareInMeta<T::StoreKey>,
@@ -196,7 +196,7 @@ where
     }
 }
 
-#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<CollationAwareBytesInByHash::<C>>)]
+#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<CollationAwareBytesInByHash::<C>>)]
 #[inline]
 pub fn compare_in_by_hash_bytes<C: Collator>(
     metadata: &CompareInMeta<SortKey<Bytes, C>>,
@@ -268,7 +268,7 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
     })
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 pub fn compare_in_by_compare<T: InByCompare>(args: &[Option<&T>]) -> Result<Option<Int>> {
     assert!(!args.is_empty());
@@ -294,7 +294,7 @@ pub fn compare_in_by_compare<T: InByCompare>(args: &[Option<&T>]) -> Result<Opti
     }
 }
 
-#[rpn_fn(varg, min_args = 1)]
+#[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
 pub fn compare_in_by_compare_json(args: &[Option<JsonRef>]) -> Result<Option<Int>> {
     assert!(!args.is_empty());
@@ -384,7 +384,7 @@ mod tests {
                 let val = result.unwrap();
                 assert!(val.is_vector());
                 assert_eq!(
-                    val.vector_value().unwrap().as_ref().as_int_slice(),
+                    val.vector_value().unwrap().as_ref().to_int_vec(),
                     &[expected]
                 );
             }
@@ -495,7 +495,7 @@ mod tests {
             let val = result.unwrap();
             assert!(val.is_vector());
             assert_eq!(
-                val.vector_value().unwrap().as_ref().as_int_slice(),
+                val.vector_value().unwrap().as_ref().to_int_vec(),
                 &[expected]
             );
         }
@@ -544,7 +544,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            val.vector_value().unwrap().as_ref().to_int_vec(),
             &[Some(1), Some(1), Some(0)],
         );
     }

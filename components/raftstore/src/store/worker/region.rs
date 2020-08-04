@@ -12,6 +12,7 @@ use std::u64;
 use engine_rocks::RocksEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable};
+use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -231,7 +232,7 @@ impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK::Snapshot>,
+    R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
     fn generate_snap(
@@ -287,7 +288,7 @@ where
             kv_snap,
             notifier,
         ) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e, "error_code" => %e.error_code());
             return;
         }
 
@@ -395,7 +396,8 @@ where
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "err" => %e);
+                error!("failed to apply snap!!!"; "err" => %e, "error_code" => %e.error_code());
+
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
             }
@@ -424,6 +426,7 @@ where
                     "start_key" => log_wrappers::Key(start_key),
                     "end_key" => log_wrappers::Key(end_key),
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -439,6 +442,7 @@ where
                 "start_key" => log_wrappers::Key(start_key),
                 "end_key" => log_wrappers::Key(end_key),
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         } else {
             info!(
@@ -569,7 +573,7 @@ impl<EK, ER, R> Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK::Snapshot>,
+    R: CasualRouter<EK>,
 {
     pub fn new(
         engines: KvEngines<EK, ER>,
@@ -630,7 +634,7 @@ impl<EK, ER, R> Runnable<Task<EK::Snapshot>> for Runner<EK, ER, R>
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK::Snapshot> + Send + Clone + 'static,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
@@ -646,6 +650,7 @@ where
                 let ctx = self.ctx.clone();
 
                 self.pool.spawn(async move {
+                    tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
                         last_applied_index_term,
@@ -653,6 +658,7 @@ where
                         kv_snap,
                         notifier,
                     );
+                    tikv_alloc::remove_thread_memory_accessor();
                 });
             }
             task @ Task::Apply { .. } => {
@@ -697,7 +703,7 @@ impl<EK, ER, R> RunnableWithTimer<Task<EK::Snapshot>, Event> for Runner<EK, ER, 
 where
     EK: KvEngine,
     ER: KvEngine,
-    R: CasualRouter<EK::Snapshot> + Send + Clone + 'static,
+    R: CasualRouter<EK> + Send + Clone + 'static,
 {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
@@ -732,10 +738,12 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine::rocks::{ColumnFamilyOptions, Writable};
-    use engine::Engines;
-    use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{CompactExt, Mutable, Peekable, WriteBatchExt};
+    use engine_rocks::raw::ColumnFamilyOptions;
+    use engine_rocks::RocksEngine;
+    use engine_traits::{
+        CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+    };
+    use engine_traits::{KvEngine, KvEngines};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
@@ -837,14 +845,10 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&engine.kv),
-            Arc::clone(&engine.raft),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let (router, _) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.c(),
+            engines,
             mgr,
             0,
             true,
@@ -869,8 +873,8 @@ mod tests {
         drop(snap);
 
         thread::sleep(Duration::from_millis(100));
-        assert!(engine.kv.get(b"k1").unwrap().is_none());
-        assert_eq!(engine.kv.get(b"k2").unwrap().unwrap(), b"v2");
+        assert!(engine.kv.get_value(b"k1").unwrap().is_none());
+        assert_eq!(engine.kv.get_value(b"k2").unwrap().unwrap(), b"v2");
     }
 
     #[test]
@@ -900,32 +904,33 @@ mod tests {
         .unwrap();
 
         for cf_name in engine.kv.cf_names() {
-            let cf = engine.kv.cf_handle(cf_name).unwrap();
             for i in 0..6 {
-                engine.kv.put_cf(cf, &[i], &[i]).unwrap();
-                engine.kv.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
-                engine.kv.flush_cf(cf, true).unwrap();
+                let cf = engine.kv.cf_handle(cf_name).unwrap();
+                engine.kv.put_cf(cf_name, &[i], &[i]).unwrap();
+                engine.kv.put_cf(cf_name, &[i + 1], &[i + 1]).unwrap();
+                engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+                    engine_rocks::util::get_cf_num_files_at_level(
+                        &engine.kv.as_inner(),
+                        cf.as_inner(),
+                        0
+                    )
+                    .unwrap(),
                     u64::from(i) + 1
                 );
             }
         }
 
         let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&engine.kv),
-            Arc::clone(&engine.raft),
-            shared_block_cache,
-        );
+        let engines = KvEngines::new(engine.kv.clone(), engine.raft.clone(), shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.c(),
+            engines.clone(),
             mgr,
             0,
             true,
@@ -941,21 +946,19 @@ mod tests {
             let (tx, rx) = mpsc::sync_channel(1);
             let apply_state: RaftApplyState = engines
                 .kv
-                .c()
                 .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
             let entry = engines
                 .raft
-                .c()
                 .get_msg::<Entry>(&keys::raft_log_key(id, idx))
                 .unwrap()
                 .unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: RocksSnapshot::new(engines.kv.clone()),
+                    kv_snap: engines.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
                     notifier: tx,
@@ -977,17 +980,16 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let mut wb = engine.kv.c().write_batch();
+            let mut wb = engine.kv.write_batch();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
-                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
-            engine.kv.c().write(&wb).unwrap();
+            engine.kv.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
@@ -1004,7 +1006,6 @@ mod tests {
                 thread::sleep(Duration::from_millis(100));
                 if engine
                     .kv
-                    .c()
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()
@@ -1015,23 +1016,19 @@ mod tests {
                 }
             }
         };
-        let cf = engine.kv.cf_handle(CF_DEFAULT).unwrap();
+        let cf = engine.kv.cf_handle(CF_DEFAULT).unwrap().as_inner();
 
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             6
         );
 
         // compact all files to the bottomest level
-        engine
-            .kv
-            .c()
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0
         );
 
@@ -1041,7 +1038,7 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             2
         );
 
@@ -1049,35 +1046,31 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             4
         );
 
         // compact all files to the bottomest level
-        engine
-            .kv
-            .c()
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0
         );
 
@@ -1087,25 +1080,21 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             4
         );
 
         // make sure have checked pending applies
-        engine
-            .kv
-            .c()
-            .compact_files_in_range(None, None, None)
-            .unwrap();
+        engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
+            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
             2
         );
     }

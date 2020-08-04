@@ -3,7 +3,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::{CloneCompat, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::config::{Config, RaftstoreConfigManager};
@@ -14,8 +14,7 @@ use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 
-use engine::Engines;
-use engine_traits::ALL_CFS;
+use engine_traits::{KvEngines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
@@ -32,7 +31,7 @@ impl Transport for MockTransport {
     }
 }
 
-fn create_tmp_engine(dir: &TempDir) -> Engines {
+fn create_tmp_engine(dir: &TempDir) -> KvEngines<RocksEngine, RocksEngine> {
     let db = Arc::new(
         engine_rocks::raw_util::new_engine(
             dir.path().join("db").to_str().unwrap(),
@@ -52,7 +51,11 @@ fn create_tmp_engine(dir: &TempDir) -> Engines {
         .unwrap(),
     );
     let shared_block_cache = false;
-    Engines::new(db, raft_db, shared_block_cache)
+    KvEngines::new(
+        RocksEngine::from_db(db),
+        RocksEngine::from_db(raft_db),
+        shared_block_cache,
+    )
 }
 
 fn start_raftstore(
@@ -60,8 +63,8 @@ fn start_raftstore(
     dir: &TempDir,
 ) -> (
     ConfigController,
-    RaftRouter<RocksSnapshot>,
-    ApplyRouter,
+    RaftRouter<RocksEngine, RocksEngine>,
+    ApplyRouter<RocksEngine>,
     RaftBatchSystem,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
@@ -98,7 +101,7 @@ fn start_raftstore(
         .spawn(
             Default::default(),
             cfg_track,
-            engines.c(),
+            engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),
             snap_mgr,
@@ -114,7 +117,7 @@ fn start_raftstore(
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 
-fn validate_store<F>(router: &RaftRouter<RocksSnapshot>, f: F)
+fn validate_store<F>(router: &RaftRouter<RocksEngine, RocksEngine>, f: F)
 where
     F: FnOnce(&Config) + Send + 'static,
 {
@@ -128,7 +131,7 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
+fn validate_apply<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
 where
     F: FnOnce(bool) + Send + 'static,
 {

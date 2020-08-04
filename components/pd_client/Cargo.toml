@@ -17,6 +17,7 @@ prost-codec = [
 ]
 
 [dependencies]
+error_code = { path = "../error_code" }
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
@@ -35,3 +36,4 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
+semver = "0.10"

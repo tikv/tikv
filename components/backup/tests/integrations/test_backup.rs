@@ -25,6 +25,7 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range};
+use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
@@ -80,7 +81,8 @@ impl TestSuite {
                 *id,
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
-                engines.kv.clone(),
+                engines.kv.as_inner().clone(),
+                BackupConfig { num_threads: 4 },
             );
             let mut worker = Worker::new(format!("backup-{}", id));
             worker.start(backup_endpoint).unwrap();

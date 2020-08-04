@@ -57,6 +57,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod range_properties;
+pub use crate::range_properties::*;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
@@ -89,3 +91,5 @@ pub mod encryption;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod raw;

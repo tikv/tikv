@@ -19,15 +19,20 @@ use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{future, stream, Future, Stream};
+use futures03::{
+    compat::{Future01CompatExt, Stream01CompatExt},
+    executor::block_on,
+    future, stream, Stream, StreamExt, TryStreamExt,
+};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
-use engine::Engines;
 use engine_rocks::encryption::get_env;
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngines;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -40,6 +45,7 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
+use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::{escape, file::calc_crc32, unescape};
@@ -49,6 +55,8 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+
+type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
@@ -97,7 +105,11 @@ fn new_debug_executor(
                     .unwrap();
 
             Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
+                KvEngines::new(
+                    RocksEngine::from_db(Arc::new(kv_db)),
+                    RocksEngine::from_db(Arc::new(raft_db)),
+                    cache.is_some(),
+                ),
                 ConfigController::default(),
             )) as Box<dyn DebugExecutor>
         }
@@ -234,7 +246,7 @@ trait DebugExecutor {
 
         let scan_future =
             self.get_mvcc_infos(from.clone(), to, limit)
-                .for_each(move |(key, mvcc)| {
+                .try_for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
                         return future::err::<(), String>("no mvcc infos".to_owned());
@@ -266,7 +278,7 @@ trait DebugExecutor {
                     v1!("");
                     future::ok::<(), String>(())
                 });
-        if let Err(e) = scan_future.wait() {
+        if let Err(e) = block_on(scan_future) {
             ve1!("{}", e);
             process::exit(-1);
         }
@@ -336,15 +348,15 @@ trait DebugExecutor {
 
                 let mut take_item = |i: usize| -> Option<(Vec<u8>, MvccInfo)> {
                     let wait = match i {
-                        1 => future::poll_fn(|| mvcc_infos_1.poll()).wait(),
-                        _ => future::poll_fn(|| mvcc_infos_2.poll()).wait(),
+                        1 => block_on(future::poll_fn(|cx| mvcc_infos_1.poll_next_unpin(cx))),
+                        _ => block_on(future::poll_fn(|cx| mvcc_infos_2.poll_next_unpin(cx))),
                     };
-                    match wait {
-                        Ok(item1) => item1,
+                    match wait? {
                         Err(e) => {
                             v1!("db{} scan data in region {} fail: {}", i, region, e);
                             process::exit(-1);
                         }
+                        Ok(s) => Some(s),
                     }
                 };
 
@@ -464,9 +476,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -507,9 +517,7 @@ trait DebugExecutor {
         let regions = region_ids
             .into_iter()
             .map(|region_id| {
-                if let Some(region) = rpc_client
-                    .get_region_by_id(region_id)
-                    .wait()
+                if let Some(region) = block_on(rpc_client.get_region_by_id(region_id).compat())
                     .unwrap_or_else(|e| perror_and_exit("Get region id from PD", e))
                 {
                     return region;
@@ -536,12 +544,7 @@ trait DebugExecutor {
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry;
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream;
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
 
@@ -638,22 +641,18 @@ impl DebugExecutor for DebugClient {
             .take_entry()
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let mut req = ScanMvccRequest::default();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
-        Box::new(
+        Box::pin(
             self.scan_mvcc(&req)
                 .unwrap()
+                .compat()
                 .map_err(|e| e.to_string())
-                .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+                .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
+        )
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -812,17 +811,12 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::raft_log", e))
     }
 
-    fn get_mvcc_infos(
-        &self,
-        from: Vec<u8>,
-        to: Vec<u8>,
-        limit: u64,
-    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        Box::pin(stream)
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
@@ -918,7 +912,7 @@ impl DebugExecutor for Debugger {
         let rpc_client =
             RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
-        let mut region = match rpc_client.get_region_by_id(region_id).wait() {
+        let mut region = match block_on(rpc_client.get_region_by_id(region_id).compat()) {
             Ok(Some(region)) => region,
             Ok(None) => {
                 ve1!("no such region {} on PD", region_id);
@@ -1001,6 +995,22 @@ impl DebugExecutor for Debugger {
         if let Ok(id) = cluster_id {
             v1!("cluster id: {}", id);
         }
+    }
+}
+
+fn warning_prompt(message: &str) -> bool {
+    const EXPECTED: &str = "I consent";
+    println!("{}", message);
+    let input: String = promptly::prompt(format!(
+        "Type \"{}\" to continue, anything else to exit",
+        EXPECTED
+    ))
+    .unwrap();
+    if input == EXPECTED {
+        true
+    } else {
+        println!("exit.");
+        false
     }
 }
 
@@ -1095,7 +1105,7 @@ fn main() {
                 .long("encode")
                 .takes_value(true)
                 .help("Encode a key in escaped format"),
-            )
+        )
         .arg(
             Arg::with_name("pd")
                 .long("pd")
@@ -1386,10 +1396,10 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("region")
-                    .short("r")
-                    .long("region")
-                    .takes_value(true)
-                    .help("Set the region id"),
+                        .short("r")
+                        .long("region")
+                        .takes_value(true)
+                        .help("Set the region id"),
                 )
                 .arg(
                     Arg::with_name("bottommost")
@@ -1538,7 +1548,7 @@ fn main() {
                         .short("r")
                         .takes_value(true)
                         .help("The origin region id"),
-                        ),
+                ),
         )
         .subcommand(
             SubCommand::with_name("metrics")
@@ -1712,22 +1722,22 @@ fn main() {
                 .about("Inject failures to TiKV and recovery")
                 .subcommand(
                     SubCommand::with_name("inject")
-                    .about("Inject failures")
-                    .arg(
-                        Arg::with_name("args")
-                            .multiple(true)
-                            .takes_value(true)
-                            .help(
-                                "Inject fail point and actions pairs.\
+                        .about("Inject failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help(
+                                    "Inject fail point and actions pairs.\
                                 E.g. tikv-ctl fail inject a=off b=panic",
-                            ),
-                    )
-                    .arg(
-                        Arg::with_name("file")
-                            .short("f")
-                            .takes_value(true)
-                            .help("Read a file of fail points and actions to inject"),
-                    ),
+                                ),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Read a file of fail points and actions to inject"),
+                        ),
                 )
                 .subcommand(
                     SubCommand::with_name("recover")
@@ -1746,19 +1756,6 @@ fn main() {
                         ),
                 )
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
-        )
-        .subcommand(
-            SubCommand::with_name("random-hex")
-                .about("Generate random bytes with specified length and print as hex")
-                .arg(
-                    Arg::with_name("len")
-                        .short("l")
-                        .long("len")
-                        .takes_value(true)
-                        .required(true)
-                        .default_value("1024")
-                        .help("the length"),
-                ),
         )
         .subcommand(
             SubCommand::with_name("store")
@@ -1785,6 +1782,31 @@ fn main() {
                         .required(true)
                         .help("output file path"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("encryption-meta")
+                .about("Dump encryption metadata")
+                .subcommand(
+                    SubCommand::with_name("dump-key")
+                        .about("Dump data keys")
+                        .arg(
+                            Arg::with_name("ids")
+                                .long("ids")
+                                .takes_value(true)
+                                .use_delimiter(true)
+                                .help("List of data key ids. Dump all keys if not provided."),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("dump-file")
+                        .about("Dump file encryption info")
+                        .arg(
+                            Arg::with_name("path")
+                                .long("path")
+                                .takes_value(true)
+                                .help("Path to the file. Dump for all files if not provided."),
+                        ),
+                ),
         );
 
     let matches = app.clone().get_matches();
@@ -1808,11 +1830,6 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
-    } else if let Some(matches) = matches.subcommand_matches("random-hex") {
-        let len = value_t_or_exit!(matches.value_of("len"), usize);
-        let random_bytes = gen_random_bytes(len);
-        v1!("{}", hex::encode_upper(&random_bytes));
-        return;
     }
 
     if matches.args.is_empty() {
@@ -1840,6 +1857,10 @@ fn main() {
     }
 
     if let Some(matches) = matches.subcommand_matches("decrypt-file") {
+        let message = "This action will expose sensitive data as plaintext on persistent storage";
+        if !warning_prompt(message) {
+            return;
+        }
         let infile = matches.value_of("file").unwrap();
         let outfile = matches.value_of("out-file").unwrap();
         v1!("infile: {}, outfile: {}", infile, outfile);
@@ -1883,6 +1904,35 @@ fn main() {
 
         io::copy(&mut reader, &mut outf).unwrap();
         v1!("crc32: {}", calc_crc32(outfile).unwrap());
+        return;
+    }
+
+    if let Some(matches) = matches.subcommand_matches("encryption-meta") {
+        match matches.subcommand() {
+            ("dump-key", Some(matches)) => {
+                let message =
+                    "This action will expose encryption key(s) as plaintext. Do not output the \
+                    result in file on disk.";
+                if !warning_prompt(message) {
+                    return;
+                }
+                DataKeyManager::dump_key_dict(
+                    &cfg.security.encryption,
+                    &cfg.storage.data_dir,
+                    matches
+                        .values_of("ids")
+                        .map(|ids| ids.map(|id| id.parse::<u64>().unwrap()).collect()),
+                )
+                .unwrap();
+            }
+            ("dump-file", Some(matches)) => {
+                let path = matches
+                    .value_of("path")
+                    .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
+            }
+            _ => ve1!("{}", matches.usage()),
+        }
         return;
     }
 
@@ -2164,10 +2214,6 @@ fn main() {
     }
 }
 
-fn gen_random_bytes(len: usize) -> Vec<u8> {
-    (0..len).map(|_| rand::random::<u8>()).collect()
-}
-
 fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
         return hex::decode(&key[2..]);
@@ -2242,9 +2288,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = pd_client
-        .get_region_by_id(region_id)
-        .wait()
+    let region = block_on(pd_client.get_region_by_id(region_id).compat())
         .expect("get_region_by_id should success")
         .expect("must have the region");
 
@@ -2309,6 +2353,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
         let h = thread::spawn(move || {
+            tikv_alloc::add_thread_memory_accessor();
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
@@ -2321,6 +2366,7 @@ fn compact_whole_cluster(
                     bottommost,
                 );
             }
+            tikv_alloc::remove_thread_memory_accessor();
         });
         handles.push(h);
     }
@@ -2359,7 +2405,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 
-    engine::rocks::run_ldb_tool(&args, &opts);
+    engine_rocks::raw::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]
@@ -2372,11 +2418,5 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
-    }
-
-    #[test]
-    fn test_gen_random_bytes() {
-        assert_eq!(gen_random_bytes(8).len(), 8);
-        assert_eq!(gen_random_bytes(0).len(), 0);
     }
 }

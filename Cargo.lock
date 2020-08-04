@@ -194,8 +194,8 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "configuration",
  "crc64fast",
- "engine",
  "engine_rocks",
  "engine_traits",
  "external_storage",
@@ -428,7 +428,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46e3374c604fb39d1a2f35ed5e4a4e30e60d01fab49446e08f1b3e9a90aef202"
 dependencies = [
- "semver",
+ "semver 0.9.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -454,7 +454,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
- "engine",
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -572,11 +572,11 @@ dependencies = [
  "chrono",
  "clap",
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "fs2",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
@@ -587,6 +587,7 @@ dependencies = [
  "nix 0.11.1",
  "pd_client",
  "prometheus",
+ "promptly",
  "protobuf",
  "raft",
  "raftstore",
@@ -597,6 +598,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "toml",
  "txn_types",
@@ -620,6 +622,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "error_code",
  "failure",
  "libc",
  "panic_hook",
@@ -716,7 +719,7 @@ dependencies = [
  "clap",
  "criterion-plot",
  "csv",
- "itertools",
+ "itertools 0.8.2",
  "lazy_static",
  "num-traits",
  "rand_core",
@@ -758,7 +761,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
 dependencies = [
  "cast",
- "itertools",
+ "itertools 0.8.2",
 ]
 
 [[package]]
@@ -1005,6 +1008,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "engine_traits",
+ "error_code",
  "failure",
  "futures 0.3.4",
  "futures-util",
@@ -1036,28 +1040,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine"
-version = "0.0.1"
-dependencies = [
- "configuration",
- "encryption",
- "engine_traits",
- "hex 0.4.2",
- "lazy_static",
- "prometheus",
- "protobuf",
- "rocksdb",
- "slog",
- "slog-global",
- "sysinfo",
- "tempfile",
- "tikv_alloc",
- "tikv_util",
- "time 0.1.42",
- "toml",
-]
-
-[[package]]
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
@@ -1073,8 +1055,8 @@ dependencies = [
  "coarsetime",
  "configuration",
  "encryption",
- "engine",
  "engine_traits",
+ "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1099,6 +1081,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "error_code",
  "hex 0.4.2",
  "protobuf",
  "quick-error",
@@ -1129,6 +1112,15 @@ checksum = "3ab49e9dcb602294bc42f9a7dfc9bc6e936fca4418ea300dbfb84fe16de0b7d9"
 dependencies = [
  "backtrace",
  "version_check 0.1.5",
+]
+
+[[package]]
+name = "error_code"
+version = "0.0.1"
+dependencies = [
+ "kvproto",
+ "raft",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -1780,41 +1772,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
-
-[[package]]
-name = "jemalloc-ctl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e93b0f37e7d735c6b610176d5b1bde8e1621ff3f6f7ac23cdfa4e7f7d0111b5"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
-
-[[package]]
-name = "jemalloc-sys"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc62c8e50e381768ce8ee0428ee53741929f7ebd73e4d83f669bcf7693e00ae"
-dependencies = [
- "cc",
- "fs_extra",
- "libc",
-]
-
-[[package]]
-name = "jemallocator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f0cd42ac65f758063fea55126b0148b1ce0a6354ff78e07a4d6806bc65c4ab3"
-dependencies = [
- "jemalloc-sys",
- "libc",
-]
 
 [[package]]
 name = "jobserver"
@@ -1862,7 +1832,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#6f5f6ae6671fe18f2e5521e6eb28ba9e359b6e59"
+source = "git+https://github.com/pingcap/kvproto.git#3132349c113335cb670de2c81a74fc565b49f813"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1937,26 +1907,26 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
  "cc",
  "cmake",
- "jemalloc-sys",
  "libc",
  "libtitan_sys",
  "libz-sys",
  "lz4-sys",
  "openssl-sys",
  "snappy-sys",
+ "tikv-jemalloc-sys",
  "zstd-sys",
 ]
 
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2125,7 +2095,7 @@ dependencies = [
 [[package]]
 name = "minitrace"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
  "crossbeam",
  "futures 0.1.29",
@@ -2138,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "minitrace-attribute"
 version = "0.1.0"
-source = "git+https://github.com/pingcap-incubator/minitrace.git#a40a54e4404a925353142444c220fc326ebd0ae9"
+source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
  "proc-macro-error 1.0.2",
  "quote",
@@ -2286,6 +2256,19 @@ name = "nix"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd0eaf8df8bab402257e0a5c17a254e4cc1f72a93588a1ddfb5d356c801aa7cb"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
+ "void",
+]
+
+[[package]]
+name = "nix"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50e4785f2c3b7589a0d0c1dd60285e1188adac4006e8abd6dd578e1567027363"
 dependencies = [
  "bitflags",
  "cc",
@@ -2558,9 +2541,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
+dependencies = [
+ "paste-impl",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "paste-impl"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
+dependencies = [
+ "proc-macro-hack",
+]
+
+[[package]]
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
+ "error_code",
  "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
@@ -2571,6 +2574,7 @@ dependencies = [
  "prometheus",
  "quick-error",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "slog",
@@ -2838,6 +2842,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "promptly"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b99cfb0289110d969dd21637cfbc922584329bc9e5037c5e576325c615658509"
+dependencies = [
+ "rustyline",
+]
+
+[[package]]
 name = "prost"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2855,7 +2868,7 @@ checksum = "02b10678c913ecbd69350e8535c3aef91a8676c0773fc1d7b95cdd196d7f2f26"
 dependencies = [
  "bytes 0.5.3",
  "heck",
- "itertools",
+ "itertools 0.8.2",
  "log",
  "multimap",
  "petgraph",
@@ -2872,7 +2885,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "537aa19b95acde10a12fec4301466386f757403de4cd4e5b4fa78fb5ecb18f72"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.8.2",
  "proc-macro2",
  "quote",
  "syn",
@@ -2899,12 +2912,13 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.11.1"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f3ca050cd02aa2ee07f8e227871ebe8c12cf076ff7c6bf82fdd41dc81af874"
+checksum = "62e8796ce8d382b0a59f53772a00728799f4d78fc478d4f85e6ca864d67130e0"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
+ "proc-macro2",
  "prost-build",
  "protobuf",
  "protobuf-codegen",
@@ -2949,7 +2963,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+source = "git+https://github.com/pingcap/raft-rs#2d721a6b054480839fb2212eb77c6465fdae8991"
 dependencies = [
  "fxhash",
  "getset",
@@ -2963,7 +2977,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#513b82ce4507747a678fee7b4405c8b8b106fc12"
+source = "git+https://github.com/pingcap/raft-rs#2d721a6b054480839fb2212eb77c6465fdae8991"
 dependencies = [
  "lazy_static",
  "prost",
@@ -2982,9 +2996,10 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "encryption",
- "engine",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -3017,6 +3032,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "tidb_query_datatype",
+ "tikv_alloc",
  "tikv_util",
  "time 0.1.42",
  "tokio 0.2.13",
@@ -3276,7 +3292,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#639b47773f9c5f3affddf9f804bf67312a2d0258"
+source = "git+https://github.com/tikv/rust-rocksdb.git#5e8633cbd76f87535a692c6754a0d4934937633e"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3466,7 +3482,25 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 dependencies = [
- "semver",
+ "semver 0.9.0",
+]
+
+[[package]]
+name = "rustyline"
+version = "6.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61a7384a84da856bd163ef2c22982c816b0bcedaf17978ec13d8e0e277ddc332"
+dependencies = [
+ "cfg-if",
+ "dirs",
+ "libc",
+ "log",
+ "memchr",
+ "nix 0.17.0",
+ "unicode-segmentation",
+ "unicode-width",
+ "utf8parse",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -3554,6 +3588,15 @@ checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 dependencies = [
  "semver-parser",
  "serde",
+]
+
+[[package]]
+name = "semver"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "394cec28fa623e00903caf7ba4fa6fb9a0e260280bb8cdbbba029611108a0190"
+dependencies = [
+ "semver-parser",
 ]
 
 [[package]]
@@ -3705,6 +3748,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slog-json"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc0d2aff1f8f325ef660d9a0eb6e6dcd20b30b3f581a5897f58bf42d061c37a"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "slog",
+]
+
+[[package]]
 name = "slog-term"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3779,6 +3834,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "futures 0.1.29",
  "futures-cpupool",
@@ -4101,7 +4157,6 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "futures 0.1.29",
@@ -4131,7 +4186,6 @@ name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
- "engine",
  "engine_rocks",
  "engine_traits",
  "keys",
@@ -4145,6 +4199,7 @@ version = "0.0.1"
 dependencies = [
  "futures 0.1.29",
  "kvproto",
+ "pd_client",
  "raftstore",
  "test_raftstore",
  "tikv",
@@ -4185,7 +4240,6 @@ dependencies = [
  "criterion-papi",
  "crossbeam",
  "encryption",
- "engine",
  "engine_rocks",
  "engine_traits",
  "external_storage",
@@ -4207,6 +4261,7 @@ dependencies = [
  "rand",
  "rand_xorshift",
  "security",
+ "semver 0.10.0",
  "serde_json",
  "slog",
  "slog-global",
@@ -4225,6 +4280,7 @@ dependencies = [
  "tidb_query_vec_expr",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio 0.2.13",
@@ -4289,6 +4345,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "derive_more",
+ "error_code",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4310,6 +4367,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
+ "error_code",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4413,6 +4471,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
+ "protobuf",
  "slog",
  "slog-global",
  "smallvec 1.4.0",
@@ -4476,10 +4535,10 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "encryption",
- "engine",
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "failure",
  "fs2",
@@ -4495,13 +4554,14 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools",
+ "itertools 0.8.2",
  "keys",
  "kvproto",
  "lazy_static",
  "libc",
  "log",
  "log_wrappers",
+ "match_template",
  "mime",
  "minitrace",
  "more-asserts",
@@ -4527,6 +4587,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
+ "semver 0.10.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4570,17 +4631,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.4.0+5.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f5230e450d11f3a5ba46e94073e6d4d2afcc26ecd47b80533420eed648b3084"
+dependencies = [
+ "cc",
+ "fs_extra",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90c7c5e31d05b8a79b7d4dd50d0ea4a57db4ed2bf694c66763d79cdb84045cc"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
- "jemalloc-ctl",
- "jemalloc-sys",
- "jemallocator",
+ "lazy_static",
  "libc",
  "log",
  "mimallocator",
  "tcmalloc",
  "tempfile",
+ "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
+ "tikv-jemallocator",
 ]
 
 [[package]]
@@ -4596,6 +4690,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -4620,11 +4715,11 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "serde_derive",
  "serde_json",
  "slog",
  "slog-async",
  "slog-global",
+ "slog-json",
  "slog-term",
  "sysinfo",
  "tempfile",
@@ -4702,7 +4797,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#85b2ef9503b5c69709871403bb8378139e4bb47f"
+source = "git+https://github.com/pingcap/tipb.git#dcfcea0b59654004a89d5c25d6d22c113a13b848"
 dependencies = [
  "lazy_static",
  "prost",
@@ -5034,6 +5129,7 @@ dependencies = [
  "byteorder",
  "codec",
  "derive-new",
+ "error_code",
  "farmhash",
  "hex 0.4.2",
  "kvproto",
@@ -5116,6 +5212,12 @@ dependencies = [
  "matches",
  "percent-encoding",
 ]
+
+[[package]]
+name = "utf8parse"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
 
 [[package]]
 name = "utime"
@@ -5410,11 +5512,12 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.15+zstd.1.4.4"
+version = "1.4.17+zstd.1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89719b034dc22d240d5b407fb0a3fe6d29952c181cff9a9f95c0bd40b4f8f7d8"
+checksum = "b89249644df056b522696b1bb9e7c18c87e8ffa3e2f0dc3b0155875d6498f01b"
 dependencies = [
  "cc",
  "glob",
+ "itertools 0.9.0",
  "libc",
 ]

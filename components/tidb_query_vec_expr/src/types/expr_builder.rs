@@ -467,49 +467,49 @@ mod tests {
     use tidb_query_common::Result;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn fn_a(_v: Option<&i64>) -> Result<Option<Real>> {
         unreachable!()
     }
 
     /// An RPN function for test. It accepts 2 float arguments, returns int.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn fn_b(_v1: Option<&Real>, _v2: Option<&Real>) -> Result<Option<i64>> {
         unreachable!()
     }
 
     /// An RPN function for test. It accepts 3 int arguments, returns int.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn fn_c(_v1: Option<&i64>, _v2: Option<&i64>, _v3: Option<&i64>) -> Result<Option<i64>> {
         unreachable!()
     }
 
     /// An RPN function for test. It accepts 3 float arguments, returns float.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn fn_d(_v1: Option<&Real>, _v2: Option<&Real>, _v3: Option<&Real>) -> Result<Option<Real>> {
         unreachable!()
     }
 
     /// This function is only used when testing with the validator.
-    #[rpn_fn]
+    #[rpn_fn(nullable)]
     fn fn_e(_v1: Option<&Int>, _v2: Option<&Real>) -> Result<Option<Bytes>> {
         unreachable!()
     }
 
     /// This function is only used when testing with the validator.
-    #[rpn_fn(varg)]
+    #[rpn_fn(nullable, varg)]
     fn fn_f(_v: &[Option<&Int>]) -> Result<Option<Real>> {
         unreachable!()
     }
 
     /// This function is only used when testing with the validator.
-    #[rpn_fn(varg, min_args = 2)]
+    #[rpn_fn(nullable, varg, min_args = 2)]
     fn fn_g(_v: &[Option<&Real>]) -> Result<Option<Int>> {
         unreachable!()
     }
 
     /// This function is only used when testing with the validator.
-    #[rpn_fn(raw_varg, min_args = 1)]
+    #[rpn_fn(nullable, raw_varg, min_args = 1)]
     fn fn_h(_v: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
         unreachable!()
     }

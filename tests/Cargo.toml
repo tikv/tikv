@@ -84,7 +84,6 @@ crc64fast = "0.1"
 crossbeam = "0.7.2"
 configuration = { path = "../components/configuration" }
 encryption = { path = "../components/encryption" }
-engine = { path = "../components/engine" }
 cdc = { path = "../components/cdc" }
 futures = "0.1"
 futures-cpupool = "0.1"
@@ -114,6 +113,7 @@ tokio-threadpool = "0.1.13"
 toml = "0.4"
 txn_types = { path = "../components/txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+time = "0.1"
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
@@ -122,7 +122,6 @@ criterion = "0.3"
 criterion-cpu-time = "0.1"
 arrow = "0.10"
 rand_xorshift = "0.2"
-
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 external_storage = { path = "../components/external_storage" }
@@ -141,6 +140,7 @@ test_raftstore = { path = "../components/test_raftstore" }
 byteorder = "1.2"
 serde_json = "1.0"
 tokio = { version = "0.2", features = ["rt-core"] }
+semver = "0.10"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 criterion-papi = "0.1"

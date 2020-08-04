@@ -219,7 +219,7 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoder::{Column, RowEncoder};
+    use super::super::encoder_for_test::{Column, RowEncoder};
     use super::{read_le_bytes, RowSlice};
     use crate::codec::data_type::ScalarValue;
     use crate::expr::EvalContext;
@@ -307,7 +307,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use super::super::encoder::{Column, RowEncoder};
+    use super::super::encoder_for_test::{Column, RowEncoder};
     use super::RowSlice;
     use crate::codec::data_type::ScalarValue;
     use crate::expr::EvalContext;

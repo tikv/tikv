@@ -626,8 +626,8 @@ mod tests {
 
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use crate::raw::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
     use test::Bencher;
 
@@ -639,6 +639,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::many_single_char_names)]
     #[test]
     fn test_range_properties() {
         let cases = [
