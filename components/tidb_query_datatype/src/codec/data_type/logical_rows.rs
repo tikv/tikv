@@ -83,3 +83,35 @@ impl<'a> LogicalRows<'a> {
         self.len() == 0
     }
 }
+
+pub struct LogicalRowsIterator<'a> {
+    logical_rows: LogicalRows<'a>,
+    idx: usize,
+}
+
+impl<'a> Iterator for LogicalRowsIterator<'a> {
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = if self.idx < self.logical_rows.len() {
+            Some(self.logical_rows.get_idx(self.idx))
+        } else {
+            None
+        };
+
+        self.idx += 1;
+
+        result
+    }
+}
+
+impl<'a> IntoIterator for LogicalRows<'a> {
+    type Item = usize;
+    type IntoIter = LogicalRowsIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LogicalRowsIterator {
+            logical_rows: self,
+            idx: 0,
+        }
+    }
+}
