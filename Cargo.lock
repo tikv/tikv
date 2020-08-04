@@ -576,6 +576,7 @@ dependencies = [
  "engine_traits",
  "fs2",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",
@@ -621,6 +622,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.4.12",
+ "error_code",
  "failure",
  "libc",
  "panic_hook",
@@ -1006,6 +1008,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "engine_traits",
+ "error_code",
  "failure",
  "futures 0.3.4",
  "futures-util",
@@ -1078,6 +1081,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "error_code",
  "hex 0.4.2",
  "protobuf",
  "quick-error",
@@ -1108,6 +1112,15 @@ checksum = "3ab49e9dcb602294bc42f9a7dfc9bc6e936fca4418ea300dbfb84fe16de0b7d9"
 dependencies = [
  "backtrace",
  "version_check 0.1.5",
+]
+
+[[package]]
+name = "error_code"
+version = "0.0.1"
+dependencies = [
+ "kvproto",
+ "raft",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -2550,6 +2563,7 @@ dependencies = [
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
+ "error_code",
  "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
@@ -2985,6 +2999,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -3819,6 +3834,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "futures 0.1.29",
  "futures-cpupool",
@@ -4329,6 +4345,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "derive_more",
+ "error_code",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4350,6 +4367,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
+ "error_code",
  "failure",
  "hex 0.3.2",
  "kvproto",
@@ -4453,6 +4471,7 @@ dependencies = [
  "hex 0.3.2",
  "kvproto",
  "match_template",
+ "protobuf",
  "slog",
  "slog-global",
  "smallvec 1.4.0",
@@ -4519,6 +4538,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "fail",
  "failure",
  "fs2",
@@ -4670,6 +4690,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
+ "error_code",
  "fail",
  "fs2",
  "futures 0.1.29",
@@ -5108,6 +5129,7 @@ dependencies = [
  "byteorder",
  "codec",
  "derive-new",
+ "error_code",
  "farmhash",
  "hex 0.4.2",
  "kvproto",
