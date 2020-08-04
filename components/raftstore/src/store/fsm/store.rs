@@ -64,6 +64,7 @@ use crate::store::{
 
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
+use error_code::ErrorCodeExt;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
