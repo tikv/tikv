@@ -73,7 +73,6 @@ impl Drop for KeyHandleGuard {
         // We only keep the lock in memory until the write to the underlying
         // store finishes.
         // The guard can be released after finishes writing.
-        // FIXME: read checks should be done before getting the snapshot
         *self.handle.lock_store.lock() = None;
     }
 }

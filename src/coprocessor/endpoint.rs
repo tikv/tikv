@@ -633,7 +633,7 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use futures03::executor::block_on_stream;
+    use futures03::executor::{block_on, block_on_stream};
 
     use tipb::Executor;
     use tipb::Expr;
@@ -644,6 +644,7 @@ mod tests {
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use protobuf::Message;
+    use txn_types::{Key, LockType};
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -1475,5 +1476,49 @@ mod tests {
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
+    }
+
+    #[test]
+    fn test_check_memory_locks() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+            ));
+        });
+
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+
+        let mut req = coppb::Request::default();
+        req.mut_context().set_isolation_level(IsolationLevel::Si);
+        req.set_start_ts(100);
+        req.set_tp(REQ_TYPE_DAG);
+        let mut key_range = coppb::KeyRange::default();
+        key_range.set_start(b"a".to_vec());
+        key_range.set_end(b"z".to_vec());
+        req.mut_ranges().push(key_range);
+        let mut dag = DagRequest::default();
+        dag.mut_executors().push(Executor::default());
+        req.set_data(dag.write_to_bytes().unwrap());
+
+        let resp = cop
+            .parse_and_handle_unary_request(req, None)
+            .wait()
+            .unwrap();
+        assert_eq!(resp.get_locked().get_key(), b"key");
     }
 }

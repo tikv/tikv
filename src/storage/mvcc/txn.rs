@@ -1311,7 +1311,6 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use kvproto::kvrpcpb::Context;
-    use pd_client::DummyPdClient;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -3318,10 +3317,8 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut pd_client = DummyPdClient::new();
-        pd_client.next_ts = TimeStamp::new(42);
         let cm = ConcurrencyManager::new(42.into());
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         txn.prewrite(
             mutation,
@@ -3333,6 +3330,13 @@ mod tests {
             TimeStamp::zero(),
         )
         .unwrap();
+
+        // Now the lock has not been written to the underlying engine, but it has
+        // been stored to the concurrency manager.
+        assert!(cm
+            .read_key_check(&Key::from_raw(b"key"), |_| Err(()))
+            .is_err());
+
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
             .unwrap();
@@ -3355,9 +3359,6 @@ mod tests {
         // The preparation work is the same as test_async_prewrite_primary.
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-
-        let mut pd_client = DummyPdClient::new();
-        pd_client.next_ts = TimeStamp::new(42);
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let cm = ConcurrencyManager::new(42.into());

@@ -314,88 +314,107 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
         let concurrency_manager = self.concurrency_manager.clone();
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe(requests.len() as f64);
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = Some(ThreadReadId::new());
-                let mut statistics = Statistics::default();
-                let mut results = Vec::default();
-                let mut snaps = vec![];
+        let res =
+            self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(requests.len() as f64);
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let read_id = Some(ThreadReadId::new());
+                    let mut statistics = Statistics::default();
+                    let mut results = Vec::default();
+                    let mut req_snaps = vec![];
 
-                for mut req in requests {
-                    let key = Key::from_raw(req.get_key());
-                    let start_ts = req.get_version().into();
-                    let mut ctx = req.take_context();
-                    let isolation_level = ctx.get_isolation_level();
-                    let fill_cache = !ctx.get_not_fill_cache();
-                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                    let region_id = ctx.get_region_id();
-                    // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                    if start_ts != TimeStamp::max() {
-                        concurrency_manager.update_max_read_ts(start_ts);
-                    }
-                    if isolation_level == IsolationLevel::Si {
-                        concurrency_manager
-                            .read_key_check(&key, |lock| {
-                                lock.clone()
-                                    .check_ts_conflict(&key, start_ts, &bypass_locks)
-                            })
-                            .map_err(mvcc::Error::from)?;
-                    }
-                    let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot(engine, read_id.clone(), req.get_context())
-                    });
-                    snaps.push((
-                        snap,
-                        key,
-                        start_ts,
-                        isolation_level,
-                        fill_cache,
-                        bypass_locks,
-                        region_id,
-                    ));
-                }
-                Self::with_tls_engine(|engine| engine.release_snapshot());
-                for (snap, key, start_ts, isolation_level, fill_cache, bypass_locks, region_id) in
-                    snaps
-                {
-                    match snap.await {
-                        Ok(snapshot) => {
-                            match PointGetterBuilder::new(snapshot, start_ts)
-                                .fill_cache(fill_cache)
-                                .isolation_level(isolation_level)
-                                .multi(false)
-                                .bypass_locks(bypass_locks)
-                                .build()
+                    for mut req in requests {
+                        let key = Key::from_raw(req.get_key());
+                        let start_ts = req.get_version().into();
+                        let mut ctx = req.take_context();
+                        let isolation_level = ctx.get_isolation_level();
+                        let fill_cache = !ctx.get_not_fill_cache();
+                        let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                        let region_id = ctx.get_region_id();
+                        // Update max_read_ts and check the in-memory lock table before getting the snapshot
+                        if start_ts != TimeStamp::max() {
+                            concurrency_manager.update_max_read_ts(start_ts);
+                        }
+                        if isolation_level == IsolationLevel::Si {
+                            if let Err(e) = concurrency_manager
+                                .read_key_check(&key, |lock| {
+                                    lock.clone()
+                                        .check_ts_conflict(&key, start_ts, &bypass_locks)
+                                })
+                                .map_err(mvcc::Error::from)
                             {
-                                Ok(mut point_getter) => {
-                                    let v = point_getter.get(&key);
-                                    let stat = point_getter.take_statistics();
-                                    metrics::tls_collect_read_flow(region_id, &stat);
-                                    statistics.add(&stat);
-                                    results.push(v.map_err(|e| Error::from(txn::Error::from(e))));
-                                }
-                                Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
+                                req_snaps.push(Err(e));
+                                continue;
                             }
                         }
-                        Err(e) => {
-                            results.push(Err(e));
+                        let snap = Self::with_tls_engine(|engine| {
+                            Self::snapshot(engine, read_id.clone(), req.get_context())
+                        });
+                        req_snaps.push(Ok((
+                            snap,
+                            key,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            region_id,
+                        )));
+                    }
+                    Self::with_tls_engine(|engine| engine.release_snapshot());
+                    for req_snap in req_snaps {
+                        let (
+                            snap,
+                            key,
+                            start_ts,
+                            isolation_level,
+                            fill_cache,
+                            bypass_locks,
+                            region_id,
+                        ) = match req_snap {
+                            Ok(req_snap) => req_snap,
+                            Err(e) => {
+                                results.push(Err(e.into()));
+                                continue;
+                            }
+                        };
+                        match snap.await {
+                            Ok(snapshot) => {
+                                match PointGetterBuilder::new(snapshot, start_ts)
+                                    .fill_cache(fill_cache)
+                                    .isolation_level(isolation_level)
+                                    .multi(false)
+                                    .bypass_locks(bypass_locks)
+                                    .build()
+                                {
+                                    Ok(mut point_getter) => {
+                                        let v = point_getter.get(&key);
+                                        let stat = point_getter.take_statistics();
+                                        metrics::tls_collect_read_flow(region_id, &stat);
+                                        statistics.add(&stat);
+                                        results
+                                            .push(v.map_err(|e| Error::from(txn::Error::from(e))));
+                                    }
+                                    Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
+                                }
+                            }
+                            Err(e) => {
+                                results.push(Err(e));
+                            }
                         }
                     }
-                }
-                metrics::tls_collect_scan_details(CMD, &statistics);
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.elapsed_secs());
-                Ok(results)
-            },
-            priority,
-            thread_rng().next_u64(),
-        );
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    Ok(results)
+                },
+                priority,
+                thread_rng().next_u64(),
+            );
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
@@ -1557,6 +1576,7 @@ mod tests {
     use super::{test_util::*, *};
 
     use crate::config::TitanDBConfig;
+    use crate::storage::mvcc::LockType;
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -5331,5 +5351,74 @@ mod tests {
             0.into(),
             false,
         );
+    }
+
+    #[test]
+    fn test_check_memory_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let cm = storage.get_concurrency_manager();
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+            ));
+        });
+
+        let mut ctx = Context::default();
+        ctx.set_isolation_level(IsolationLevel::Si);
+
+        // Test get
+        assert!(storage
+            .get(ctx.clone(), key.clone(), 100.into())
+            .wait()
+            .is_err());
+
+        // Test batch_get
+        assert!(storage
+            .batch_get(
+                ctx.clone(),
+                vec![Key::from_raw(b"a"), key.clone()],
+                100.into()
+            )
+            .wait()
+            .is_err());
+
+        // Test scan
+        assert!(storage
+            .scan(
+                ctx.clone(),
+                Key::from_raw(b"a"),
+                None,
+                10,
+                0,
+                100.into(),
+                false,
+                false
+            )
+            .wait()
+            .is_err());
+
+        // Test batch_get_command
+        let mut req1 = GetRequest::default();
+        req1.set_context(ctx.clone());
+        req1.set_key(b"a".to_vec());
+        req1.set_version(50);
+        let mut req2 = GetRequest::default();
+        req2.set_context(ctx);
+        req2.set_key(b"key".to_vec());
+        req2.set_version(100);
+        let res = storage.batch_get_command(vec![req1, req2]).wait().unwrap();
+        assert!(res[0].is_ok());
+        assert!(res[1].is_err());
     }
 }
