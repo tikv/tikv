@@ -63,12 +63,7 @@ impl RaftStoreRouter<RocksEngine> for MockRaftStoreRouter {
     fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksSnapshot>) -> RaftStoreResult<()> {
         unimplemented!()
     }
-    fn send_command_txn_extra(
-        &self,
-        _: RaftCmdRequest,
-        _: TxnExtra,
-        _: Callback<RocksSnapshot>,
-    ) -> RaftStoreResult<()> {
+    fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
         unimplemented!()
     }
     fn broadcast_unreachable(&self, _: u64) {

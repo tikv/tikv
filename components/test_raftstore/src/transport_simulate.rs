@@ -206,13 +206,8 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
         self.ch.read(read_id, req, cb)
     }
 
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<RocksSnapshot>,
-    ) -> Result<()> {
-        self.ch.send_command_txn_extra(req, txn_extra, cb)
+    fn send_txn_extra(&self, txn_extra: TxnExtra) -> Result<()> {
+        self.ch.send_txn_extra(txn_extra)
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {

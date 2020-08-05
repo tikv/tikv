@@ -239,10 +239,11 @@ impl<S: RaftStoreRouter<RocksEngine>> RaftKv<S> {
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
+        self.router.send_txn_extra(txn_extra)?;
+
         self.router
-            .send_command_txn_extra(
+            .send_command(
                 cmd,
-                txn_extra,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));

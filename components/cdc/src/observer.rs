@@ -112,12 +112,9 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             .push(observe_id, region_id, cmd);
     }
 
-    fn on_flush_apply(&self, txn_extras: Vec<TxnExtra>, engine: E) {
+    fn on_flush_apply(&self, engine: E) {
         fail_point!("before_cdc_flush_apply");
         let mut txn_extra = TxnExtra::default();
-        txn_extras
-            .into_iter()
-            .for_each(|mut e| txn_extra.extend(&mut e));
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
@@ -331,7 +328,7 @@ mod tests {
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply(Vec::default(), engine);
+        observer.on_flush_apply(engine);
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {

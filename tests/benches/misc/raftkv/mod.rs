@@ -74,13 +74,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
         Ok(())
     }
 
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<RocksSnapshot>,
-    ) -> Result<()> {
-        self.invoke(RaftCommand::with_txn_extra(req, cb, txn_extra));
+    fn send_txn_extra(&self, _: TxnExtra) -> Result<()> {
         Ok(())
     }
 

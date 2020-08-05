@@ -25,17 +25,10 @@ where
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        self.send_command_txn_extra(req, TxnExtra::default(), cb)
-    }
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()>;
 
-    /// Sends RaftCmdRequest to local store with txn extras.
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()>;
+    /// Sends TxnExtra to local store.
+    fn send_txn_extra(&self, txn_extra: TxnExtra) -> RaftStoreResult<()>;
 
     /// Sends Snapshot to local store.
     fn read(
@@ -101,13 +94,13 @@ where
         Ok(())
     }
 
-    /// Sends RaftCmdRequest to local store with txn extra.
-    fn send_command_txn_extra(
-        &self,
-        _: RaftCmdRequest,
-        _: TxnExtra,
-        _: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()> {
+    /// Sends RaftCmdRequest to local store.
+    fn send_command(&self, _: RaftCmdRequest, _: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends TxnExtra to local store.
+    fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
         Ok(())
     }
 
@@ -213,17 +206,8 @@ where
         local_reader.release_snapshot_cache();
     }
 
-    fn send_command_txn_extra(
-        &self,
-        req: RaftCmdRequest,
-        txn_extra: TxnExtra,
-        cb: Callback<EK::Snapshot>,
-    ) -> RaftStoreResult<()> {
-        let cmd = RaftCommand::with_txn_extra(req, cb, txn_extra);
-        let region_id = cmd.request.get_header().get_region_id();
-        self.router
-            .send_raft_command(cmd)
-            .map_err(|e| handle_send_error(region_id, e))
+    fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
+        Ok(())
     }
 
     fn significant_send(

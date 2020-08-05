@@ -333,13 +333,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_command_txn_extra(
-            &self,
-            _: RaftCmdRequest,
-            _: TxnExtra,
-            _: Callback<RocksSnapshot>,
-        ) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+        fn send_txn_extra(&self, _: TxnExtra) -> RaftStoreResult<()> {
             Ok(())
         }
 
