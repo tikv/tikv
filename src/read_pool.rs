@@ -161,6 +161,7 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        self.fail_registry.register_current();
         set_tls_engine(self.engine.take().unwrap());
         self.inner.start(local);
         tikv_alloc::add_thread_memory_accessor()
@@ -186,7 +187,8 @@ impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
         self.inner.end(local);
         self.flush_metrics();
         unsafe { destroy_tls_engine::<E>() }
-        tikv_alloc::remove_thread_memory_accessor()
+        tikv_alloc::remove_thread_memory_accessor();
+        fail::FailPointRegistry::deregister_current();
     }
 }
 

@@ -651,6 +651,7 @@ where
 
                 let local_registry = fail::FailPointRegistry::current_registry();
                 self.pool.spawn(async move {
+                    local_registry.register_current();
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
@@ -660,6 +661,7 @@ where
                         notifier,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
+                    fail::FailPointRegistry::deregister_current();
                 });
             }
             task @ Task::Apply { .. } => {

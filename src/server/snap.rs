@@ -317,8 +317,14 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
             pool: CpuPoolBuilder::new()
                 .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
-                .after_start(|| tikv_alloc::add_thread_memory_accessor())
-                .before_stop(|| tikv_alloc::remove_thread_memory_accessor())
+                .after_start(|| {
+                    local_registry.register_current();
+                    tikv_alloc::add_thread_memory_accessor();
+                })
+                .before_stop(|| {
+                    tikv_alloc::remove_thread_memory_accessor();
+                    fail::FailPointRegistry::deregister_current();
+                })
                 .create(),
             raft_router: r,
             security_mgr,
