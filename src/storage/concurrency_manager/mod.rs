@@ -3,10 +3,12 @@
 //! The concurrency manager is responsible for concurrency control of
 //! transactions.
 //!
-//! The concurrency manager contains a key table in memory.
-//! Transactional commands can acquire key mutexes from the concurrency manager
-//! to ensure serializability. Lock information can be also stored in the
-//! manager and reading requests can check if these locks block the read.
+//! The concurrency manager contains a lock table in memory. Lock information
+//! can be stored in it and reading requests can check if these locks block
+//! the read.
+//!
+//! In order to mutate the lock of a key stored in the lock table, it needs
+//! to be locked first using `lock_key` or `lock_keys`.
 
 mod key_handle;
 mod lock_table;

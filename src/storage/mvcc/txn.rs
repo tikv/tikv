@@ -90,11 +90,15 @@ pub struct MvccTxn<S: Snapshot> {
     // collapse continuous rollbacks.
     collapse_rollback: bool,
     pub extra_op: ExtraOp,
-    // used to set memory locks for prewritten keys
+    // `concurrency_manager` is used to set memory locks for prewritten keys.
+    // Prewritten locks of async commit transactions should be visible to
+    // readers before they are written to the engine.
     concurrency_manager: ConcurrencyManager,
-    // After locks are also stored in memory in prewrite, the KeyHandleGuard
-    // needs to be stored here. These guards should be taken and released
-    // after finishing writing to the underlying store.
+    // After locks are stored in memory in prewrite, the KeyHandleGuard
+    // needs to be stored here.
+    // When the locks are written to the underlying engine, subsequent
+    // reading requests should be able to read the locks from the engine.
+    // So these guards can be released after finishing writing.
     guards: Vec<KeyHandleGuard>,
 }
 
