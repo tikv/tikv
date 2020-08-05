@@ -60,6 +60,8 @@ impl<Router: RaftStoreRouter<RocksEngine>> ImportSSTService<Router> {
         let local_registry = fail::FailPointRegistry::current_registry();
         let threads = Builder::new()
             .name_prefix("sst-importer")
+            .after_start(move || tikv_alloc::add_thread_memory_accessor())
+            .before_stop(move || tikv_alloc::remove_thread_memory_accessor())
             .pool_size(cfg.num_threads)
             .after_start(move || local_registry.register_current())
             .before_stop(|| fail::FailPointRegistry::deregister_current())

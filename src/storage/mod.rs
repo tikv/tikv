@@ -28,7 +28,7 @@ pub use self::{
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, PrewriteResult, StorageCallback, TxnStatus},
+    types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
@@ -446,6 +446,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         start_key: Key,
         end_key: Option<Key>,
         limit: usize,
+        sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
@@ -502,7 +503,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         scanner =
                             snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
-                    let res = scanner.scan(limit);
+                    let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
@@ -1412,6 +1413,16 @@ pub mod test_util {
         })
     }
 
+    pub fn expect_secondary_locks_status_callback(
+        done: Sender<i32>,
+        secondary_locks_status: SecondaryLocksStatus,
+    ) -> Callback<SecondaryLocksStatus> {
+        Box::new(move |res: Result<SecondaryLocksStatus>| {
+            assert_eq!(res.unwrap(), secondary_locks_status);
+            done.send(0).unwrap();
+        })
+    }
+
     type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
 
     pub fn new_acquire_pessimistic_lock_command(
@@ -1473,7 +1484,7 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use futures03::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+    use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -1601,6 +1612,7 @@ mod tests {
                     Key::from_raw(b"x"),
                     None,
                     1000,
+                    0,
                     1.into(),
                     false,
                     false,
@@ -1674,6 +1686,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1689,6 +1702,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1704,6 +1718,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1719,6 +1734,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1734,6 +1750,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1749,6 +1766,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1785,6 +1803,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1804,6 +1823,77 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"a".to_vec(), b"aa".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), b"aa".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), b"cc".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1,
+                    2,
                     5.into(),
                     false,
                     true,
@@ -1822,6 +1912,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1840,6 +1931,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1859,6 +1951,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1877,6 +1970,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1936,6 +2030,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -1951,6 +2046,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -1966,6 +2062,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -1981,6 +2078,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -1996,6 +2094,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2011,6 +2110,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2047,6 +2147,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2066,6 +2167,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2081,6 +2183,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2096,6 +2199,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2112,6 +2216,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2127,6 +2232,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -3363,7 +3469,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             true
         );
@@ -3375,7 +3481,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             true
         );
@@ -3387,7 +3493,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             false
         );
@@ -3400,7 +3506,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, false
+                &ranges, false,
             ),
             false
         );
@@ -3412,7 +3518,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             true
         );
@@ -3424,7 +3530,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             true
         );
@@ -3436,7 +3542,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             false
         );
@@ -3448,7 +3554,7 @@ mod tests {
         ]);
         assert_eq!(
             <Storage<RocksEngine, DummyLockManager, DummyPdClient>>::check_key_ranges(
-                &ranges, true
+                &ranges, true,
             ),
             false
         );
@@ -4401,6 +4507,113 @@ mod tests {
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_check_secondary_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        let k1 = Key::from_raw(b"k1");
+        let k2 = Key::from_raw(b"k2");
+
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::Lock(k1.clone()), Mutation::Lock(k2.clone())],
+                    b"k".to_vec(),
+                    10.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::zero(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // All locks exist
+
+        let mut lock1 = LockInfo::default();
+        lock1.set_primary_lock(b"k".to_vec());
+        lock1.set_lock_version(10);
+        lock1.set_key(b"k1".to_vec());
+        lock1.set_txn_size(2);
+        lock1.set_lock_ttl(100);
+        lock1.set_lock_type(Op::Lock);
+        let mut lock2 = lock1.clone();
+        lock2.set_key(b"k2".to_vec());
+
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![k1.clone(), k2.clone()],
+                    10.into(),
+                    Context::default(),
+                ),
+                expect_secondary_locks_status_callback(
+                    tx.clone(),
+                    SecondaryLocksStatus::Locked(vec![lock1, lock2]),
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // One of the locks are committed
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k1.clone()], 10.into(), 20.into(), Context::default()),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(vec![k1, k2], 10.into(), Context::default()),
+                expect_secondary_locks_status_callback(
+                    tx.clone(),
+                    SecondaryLocksStatus::Committed(20.into()),
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Some of the locks do not exist
+        let k3 = Key::from_raw(b"k3");
+        let k4 = Key::from_raw(b"k4");
+
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::Lock(k3.clone())],
+                    b"k".to_vec(),
+                    30.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::zero(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(vec![k3, k4], 10.into(), Context::default()),
+                expect_secondary_locks_status_callback(tx, SecondaryLocksStatus::RolledBack),
             )
             .unwrap();
         rx.recv().unwrap();

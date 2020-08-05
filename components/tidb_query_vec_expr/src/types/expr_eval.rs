@@ -24,6 +24,36 @@ static IDENTICAL_LOGICAL_ROWS: [usize; BATCH_MAX_SIZE] = {
     logical_rows
 };
 
+#[derive(Clone, Copy, Debug)]
+pub enum LogicalRows<'a> {
+    Identical { size: usize },
+    Ref { logical_rows: &'a [usize] },
+}
+
+impl<'a> LogicalRows<'a> {
+    pub fn as_slice(self) -> &'a [usize] {
+        match self {
+            LogicalRows::Identical { size } => &IDENTICAL_LOGICAL_ROWS[0..size],
+            LogicalRows::Ref { logical_rows } => logical_rows,
+        }
+    }
+
+    #[inline]
+    pub fn get_idx(self, idx: usize) -> usize {
+        match self {
+            LogicalRows::Identical { size: _ } => idx,
+            LogicalRows::Ref { logical_rows } => logical_rows[idx],
+        }
+    }
+
+    pub fn is_ident(self) -> bool {
+        match self {
+            LogicalRows::Identical { size: _ } => true,
+            LogicalRows::Ref { logical_rows: _ } => false,
+        }
+    }
+}
+
 /// Represents a vector value node in the RPN stack.
 ///
 /// It can be either an owned node or a reference node.
@@ -54,13 +84,19 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     }
 
     /// Gets a reference to the logical rows.
-    pub fn logical_rows(&self) -> &[usize] {
+    pub fn logical_rows_struct(&self) -> LogicalRows {
         match self {
-            RpnStackNodeVectorValue::Generated { physical_value } => {
-                &IDENTICAL_LOGICAL_ROWS[0..physical_value.len()]
-            }
-            RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
+            RpnStackNodeVectorValue::Generated { physical_value } => LogicalRows::Identical {
+                size: physical_value.len(),
+            },
+
+            RpnStackNodeVectorValue::Ref { logical_rows, .. } => LogicalRows::Ref { logical_rows },
         }
+    }
+
+    /// Gets a reference to the logical rows.
+    pub fn logical_rows(&self) -> &[usize] {
+        self.logical_rows_struct().as_slice()
     }
 }
 
@@ -139,8 +175,9 @@ impl<'a> RpnStackNode<'a> {
         match self {
             RpnStackNode::Vector { value, .. } => {
                 let physical_vector = value.as_ref();
-                let logical_rows = value.logical_rows();
-                physical_vector.get_scalar_ref(logical_rows[logical_index])
+                let logical_rows = value.logical_rows_struct();
+                let idx = logical_rows.get_idx(logical_index);
+                physical_vector.get_scalar_ref(idx)
             }
             RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
         }
@@ -1170,6 +1207,52 @@ mod tests {
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+    }
+
+    #[test]
+    fn test_merge_nulls_constant_null() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(None))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10).map(|_| None).collect::<Vec<Option<Real>>>()
+        );
+    }
+
+    #[test]
+    fn test_merge_nulls_constant() {
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Real) -> Result<Option<Real>> {
+            Ok(Some(*v * 2.5))
+        }
+
+        let exp = RpnExpressionBuilder::new_for_test()
+            .push_constant_for_test(ScalarValue::Real(Real::new(10.0).ok()))
+            .push_fn_call_for_test(foo_fn_meta(), 1, FieldTypeTp::Double)
+            .build_for_test();
+        let mut ctx = EvalContext::default();
+        let mut columns = LazyBatchColumnVec::empty();
+        let val = exp.eval(&mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_real_vec(),
+            (0..10)
+                .map(|_| Real::new(25.0).ok())
+                .collect::<Vec<Option<Real>>>()
+        );
     }
 
     #[bench]

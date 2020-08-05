@@ -78,7 +78,8 @@ encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
-fail = "0.4"
+error_code = { path = "components/error_code" }
+fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
@@ -230,6 +231,7 @@ members = [
   "components/raftstore",
   "components/into_other",
   "components/encryption",
+  "components/error_code",
 ]
 default-members = ["cmd"]
 
