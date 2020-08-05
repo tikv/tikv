@@ -45,7 +45,6 @@ struct TestSuite {
     tikv_cli: TikvClient,
     context: Context,
     ts: TimeStamp,
-    concurrency_manager: ConcurrencyManager,
 
     _env: Arc<Environment>,
 }
@@ -118,7 +117,6 @@ impl TestSuite {
             tikv_cli,
             context,
             ts: TimeStamp::zero(),
-            concurrency_manager,
             _env: env,
         }
     }
