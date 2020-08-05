@@ -7,6 +7,7 @@ use engine_rocks::RocksTablePropertiesCollection;
 use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -163,8 +164,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock
-                .check_ts_conflict(key, ts, &Default::default())
+            return Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
                 .map_err(From::from);
         }
         Ok(())

@@ -48,10 +48,12 @@ impl ConcurrencyManager {
     }
 
     /// Updates max_read_ts with the given read_ts. It has no effect if
-    /// max_read_ts >= read_ts.
+    /// max_read_ts >= read_ts or read_ts is TimeStamp::max().
     pub fn update_max_read_ts(&self, read_ts: TimeStamp) {
-        self.max_read_ts
-            .fetch_max(read_ts.into_inner(), Ordering::SeqCst);
+        if read_ts != TimeStamp::max() {
+            self.max_read_ts
+                .fetch_max(read_ts.into_inner(), Ordering::SeqCst);
+        }
     }
 
     /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
@@ -131,6 +133,9 @@ mod tests {
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
 
         concurrency_manager.update_max_read_ts(5.into());
+        assert_eq!(concurrency_manager.max_read_ts(), 20.into());
+
+        concurrency_manager.update_max_read_ts(TimeStamp::max());
         assert_eq!(concurrency_manager.max_read_ts(), 20.into());
     }
 }

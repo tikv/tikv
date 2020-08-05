@@ -206,6 +206,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 },
             };
             let txn_extra = txn.take_extra();
+            // Here the lock guards are taken and will be released after the write finishes.
+            // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
+            // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
             let write_data = WriteData::new(txn.into_modifies(), txn_extra);
             (pr, write_data, rows, self.ctx, None, lock_guards)

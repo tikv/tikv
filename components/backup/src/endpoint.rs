@@ -5,7 +5,7 @@ use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::time::*;
+use std::{borrow::Cow, time::*};
 
 use configuration::Configuration;
 use engine_rocks::raw::DB;
@@ -29,7 +29,7 @@ use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
 use crate::*;
@@ -157,16 +157,18 @@ impl BackupRange {
         ctx.set_peer(self.leader.clone());
 
         // Update max_read_ts and check the in-memory lock table before getting the snapshot
-        if backup_ts != TimeStamp::max() {
-            concurrency_manager.update_max_read_ts(backup_ts);
-        }
+        concurrency_manager.update_max_read_ts(backup_ts);
         concurrency_manager
             .read_range_check(
                 self.start_key.as_ref(),
                 self.end_key.as_ref(),
                 |key, lock| {
-                    lock.clone()
-                        .check_ts_conflict(&key, backup_ts, &Default::default())
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        &key,
+                        backup_ts,
+                        &Default::default(),
+                    )
                 },
             )
             .map_err(MvccError::from)

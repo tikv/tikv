@@ -51,10 +51,13 @@ use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use std::sync::{atomic, Arc};
+use std::{
+    borrow::Cow,
+    sync::{atomic, Arc},
+};
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -249,14 +252,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                if start_ts != TimeStamp::max() {
-                    concurrency_manager.update_max_read_ts(start_ts);
-                }
+                concurrency_manager.update_max_read_ts(start_ts);
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     concurrency_manager
                         .read_key_check(&key, |lock| {
-                            lock.clone()
-                                .check_ts_conflict(&key, start_ts, &bypass_locks)
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
                         })
                         .map_err(mvcc::Error::from)?;
                 }
@@ -336,14 +341,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
                         // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                        if start_ts != TimeStamp::max() {
-                            concurrency_manager.update_max_read_ts(start_ts);
-                        }
+                        concurrency_manager.update_max_read_ts(start_ts);
                         if isolation_level == IsolationLevel::Si {
                             if let Err(e) = concurrency_manager
                                 .read_key_check(&key, |lock| {
-                                    lock.clone()
-                                        .check_ts_conflict(&key, start_ts, &bypass_locks)
+                                    Lock::check_ts_conflict(
+                                        Cow::Borrowed(lock),
+                                        &key,
+                                        start_ts,
+                                        &bypass_locks,
+                                    )
                                 })
                                 .map_err(mvcc::Error::from)
                             {
@@ -453,15 +460,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                if start_ts != TimeStamp::max() {
-                    concurrency_manager.update_max_read_ts(start_ts);
-                }
+                concurrency_manager.update_max_read_ts(start_ts);
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     for key in &keys {
                         concurrency_manager
                             .read_key_check(&key, |lock| {
-                                lock.clone()
-                                    .check_ts_conflict(&key, start_ts, &bypass_locks)
+                                Lock::check_ts_conflict(
+                                    Cow::Borrowed(lock),
+                                    &key,
+                                    start_ts,
+                                    &bypass_locks,
+                                )
                             })
                             .map_err(mvcc::Error::from)?;
                     }
@@ -571,14 +580,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 // Update max_read_ts and check the in-memory lock table before getting the snapshot
-                if start_ts != TimeStamp::max() {
-                    concurrency_manager.update_max_read_ts(start_ts);
-                }
+                concurrency_manager.update_max_read_ts(start_ts);
                 if ctx.get_isolation_level() == IsolationLevel::Si {
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                            lock.clone()
-                                .check_ts_conflict(&key, start_ts, &bypass_locks)
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
                         })
                         .map_err(mvcc::Error::from)?;
                 }
