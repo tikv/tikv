@@ -1512,9 +1512,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a60cc544face71ebbc053d821fdf880b809340b67d19f5d07d6b829e9e36e63"
+checksum = "40601ccb2814bbb83312b229cf220eb39460dafcf1c561c6b2e9213291976db5"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.1.29",
