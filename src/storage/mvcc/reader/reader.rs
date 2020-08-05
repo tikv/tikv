@@ -174,33 +174,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(res)
     }
 
-    pub fn load_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
-        if self.scan_mode.is_some() && self.write_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, self.fill_cache);
-            self.write_cursor = Some(self.snapshot.iter_cf(
-                CF_WRITE,
-                iter_opt,
-                self.get_scan_mode(true),
-            )?);
-        }
-
-        let k = key.clone().append_ts(ts);
-        let val = if let Some(ref mut cursor) = self.write_cursor {
-            cursor
-                .get(&k, &mut self.statistics.write)?
-                .map(|v| v.to_vec())
-        } else {
-            self.statistics.write.get += 1;
-            self.snapshot.get_cf(CF_WRITE, &k)?
-        };
-        self.statistics.write.processed += 1;
-
-        match val {
-            Some(v) => Ok(Some(WriteRef::parse(&v)?.to_owned())),
-            None => Ok(None),
-        }
-    }
-
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
         match self.scan_mode {
             Some(ScanMode::Forward) => ScanMode::Forward,
@@ -313,7 +286,7 @@ impl<S: Snapshot> MvccReader<S> {
                     overlay_write: Some(write),
                 });
             }
-            if commit_ts <= start_ts {
+            if commit_ts < start_ts {
                 break;
             }
             seek_ts = commit_ts.prev();

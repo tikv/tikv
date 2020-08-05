@@ -123,16 +123,6 @@ impl Write {
     }
 
     #[inline]
-    pub fn is_protected(&self) -> bool {
-        self.write_type == WriteType::Rollback
-            && self
-                .short_value
-                .as_ref()
-                .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
-                .unwrap_or_default()
-    }
-
-    #[inline]
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         let write_type_bytes = b
             .read_u8()

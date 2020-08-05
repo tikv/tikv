@@ -1105,7 +1105,11 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             Some(lock) if lock.ts == start_ts => {
                 if lock.lock_type == LockType::Pessimistic {
                     released_lock = self.unlock_key(key.clone(), true);
-                    (SecondaryLockStatus::RolledBack, true, None)
+                    let overlay_write = self
+                        .reader
+                        .get_txn_commit_record(&key, start_ts)?
+                        .unwrap_none();
+                    (SecondaryLockStatus::RolledBack, true, overlay_write)
                 } else {
                     (SecondaryLockStatus::Locked(lock), false, None)
                 }
