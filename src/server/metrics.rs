@@ -242,6 +242,12 @@ lazy_static! {
         exponential_buckets(1f64, 5f64, 10).unwrap()
     )
     .unwrap();
+    pub static ref ASYNC_WRITE_SIZE_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_server_raftkv_async_write_size",
+        "Total size of data written through raftkv async write",
+        &["cf"]
+    )
+    .unwrap();
 }
 
 make_static_metric! {

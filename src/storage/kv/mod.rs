@@ -68,6 +68,21 @@ impl Modify {
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
+
+    pub fn cf_size(&self) -> (CfName, usize) {
+        let cf = match self {
+            Modify::Delete(cf, _) => cf,
+            Modify::Put(cf, ..) => cf,
+            Modify::DeleteRange(..) => unreachable!(),
+        };
+        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
+
+        match self {
+            Modify::Delete(_, k) => (cf, cf_size + k.as_encoded().len()),
+            Modify::Put(_, k, v) => (cf, cf_size + k.as_encoded().len() + v.len()),
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
 }
 
 pub trait Engine: Send + Clone + 'static {
