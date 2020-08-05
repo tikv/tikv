@@ -1773,7 +1773,7 @@ where
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
             panic!(
-                "{} is applying atomic snapshot during destroy",
+                "{} is applying atomic snapshot during destroying",
                 self.fsm.peer.tag
             );
         }

@@ -377,7 +377,7 @@ fn test_shutdown_when_snap_gc() {
 
 // Test if a peer handle the old snapshot properly.
 #[test]
-fn test_get_old_snapshot() {
+fn test_receive_old_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
