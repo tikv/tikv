@@ -669,7 +669,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(TimeStamp::zero());
+            return Ok(lock.min_commit_ts);
         }
 
         self.check_extra_op(&key, mutation_type, prev_write)?;
@@ -3312,24 +3312,35 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
-        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        txn.prewrite(
-            mutation,
-            b"key",
-            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-            false,
-            0,
-            4,
-            TimeStamp::zero(),
-        )
-        .unwrap();
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
+        let pd_client = Arc::new(pd_client);
+
+        let do_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .prewrite(
+                    mutation,
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    false,
+                    0,
+                    4,
+                    TimeStamp::zero(),
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
+
+        assert_eq!(do_prewrite(), 42.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3341,6 +3352,9 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
         assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_prewrite(), 42.into());
     }
 
     #[test]
@@ -3349,27 +3363,37 @@ mod tests {
         let ctx = Context::default();
         let mut pd_client = DummyPdClient::new();
         pd_client.next_ts = TimeStamp::new(42);
+        let pd_client = Arc::new(pd_client);
 
         must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
 
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
-        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        txn.pessimistic_prewrite(
-            mutation,
-            b"key",
-            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-            true,
-            0,
-            4.into(),
-            4,
-            TimeStamp::zero(),
-            false,
-        )
-        .unwrap();
-        engine
-            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-            .unwrap();
+        let do_pessimistic_prewrite = || {
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, pd_client.clone());
+            let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+            let min_commit_ts = txn
+                .pessimistic_prewrite(
+                    mutation.clone(),
+                    b"key",
+                    &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+                    true,
+                    0,
+                    4.into(),
+                    4,
+                    TimeStamp::zero(),
+                    false,
+                )
+                .unwrap();
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+            min_commit_ts
+        };
+
+        assert_eq!(do_pessimistic_prewrite(), 42.into());
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
@@ -3381,6 +3405,9 @@ mod tests {
             vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
         );
         assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+
+        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        assert_eq!(do_pessimistic_prewrite(), 42.into());
     }
 
     #[test]
