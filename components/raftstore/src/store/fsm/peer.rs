@@ -1155,7 +1155,8 @@ where
             return Ok(());
         }
 
-        let (is_snapshot, regions_to_destroy) = match self.check_snapshot(&msg)? {
+        let is_snapshot = msg.get_message().has_snapshot();
+        let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
                 // If the snapshot file is not used again, then it's OK to
                 // delete them here. If the snapshot file will be reused when
@@ -1485,12 +1486,9 @@ where
 
     // Returns `None` if the `msg` doesn't contain a snapshot or it contains a snapshot which
     // doesn't conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
-    fn check_snapshot(
-        &mut self,
-        msg: &RaftMessage,
-    ) -> Result<Either<SnapKey, (bool, Vec<(u64, bool)>)>> {
+    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
-            return Ok(Either::Right((false, vec![])));
+            return Ok(Either::Right(vec![]));
         }
 
         let before_check_snapshot_1_2 = || {
@@ -1660,7 +1658,7 @@ where
         }
         meta.pending_snapshot_regions.push(snap_region);
 
-        Ok(Either::Right((true, regions_to_destroy)))
+        Ok(Either::Right(regions_to_destroy))
     }
 
     fn destroy_regions_for_snapshot(&mut self, regions_to_destroy: Vec<(u64, bool)>) {
