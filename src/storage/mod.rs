@@ -4424,7 +4424,7 @@ mod tests {
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(10, 0),
-                    ts(12, 0),
+                    ts(0, 0),
                     ts(15, 0),
                     true,
                     Context::default(),
