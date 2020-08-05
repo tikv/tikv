@@ -216,7 +216,7 @@ impl WriteRef<'_> {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2 + 1);
         b.push(self.write_type.to_u8());
         b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
