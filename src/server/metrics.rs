@@ -81,14 +81,24 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GRPC_MSG_HISTOGRAM_VEC: GrpcMsgHistogramVec = register_static_histogram_vec!(
-        GrpcMsgHistogramVec,
-        "tikv_grpc_msg_duration_seconds",
-        "Bucketed histogram of grpc server messages",
-        &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
+    pub static ref GRPC_MSG_DURATION_HISTOGRAM_VEC: GrpcMsgHistogramVec =
+        register_static_histogram_vec!(
+            GrpcMsgHistogramVec,
+            "tikv_grpc_msg_duration_seconds",
+            "Bucketed histogram of the duration of grpc server messages",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        )
+        .unwrap();
+    pub static ref GRPC_MSG_SIZE_HISTOGRAM_VEC: GrpcMsgHistogramVec =
+        register_static_histogram_vec!(
+            GrpcMsgHistogramVec,
+            "tikv_grpc_msg_size",
+            "Bucketed histogram of the size of grpc server messages",
+            &["type"],
+            exponential_buckets(1.0, 2.0, 10).unwrap()
+        )
+        .unwrap();
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
         GrpcMsgFailCounterVec,
         "tikv_grpc_msg_fail_total",

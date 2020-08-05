@@ -33,6 +33,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
+use protobuf::Message;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
 use security::{check_common_name, SecurityManager};
@@ -126,7 +127,8 @@ macro_rules! handle_request {
             if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
                 return;
             }
-            let timer = GRPC_MSG_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
+            let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC.$fn_name.start_coarse_timer();
+            GRPC_MSG_SIZE_HISTOGRAM_VEC.$fn_name.observe(req.compute_size() as f64);
             let future = $future_name(&self.storage, req)
                 .and_then(|res| sink.success(res).map_err(Error::from))
                 .map(|_| timer.observe_duration())
@@ -268,7 +270,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -287,7 +289,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
+            .coprocessor
+            .start_coarse_timer();
         let future = future_cop(&self.cop, Some(ctx.peer()), req)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -311,7 +315,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .register_lock_observer
             .start_coarse_timer();
 
@@ -347,7 +351,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .check_lock_observer
             .start_coarse_timer();
 
@@ -389,7 +393,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .remove_lock_observer
             .start_coarse_timer();
 
@@ -425,7 +429,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .physical_scan_lock
             .start_coarse_timer();
 
@@ -468,7 +472,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .unsafe_destroy_range
             .start_coarse_timer();
 
@@ -515,7 +519,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
             .coprocessor_stream
             .start_coarse_timer();
 
@@ -646,7 +650,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
+            .split_region
+            .start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
@@ -721,7 +727,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
+        let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
+            .read_index
+            .start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::default();
@@ -981,12 +989,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             match req.cmd {
                 None => {
                     // For some invalid requests.
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+                    let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC.invalid.start_coarse_timer();
                     let resp = future::ok(batch_commands_response::Response::default());
                     response_batch_commands_request(id, resp, tx, timer);
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.$metric_name.start_coarse_timer();
+                    let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC.$metric_name.start_coarse_timer();
                     let resp = $future_fn($($arg,)* req)
                         .map(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
@@ -1080,7 +1088,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
+    let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
         .kv_batch_get_command
         .start_coarse_timer();
     storage.batch_get_command(commands).then(move |v| {
@@ -1247,7 +1255,7 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     cf: String,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
+    let timer = GRPC_MSG_DURATION_HISTOGRAM_VEC
         .raw_batch_get_command
         .start_coarse_timer();
     storage.raw_batch_get_command(cf, commands).then(move |v| {
