@@ -16,6 +16,7 @@ prost-codec = [
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+cloud = ["rocksdb/cloud"]
 
 [dependencies]
 encryption = { path = "../encryption" }
