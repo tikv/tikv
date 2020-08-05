@@ -5385,11 +5385,7 @@ mod tests {
 
         // Test batch_get
         assert!(storage
-            .batch_get(
-                ctx.clone(),
-                vec![Key::from_raw(b"a"), key.clone()],
-                100.into()
-            )
+            .batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into())
             .wait()
             .is_err());
 
