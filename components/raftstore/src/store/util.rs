@@ -4,13 +4,15 @@ use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
+use std::convert::AsRef;
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest, ChangePeerRequest, ChangePeerV2Request};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
+use raft_proto::ConfChangeI;
 use raft::INVALID_INDEX;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
@@ -653,6 +655,67 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 
 pub fn is_learner(p: &metapb::Peer) -> bool {
     p.get_role() == PeerRole::Learner
+}
+
+/// Abstracts over ChangePeerV2Request and (legacy) ChangePeerRequest to allow
+/// treating them in a unified manner.
+pub trait ChangePeerI: Copy {
+    type CC: ConfChangeI;
+    type CP: AsRef<[ChangePeerRequest]>;
+
+    fn get_change_peers(self) -> Self::CP;
+
+    fn to_confchange(self, _: Vec<u8>) -> Self::CC;
+}
+
+impl<'a> ChangePeerI for &'a ChangePeerRequest {
+    type CC = eraftpb::ConfChange;
+    type CP = Vec<ChangePeerRequest>;
+
+    fn get_change_peers(self) -> Vec<ChangePeerRequest> {
+        vec![ChangePeerRequest::clone(self)]
+    }
+
+    fn to_confchange(self, ctx: Vec<u8>) -> eraftpb::ConfChange {
+        let mut cc = eraftpb::ConfChange::default();
+        cc.set_change_type(self.get_change_type());
+        cc.set_node_id(self.get_peer().get_id());
+        cc.set_context(ctx);
+        cc
+    }
+}
+
+impl<'a> ChangePeerI for &'a ChangePeerV2Request {
+    type CC = eraftpb::ConfChangeV2;
+    type CP = &'a [ChangePeerRequest];
+
+    fn get_change_peers(self) -> &'a [ChangePeerRequest] {
+        self.get_changes()
+    }
+
+    fn to_confchange(self, ctx: Vec<u8>) -> eraftpb::ConfChangeV2 {
+        let mut cc = eraftpb::ConfChangeV2::default();
+        let changes: Vec<_> = self.get_changes()
+            .iter()
+            .map(|c| {
+                let mut ccs = eraftpb::ConfChangeSingle::default();
+                ccs.set_change_type(c.get_change_type());
+                ccs.set_node_id(c.get_peer().get_id());
+                ccs
+            })
+            .collect();
+
+        if changes.is_empty() {
+            // Leave joint
+            cc.set_transition(eraftpb::ConfChangeTransition::Auto);
+        } else {
+            // Enter joint
+            cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
+        }
+        cc.set_changes(changes.into());
+        cc.set_context(ctx);
+        cc
+    }
 }
 
 pub struct KeysInfoFormatter<

@@ -15,11 +15,12 @@ use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, RaftCmdRequest, SplitRequest,
+    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, SplitRequest,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
 use prometheus::local::LocalHistogram;
+use raft::eraftpb::ConfChangeType;
 
 use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
@@ -816,15 +817,17 @@ where
                         .with_label_values(&["change peer"])
                         .inc();
 
-                    let change_peer = resp.take_change_peer();
+                    let mut change_peer = resp.take_change_peer();
                     info!(
                         "try to change peer";
                         "region_id" => region_id,
                         "change_type" => ?change_peer.get_change_type(),
-                        "peer" => ?change_peer.get_peer(),
-                        "kind" => ?ConfChangeKind::Simple,
+                        "peer" => ?change_peer.get_peer()
                     );
-                    let req = new_change_peer_v2_request(vec![change_peer]);
+                    let req = new_change_peer_request(
+                        change_peer.get_change_type(),
+                        change_peer.take_peer(),
+                    );
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
                 } else if resp.has_change_peer_v2() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -1088,6 +1091,14 @@ where
     }
 }
 
+fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
+    req
+}
+
 fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
@@ -1100,7 +1111,9 @@ fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
             cp
         })
         .collect();
-    req.mut_change_peer_v2().set_changes(change_peer_reqs);
+    let mut cp = ChangePeerV2Request::default();
+    cp.set_changes(change_peer_reqs);
+    req.set_change_peer_v2(cp);
     req
 }
 

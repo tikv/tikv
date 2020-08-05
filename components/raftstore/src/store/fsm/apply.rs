@@ -1006,8 +1006,8 @@ where
         let (index, term) = (entry.get_index(), entry.get_term());
         let (conf_change, cmd) = match entry_type {
             EntryType::EntryConfChange => {
-                let conf_change: ConfChange = util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
-                let mut cmd: RaftCmdRequest = util::parse_data_at(conf_change.get_context(), entry.get_index(), &self.tag);
+                let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
+                let mut cmd: RaftCmdRequest = util::parse_data_at(conf_change.get_context(), index, &self.tag);
                 {
                     // Covert ChangePeerRequest to ChangePeerV2Request
                     let req = cmd.mut_admin_request();
@@ -2403,7 +2403,7 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerV2Request>
     Some(req.get_change_peer_v2())
 }
 
-fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
+pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     if !msg.has_admin_request() {
         return false;
     }

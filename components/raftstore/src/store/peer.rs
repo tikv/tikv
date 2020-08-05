@@ -14,7 +14,7 @@ use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest, RaftCmdResponse,
-    TransferLeaderRequest, TransferLeaderResponse,
+    TransferLeaderRequest, TransferLeaderResponse, ChangePeerRequest
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -28,6 +28,7 @@ use raft::{
     self, Changer, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
+use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
 use txn_types::TxnExtra;
@@ -55,7 +56,7 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
-    self, check_region_epoch, is_initial_msg, is_learner, ConfChangeKind, Lease, LeaseState,
+    self, check_region_epoch, is_initial_msg, is_learner, ConfChangeKind, Lease, LeaseState, ChangePeerI
 };
 use super::DestroyPeerJob;
 
@@ -1925,17 +1926,12 @@ where
     fn check_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
-        cmd: &RaftCmdRequest,
+        change_peers: &[ChangePeerRequest],
         cc: &eraftpb::ConfChangeV2,
     ) -> Result<()> {
+
         // Check whether current joint state can handle this request
         let mut after_applied_prs = self.check_joint_state(cc)?;
-
-        let change_peers: Vec<_> = apply::get_change_peer_cmd(cmd)
-            .unwrap()
-            .get_changes()
-            .into();
-
         // Leaving joint state, skip check
         if change_peers.is_empty() {
             return Ok(());
@@ -2573,11 +2569,6 @@ where
         transferred
     }
 
-    // Fails in such cases:
-    // 1. A pending conf change has not been applied yet;
-    // 2. Removing the leader is not allowed in the configuration;
-    // 3. The conf change makes the raft group not healthy;
-    // 4. The conf change is dropped by raft group internally.
     fn propose_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
@@ -2605,41 +2596,39 @@ where
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
-        let cc = {
-            let changes: Vec<_> = apply::get_change_peer_cmd(req)
-                .unwrap()
-                .get_changes()
-                .iter()
-                .map(|c| {
-                    let mut ccs = eraftpb::ConfChangeSingle::default();
-                    ccs.set_change_type(c.get_change_type());
-                    ccs.set_node_id(c.get_peer().get_id());
-                    ccs
-                })
-                .collect();
-            let mut cc = eraftpb::ConfChangeV2::default();
-            if changes.is_empty() {
-                // Leave joint
-                cc.set_transition(eraftpb::ConfChangeTransition::Auto);
-            } else {
-                // Enter joint
-                cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
-            }
-            cc.set_changes(changes.into());
-            cc.set_context(data);
-            cc
-        };
+        let admin = req.get_admin_request();
+        if admin.has_change_peer() {
+            self.propose_conf_change_internal(ctx, admin.get_change_peer(), data)
+        } else if admin.has_change_peer_v2() {
+            self.propose_conf_change_internal(ctx, admin.get_change_peer_v2(), data)
+        } else {
+            unreachable!()
+        }
+    }
 
-        self.check_conf_change(ctx, req, &cc)?;
+    // Fails in such cases:
+    // 1. A pending conf change has not been applied yet;
+    // 2. Removing the leader is not allowed in the configuration;
+    // 3. The conf change makes the raft group not healthy;
+    // 4. The conf change is dropped by raft group internally.
+    fn propose_conf_change_internal<T, C, CP: ChangePeerI>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T, C>,
+        change_peer: CP,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        let cc = change_peer.to_confchange(data);
+        let changes = change_peer.get_change_peers();
+
+        self.check_conf_change(ctx, changes.as_ref(), cc.as_v2().as_ref())?;
 
         ctx.raft_metrics.propose.conf_change += 1;
-
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "changes" => ?cc.get_changes(),
-            "kind" => ?ConfChangeKind::confchange_kind(cc.get_changes().len()),
+            "changes" => ?changes.as_ref(),
+            "kind" => ?ConfChangeKind::confchange_kind(changes.as_ref().len()),
         );
 
         let propose_index = self.next_proposal_index();
@@ -2650,7 +2639,6 @@ where
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
         }
-
         Ok(propose_index)
     }
 
@@ -3014,7 +3002,7 @@ pub trait RequestInspector {
     /// handle the request.
     fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.has_admin_request() {
-            if apply::get_change_peer_cmd(req).is_some() {
+            if apply::is_conf_change_cmd(req) {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
             if get_transfer_leader_cmd(req).is_some() {
