@@ -474,13 +474,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
         &mut self,
         mutation: Mutation,
         primary: &[u8],
+        secondary_keys: &Option<Vec<Vec<u8>>>,
         is_pessimistic_lock: bool,
         mut lock_ttl: u64,
         for_update_ts: TimeStamp,
         txn_size: u64,
         mut min_commit_ts: TimeStamp,
         pipelined_pessimistic_lock: bool,
-    ) -> Result<()> {
+    ) -> Result<TimeStamp> {
         if mutation.should_not_write() {
             return Err(box_err!(
                 "cannot handle checkNotExists in pessimistic prewrite"
@@ -514,12 +515,14 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
                     }
                     .into());
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, lock);
+                return Err(self
+                    .handle_non_pessimistic_lock_conflict(key, lock)
+                    .unwrap_err());
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(());
+                    return Ok(lock.min_commit_ts);
                 }
                 // The lock is pessimistic and owned by this txn, go through to overwrite it.
                 // The ttl and min_commit_ts of the lock may have been pushed forward.
@@ -536,14 +539,13 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             key,
             lock_type.unwrap(),
             primary,
-            &None,
+            secondary_keys,
             value,
             lock_ttl,
             for_update_ts,
             txn_size,
             min_commit_ts,
-        )?;
-        Ok(())
+        )
     }
 
     // TiKV may fails to write pessimistic locks due to pipelined process.
@@ -3272,6 +3274,7 @@ mod tests {
                 txn.pessimistic_prewrite(
                     mutation,
                     b"key",
+                    &None,
                     true,
                     0,
                     start_ts.into(),
@@ -3322,6 +3325,46 @@ mod tests {
             0,
             4,
             TimeStamp::zero(),
+        )
+        .unwrap();
+        engine
+            .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
+            .unwrap();
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
+        assert_eq!(lock.ts, TimeStamp::new(2));
+        assert_eq!(lock.use_async_commit, true);
+        assert_eq!(
+            lock.secondaries,
+            vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]
+        );
+        assert_eq!(lock.min_commit_ts, TimeStamp::new(42));
+    }
+
+    #[test]
+    fn test_async_pessimistic_prewrite_primary() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
+        let mut pd_client = DummyPdClient::new();
+        pd_client.next_ts = TimeStamp::new(42);
+
+        must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, Arc::new(pd_client));
+        let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
+        txn.pessimistic_prewrite(
+            mutation,
+            b"key",
+            &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
+            true,
+            0,
+            4.into(),
+            4,
+            TimeStamp::zero(),
+            false,
         )
         .unwrap();
         engine
