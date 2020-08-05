@@ -9,6 +9,7 @@ use kvproto::metapb::Region;
 use crate::store::{CasualMessage, CasualRouter};
 use engine_traits::CF_RAFT;
 use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
+use error_code::ErrorCodeExt;
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -91,6 +92,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
                     "failed to calculate hash";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -106,6 +108,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
                     "failed to get region state";
                     "region_id" => region_id,
                     "err" => %e,
+                    "error_code" => %e.error_code(),
                 );
                 return;
             }
@@ -126,6 +129,7 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
                 "failed to send hash compute result";
                 "region_id" => region_id,
                 "err" => %e,
+                "error_code" => %e.error_code(),
             );
         }
     }

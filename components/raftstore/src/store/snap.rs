@@ -421,6 +421,7 @@ impl Snap {
                     "failed to load existent snapshot meta when try to build snapshot";
                     "snapshot" => %s.path(),
                     "err" => ?e,
+                    "error_code" => %e.error_code(),
                 );
                 if !retry_delete_snapshot(mgr, key, &s) {
                     warn!(
@@ -700,6 +701,7 @@ impl Snap {
                         "region_id" => region.get_id(),
                         "snapshot" => %self.path(),
                         "err" => ?e,
+                        "error_code" => %e.error_code(),
                     );
                     if !retry_delete_snapshot(&self.mgr, &self.key, self) {
                         error!(
