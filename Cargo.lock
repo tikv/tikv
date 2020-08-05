@@ -460,6 +460,7 @@ dependencies = [
  "fail",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -2564,7 +2565,6 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "futures 0.1.29",
  "futures 0.3.4",
  "grpcio",
  "hex 0.4.2",
@@ -2581,7 +2581,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
- "tokio-timer",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
@@ -3003,6 +3003,7 @@ dependencies = [
  "fail",
  "fs2",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-executor",
  "futures-util",
  "hex 0.4.2",
@@ -4160,6 +4161,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "futures 0.1.29",
+ "futures 0.3.4",
  "futures-cpupool",
  "grpcio",
  "hex 0.4.2",

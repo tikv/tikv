@@ -4,7 +4,6 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
 use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use crate::storage::types::TxnStatus;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures03::compat::Compat01As03;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use pd_client::PdClient;
 use std::{fmt, sync::Arc};
@@ -257,7 +256,7 @@ impl<S: Snapshot, P: PdClient + 'static> MvccTxn<S, P> {
             // do it async.
             // TODO(nrc) this is also unsound! If we don't complete taking the lock until after another
             // node gets a start ts to read the key, it can violate the snapshot property.
-            let ts = ::futures_executor::block_on(Compat01As03::new(self.pd_client.get_tso()))?;
+            let ts = ::futures_executor::block_on(self.pd_client.get_tso())?;
             lock.min_commit_ts = ts;
             async_commit_ts = ts;
         }

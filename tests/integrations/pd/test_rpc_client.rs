@@ -5,7 +5,8 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use futures::Future;
+use futures03::compat::Compat;
+use futures03::executor::block_on;
 use futures_cpupool::Builder;
 use grpcio::EnvBuilder;
 use kvproto::metapb;
@@ -112,10 +113,12 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader, None);
 
-    let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
+    let tmp_region = block_on(client.get_region_by_id(region_id))
+        .unwrap()
+        .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = client.get_tso().wait().unwrap();
+    let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
     let mut prev_id = 0;
@@ -131,18 +134,18 @@ fn test_rpc_client() {
         .name_prefix(thd_name!("poller"))
         .create();
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
+    let f = Compat::new(client.handle_region_heartbeat_response(1, move |resp| {
         let _ = tx.send(resp);
-    });
+    }));
     poller.spawn(f).forget();
     poller
-        .spawn(client.region_heartbeat(
+        .spawn(Compat::new(client.region_heartbeat(
             store::RAFT_INIT_LOG_TERM,
             region.clone(),
             peer.clone(),
             RegionStat::default(),
             None,
-        ))
+        )))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -150,17 +153,9 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    client
-        .store_heartbeat(pdpb::StoreStats::default())
-        .wait()
-        .unwrap();
-    client
-        .ask_batch_split(metapb::Region::default(), 1)
-        .wait()
-        .unwrap();
-    client
-        .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
-        .wait()
+    block_on(client.store_heartbeat(pdpb::StoreStats::default())).unwrap();
+    block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
+    block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
@@ -271,8 +266,7 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 #[test]
 fn test_retry_async() {
     let r#async = |client: &RpcClient| {
-        let region = client.get_region_by_id(1);
-        region.wait().unwrap();
+        block_on(client.get_region_by_id(1)).unwrap();
     };
     test_retry(r#async);
 }
@@ -300,8 +294,7 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 #[test]
 fn test_not_retry_async() {
     let r#async = |client: &RpcClient| {
-        let region = client.get_region_by_id(1);
-        region.wait().unwrap_err();
+        block_on(client.get_region_by_id(1)).unwrap_err();
     };
     test_not_retry(r#async);
 }
@@ -322,9 +315,9 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = client.ask_batch_split(metapb::Region::default(), 2);
+    let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
     assert_eq!(
-        resp.wait().unwrap_err().to_string(),
+        resp.unwrap_err().to_string(),
         PdError::Incompatible.to_string()
     );
 }
@@ -353,9 +346,7 @@ fn restart_leader(mgr: SecurityManager) {
     region.mut_peers().push(peer);
     client.bootstrap_cluster(store, region.clone()).unwrap();
 
-    let region = client
-        .get_region_by_id(region.get_id())
-        .wait()
+    let region = block_on(client.get_region_by_id(region.get_id()))
         .unwrap()
         .unwrap();
 
@@ -366,7 +357,7 @@ fn restart_leader(mgr: SecurityManager) {
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
 
-    let region = client.get_region_by_id(region.get_id()).wait().unwrap();
+    let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
 }
 
@@ -398,8 +389,8 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id(1);
-        region.wait().ok();
+        let region = block_on(client.get_region_by_id(1));
+        region.ok();
 
         let new = client.get_leader();
         if new != leader {
@@ -424,21 +415,21 @@ fn test_region_heartbeat_on_leader_change() {
         .name_prefix(thd_name!("poller"))
         .create();
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
+    let f = Compat::new(client.handle_region_heartbeat_response(1, move |resp| {
         tx.send(resp).unwrap();
-    });
+    }));
     poller.spawn(f).forget();
     let region = metapb::Region::default();
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();
     poller
-        .spawn(client.region_heartbeat(
+        .spawn(Compat::new(client.region_heartbeat(
             store::RAFT_INIT_LOG_TERM,
             region.clone(),
             peer.clone(),
             stat.clone(),
             None,
-        ))
+        )))
         .forget();
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
@@ -447,7 +438,7 @@ fn test_region_heartbeat_on_leader_change() {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
-                let _ = client.get_region_by_id(1).wait();
+                let _ = block_on(client.get_region_by_id(1));
                 let new = client.get_leader();
                 if leader != new {
                     leader = new;
@@ -458,13 +449,13 @@ fn test_region_heartbeat_on_leader_change() {
             }
         }
         poller
-            .spawn(client.region_heartbeat(
+            .spawn(Compat::new(client.region_heartbeat(
                 store::RAFT_INIT_LOG_TERM,
                 region.clone(),
                 peer.clone(),
                 stat.clone(),
                 None,
-            ))
+            )))
             .forget();
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();
@@ -514,7 +505,7 @@ fn test_cluster_version() {
 
     let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
-        client.store_heartbeat(req).wait().unwrap();
+        block_on(client.store_heartbeat(req)).unwrap();
     };
 
     let set_cluster_version = |version: &str| {

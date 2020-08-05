@@ -1,17 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use futures::future::{loop_fn, ok, Loop};
-use futures::sync::mpsc::UnboundedSender;
-use futures::task::Task;
-use futures::{task, Async, Future, Poll, Stream};
-use futures03::compat::Future01CompatExt;
-use futures03::executor::block_on;
+use futures::channel::mpsc::UnboundedSender;
+use futures::compat::Future01CompatExt;
+use futures::compat::Stream01CompatExt;
+use futures::executor::block_on;
+use futures::future;
+use futures::future::TryFutureExt;
+use futures::stream::Stream;
+use futures::stream::TryStreamExt;
+use futures::task::Context;
+use futures::task::Poll;
+use futures::task::Waker;
+
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -22,9 +28,7 @@ use kvproto::pdpb::{
 };
 use security::SecurityManager;
 use tikv_util::collections::HashSet;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
-use tokio_timer::timer::Handle;
 
 use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
@@ -34,7 +38,7 @@ pub struct Inner {
         Option<ClientDuplexSender<RegionHeartbeatRequest>>,
         UnboundedSender<RegionHeartbeatRequest>,
     >,
-    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
+    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Option<Waker>>,
     pub client_stub: PdClientStub,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
@@ -51,15 +55,14 @@ pub struct HeartbeatReceiver {
 }
 
 impl Stream for HeartbeatReceiver {
-    type Item = RegionHeartbeatResponse;
-    type Error = Error;
+    type Item = Result<RegionHeartbeatResponse>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             if let Some(ref mut receiver) = self.receiver {
-                match receiver.poll() {
-                    Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                match Pin::new(&mut receiver.compat()).poll_next(cx) {
+                    Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
+                    Poll::Pending => return Poll::Pending,
                     // If it's None or there's error, we need to update receiver.
                     _ => {}
                 }
@@ -67,7 +70,8 @@ impl Stream for HeartbeatReceiver {
 
             self.receiver.take();
 
-            let mut inner = self.inner.wl();
+            let inner_lock = self.inner.clone();
+            let mut inner = inner_lock.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
@@ -76,8 +80,8 @@ impl Stream for HeartbeatReceiver {
                 debug!("heartbeat receiver is refreshed");
                 self.receiver = receiver;
             } else {
-                inner.hb_receiver = Either::Right(task::current());
-                return Ok(Async::NotReady);
+                inner.hb_receiver = Either::Right(Some(cx.waker().clone()));
+                return Poll::Pending;
             }
         }
     }
@@ -85,7 +89,6 @@ impl Stream for HeartbeatReceiver {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    timer: Handle,
     pub(crate) inner: Arc<RwLock<Inner>>,
 }
 
@@ -101,7 +104,6 @@ impl LeaderClient {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
 
         LeaderClient {
-            timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
@@ -125,10 +127,10 @@ impl LeaderClient {
             receiver: None,
             inner: Arc::clone(&self.inner),
         };
-        Box::new(
-            recv.for_each(move |resp| {
+        Box::pin(
+            recv.try_for_each(move |resp| {
                 f(resp);
-                Ok(())
+                future::ready(Ok(()))
             })
             .map_err(|e| panic!("unexpected error: {:?}", e)),
         )
@@ -148,7 +150,6 @@ impl LeaderClient {
             reconnect_count: retry,
             request_sent: 0,
             client: LeaderClient {
-                timer: self.timer.clone(),
                 inner: Arc::clone(&self.inner),
             },
             req,
@@ -197,7 +198,9 @@ impl LeaderClient {
             }
             inner.hb_sender = Either::Left(Some(tx));
             if let Either::Right(ref mut task) = inner.hb_receiver {
-                task.notify();
+                if let Some(t) = task.take() {
+                    t.wake();
+                }
             }
             inner.hb_receiver = Either::Left(Some(rx));
             inner.client_stub = client;
@@ -234,11 +237,11 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
+    async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
-            return Box::new(ok(self));
+            return false;
         }
 
         // Updating client.
@@ -246,51 +249,30 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match block_on(self.client.reconnect()) {
+        match self.client.reconnect().await {
             Ok(_) => {
                 self.request_sent = 0;
-                Box::new(ok(self))
+                false
             }
-            Err(_) => Box::new(
-                self.client
-                    .timer
-                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                    .then(|_| Err(self)),
-            ),
+            Err(_) => {
+                tokio::time::delay_for(Duration::from_secs(RECONNECT_INTERVAL_SEC)).await;
+                true
+            }
         }
     }
 
-    fn send_and_receive(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
+    async fn send_and_receive(&mut self) {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        Box::new(ok(self).and_then(|mut ctx| {
-            let req = (ctx.func)(&ctx.client.inner, r);
-            req.then(|resp| match resp {
-                Ok(resp) => {
-                    ctx.resp = Some(Ok(resp));
-                    Ok(ctx)
-                }
-                Err(err) => {
-                    ctx.resp = Some(Err(err));
-                    Err(ctx)
-                }
-            })
-        }))
+        let req = (self.func)(&self.client.inner, r);
+        self.resp = Some(req.await);
     }
 
-    fn break_or_continue(ctx: result::Result<Self, Self>) -> Result<Loop<Self, Self>> {
-        let ctx = match ctx {
-            Ok(ctx) | Err(ctx) => ctx,
-        };
-        let done = ctx.reconnect_count == 0
-            || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
-        if done {
-            Ok(Loop::Break(ctx))
-        } else {
-            Ok(Loop::Continue(ctx))
-        }
+    fn need_break(&mut self) -> bool {
+        self.reconnect_count == 0
+            || (self.resp.is_some() && Self::should_not_retry(self.resp.as_ref().unwrap()))
     }
 
     fn should_not_retry(resp: &Result<Resp>) -> bool {
@@ -305,24 +287,24 @@ where
         }
     }
 
-    fn post_loop(ctx: Result<Self>) -> Result<Resp> {
-        let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp
+    fn post_loop(self) -> Result<Resp> {
+        self.resp
             .unwrap_or_else(|| Err(box_err!("response is empty")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
-    pub fn execute(self) -> PdFuture<Resp> {
-        let ctx = self;
-        Box::new(
-            loop_fn(ctx, |ctx| {
-                ctx.reconnect_if_needed()
-                    .and_then(Self::send_and_receive)
-                    .then(Self::break_or_continue)
-            })
-            .then(Self::post_loop),
-        )
+    pub fn execute(mut self) -> PdFuture<Resp> {
+        Box::pin(async move {
+            loop {
+                while self.reconnect_if_needed().await {}
+                self.send_and_receive().await;
+                if self.need_break() {
+                    break;
+                }
+            }
+            self.post_loop()
+        })
     }
 }
 
