@@ -513,6 +513,7 @@ fn test_serde_custom_tikv_config() {
             enable_doubly_skiplist: false,
         },
         titan: titan_db_config.clone(),
+        s3: S3Config::default(),
     };
     value.raftdb = RaftDbConfig {
         info_log_level: LogLevel::Info,
