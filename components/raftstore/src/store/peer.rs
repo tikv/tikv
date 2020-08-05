@@ -2639,7 +2639,7 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "changes" => ?cc.get_changes(),
-            "kind" => ConfChangeKind::confchange_kind(cc.get_changes().len()),
+            "kind" => ?ConfChangeKind::confchange_kind(cc.get_changes().len()),
         );
 
         let propose_index = self.next_proposal_index();
@@ -3310,7 +3310,7 @@ mod tests {
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeNormal));
 
-        admin_req.set_change_peer(raft_cmdpb::ChangePeerV2Request::default());
+        admin_req.set_change_peer_v2(raft_cmdpb::ChangePeerV2Request::default());
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeConfChange));
         admin_req.clear_change_peer();

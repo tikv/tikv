@@ -1850,7 +1850,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/NingLin-P/kvproto.git?branch=use-joint-consensus#e3fbaff10d4f6958e4a7a2cfe6da749f28bafdc5"
+source = "git+https://github.com/NingLin-P/kvproto.git?branch=use-joint-consensus#c5b152e10b916db603865edf5fca3ac9d4affd07"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3018,6 +3018,7 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "raft-proto",
  "rand",
  "serde",
  "serde_derive",

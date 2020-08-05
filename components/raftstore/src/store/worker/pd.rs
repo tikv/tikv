@@ -822,7 +822,7 @@ where
                         "region_id" => region_id,
                         "change_type" => ?change_peer.get_change_type(),
                         "peer" => ?change_peer.get_peer(),
-                        "kind" => ConfChangeKind::Simple,
+                        "kind" => ?ConfChangeKind::Simple,
                     );
                     let req = new_change_peer_v2_request(vec![change_peer]);
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
@@ -836,7 +836,7 @@ where
                         "try to change peer";
                         "region_id" => region_id,
                         "changes" => ?change_peer_v2.get_changes(),
-                        "kind" => ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
+                        "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
                     let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
@@ -1100,7 +1100,7 @@ fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
             cp
         })
         .collect();
-    req.mut_change_peer().set_changes(change_peer_reqs);
+    req.mut_change_peer_v2().set_changes(change_peer_reqs);
     req
 }
 

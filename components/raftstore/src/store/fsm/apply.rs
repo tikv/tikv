@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
-use raft_proto::confchange::ConfChangeI;
+use raft_proto::ConfChangeI;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
@@ -889,10 +889,7 @@ where
 
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
-                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
-                EntryType::EntryConfChangeV2 => {
-                    self.handle_raft_entry_conf_change_v2(apply_ctx, &entry)
-                }
+                t => self.handle_raft_entry_conf_change(apply_ctx, &entry, t),
             };
 
             match res {
@@ -999,33 +996,35 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<E, W>,
         entry: &Entry,
-    ) -> ApplyResult<E::Snapshot> {
-        let mut entry = entry.clone();
-        let conf_change: ConfChange =
-            util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
-
-        // FIXME: We also need to change ChangePeerRequest to ChangePeerV2Request here
-        let data_v2 = conf_change.into_v2();
-
-        entry.set_data(data_v2.write_to_bytes().unwrap());
-
-        self.handle_raft_entry_conf_change_v2(apply_ctx, &entry)
-    }
-
-    fn handle_raft_entry_conf_change_v2<W: WriteBatch + WriteBatchVecExt<E>>(
-        &mut self,
-        apply_ctx: &mut ApplyContext<E, W>,
-        entry: &Entry,
+        entry_type: EntryType,
     ) -> ApplyResult<E::Snapshot> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
             ApplyResult::Yield
         });
-        let index = entry.get_index();
-        let term = entry.get_term();
-        let conf_change: ConfChangeV2 = util::parse_data_at(entry.get_data(), index, &self.tag);
-        let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
+        let (index, term) = (entry.get_index(), entry.get_term());
+        let (conf_change, cmd) = match entry_type {
+            EntryType::EntryConfChange => {
+                let conf_change: ConfChange = util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
+                let mut cmd: RaftCmdRequest = util::parse_data_at(conf_change.get_context(), entry.get_index(), &self.tag);
+                {
+                    // Covert ChangePeerRequest to ChangePeerV2Request
+                    let req = cmd.mut_admin_request();
+                    assert!(req.has_change_peer());
+                    let mut cp_v2 = ChangePeerV2Request::default();
+                    cp_v2.set_changes(vec![req.take_change_peer()].into());
+                    req.set_change_peer_v2(cp_v2);
+                }
+                (conf_change.into_v2(), cmd)
+            },
+            EntryType::EntryConfChangeV2 => {
+                let conf_change: ConfChangeV2 = util::parse_data_at(entry.get_data(), index, &self.tag);
+                let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
+                (conf_change, cmd)
+            },
+            _ => unreachable!()
+        };
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
                 // If failed, tell Raft that the `ConfChange` was aborted.
@@ -1105,7 +1104,6 @@ where
         // Set sync log hint if the cmd requires so.
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
 
-        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
@@ -1122,7 +1120,7 @@ where
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
-        let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change);
+        let (cmd_cb, txn_extra) = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         if let Some(observe_cmd) = self.observe_cmd.as_ref() {
             let cmd = Cmd::new(index, cmd, resp.clone());
             apply_ctx.txn_extras.push(txn_extra);
@@ -1628,18 +1626,18 @@ where
             |_| panic!("should not use return")
         );
 
-        let changes: Vec<_> = request.get_change_peer().clone().take_changes().into();
+        let changes: Vec<_> = request.get_change_peer_v2().clone().take_changes().into();
         info!(
             "exec ConfChange";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "kind" => ConfChangeKind::confchange_kind(changes.len()),
+            "kind" => ?ConfChangeKind::confchange_kind(changes.len()),
             "epoch" => ?self.region.get_region_epoch(),
         );
 
         let region = match ConfChangeKind::confchange_kind(changes.len()) {
-            ConfChangeKind::LeaveJoint => self.leave_joint(ctx)?,
-            _ => self.apply_conf_change(ctx, changes)?,
+            ConfChangeKind::LeaveJoint => self.leave_joint()?,
+            _ => self.apply_conf_change(&changes.as_slice())?,
         };
 
         let state = if self.pending_remove {
@@ -1665,10 +1663,9 @@ where
         ))
     }
 
-    fn apply_conf_change<W: WriteBatch + WriteBatchVecExt<E>>(
+    fn apply_conf_change(
         &mut self,
-        ctx: &mut ApplyContext<E, W>,
-        changes: Vec<ChangePeerRequest>,
+        changes: &[ChangePeerRequest],
     ) -> Result<Region> {
         let mut region = self.region.clone();
         for cp in changes.iter() {
@@ -1820,19 +1817,16 @@ where
         Ok(region)
     }
 
-    fn leave_joint<W: WriteBatch + WriteBatchVecExt<E>>(
-        &self,
-        ctx: &mut ApplyContext<E, W>,
-    ) -> Result<Region> {
+    fn leave_joint(&self) -> Result<Region> {
         let mut region = self.region.clone();
-        for peer in region.mut_peers().iter() {
+        for peer in region.mut_peers().iter_mut() {
             match peer.get_role() {
                 PeerRole::IncomingVoter => peer.set_role(PeerRole::Voter),
                 PeerRole::DemotingVoter => peer.set_role(PeerRole::Learner),
                 _ => {}
             }
         }
-        // TODO: Should we also increate epoch here?
+        // TODO: Should we also increase epoch here?
         Ok(region)
     }
 
@@ -2396,16 +2390,25 @@ where
     }
 }
 
+/// Get the ChangePeerV2Request
 pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerV2Request> {
     if !msg.has_admin_request() {
         return None;
     }
     let req = msg.get_admin_request();
-    if !req.has_change_peer() {
+    if !req.has_change_peer_v2() {
         return None;
     }
+    
+    Some(req.get_change_peer_v2())
+}
 
-    Some(req.get_change_peer())
+fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
+    if !msg.has_admin_request() {
+        return false;
+    }
+    let req = msg.get_admin_request();
+    req.has_change_peer() || req.has_change_peer_v2()
 }
 
 fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
