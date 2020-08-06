@@ -421,6 +421,7 @@ pub mod tests {
         txn.pessimistic_prewrite(
             Mutation::CheckNotExists(Key::from_raw(key)),
             pk,
+            &None,
             false,
             0,
             TimeStamp::default(),
@@ -467,6 +468,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 lock_ttl,
                 for_update_ts,
@@ -654,6 +656,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,
@@ -737,6 +740,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,
@@ -791,6 +795,7 @@ pub mod tests {
             txn.pessimistic_prewrite(
                 mutation,
                 pk,
+                &None,
                 is_pessimistic_lock,
                 0,
                 for_update_ts,
