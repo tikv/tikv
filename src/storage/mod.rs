@@ -4428,7 +4428,6 @@ mod tests {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
             .unwrap();
-        let cm = &storage.concurrency_manager;
         let (tx, rx) = channel();
 
         let k = Key::from_raw(b"k");
