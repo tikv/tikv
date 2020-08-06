@@ -245,7 +245,11 @@ impl CompactionFilter for WriteCompactionFilter {
 
         self.versions += 1;
         let mut filtered = self.remove_older;
-        let write = WriteRef::parse(value).unwrap();
+        let write = match WriteRef::parse(value) {
+            Ok(write) => write,
+            // Invalid MVCC keys, don't touch them.
+            Err(_) => return false,
+        };
 
         if !self.remove_older {
             // here `filtered` must be false.
