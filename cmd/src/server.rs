@@ -373,6 +373,7 @@ impl TiKVServer {
     }
 
     fn init_engines(&mut self) {
+        #[allow(unused_mut)]
         let mut base_env = None;
         #[cfg(features = "cloud")]
         if self.config.s3.enabled {
