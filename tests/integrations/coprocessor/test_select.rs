@@ -1635,40 +1635,9 @@ fn test_exec_details() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
 
-    // get none
-    let req = DAGSelect::from(&product).build();
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(!exec_details.has_handle_time());
-    assert!(!exec_details.has_scan_detail());
-
     let flags = &[0];
 
-    // get handle_time
     let mut ctx = Context::default();
-    ctx.set_handle_time(true);
-    let req = DAGSelect::from(&product).build_with(ctx, flags);
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(exec_details.has_handle_time());
-    assert!(!exec_details.has_scan_detail());
-
-    // get scan detail
-    let mut ctx = Context::default();
-    ctx.set_scan_detail(true);
-    let req = DAGSelect::from(&product).build_with(ctx, flags);
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(!exec_details.has_handle_time());
-    assert!(exec_details.has_scan_detail());
-
-    // get both
-    let mut ctx = Context::default();
-    ctx.set_scan_detail(true);
-    ctx.set_handle_time(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
     assert!(resp.has_exec_details());
