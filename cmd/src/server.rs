@@ -53,8 +53,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
-        CPU_CORES_QUOTA,
+        Node, RaftKv, Server, CPU_CORES_QUOTA, DEFAULT_CLUSTER_ID,
     },
     storage::{self, config::StorageConfigManger},
 };
