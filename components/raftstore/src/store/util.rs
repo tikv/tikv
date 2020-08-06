@@ -1,19 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::AsRef;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
-use std::convert::AsRef;
 
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest, ChangePeerRequest, ChangePeerV2Request};
+use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
-use raft_proto::ConfChangeI;
 use raft::INVALID_INDEX;
+use raft_proto::ConfChangeI;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
@@ -695,7 +695,8 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 
     fn to_confchange(self, ctx: Vec<u8>) -> eraftpb::ConfChangeV2 {
         let mut cc = eraftpb::ConfChangeV2::default();
-        let changes: Vec<_> = self.get_changes()
+        let changes: Vec<_> = self
+            .get_changes()
             .iter()
             .map(|c| {
                 let mut ccs = eraftpb::ConfChangeSingle::default();

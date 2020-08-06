@@ -15,7 +15,8 @@ use engine_traits::KvEngine;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, SplitRequest,
+    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
+    SplitRequest,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;

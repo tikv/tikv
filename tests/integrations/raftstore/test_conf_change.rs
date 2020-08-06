@@ -7,10 +7,9 @@ use std::time::*;
 
 use futures::Future;
 
-use kvproto::metapb;
+use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
-use kvproto::metapb::PeerRole;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;

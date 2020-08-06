@@ -215,7 +215,7 @@ trait DebugExecutor {
                 let mut cmd = RaftCmdRequest::default();
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
-            },
+            }
         }
     }
 

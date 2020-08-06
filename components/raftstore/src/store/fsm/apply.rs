@@ -46,7 +46,7 @@ use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
 use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{ConfChangeKind, KeysInfoFormatter, PerfContextStatistics, ChangePeerI};
+use crate::store::util::{ChangePeerI, ConfChangeKind, KeysInfoFormatter, PerfContextStatistics};
 
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
@@ -1011,8 +1011,10 @@ where
         let (index, term) = (entry.get_index(), entry.get_term());
         let (conf_change, cmd) = match entry_type {
             EntryType::EntryConfChange => {
-                let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
-                let mut cmd: RaftCmdRequest = util::parse_data_at(conf_change.get_context(), index, &self.tag);
+                let conf_change: ConfChange =
+                    util::parse_data_at(entry.get_data(), index, &self.tag);
+                let mut cmd: RaftCmdRequest =
+                    util::parse_data_at(conf_change.get_context(), index, &self.tag);
                 {
                     // Covert ChangePeerRequest to ChangePeerV2Request
                     let req = cmd.mut_admin_request();
@@ -1022,13 +1024,14 @@ where
                     req.set_change_peer_v2(cp_v2);
                 }
                 (conf_change.into_v2(), cmd)
-            },
+            }
             EntryType::EntryConfChangeV2 => {
-                let conf_change: ConfChangeV2 = util::parse_data_at(entry.get_data(), index, &self.tag);
+                let conf_change: ConfChangeV2 =
+                    util::parse_data_at(entry.get_data(), index, &self.tag);
                 let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
                 (conf_change, cmd)
-            },
-            _ => unreachable!()
+            }
+            _ => unreachable!(),
         };
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
@@ -1631,7 +1634,7 @@ where
             |_| panic!("should not use return")
         );
 
-        // It is okay to ignore ChangePeerRequest here, because we convert 
+        // It is okay to ignore ChangePeerRequest here, because we convert
         // ChangePeerRequest to ChangePeerV2Request at `handle_raft_entry_conf_change`
         let changes = request.get_change_peer_v2().get_change_peers();
         info!(
@@ -1670,10 +1673,7 @@ where
         ))
     }
 
-    fn apply_conf_change(
-        &mut self,
-        changes: &[ChangePeerRequest],
-    ) -> Result<Region> {
+    fn apply_conf_change(&mut self, changes: &[ChangePeerRequest]) -> Result<Region> {
         let mut region = self.region.clone();
         for cp in changes.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());

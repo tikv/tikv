@@ -13,8 +13,8 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest, RaftCmdResponse,
-    TransferLeaderRequest, TransferLeaderResponse, ChangePeerRequest
+    AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, RaftCmdRequest,
+    RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -56,7 +56,8 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
-    self, check_region_epoch, is_initial_msg, is_learner, ConfChangeKind, Lease, LeaseState, ChangePeerI
+    self, check_region_epoch, is_initial_msg, is_learner, ChangePeerI, ConfChangeKind, Lease,
+    LeaseState,
 };
 use super::DestroyPeerJob;
 
@@ -1929,7 +1930,6 @@ where
         change_peers: &[ChangePeerRequest],
         cc: &eraftpb::ConfChangeV2,
     ) -> Result<()> {
-
         // Check whether current joint state can handle this request
         let mut after_applied_prs = self.check_joint_state(cc)?;
         // Leaving joint state, skip check
@@ -2348,7 +2348,9 @@ where
             if entry.index > min_matched {
                 entry_size += entry.get_data().len();
             }
-            if entry.get_entry_type() == EntryType::EntryConfChange || entry.get_entry_type() == EntryType::EntryConfChangeV2 {
+            if entry.get_entry_type() == EntryType::EntryConfChange
+                || entry.get_entry_type() == EntryType::EntryConfChangeV2
+            {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
                     self.tag
