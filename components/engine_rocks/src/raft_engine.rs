@@ -7,23 +7,15 @@ use engine_traits::{
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::{eraftpb::Entry, StorageError};
-use raft_engine::{Error, RaftEngine, RaftLogBatch, Result};
+use raft_engine::{CacheStats, Error, RaftEngine, RaftLogBatch, Result};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
-#[derive(Clone, Copy)]
-pub struct RecoveryMode;
-
 impl RaftEngine for RocksEngine {
-    type RecoveryMode = RecoveryMode;
     type LogBatch = RocksWriteBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
-    }
-
-    fn recover(&mut self, _: Self::RecoveryMode) -> Result<()> {
-        Ok(())
     }
 
     fn sync(&self) -> Result<()> {
@@ -31,10 +23,7 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn compact_to(&self, _raft_group_id: u64, _index: u64) -> Result<()> {
-        // FIXME: Is it necessary to move entry cache here?
-        Ok(())
-    }
+    fn compact_to(&self, _raft_group_id: u64, _index: u64) {}
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
@@ -172,17 +161,16 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
-        let (total_size, max_size) = entries.iter().fold((0usize, 0usize), |(total, max), e| {
-            let size = e.compute_size() as usize;
-            (total + size, std::cmp::max(max, size))
-        });
+    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+        self.append_slice(raft_group_id, &entries)
+    }
 
-        let mut wb = RocksWriteBatch::with_capacity(self.as_inner().clone(), total_size);
-        let buf = Vec::with_capacity(max_size);
-        let ret = wb.append_impl(raft_group_id, entries, buf)?;
+    fn append_slice(&self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
+        let mut wb = RocksWriteBatch::new(self.as_inner().clone());
+        let buf = Vec::with_capacity(1024);
+        wb.append_impl(raft_group_id, entries, buf)?;
         self.consume(&mut wb, false)?;
-        Ok(ret)
+        Ok(())
     }
 
     fn remove(&self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
@@ -228,15 +216,27 @@ impl RaftEngine for RocksEngine {
         box_try!(self.put_msg(&keys::raft_state_key(raft_group_id), state));
         Ok(())
     }
+
+    fn has_internal_entry_cache(&self) -> bool {
+        false
+    }
+
+    fn flush_stats(&self) -> CacheStats {
+        CacheStats::default()
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
+    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+        self.append_slice(raft_group_id, &entries)
+    }
+
+    fn append_slice(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
             return self.append_impl(raft_group_id, entries, ser_buf);
         }
-        Ok(0)
+        Ok(())
     }
 
     fn remove(&mut self, raft_group_id: u64, from: u64, to: u64) -> Result<()> {
@@ -263,14 +263,13 @@ impl RocksWriteBatch {
         raft_group_id: u64,
         entries: &[Entry],
         mut ser_buf: Vec<u8>,
-    ) -> Result<usize> {
-        let ret = entries.len();
+    ) -> Result<()> {
         for entry in entries {
             let key = keys::raft_log_key(raft_group_id, entry.get_index());
             ser_buf.clear();
             entry.write_to_vec(&mut ser_buf).unwrap();
             box_try!(self.put(&key, &ser_buf));
         }
-        Ok(ret)
+        Ok(())
     }
 }

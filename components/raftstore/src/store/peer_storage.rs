@@ -101,6 +101,8 @@ pub const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
 
 struct EntryCache {
     cache: VecDeque<Entry>,
+    hit: Cell<i64>,
+    miss: Cell<i64>,
     mem_size_change: i64,
 }
 
@@ -263,11 +265,15 @@ impl EntryCache {
     }
 
     fn flush_mem_size_change(&mut self) {
-        if self.mem_size_change == 0 {
-            return;
-        }
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
         self.mem_size_change = 0;
+    }
+
+    fn flush_stats(&self) {
+        let hit = self.hit.replace(0);
+        RAFT_ENTRY_FETCHES.hit.inc_by(hit);
+        let miss = self.miss.replace(0);
+        RAFT_ENTRY_FETCHES.miss.inc_by(miss);
     }
 
     #[inline]
@@ -279,11 +285,15 @@ impl EntryCache {
 impl Default for EntryCache {
     fn default() -> Self {
         let cache = VecDeque::default();
-        RAFT_ENTRIES_CACHES_GAUGE.add((ENTRY_MEM_SIZE * cache.capacity()) as i64);
-        EntryCache {
+        let size = ENTRY_MEM_SIZE * cache.capacity();
+        let mut entry_cache = EntryCache {
             cache,
-            mem_size_change: 0,
-        }
+            hit: Cell::new(0),
+            miss: Cell::new(0),
+            mem_size_change: size as i64,
+        };
+        entry_cache.flush_mem_size_change();
+        entry_cache
     }
 }
 
@@ -291,23 +301,7 @@ impl Drop for EntryCache {
     fn drop(&mut self) {
         self.flush_mem_size_change();
         RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
-    }
-}
-
-#[derive(Default)]
-pub struct CacheQueryStats {
-    pub hit: Cell<u64>,
-    pub miss: Cell<u64>,
-}
-
-impl CacheQueryStats {
-    pub fn flush(&mut self) {
-        if self.hit.get() > 0 {
-            RAFT_ENTRY_FETCHES.hit.inc_by(self.hit.replace(0) as i64);
-        }
-        if self.miss.get() > 0 {
-            RAFT_ENTRY_FETCHES.miss.inc_by(self.miss.replace(0) as i64);
-        }
+        self.flush_stats();
     }
 }
 
@@ -606,8 +600,8 @@ where
     region_sched: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
-    cache: EntryCache,
-    stats: CacheQueryStats,
+    // Entry cache if `ER doesn't have an internal entry cache.
+    cache: Option<EntryCache>,
 
     pub tag: String,
 }
@@ -673,6 +667,12 @@ where
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
 
+        let cache = if engines.raft.has_internal_entry_cache() {
+            None
+        } else {
+            Some(EntryCache::default())
+        };
+
         Ok(PeerStorage {
             engines,
             peer_id,
@@ -686,8 +686,7 @@ where
             tag,
             applied_index_term,
             last_term,
-            cache: EntryCache::default(),
-            stats: CacheQueryStats::default(),
+            cache,
         })
     }
 
@@ -738,11 +737,41 @@ where
         if low == high {
             return Ok(ents);
         }
-        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
-        if high <= cache_low {
-            // not overlap
-            self.stats.miss.update(|m| m + 1);
+        if let Some(ref cache) = self.cache {
+            let cache_low = cache.first_index().unwrap_or(u64::MAX);
+            if high <= cache_low {
+                cache.miss.update(|m| m + 1);
+                self.engines.raft.fetch_entries_to(
+                    region_id,
+                    low,
+                    high,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?;
+                return Ok(ents);
+            }
+            let mut fetched_size = 0;
+            let begin_idx = if low < cache_low {
+                cache.miss.update(|m| m + 1);
+                fetched_size = self.engines.raft.fetch_entries_to(
+                    region_id,
+                    low,
+                    cache_low,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?;
+                if fetched_size > max_size as usize {
+                    // max_size exceed.
+                    return Ok(ents);
+                }
+                cache_low
+            } else {
+                low
+            };
+            cache.hit.update(|h| h + 1);
+            cache.fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
+        } else {
             self.engines.raft.fetch_entries_to(
                 region_id,
                 low,
@@ -750,30 +779,7 @@ where
                 Some(max_size as usize),
                 &mut ents,
             )?;
-            return Ok(ents);
         }
-        let mut fetched_size = 0;
-        let begin_idx = if low < cache_low {
-            self.stats.miss.update(|m| m + 1);
-            fetched_size = self.engines.raft.fetch_entries_to(
-                region_id,
-                low,
-                cache_low,
-                Some(max_size as usize),
-                &mut ents,
-            )?;
-            if fetched_size > max_size as usize {
-                // max_size exceed.
-                return Ok(ents);
-            }
-            cache_low
-        } else {
-            low
-        };
-
-        self.stats.hit.update(|h| h + 1);
-        self.cache
-            .fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
         Ok(ents)
     }
 
@@ -1007,7 +1013,14 @@ where
                 ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
             }
         }
-        ready_ctx.raft_wb_mut().append(region_id, entries)?;
+
+        // TODO: save a copy here.
+        ready_ctx.raft_wb_mut().append_slice(region_id, entries)?;
+
+        if let Some(ref mut cache) = self.cache {
+            // TODO: if the writebatch is failed to commit, the cache will be wrong.
+            cache.append(&self.tag, entries);
+        }
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
@@ -1018,26 +1031,33 @@ where
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
 
-        // TODO: if the writebatch is failed to commit, the cache will be wrong.
-        self.cache.append(&self.tag, entries);
         Ok(last_index)
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        self.cache.compact_to(idx);
+        self.engines.raft.compact_to(self.get_region_id(), idx);
+        if let Some(ref mut cache) = self.cache {
+            cache.compact_to(idx);
+        }
     }
 
     #[inline]
     pub fn is_cache_empty(&self) -> bool {
-        self.cache.is_empty()
+        self.cache.as_ref().map_or(true, |c| c.is_empty())
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
         if replicated_idx == apply_idx {
             // The region is inactive, clear the cache immediately.
-            self.cache.compact_to(apply_idx + 1);
-        } else {
-            let cache_first_idx = match self.cache.first_index() {
+            let region_id = self.get_region_id();
+            self.engines.raft.compact_to(region_id, apply_idx + 1);
+            if self.engines.raft.has_internal_entry_cache() {
+                return;
+            }
+        }
+
+        if let Some(ref mut cache) = self.cache {
+            let cache_first_idx = match cache.first_index() {
                 None => return,
                 Some(idx) => idx,
             };
@@ -1045,15 +1065,22 @@ where
                 // Catching up log requires accessing fs already, let's optimize for
                 // the common case.
                 // Maybe gc to second least replicated_idx is better.
-                self.cache.compact_to(apply_idx + 1);
+                cache.compact_to(apply_idx + 1);
             }
         }
     }
 
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
-        self.stats.flush();
-        self.cache.flush_mem_size_change();
+        if let Some(ref mut cache) = self.cache {
+            cache.flush_mem_size_change();
+            cache.flush_stats();
+            return;
+        }
+        let stats = self.engines.raft.flush_stats();
+        RAFT_ENTRIES_CACHES_GAUGE.add(stats.mem_size_change as i64);
+        RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
+        RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
     }
 
     // Apply the peer with given snapshot.
@@ -1130,7 +1157,9 @@ where
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
-        self.cache = EntryCache::default();
+        if !self.engines.raft.has_internal_entry_cache() {
+            self.cache = Some(EntryCache::default());
+        }
         Ok(())
     }
 
@@ -1717,7 +1746,7 @@ mod tests {
     }
 
     fn validate_cache(store: &PeerStorage<RocksEngine, RocksEngine>, exp_ents: &[Entry]) {
-        assert_eq!(store.cache.cache, exp_ents);
+        assert_eq!(store.cache.as_ref().unwrap().cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
             let bytes = store.engines.raft.get_value(&key).unwrap().unwrap();
@@ -2139,7 +2168,7 @@ mod tests {
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.cache.clear();
+        store.cache.as_mut().unwrap().cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store.entries(4, 6, u64::max_value()).unwrap();
         assert_eq!(*res, ents[1..]);
@@ -2182,7 +2211,7 @@ mod tests {
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.cache.clear();
+        store.cache.as_mut().unwrap().cache.clear();
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -2239,20 +2268,20 @@ mod tests {
         validate_cache(&store, &exp_res);
 
         // compact shrink
-        assert!(store.cache.cache.capacity() >= cap as usize);
+        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.cache.capacity() < cap as usize);
+        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
 
         // append shrink
         entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
-        assert!(store.cache.cache.capacity() >= cap as usize);
+        assert!(store.cache.as_ref().unwrap().cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.cache.capacity() < cap as usize);
+        assert!(store.cache.as_ref().unwrap().cache.capacity() < cap as usize);
 
         // compact all
         store.compact_to(cap + 2);
